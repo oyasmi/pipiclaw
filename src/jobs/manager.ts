@@ -11,9 +11,10 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 import { shellEscape } from "../shared/os.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
+import { buildLaunchScript, type JobArtifacts, jobArtifacts, parseLaunchOutput } from "./launch.js";
+import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobRecord, toSnapshot } from "./record.js";
 
 /**
  * Per-channel manager for background bash jobs. A long command that ran synchronously would hold
@@ -31,158 +32,6 @@ import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
  * arrange its own callback was a judgement call it could not make correctly, so completion is a
  * runtime guarantee instead.
  */
-
-export type JobStatus = "running" | "completed" | "failed" | "cancelled" | "lost";
-
-export interface JobSnapshot {
-	id: string;
-	label: string;
-	command: string;
-	status: JobStatus;
-	startedAt: number;
-	durationMs: number;
-	exitCode?: number;
-	/** The job's own wall-clock limit; a task's `work` ticket derives its backstop from it. */
-	timeoutSeconds: number;
-	/** The task this job's completion wake belongs to, if any — lets a caller verify that a
-	 *  `[JOB:<id>] ... belongs to task <taskId>.` wake actually names the job it claims to (T9). */
-	taskId?: string;
-}
-
-/** What should happen when the job finishes. */
-export interface JobWakeContract {
-	/** Wake the channel on completion. Defaults to true — that is the point of the mechanism. */
-	notify: boolean;
-	/** The task this job is advancing, surfaced in the wake so the model lands in context. */
-	taskId?: string;
-}
-
-interface JobRecord extends JobSnapshot {
-	pid: number;
-	/** Process-group id of the launched job, as `ps` reported it right after spawn. `setsid` makes
-	 *  the job its own session/group leader, so this normally equals `pid` — the precondition for a
-	 *  safe negative-PGID kill. Absent on records written before this was captured. */
-	pgid?: number;
-	/** `ps -o lstart=` for `pid` at launch: the only OS-verifiable way to tell the still-running
-	 *  job apart from an unrelated process that later reused its pid. Absent on older records and
-	 *  whenever `ps` was unavailable at launch — callers must then treat identity as unprovable. */
-	pidStartedAt?: string;
-	spillFile: string;
-	exitFile: string;
-	timeoutSeconds: number;
-	contract: JobWakeContract;
-	/** When the job reached a terminal status; drives retention of the record and spill file. */
-	finishedAt?: number;
-	/** Set once the completion wake has been dispatched, so a restart cannot re-announce it. */
-	notified?: boolean;
-	/** Set once the owning task's log has this job's settlement (spec 052, D4); guards against a second record. */
-	taskLogged?: boolean;
-	/**
-	 * A cancel or timeout whose kill could not be *confirmed* yet: the job stays `running` and
-	 * manageable, and every sweep re-attempts the kill until the process is proven gone, at which
-	 * point this terminal status is applied. Internal only — never surfaced in a `JobSnapshot`.
-	 */
-	pendingKill?: "cancelled" | "failed";
-	wakeClaimDispatchId?: string;
-	wakeConsumedAt?: number;
-}
-
-/** Every scratch file a single job owns, all derived from its spill path. */
-interface JobArtifacts {
-	spillFile: string;
-	exitFile: string;
-	exitTmp: string;
-	readyFile: string;
-	readyTmp: string;
-	metaFile: string;
-	metaTmp: string;
-}
-
-function jobArtifacts(spillFile: string): JobArtifacts {
-	return {
-		spillFile,
-		exitFile: `${spillFile}.exit`,
-		exitTmp: `${spillFile}.exit.tmp`,
-		readyFile: `${spillFile}.ready`,
-		readyTmp: `${spillFile}.ready.tmp`,
-		metaFile: `${spillFile}.meta`,
-		metaTmp: `${spillFile}.meta.tmp`,
-	};
-}
-
-/** ~2s of readiness polling: 40 iterations of a 50ms sleep in the wrapper shell. */
-const LAUNCH_HANDSHAKE_MAX_POLLS = 40;
-
-/**
- * Build the wrapper shell that launches a background job with a verifiable startup handshake.
- *
- * The inner shell writes an atomic `ready` marker as its very first action — *before* the user
- * command — so the parent can distinguish "wrapper live, spill writable, command about to run"
- * from "launch silently failed" (a read-only spill dir, a `setsid`/`sh` that could not exec). The
- * parent also writes a metadata file (pid, and under `setsid` the pgid/start-time) *before* it
- * waits on the handshake, so an abort that lands mid-handshake still leaves a recoverable pid.
- *
- * `setsid` (when present) makes the job its own session/process-group leader (pgid == pid), so a
- * later cancel/timeout can terminate the whole group. A host without it falls back to `nohup` —
- * still detached and restart-safe, but single-pid, so pgid/identity are deliberately not claimed.
- *
- * On handshake success the parent prints `MODE`/`PID`(/`PGID`/`LSTART`) and exits 0. On failure it
- * kills whatever it spawned, echoes the inner error, removes the scratch files, and exits 1.
- */
-function buildLaunchScript(command: string, art: JobArtifacts): string {
-	const spill = shellEscape(art.spillFile);
-	const exitFile = shellEscape(art.exitFile);
-	const exitTmp = shellEscape(art.exitTmp);
-	const ready = shellEscape(art.readyFile);
-	const readyTmp = shellEscape(art.readyTmp);
-	const meta = shellEscape(art.metaFile);
-	const metaTmp = shellEscape(art.metaTmp);
-
-	// Subshell around the user command so its own `exit N` only leaves the subshell and the
-	// exit-capture still runs; the exit code is written temp-then-renamed so a probe never reads a
-	// half-written `.exit`.
-	const inner =
-		`printf 'ready\\n' > ${readyTmp} && mv -f ${readyTmp} ${ready} || exit 127; ` +
-		`( ${command} )\n__pc_rc=$?; ` +
-		`printf '%s\\n' "$__pc_rc" > ${exitTmp} && mv -f ${exitTmp} ${exitFile}`;
-	const escInner = shellEscape(inner);
-
-	// `ps` can momentarily miss a just-forked process on a loaded host: one short retry.
-	const psField = (field: string) =>
-		`"$(ps -o ${field}= -p "$__pc_pid" 2>/dev/null || { sleep 0.1; ps -o ${field}= -p "$__pc_pid" 2>/dev/null; })"`;
-
-	const handshake = (killExpr: string) =>
-		`__pc_i=0; while [ ! -s ${ready} ] && [ "$__pc_i" -lt ${LAUNCH_HANDSHAKE_MAX_POLLS} ]; do ` +
-		`sleep 0.05; __pc_i=$((__pc_i+1)); done; ` +
-		`if [ ! -s ${ready} ]; then ${killExpr}printf 'HANDSHAKE failed\\n'; cat ${spill} 2>/dev/null; ` +
-		`rm -f ${ready} ${readyTmp} ${meta} ${metaTmp} ${exitFile} ${exitTmp} ${spill}; exit 1; fi`;
-
-	const setsidKill =
-		`kill -TERM "-$__pc_pid" 2>/dev/null; kill -TERM "$__pc_pid" 2>/dev/null; sleep 0.1; ` +
-		`kill -KILL "-$__pc_pid" 2>/dev/null; `;
-	const nohupKill = `kill -TERM "$__pc_pid" 2>/dev/null; sleep 0.1; kill -KILL "$__pc_pid" 2>/dev/null; `;
-
-	const setsidBranch =
-		`setsid sh -c ${escInner} > ${spill} 2>&1 & __pc_pid=$!; ` +
-		`__pc_pgid=$(printf '%s' ${psField("pgid")} | tr -d ' '); __pc_lstart=${psField("lstart")}; ` +
-		`printf 'MODE setsid\\nPID %s\\nPGID %s\\nLSTART %s\\n' "$__pc_pid" "$__pc_pgid" "$__pc_lstart" ` +
-		`> ${metaTmp} && mv -f ${metaTmp} ${meta}; ` +
-		`${handshake(setsidKill)}; ` +
-		`printf 'MODE setsid\\nPID %s\\nPGID %s\\nLSTART %s\\n' "$__pc_pid" "$__pc_pgid" "$__pc_lstart"`;
-
-	const nohupBranch =
-		`nohup sh -c ${escInner} > ${spill} 2>&1 & __pc_pid=$!; ` +
-		`printf 'MODE nohup\\nPID %s\\n' "$__pc_pid" > ${metaTmp} && mv -f ${metaTmp} ${meta}; ` +
-		`${handshake(nohupKill)}; ` +
-		`printf 'MODE nohup\\nPID %s\\n' "$__pc_pid"`;
-
-	// `umask 077`: the spill holds whatever the command printed (routinely credentials) in a
-	// world-readable /tmp; set the mask rather than chmod afterwards so there is no readable window.
-	return (
-		`umask 077; rm -f ${exitFile} ${exitTmp} ${ready} ${readyTmp} ${meta} ${metaTmp}; ` +
-		`if command -v setsid >/dev/null 2>&1; then ${setsidBranch}; else ${nohupBranch}; fi`
-	);
-}
 
 /**
  * The outcome of one kill attempt, decided from the kill script's own printed token plus the
@@ -254,74 +103,6 @@ function jobSpillPath(id: string, spillDir?: string): string {
 	return join(spillDir ?? tmpdir(), `pipiclaw-job-${id}.log`);
 }
 
-function isTerminal(status: JobStatus): boolean {
-	return status !== "running";
-}
-
-/** Accept a persisted record only if the fields the manager actually relies on are intact. */
-function parseJobRecord(raw: string): JobRecord | undefined {
-	const value: unknown = JSON.parse(raw);
-	if (
-		!isRecord(value) ||
-		typeof value.id !== "string" ||
-		typeof value.pid !== "number" ||
-		typeof value.spillFile !== "string" ||
-		typeof value.exitFile !== "string" ||
-		typeof value.startedAt !== "number" ||
-		typeof value.timeoutSeconds !== "number" ||
-		!isRecord(value.contract)
-	) {
-		return undefined;
-	}
-	return value as unknown as JobRecord;
-}
-
-/**
- * Read the launch command's stdout: an optional `MODE setsid|nohup` line followed by `PID <n>`
- * and — only in `setsid` mode — `PGID <n>` / `LSTART <...>`. A bare number on its own line is also
- * accepted as the pid so older/simpler executor fakes keep working. `pgid` and `pidStartedAt` are
- * returned only when the job was launched under `setsid` *and* `ps` actually reported them; the
- * `nohup` fallback never yields them, and the caller must then treat identity as unprovable.
- */
-function parseLaunchOutput(stdout: string): {
-	pid?: number;
-	pgid?: number;
-	pidStartedAt?: string;
-	mode?: "setsid" | "nohup";
-	handshakeFailed?: boolean;
-} {
-	let pid: number | undefined;
-	let pgid: number | undefined;
-	let pidStartedAt: string | undefined;
-	let mode: "setsid" | "nohup" | undefined;
-	let handshakeFailed = false;
-	for (const raw of stdout.split("\n")) {
-		const line = raw.trim();
-		if (!line) continue;
-		if (line === "HANDSHAKE failed") {
-			handshakeFailed = true;
-			continue;
-		}
-		if (/^\d+$/.test(line)) {
-			pid ??= Number.parseInt(line, 10);
-			continue;
-		}
-		const match = line.match(/^(MODE|PID|PGID|LSTART)\s+(.*)$/);
-		if (!match) continue;
-		const [, key, value] = match;
-		if (key === "MODE" && (value === "setsid" || value === "nohup")) mode = value;
-		else if (key === "PID" && /^\d+$/.test(value)) pid = Number.parseInt(value, 10);
-		else if (key === "PGID" && /^\d+$/.test(value)) pgid = Number.parseInt(value, 10);
-		else if (key === "LSTART" && value) pidStartedAt = value;
-	}
-	// The nohup fallback cannot capture these reliably; drop them even if something printed them.
-	if (mode === "nohup") {
-		pgid = undefined;
-		pidStartedAt = undefined;
-	}
-	return { pid, pgid, pidStartedAt, mode, handshakeFailed };
-}
-
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve) => {
 		const timer = setTimeout(resolve, ms);
@@ -334,20 +115,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			{ once: true },
 		);
 	});
-}
-
-function toSnapshot(record: JobRecord): JobSnapshot {
-	return {
-		id: record.id,
-		label: record.label,
-		command: record.command,
-		status: record.status,
-		startedAt: record.startedAt,
-		durationMs: record.status === "running" ? Date.now() - record.startedAt : record.durationMs,
-		exitCode: record.exitCode,
-		timeoutSeconds: record.timeoutSeconds,
-		taskId: record.contract.taskId,
-	};
 }
 
 export class ChannelJobManager {

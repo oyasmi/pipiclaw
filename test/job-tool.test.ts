@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ChannelJobManager, JobSnapshot } from "../src/jobs/manager.js";
+import type { ChannelJobManager } from "../src/jobs/manager.js";
+import type { JobSnapshot } from "../src/jobs/record.js";
 import { createJobTool } from "../src/tools/job.js";
 
 function snapshot(overrides: Partial<JobSnapshot> = {}): JobSnapshot {

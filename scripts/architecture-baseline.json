@@ -4,7 +4,7 @@
 	"r3": {
 		"src/agent/channel-runner.ts": 1863,
 		"src/events/events.ts": 908,
-		"src/jobs/manager.ts": 1328,
+		"src/jobs/manager.ts": 1095,
 		"src/subagents/discovery.ts": 1040,
 		"src/subagents/runs.ts": 1173
 	}
