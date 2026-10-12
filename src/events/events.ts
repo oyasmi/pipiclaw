@@ -24,7 +24,12 @@ import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { type TaskCreateInput, validateTaskContractInput } from "../tasks/contract-input.js";
-import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
+import {
+	EventDefinitionError,
+	MAX_EVENT_FILES,
+	MAX_ONE_SHOT_DELAY_MS,
+	validateScheduledEvent,
+} from "./event-validation.js";
 
 // ============================================================================
 // Event Types
@@ -155,7 +160,10 @@ function truncateTextPreview(text: string): string {
 function readRequiredString(data: Record<string, unknown>, field: string, filename: string): string {
 	const value = data[field];
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`Missing required fields (type, channelId, and text or task) in ${filename}`);
+		throw new EventDefinitionError(
+			"missing-field",
+			`Missing required fields (type, channelId, and text or task) in ${filename}`,
+		);
 	}
 	return value;
 }
@@ -165,7 +173,8 @@ function parsePayload(data: Record<string, unknown>, filename: string): EventPay
 	const hasText = typeof data.text === "string" && data.text.trim().length > 0;
 	const hasTask = data.task !== undefined;
 	if (hasText === hasTask) {
-		throw new Error(
+		throw new EventDefinitionError(
+			"payload",
 			`An event needs exactly one of 'text' (a chat message) or 'task' (a task template) in ${filename}`,
 		);
 	}
@@ -173,26 +182,32 @@ function parsePayload(data: Record<string, unknown>, filename: string): EventPay
 	try {
 		return { task: validateTaskContractInput(data.task) };
 	} catch (error) {
-		throw new Error(`Invalid 'task' template in ${filename}: ${errorMessage(error)}`);
+		throw new EventDefinitionError("task-template", `Invalid 'task' template in ${filename}: ${errorMessage(error)}`);
 	}
 }
 
 function parsePreAction(data: Record<string, unknown>, filename: string): EventAction | undefined {
 	if (!data.preAction) return undefined;
 	if (!isPlainObject(data.preAction)) {
-		throw new Error(`Invalid 'preAction' field in ${filename}, expected an object`);
+		throw new EventDefinitionError("pre-action", `Invalid 'preAction' field in ${filename}, expected an object`);
 	}
 
 	const action = data.preAction;
 	if (action.type !== "bash") {
-		throw new Error(`Unsupported preAction type '${String(action.type)}' in ${filename}, only 'bash' is supported`);
+		throw new EventDefinitionError(
+			"pre-action",
+			`Unsupported preAction type '${String(action.type)}' in ${filename}, only 'bash' is supported`,
+		);
 	}
 	if (typeof action.command !== "string" || action.command.trim().length === 0) {
-		throw new Error(`Missing or empty 'preAction.command' in ${filename}`);
+		throw new EventDefinitionError("pre-action", `Missing or empty 'preAction.command' in ${filename}`);
 	}
 	if (action.timeout !== undefined) {
 		if (typeof action.timeout !== "number" || !Number.isFinite(action.timeout) || action.timeout <= 0) {
-			throw new Error(`Invalid 'preAction.timeout' in ${filename}, expected a positive millisecond value`);
+			throw new EventDefinitionError(
+				"pre-action",
+				`Invalid 'preAction.timeout' in ${filename}, expected a positive millisecond value`,
+			);
 		}
 	}
 
@@ -204,9 +219,17 @@ function parsePreAction(data: Record<string, unknown>, filename: string): EventA
 }
 
 export function parseScheduledEventContent(content: string, filename: string): ScheduledEvent {
-	const data = JSON.parse(content);
+	let data: unknown;
+	try {
+		data = JSON.parse(content);
+	} catch (error) {
+		throw new EventDefinitionError("malformed", `Invalid JSON in ${filename}: ${errorMessage(error)}`);
+	}
 	if (!isPlainObject(data)) {
-		throw new Error(`Missing required fields (type, channelId, and text or task) in ${filename}`);
+		throw new EventDefinitionError(
+			"missing-field",
+			`Missing required fields (type, channelId, and text or task) in ${filename}`,
+		);
 	}
 
 	const type = readRequiredString(data, "type", filename);
@@ -220,21 +243,25 @@ export function parseScheduledEventContent(content: string, filename: string): S
 		// one. Rejecting it here — rather than only in `event_manage` — is what makes the guard
 		// enforced, since the events directory is agent-writable.
 		case "immediate":
-			throw new Error(
+			throw new EventDefinitionError(
+				"immediate",
 				`Immediate events are no longer supported (${filename}); do the work in the current turn, ` +
 					"or schedule a one-shot at least 2 minutes out via event_manage.",
 			);
 
 		case "one-shot": {
 			if (typeof data.at !== "string" || data.at.trim().length === 0) {
-				throw new Error(`Missing 'at' field for one-shot event in ${filename}`);
+				throw new EventDefinitionError("missing-field", `Missing 'at' field for one-shot event in ${filename}`);
 			}
 			return { type, channelId, ...payload, at: data.at, ...(preAction ? { preAction } : {}) };
 		}
 
 		case "periodic": {
 			if (typeof data.schedule !== "string" || data.schedule.trim().length === 0) {
-				throw new Error(`Missing 'schedule' field for periodic event in ${filename}`);
+				throw new EventDefinitionError(
+					"missing-field",
+					`Missing 'schedule' field for periodic event in ${filename}`,
+				);
 			}
 			return {
 				type,
@@ -246,7 +273,7 @@ export function parseScheduledEventContent(content: string, filename: string): S
 		}
 
 		default:
-			throw new Error(`Unknown event type '${type}' in ${filename}`);
+			throw new EventDefinitionError("unknown-type", `Unknown event type '${type}' in ${filename}`);
 	}
 }
 
@@ -365,7 +392,7 @@ export class EventsWatcher {
 			writeFileSync(this.options.historyPath, "", { flag: "a", mode: 0o600 });
 			chmodSync(this.options.historyPath, 0o600);
 		} catch (err) {
-			log.logWarning("Failed to initialize event history file", String(err));
+			log.logWarn("events.history.init_failed", "Event history file init failed", { reason: String(err) });
 		}
 	}
 
@@ -383,7 +410,7 @@ export class EventsWatcher {
 			...rest,
 		};
 		if (!this.historyAppender?.tryAppend(fullRecord, "critical")) {
-			log.logWarning("Failed to queue event history", "Retry after pending event history writes drain");
+			log.logWarn("events.history.queue_full", "Event history write dropped while earlier writes drain");
 		}
 	}
 
@@ -428,7 +455,7 @@ export class EventsWatcher {
 		try {
 			files = readdirSync(this.eventsDir).filter((f) => f.endsWith(".json"));
 		} catch (err) {
-			log.logWarning("Failed to read events directory", String(err));
+			log.logWarn("events.dir.read_failed", "Events directory read failed", { reason: String(err) });
 			return;
 		}
 
@@ -438,7 +465,10 @@ export class EventsWatcher {
 					try {
 						await this.handleFile(filename);
 					} catch (err) {
-						log.logWarning(`Failed to restore event file: ${filename}`, errorMessage(err));
+						log.logWarn("events.file.restore_failed", "Event file restore failed", {
+							reason: errorMessage(err),
+							fields: { file: filename },
+						});
 					}
 				}),
 			);
@@ -466,7 +496,10 @@ export class EventsWatcher {
 	 */
 	private handleFileSafely(filename: string): void {
 		void this.handleFile(filename).catch((err) => {
-			log.logWarning(`Failed to load event file: ${filename}`, errorMessage(err));
+			log.logWarn("events.file.load_failed", "Event file load failed", {
+				reason: errorMessage(err),
+				fields: { file: filename },
+			});
 		});
 	}
 
@@ -531,7 +564,10 @@ export class EventsWatcher {
 		}
 
 		if (!event) {
-			log.logWarning(`Failed to parse event file after ${MAX_RETRIES} retries: ${filename}`, lastError?.message);
+			log.logWarn("events.file.parse_failed", "Event file parse failed", {
+				reason: lastError?.message,
+				fields: { file: filename, attempts: MAX_RETRIES },
+			});
 			this.appendHistory({
 				filename,
 				eventType: "unknown",
@@ -545,7 +581,7 @@ export class EventsWatcher {
 
 		const rejection = this.admissionFailure(filename, event);
 		if (rejection) {
-			log.logWarning(`Rejected event file: ${filename}`, rejection);
+			log.logWarn("events.file.rejected", "Event file rejected", { reason: rejection, fields: { file: filename } });
 			this.appendEventHistory(filename, event, "invalid", "error", { reason: rejection });
 			this.markInvalid(filename, rejection);
 			return;
@@ -605,7 +641,9 @@ export class EventsWatcher {
 		const now = Date.now();
 
 		if (atTime === undefined) {
-			log.logWarning(`Invalid one-shot time for ${filename}: ${event.at}`);
+			log.logWarn("events.oneshot.invalid_time", "One-shot event time invalid", {
+				fields: { file: filename, at: event.at },
+			});
 			this.appendEventHistory(filename, event, "invalid", "error", { reason: `Invalid one-shot time: ${event.at}` });
 			this.markInvalid(filename, `Invalid one-shot time: ${event.at}`);
 			return;
@@ -622,9 +660,9 @@ export class EventsWatcher {
 
 		const delay = atTime - now;
 		if (delay > MAX_ONE_SHOT_DELAY_MS) {
-			log.logWarning(
-				`One-shot event exceeds maximum supported delay for ${filename}: ${event.at}. Use a periodic cron event instead.`,
-			);
+			log.logWarn("events.oneshot.too_far", "One-shot event exceeds the maximum delay; use a periodic event", {
+				fields: { file: filename, at: event.at },
+			});
 			this.appendEventHistory(filename, event, "skipped", "skipped", {
 				reason: `One-shot event exceeds maximum supported delay: ${event.at}`,
 			});
@@ -644,7 +682,10 @@ export class EventsWatcher {
 				this.appendEventHistory(filename, event, "triggered", "ok");
 				await this.execute(filename, event);
 			} catch (err) {
-				log.logWarning(`One-shot event execution failed: ${filename}`, String(err));
+				log.logWarn("events.oneshot.failed", "One-shot event execution failed", {
+					reason: String(err),
+					fields: { file: filename },
+				});
 				this.appendEventHistory(filename, event, "skipped", "error", {
 					reason: errorMessage(err),
 				});
@@ -663,7 +704,10 @@ export class EventsWatcher {
 					// Croner exposes the callback start time, which distinguishes live occurrences.
 					await this.execute(filename, event, false, cron.currentRun() ?? new Date());
 				} catch (err) {
-					log.logWarning(`Periodic event execution failed: ${filename}`, String(err));
+					log.logWarn("events.periodic.failed", "Periodic event execution failed", {
+						reason: String(err),
+						fields: { file: filename },
+					});
 					this.appendEventHistory(filename, event, "skipped", "error", {
 						reason: errorMessage(err),
 					});
@@ -676,7 +720,10 @@ export class EventsWatcher {
 			log.logInfo(`Scheduled periodic event: ${filename}, next run: ${next?.toISOString() ?? "unknown"}`);
 			this.appendEventHistory(filename, event, "scheduled", "ok", next ? { nextRunAt: formatLocalTime(next) } : {});
 		} catch (err) {
-			log.logWarning(`Invalid cron schedule for ${filename}: ${event.schedule}`, String(err));
+			log.logWarn("events.periodic.invalid_cron", "Periodic event cron invalid", {
+				reason: String(err),
+				fields: { file: filename, schedule: event.schedule },
+			});
 			this.appendEventHistory(filename, event, "invalid", "error", {
 				reason: `Invalid cron schedule: ${event.schedule}\n${String(err)}`,
 			});
@@ -787,7 +834,9 @@ export class EventsWatcher {
 		// next tick, so just warn. One-shot/immediate events would otherwise be
 		// GC'd as "past" with no trace, so leave a visible error marker (and keep
 		// the source file) making the loss auditable rather than a silent hole.
-		log.logWarning(`Event queue full, could not enqueue: ${filename}`);
+		log.logWarn("events.enqueue.queue_full", "Event not enqueued: channel queue full", {
+			fields: { file: filename },
+		});
 		this.appendEventHistory(filename, event, "queue_full", "error", {
 			reason: "channel queue full",
 			queue: { accepted: false },
@@ -835,7 +884,10 @@ export class EventsWatcher {
 			if (deleteAfter) this.deleteFile(filename);
 		} catch (err) {
 			const reason = errorMessage(err);
-			log.logWarning(`Could not spawn a task for event: ${filename}`, reason);
+			log.logWarn("events.task_spawn.failed", "Task spawn for event failed", {
+				reason: reason,
+				fields: { file: filename },
+			});
 			this.appendEventHistory(filename, event, "skipped", "error", { reason });
 			if (deleteAfter) {
 				this.markInvalid(filename, `Could not create the task instance at ${new Date().toISOString()}: ${reason}`);
@@ -851,7 +903,10 @@ export class EventsWatcher {
 		if (this.commandGuardConfig?.enabled) {
 			const guardResult = guardCommand(action.command, this.commandGuardConfig);
 			if (!guardResult.allowed) {
-				log.logWarning(`Pre-action command blocked by guard for ${filename}: ${guardResult.reason}`);
+				log.logWarn("events.preaction.blocked", "Event pre-action blocked by guard", {
+					reason: guardResult.reason,
+					fields: { file: filename },
+				});
 				throw new EventPreActionError("blocked", `guard: ${guardResult.reason}`, {
 					durationMs: Date.now() - startedAt,
 				});
@@ -883,7 +938,10 @@ export class EventsWatcher {
 			unlinkSync(filePath);
 		} catch (err) {
 			if (err instanceof Error && "code" in err && err.code !== "ENOENT") {
-				log.logWarning(`Failed to delete event file: ${filename}`, String(err));
+				log.logWarn("events.file.delete_failed", "Event file delete failed", {
+					reason: String(err),
+					fields: { file: filename },
+				});
 			}
 		}
 		this.clearInvalidMarker(filename);
@@ -907,7 +965,10 @@ export class EventsWatcher {
 				[`timestamp: ${formatLocalTime()}`, `file: ${filename}`, "", message.trim()].join("\n"),
 			);
 		} catch (err) {
-			log.logWarning(`Failed to write event error marker: ${filename}`, String(err));
+			log.logWarn("events.marker.write_failed", "Event error marker write failed", {
+				reason: String(err),
+				fields: { file: filename },
+			});
 		}
 		this.knownFiles.add(filename);
 	}
@@ -918,7 +979,10 @@ export class EventsWatcher {
 			unlinkSync(markerPath);
 		} catch (err) {
 			if (err instanceof Error && "code" in err && err.code !== "ENOENT") {
-				log.logWarning(`Failed to delete event error marker: ${filename}`, String(err));
+				log.logWarn("events.marker.delete_failed", "Event error marker delete failed", {
+					reason: String(err),
+					fields: { file: filename },
+				});
 			}
 		}
 	}

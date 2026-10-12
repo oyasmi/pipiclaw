@@ -160,7 +160,7 @@ export function ticketDueMs(ticket: Ticket): number | undefined {
 	return ticket.kind === "time" ? parseLocalTime(ticket.at) : undefined;
 }
 
-/** One-line summary for `/tasks`, receipts, and the step brief. */
+/** One-line summary for the step brief and the expiry record (model-facing). */
 export function describeTicket(ticket: Ticket): string {
 	switch (ticket.kind) {
 		case "time":
@@ -169,5 +169,25 @@ export function describeTicket(ticket: Ticket): string {
 			return ticket.refs.length > 0 ? `等待委派/作业 ${ticket.refs.join(", ")}` : "等待委派/作业";
 		case "ask":
 			return `等待用户回答：${ticket.asked}`;
+	}
+}
+
+/** `2026-10-12T09:00:00.000+08:00` → `10-12 09:00`, read off the stored wall-clock text. */
+function minuteOf(at: string): string {
+	const match = /^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/.exec(at);
+	return match ? `${match[1]} ${match[2]}` : at;
+}
+
+/** The same summary in the user's terms, for `/tasks` (spec 053, D4). */
+export function describeTicketForUser(ticket: Ticket): string {
+	switch (ticket.kind) {
+		case "time":
+			return `等到 ${minuteOf(ticket.at)}`;
+		case "work":
+			return ticket.refs.length > 0
+				? `等待 ${ticket.refs.map((ref) => `\`${ref}\``).join("、")} 完成`
+				: "等待委派或后台作业完成";
+		case "ask":
+			return `等你回答：${ticket.asked}`;
 	}
 }

@@ -39,7 +39,10 @@ function readWorkspaceFile(path: string): string {
 	try {
 		return readFileSync(path, "utf-8").replace(/\r/g, "").trim();
 	} catch (error) {
-		log.logWarning(`Failed to read ${path}`, String(error));
+		log.logWarn("agent.prompt.resource_read_failed", "Prompt resource read failed", {
+			reason: String(error),
+			fields: { path },
+		});
 		return "";
 	}
 }

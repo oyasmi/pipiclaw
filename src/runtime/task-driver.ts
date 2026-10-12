@@ -7,7 +7,8 @@ import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import { type PipiclawTaskDriverSettings, TASK_DRIVER_SETTINGS } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { checkBudget, IDLE_STEP_LIMIT } from "../tasks/budget.js";
+import { type BudgetBreach, checkBudget, IDLE_STEP_LIMIT } from "../tasks/budget.js";
+import { taskStateLabel } from "../tasks/frontmatter.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
 import { readTaskLog } from "../tasks/log.js";
 import { expireTicket, pauseTask, redeemTicket } from "../tasks/store.js";
@@ -110,23 +111,29 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 /**
  * The deterministic receipt a runtime stop produces (spec 051, D11). It is delivered directly,
  * without opening a model turn: the user needs to know their task stopped, and spending an LLM
- * call to phrase that is exactly the kind of cost this design removes.
+ * call to phrase that is exactly the kind of cost this design removes. A budget stop also says
+ * how to resume with more of the dimension that ran out (spec 053, D6).
  */
 export function taskStopReceipt(
 	channelId: string,
 	entry: TaskLedgerEntry,
 	reason: string,
 	nowMs: number,
+	breach?: BudgetBreach,
 ): ChannelEvent {
+	const usage = entry.fields.usage ? ` · 已用 ${entry.fields.usage.steps} 步` : "";
+	const grant = breach === "steps" ? " +steps 10" : breach === "usd" ? " +usd 5" : "";
+	const resumeLabel = grant ? "继续并追加预算" : "继续";
 	return {
 		...channelType(channelId),
 		channelId,
 		user: "TASK_DRIVER",
 		userName: "TASK_DRIVER",
 		text:
-			`任务 ${entry.id}（${entry.title}）已停止自动执行：${reason}\n` +
-			`当前阶段：${entry.fields.state}${entry.fields.usage ? `；已用 ${entry.fields.usage.steps} 步` : ""}\n` +
-			`查看：/tasks show ${entry.id}\n继续：/tasks resume ${entry.id}\n不再需要：让 Agent cancel 该任务。`,
+			`🛑 任务 \`${entry.id}\`（${entry.title}）已停止自动执行：${reason}。\n` +
+			`状态：${taskStateLabel(entry.fields.state)}${usage}\n` +
+			`查看：\`/tasks show ${entry.id}\`；${resumeLabel}：\`/tasks resume ${entry.id}${grant}\`\n` +
+			"不再需要：直接告诉我取消该任务。",
 		ts: String(nowMs),
 		// Keyed on the cause, not the moment: re-detecting the same stop before the user has acted
 		// must not queue a second identical receipt, while a different cause still does.
@@ -173,17 +180,18 @@ export class TaskDriver {
 		try {
 			this.options.onDispatch?.(event, accepted);
 		} catch (error) {
-			log.logWarning("Task driver dispatch observer failed", errorMessage(error));
+			log.logWarn("taskdriver.observer.failed", "Task driver dispatch observer failed", {
+				reason: errorMessage(error),
+			});
 		}
 	}
 
 	start(): void {
 		if (this.loopActive) return;
 		this.loopActive = true;
-		log.logInfo(
-			"Task driver started",
-			`schedule timezone=${Intl.DateTimeFormat().resolvedOptions().timeZone} (host)`,
-		);
+		log.logInfoEvent("taskdriver.started", "Task driver started", {
+			fields: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+		});
 		void this.tick();
 	}
 
@@ -221,7 +229,7 @@ export class TaskDriver {
 		try {
 			await this.runOnce();
 		} catch (error) {
-			log.logWarning("Task driver tick failed", errorMessage(error));
+			log.logWarn("taskdriver.tick.failed", "Task driver tick failed", { reason: errorMessage(error) });
 		}
 		this.scheduleNext();
 	}
@@ -246,11 +254,20 @@ export class TaskDriver {
 	}
 
 	/** Stop one task and notify. Delivery failure is logged, never fatal: the durable stop already happened. */
-	private async notifyStop(channelId: string, entry: TaskLedgerEntry, reason: string, nowMs: number): Promise<void> {
+	private async notifyStop(
+		channelId: string,
+		entry: TaskLedgerEntry,
+		reason: string,
+		nowMs: number,
+		breach?: BudgetBreach,
+	): Promise<void> {
 		try {
-			await this.options.notify?.(taskStopReceipt(channelId, entry, reason, nowMs));
+			await this.options.notify?.(taskStopReceipt(channelId, entry, reason, nowMs, breach));
 		} catch (error) {
-			log.logWarning(`[${channelId}] Task stop receipt failed`, errorMessage(error));
+			log.logWarn("taskdriver.receipt.failed", "Task stop receipt failed", {
+				channelId: channelId,
+				reason: errorMessage(error),
+			});
 		}
 	}
 
@@ -283,10 +300,23 @@ export class TaskDriver {
 				if (!expiry) continue;
 				changed = true;
 				if (expiry.outcome === "paused") {
-					log.logWarning(`[${channelId}] Task ${entry.id} paused: ticket expired twice`, expiry.ticket);
-					await this.notifyStop(channelId, entry, `等待未兑现（${expiry.ticket}），已连续两次超过兜底时限`, nowMs);
+					log.logWarn("taskdriver.task.paused", "Task paused: ticket expired twice", {
+						channelId: channelId,
+						reason: expiry.ticket,
+						fields: { taskId: entry.id, cause: "ticket_expired" },
+					});
+					await this.notifyStop(
+						channelId,
+						entry,
+						`等待条件一直未满足（${expiry.ticket}），已连续两次超过最晚检查时间`,
+						nowMs,
+					);
 				} else {
-					log.logInfo(`[${channelId}] Task ${entry.id} reopened after its ticket expired`, expiry.ticket);
+					log.logInfoEvent("taskdriver.task.reopened", "Task reopened after its ticket expired", {
+						channelId: channelId,
+						reason: expiry.ticket,
+						fields: { taskId: entry.id },
+					});
 				}
 				continue;
 			}
@@ -317,10 +347,14 @@ export class TaskDriver {
 			if (steps.length < IDLE_STEP_LIMIT) continue;
 			const idle = steps.every((record) => record.kind === "step" && record.tools.length === 0);
 			if (!idle) continue;
-			const reason = `连续 ${IDLE_STEP_LIMIT} 步没有任何工具调用，循环已停下等你确认`;
+			const reason = `连续 ${IDLE_STEP_LIMIT} 步没有任何工具调用，已停下等你确认`;
 			if (await pauseTask(channelDir, entry.id, { by: "runtime", reason })) {
 				paused = true;
-				log.logWarning(`[${channelId}] Task ${entry.id} paused: idle loop`, reason);
+				log.logWarn("taskdriver.task.paused", "Task paused: idle loop", {
+					channelId: channelId,
+					reason: reason,
+					fields: { taskId: entry.id, cause: "idle" },
+				});
 				await this.notifyStop(channelId, entry, reason, nowMs);
 			}
 		}
@@ -372,8 +406,12 @@ export class TaskDriver {
 						continue;
 					}
 					if (await pauseTask(channelDir, entry.id, { by: "runtime", reason: status.reason })) {
-						log.logWarning(`[${channelId}] Task ${entry.id} paused: budget ${status.breach}`, status.reason);
-						await this.notifyStop(channelId, entry, status.reason, nowMs);
+						log.logWarn("taskdriver.task.paused", "Task paused: budget exhausted", {
+							channelId: channelId,
+							reason: status.reason,
+							fields: { taskId: entry.id, cause: `budget_${status.breach}` },
+						});
+						await this.notifyStop(channelId, entry, status.reason, nowMs, status.breach);
 					}
 				}
 				const idled = await this.detectIdleLoop(channelDir, channelId, budgeted, nowMs);
@@ -409,9 +447,15 @@ export class TaskDriver {
 				if (accepted) {
 					dispatched++;
 					lastDispatchOffset = offset;
-					log.logInfo(`[${channelId}] Task driver enqueued ${entry.id}`);
+					log.logDebugEvent("taskdriver.step.enqueued", "Task step enqueued", {
+						channelId: channelId,
+						fields: { taskId: entry.id },
+					});
 				} else {
-					log.logWarning(`[${channelId}] Task driver could not enqueue ${entry.id}`, "channel queue unavailable");
+					log.logWarn("taskdriver.step.enqueue_failed", "Task step not enqueued: channel queue unavailable", {
+						channelId: channelId,
+						fields: { taskId: entry.id },
+					});
 				}
 			}
 

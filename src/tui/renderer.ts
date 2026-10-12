@@ -70,8 +70,9 @@ export function createFrontend(options: FrontendOptions = {}): Frontend {
 	const isTty = process.stdout.isTTY === true && process.stdin.isTTY === true;
 	// `--print`/one-shot (interactive === false) must use the plain stream even on a
 	// TTY, or the answer is trapped in a full-screen pi-tui frame and never reaches a
-	// clean stdout.
-	if (options.plain || !isTty || options.interactive === false) {
+	// clean stdout. `--quiet` is about how much is printed, and only the plain stream can print
+	// less, so it implies `--plain` rather than being silently ignored by the full-screen UI.
+	if (options.plain || options.quiet || !isTty || options.interactive === false) {
 		return new PlainFrontend({ quiet: options.quiet, interactive: options.interactive });
 	}
 	return new PiTuiFrontend({ commands: options.commands, basePath: options.basePath });

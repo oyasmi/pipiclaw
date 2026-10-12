@@ -448,10 +448,10 @@ async function resolveContextualBlocks(
 	options: SubAgentToolOptions,
 ): Promise<string[]> {
 	return buildContextualBlocks(config, options).catch((error) => {
-		log.logWarning(
-			`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
-			errorMessage(error),
-		);
+		log.logWarn("subagent.context.inject_failed", "Sub-agent context injection failed; continuing without it", {
+			channelId: options.runtimeContext.channelId,
+			reason: errorMessage(error),
+		});
 		return [] as string[];
 	});
 }
@@ -1354,7 +1354,10 @@ async function dispatchInternalRun(input: {
 		runManager.clearCancelHandle(runContext.runId);
 		const settleInput = outcome.ok ? outcome.value.settleInput : fatalSettleInput(outcome.error);
 		await runManager.settle(runContext.runId, settleInput, { announce: true }).catch((error) => {
-			log.logWarning(`Failed to settle detached sub-agent run ${runContext.runId}`, errorMessage(error));
+			log.logWarn("subagent.settle.failed", "Detached run settlement failed", {
+				reason: errorMessage(error),
+				fields: { runId: runContext.runId },
+			});
 		});
 	});
 

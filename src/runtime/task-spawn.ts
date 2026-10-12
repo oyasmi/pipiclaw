@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import type { SpawnTaskRequest, SpawnTaskResult } from "../events/events.js";
 import * as log from "../log.js";
 import { createTaskDocument, instanceStamp } from "../tasks/create.js";
+import { taskStateLabel } from "../tasks/frontmatter.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { archivedTaskPath, taskPath, tasksDir } from "../tasks/store.js";
 
@@ -13,8 +14,6 @@ export interface TaskSpawnerOptions {
 	/** Direct, non-LLM message to the channel — used for the "previous instance still running" receipt. */
 	notify: (channelId: string, text: string) => Promise<unknown>;
 }
-
-const STATE_LABEL: Record<string, string> = { open: "进行中", parked: "等待中" };
 
 /**
  * Create the task instance a template event asks for (spec 052, D2).
@@ -45,14 +44,18 @@ export function createTaskSpawner(
 			(entry) => entry.fields.origin === request.eventName && !entry.fields.outcome,
 		);
 		if (active) {
-			const state = STATE_LABEL[active.fields.state] ?? active.fields.state;
+			const state = `${taskStateLabel(active.fields.state)}${active.fields.paused ? "，已暂停" : ""}`;
 			await options
 				.notify(
 					request.channelId,
-					`周期任务 ${request.eventName} 本次（${instanceStamp(request.occurrence)}）未启动：上一实例 ${active.id} 仍在进行（${state}${active.fields.paused ? "，已暂停" : ""}）。\n查看：/tasks show ${active.id}`,
+					`⚠️ 周期任务 \`${request.eventName}\` 本次（${instanceStamp(request.occurrence)}）未启动：上一个实例 \`${active.id}\` 仍未结束（${state}）。\n查看：\`/tasks show ${active.id}\``,
 				)
 				.catch((error: unknown) => {
-					log.logWarning(`Could not deliver skip receipt for ${request.eventName}`, String(error));
+					log.logWarn("tasks.spawn.receipt_failed", "Skip receipt delivery failed", {
+						channelId: request.channelId,
+						reason: String(error),
+						fields: { event: request.eventName },
+					});
 				});
 			return { outcome: "skipped", id: active.id };
 		}
@@ -64,7 +67,10 @@ export function createTaskSpawner(
 			origin: request.eventName,
 			now: request.occurrence,
 		});
-		log.logInfo(`[${request.channelId}] Event ${request.eventName} spawned task ${id}`);
+		log.logInfoEvent("tasks.spawn.created", "Event spawned a task instance", {
+			channelId: request.channelId,
+			fields: { event: request.eventName, taskId: id },
+		});
 		options.nudge();
 		return { outcome: "spawned", id };
 	};

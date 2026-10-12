@@ -8,6 +8,40 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * User-facing elapsed time in Chinese, two units at most (`42秒`, `1分02秒`, `3小时05分`, `2天3小时`) —
+ * for "how long did this take / has this been running" in replies, receipts and cards (spec 053,
+ * D4). Model-facing text keeps `formatDuration` above.
+ */
+export function formatElapsedZh(ms: number): string {
+	const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+	if (totalSeconds < 60) return `${totalSeconds}秒`;
+	const totalMinutes = Math.floor(totalSeconds / 60);
+	if (totalMinutes < 60) return `${totalMinutes}分${String(totalSeconds % 60).padStart(2, "0")}秒`;
+	const totalHours = Math.floor(totalMinutes / 60);
+	if (totalHours < 24) {
+		const minutes = totalMinutes % 60;
+		return minutes > 0 ? `${totalHours}小时${String(minutes).padStart(2, "0")}分` : `${totalHours}小时`;
+	}
+	const hours = totalHours % 24;
+	return hours > 0 ? `${Math.floor(totalHours / 24)}天${hours}小时` : `${Math.floor(totalHours / 24)}天`;
+}
+
+/**
+ * A coarse, single-unit span in Chinese (`30 秒`, `12 分钟`, `3 小时`, `2 天`) — for "how far away is
+ * this deadline", where a second unit is noise. Rounds within a unit and promotes to the next unit
+ * when rounding reaches it, so the output never reads `60 分钟` or `24 小时`.
+ */
+export function formatSpanZh(ms: number): string {
+	const seconds = Math.max(0, Math.round(ms / 1000));
+	if (seconds < 60) return `${seconds} 秒`;
+	const minutes = Math.round(ms / 60_000);
+	if (minutes < 60) return `${minutes} 分钟`;
+	const hours = Math.round(ms / 3_600_000);
+	if (hours < 24) return `${hours} 小时`;
+	return `${Math.round(ms / 86_400_000)} 天`;
+}
+
+/**
  * Coerce an untrusted numeric config/request value into an integer within `[minimum, maximum]`,
  * falling back to `fallback` for anything not a finite number or out of range. Shared by the
  * app-level config loaders (`tools.json`) and web request parameter resolution — both need the

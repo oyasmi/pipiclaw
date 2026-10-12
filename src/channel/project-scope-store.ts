@@ -152,7 +152,7 @@ export function resolveProjectScope(
 	if (resolution.configured && !isWithinAllowedRoots(real, resolution.policy)) {
 		return {
 			kind: "blocked",
-			reason: `项目目录 ${real} 已不在允许的可选根内（security.json 的 projectAccess 已变更）。请在频道空闲时执行 /project set <path> 或 /project reset。`,
+			reason: `项目目录 \`${real}\` 已不在允许的根目录内（security.json 的 projectAccess 已变更）。请在频道空闲时用 \`/project set <路径>\` 或 \`/project reset\` 重新选择。`,
 		};
 	}
 	return { kind: "ready", scope: { projectRoot: real, boundary, sandbox }, selection: existing };

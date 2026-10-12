@@ -79,11 +79,23 @@ describe("log file sink", () => {
 		log.configureLogging({ level: "warn", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
 
 		log.logInfo("info line"); // info < warn → dropped
-		log.logWarning("warn line"); // kept
+		log.logWarn("test.line.kept", "warn line"); // kept
 		await flush(log);
 
 		const records = readRecords(runtimeLogPath);
 		expect(records.map((r) => r.message)).toEqual(["warn line"]);
+	});
+
+	// Regression: the `[channelId]` prefix parser only accepted `[A-Za-z0-9._-]`, so a group
+	// channel (`group_<base64 conversationId>`) kept its prefix in the message and lost `channelId`.
+	it("parses a base64 group channel id out of a legacy message prefix", async () => {
+		const { log, runtimeLogPath } = await loadLog();
+		log.configureLogging({ level: "info", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
+
+		log.logInfo("[group_cid+a/b==] msg");
+		await flush(log);
+
+		expect(readRecords(runtimeLogPath)[0]).toMatchObject({ channelId: "group_cid+a/b==", message: "msg" });
 	});
 
 	it("redacts sensitive values and bounds details in structured records", async () => {

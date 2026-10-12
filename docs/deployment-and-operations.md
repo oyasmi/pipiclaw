@@ -154,7 +154,7 @@ supervisorctl tail -f pipiclaw
 
 - `/status` —— 执行状态、当前模型、上下文用量、运行时长、版本
 - `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；任务相关条目带 `taskId`；任务的 `usage.usd` 另外汇总任务成本（含绑定委派）用于预算，无法实报的外部成本可能含估算
-- `/tasks doctor` —— 任务契约与等待票的只读体检，每条问题附下一步建议
+- `/tasks doctor` —— 任务文件与等待条件的只读体检，每条问题附下一步建议
 - `/tasks pause|resume|run|steer|reply ...` —— 暂停、恢复、立即唤醒、纠偏或回答阻塞问题
 - `/subagents` —— 运行中的委派、最近结果和角色可用性摘要
 - `/subagents show <runId>` / `output <runId>` —— 实际 argv、工作目录、stderr 与文本产出
@@ -162,7 +162,13 @@ supervisorctl tail -f pipiclaw
 
 ### 结构化日志与成本账本（Structured Logs and Cost Ledger）
 
-除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。日志级别与落盘开关见[配置字段参考的可观测性一节](./configuration-reference.md#可观测性结构化日志与成本账本observability-structured-logging--cost-ledger)。
+除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。
+
+每条警告都有一个可筛选的事件名，格式为 `<domain>.<object>.<verb>`，例如 `dingtalk.reconnect.failed`、`dingtalk.card.stream_failed`、`dispatch.exhausted`、`taskdriver.task.paused`、`subagent.settle.failed`、`runtime.shutdown.waiting`。消息本身是固定的一句话，变化的部分（原因、id、计数）放在 `fields` 里（原因在 `fields.reason` 和 `details`），所以 `jq 'select(.event == "dingtalk.reconnect.failed")'` 就能筛出同一类问题。群聊频道（`group_<base64 id>`）的记录也带 `channelId` 字段。
+
+> **从 0.9.x 升级的注意事项**：此前所有警告的事件名都是 `system.warning`、大部分 info 是 `system.info`；依赖这两个名字筛选的外部脚本需要改用新的事件名。仍未迁移的少量 info 级记录还在 `system.info` 下。每步都会出现的 `taskdriver.step.enqueued` 降到了 debug 级别。
+
+日志级别与落盘开关见[配置字段参考的可观测性一节](./configuration-reference.md#可观测性结构化日志与成本账本observability-structured-logging--cost-ledger)。
 
 ### 进程日志（Process Logs）
 
@@ -317,6 +323,10 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 5. 再逐步放开使用范围
 
 ## 常见运维问题（Common Operational Issues）
+
+### 首次运行
+
+第一次运行 `pipiclaw` 会在 `${PIPICLAW_HOME:-~/.pipiclaw}` 下生成配置模板，并打印接下来的三步：填 `channel.json` 的 `clientId`、`clientSecret`（钉钉开放平台 → 应用 → 凭证；`cardTemplateId` 可选，用于 AI Card 流式输出），用 `pipiclaw auth login` 或 `models.json` 配置模型，然后再次运行。这一次的退出码是 **0**——生成模板是预期结果，不是错误。之后如果 `channel.json` 仍是 `your-*` 占位值，启动会报出具体字段并以退出码 1 退出。用 systemd / pm2 托管时，不要把第一次运行放进带自动重启的服务里。
 
 ### 进程启动后立即退出
 

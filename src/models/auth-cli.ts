@@ -10,6 +10,7 @@ import type { AuthType } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { prepareAppServices } from "../app-services.js";
 import * as log from "../log.js";
+import { docsUrl } from "../paths.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -233,7 +234,7 @@ async function runLogin(
 			io.error(
 				`"${target.name}" uses ambient credentials (environment variables / local config files), not interactive login.`,
 			);
-			io.error("See docs/configuration.md for how to configure it.");
+			io.error(`See ${docsUrl("configuration.md")} for how to configure it.`);
 			throw new BootstrapExitError(1);
 		}
 
@@ -266,7 +267,7 @@ async function runLogin(
 			io.log(
 				"Warning: PIPICLAW_PROXY is set but HTTPS_PROXY/HTTP_PROXY is not. Codex chat traffic uses a " +
 					"WebSocket transport that only honors HTTPS_PROXY/HTTP_PROXY and may connect directly — see " +
-					"docs/configuration.md.",
+					`${docsUrl("configuration.md")}.`,
 			);
 		}
 	} catch (error) {

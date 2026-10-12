@@ -159,7 +159,9 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 			const hasUnknownSignal = entry.usageKnown === false || entry.costKnown === false;
 			if (!hasKnownSignal && !hasUnknownSignal) return;
 			if (!entry.channelId) {
-				log.logWarning("Usage ledger entry missing channelId; recording as untracked", `kind=${entry.kind}`);
+				log.logWarn("usage.entry.untracked", "Usage entry missing channelId; recorded as untracked", {
+					fields: { kind: entry.kind },
+				});
 			}
 			const full: UsageLedgerEntry = {
 				ts: formatLocalTime(),

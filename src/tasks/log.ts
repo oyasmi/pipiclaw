@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { clipText } from "../shared/text-utils.js";
+import { clipText, truncate } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { normalizeTaskId } from "./ledger.js";
 
@@ -239,7 +239,7 @@ export async function readTaskLog(
 	return options.limit !== undefined && records.length > options.limit ? records.slice(-options.limit) : records;
 }
 
-/** One line per record, for the step brief and `/tasks show`. */
+/** One line per record, for the step brief and `task_log` (model-facing; `/tasks` uses `renderTaskLogLineForUser`). */
 export function renderTaskLogLine(record: TaskLogRecord): string {
 	switch (record.kind) {
 		case "step":
@@ -254,5 +254,67 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 			return `- [${record.ts}] ${record.outcome === "done" ? "完成" : "取消"}：${record.note}`;
 		case "note":
 			return `- [${record.ts}] ${record.note}`;
+	}
+}
+
+/** `2026-10-11T14:02:33.000+08:00` → `10-11 14:02`: read straight off the stored wall-clock text, never re-zoned. */
+function minuteStamp(ts: string): string {
+	const match = /^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/.exec(ts);
+	return match ? `${match[1]} ${match[2]}` : ts;
+}
+
+/** A run id is `run_…`; anything else bound to a task is a background job. */
+export function describeWorkRef(ref: string): string {
+	return /^run_/i.test(ref) ? `委派 \`${ref}\`` : `后台作业 \`${ref}\``;
+}
+
+const SETTLE_STATUS: Record<string, string> = {
+	completed: "完成",
+	failed: "失败",
+	cancelled: "已取消",
+	lost: "已丢失",
+	running: "进行中",
+};
+
+/** A settled run/job's outcome in words: `完成，验收通过` / `失败（退出码 1）`. */
+export function describeSettlement(settle: Pick<TaskSettleRecord, "status" | "verdict" | "exitCode">): string {
+	const parts = [SETTLE_STATUS[settle.status] ?? settle.status];
+	if (settle.verdict) parts.push(settle.verdict === "pass" ? "验收通过" : "验收未通过");
+	const exit = settle.exitCode !== undefined && settle.exitCode !== 0 ? `（退出码 ${settle.exitCode}）` : "";
+	return `${parts.join("，")}${exit}`;
+}
+
+function oneLine(text: string, max: number): string {
+	return truncate(text.replace(/\s+/g, " ").trim(), max);
+}
+
+/**
+ * One line per record for `/tasks show` and `/tasks log` (spec 053, D2). The same records as
+ * `renderTaskLogLine`, said in the user's terms: no `task_step_end` outcome values, no `VERDICT`,
+ * no tool names, minute precision.
+ */
+export function renderTaskLogLineForUser(record: TaskLogRecord): string {
+	const at = minuteStamp(record.ts);
+	switch (record.kind) {
+		case "step": {
+			const after = record.outcome === "park" ? "（之后转入等待）" : record.outcome === "done" ? "（任务完成）" : "";
+			const reported = record.report ? "，已向你汇报" : "";
+			return `- ${at} 第 ${record.seq} 步：${oneLine(record.note, 160)}${after}${reported}`;
+		}
+		case "dispatch": {
+			const who =
+				record.agent && record.agent !== "job"
+					? `（${record.agent}${record.purpose === "verify" ? "，验收" : ""}）`
+					: "";
+			return `- ${at} 开始${describeWorkRef(record.ref)}${who}${record.item ? `，对应工作项 ${record.item}` : ""}`;
+		}
+		case "settle":
+			return `- ${at} ${describeWorkRef(record.ref)}结束：${describeSettlement(record)}`;
+		case "expired":
+			return `- ${at} 等待超时（${oneLine(record.ticket, 80)}），${record.action === "reopened" ? "已重新开始" : "已暂停"}`;
+		case "close":
+			return `- ${at} ${record.outcome === "done" ? "任务完成" : "任务取消"}：${oneLine(record.note, 160)}`;
+		case "note":
+			return `- ${at} ${oneLine(record.note, 160)}`;
 	}
 }

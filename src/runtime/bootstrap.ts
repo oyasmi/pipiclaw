@@ -15,6 +15,9 @@ import { resolveProjectScope } from "../channel/project-scope-store.js";
 import { ChannelStore } from "../channel/store.js";
 import {
 	BUILT_IN_COMMANDS,
+	formatMissingQueueMessage,
+	formatNewSessionReply,
+	formatSteerQueued,
 	formatUnknownCommandMessage,
 	isRunnerBuiltInCommand,
 	parseBuiltInCommand,
@@ -50,6 +53,7 @@ import {
 	loadConfig,
 	parseArgs,
 	printBootstrapSummary,
+	printFirstRunGuide,
 	readCliVersion,
 } from "./app-home.js";
 import { createDingTalkContext } from "./delivery.js";
@@ -61,7 +65,7 @@ import {
 	type DingTalkHandler,
 	type StopOutcome,
 } from "./dingtalk.js";
-import { DurableDispatchService } from "./durable-dispatch.js";
+import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { extensionForMimeType } from "./inbound-media.js";
 import { runReportCommand } from "./report-commands.js";
 import { renderRunNotice } from "./subagent-commands.js";
@@ -146,7 +150,10 @@ async function evictIdleRunnersOverCap(channelRunners: Map<string, AgentRunner>)
 		if (runner.isBusy()) continue;
 		channelRunners.delete(channelId);
 		await runner.dispose().catch((err) => {
-			log.logWarning(`[${channelId}] Failed to dispose evicted runner`, errorMessage(err));
+			log.logWarn("runtime.runner.evict_dispose_failed", "Evicted runner dispose failed", {
+				channelId: channelId,
+				reason: errorMessage(err),
+			});
 		});
 	}
 }
@@ -343,7 +350,11 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			await runner.bindTaskSession(taskId);
 			return { taskId, brief };
 		} catch (error) {
-			log.logWarning(`[${event.channelId}] Could not start task step for ${taskId}`, errorMessage(error));
+			log.logWarn("taskdriver.step.start_failed", "Task step start failed", {
+				channelId: event.channelId,
+				reason: errorMessage(error),
+				fields: { taskId },
+			});
 			return undefined;
 		}
 	};
@@ -358,10 +369,18 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 				// closed context silently dropped successful task_step_end notifications (T-run-01).
 				const delivered = await bot.sendPlain(channelId, notice);
 				if (delivered) await store.logBotResponse(channelId, notice, Date.now().toString());
-				else log.logWarning(`[${channelId}] Failed to deliver task notice for ${taskId}`);
+				else
+					log.logWarn("taskdriver.notice.delivery_failed", "Task notice delivery failed", {
+						channelId: channelId,
+						fields: { taskId },
+					});
 			}
 		} catch (error) {
-			log.logWarning(`[${channelId}] Could not deliver task notice for ${taskId}`, errorMessage(error));
+			log.logWarn("taskdriver.notice.delivery_failed", "Task notice delivery failed", {
+				channelId: channelId,
+				reason: errorMessage(error),
+				fields: { taskId },
+			});
 		}
 		await getRunner(channelId).bindChatSession();
 	};
@@ -390,27 +409,43 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						reason: "用户 /stop 中止了该任务的当前步骤。",
 					});
 					pausedTaskId = taskId;
-					log.logInfo(`[${channelId}] Paused task ${taskId} on /stop`);
+					log.logInfoEvent("tasks.task.paused_on_stop", "Task paused on /stop", {
+						channelId: channelId,
+						fields: { taskId },
+					});
 				}
 				_bot.discardCard(channelId);
 				// Drop queued-but-not-started messages so a burst does not keep
 				// running after the user asked to halt; abort the in-flight one.
 				const dropped = _bot.clearPendingMessages(channelId);
 				if (dropped > 0) {
-					log.logInfo(`[${channelId}] Dropped ${dropped} queued message(s) on stop`);
+					log.logInfoEvent("agent.turn.queue_dropped", "Queued messages dropped on /stop", {
+						channelId: channelId,
+						fields: { count: dropped },
+					});
 				}
 				void runner.abort().catch((err) => {
-					log.logWarning(`[${channelId}] Failed to abort run`, errorMessage(err));
+					log.logWarn("agent.turn.abort_failed", "Turn abort failed", {
+						channelId: channelId,
+						reason: errorMessage(err),
+					});
 				});
 				void getDurableDispatch()
 					?.cancelChannel(channelId)
 					.then((canceled) => {
-						if (canceled) log.logInfo(`[${channelId}] Reset ${canceled} durable-dispatch lease(s) on stop`);
+						if (canceled)
+							log.logInfoEvent("dispatch.cancel.reset", "Durable dispatch leases reset on /stop", {
+								channelId: channelId,
+								fields: { count: canceled },
+							});
 					})
 					.catch((err) => {
-						log.logWarning(`[${channelId}] Failed to reset durable-dispatch leases on stop`, errorMessage(err));
+						log.logWarn("dispatch.cancel.failed", "Durable dispatch lease reset on stop failed", {
+							channelId: channelId,
+							reason: errorMessage(err),
+						});
 					});
-				log.logInfo(`[${channelId}] Stop requested`);
+				log.logInfoEvent("agent.turn.stop_requested", "Stop requested", { channelId: channelId });
 				if (!stopWatchdogs.has(channelId)) {
 					stopWatchdogs.add(channelId);
 					void forceEndStuckTurnAfterStop({
@@ -420,7 +455,10 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						notify: (text) => _bot.sendPlain(channelId, text),
 					})
 						.catch((err) => {
-							log.logWarning(`[${channelId}] Stop watchdog failed`, errorMessage(err));
+							log.logWarn("agent.turn.stop_watchdog_failed", "Stop watchdog failed", {
+								channelId: channelId,
+								reason: errorMessage(err),
+							});
 						})
 						.finally(() => {
 							stopWatchdogs.delete(channelId);
@@ -459,17 +497,20 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 							} catch (error) {
 								// The active pointer already names the new session. Retirement is
 								// best-effort cleanup and must not misreport the committed reset as failed.
-								log.logWarning(
-									`[${event.channelId}] Old runner retirement failed after /new`,
-									errorMessage(error),
-								);
+								log.logWarn("agent.session.retire_failed", "Old runner retirement after /new failed", {
+									channelId: event.channelId,
+									reason: errorMessage(error),
+								});
 							}
 						}
 						const dropped = _bot.resetChannelQueue(event.channelId);
 						if (dropped > 0) {
-							log.logInfo(`[${event.channelId}] /new discarded ${dropped} queued old-session message(s)`);
+							log.logInfoEvent("agent.session.queue_dropped", "Old-session queued messages discarded by /new", {
+								channelId: event.channelId,
+								fields: { count: dropped },
+							});
 						}
-						await _bot.sendPlain(event.channelId, `已开启新会话。\n\nSession ID: \`${result.sessionId}\``);
+						await _bot.sendPlain(event.channelId, formatNewSessionReply(result.sessionId));
 						void archiveIncomingMessage(
 							event.channelId,
 							{
@@ -485,10 +526,13 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						);
 					} catch (error) {
 						const message = errorMessage(error);
-						log.logWarning(`[${event.channelId}] Failed to create a fresh session`, message);
+						log.logWarn("agent.session.create_failed", "Fresh session creation failed", {
+							channelId: event.channelId,
+							reason: message,
+						});
 						await _bot.sendPlain(
 							event.channelId,
-							`新会话创建失败：${message}\n\n旧会话仍保持不变；请重试 \`/new\`。`,
+							`新会话创建失败：${message}\n旧会话保持不变，可以重试 \`/new\`。`,
 						);
 					}
 				});
@@ -523,7 +567,10 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						const runner = channelRunners.get(channelId);
 						channelRunners.delete(channelId);
 						await runner?.dispose().catch((err) => {
-							log.logWarning(`[${channelId}] Failed to dispose runner after /project`, errorMessage(err));
+							log.logWarn("runtime.runner.dispose_failed", "Runner dispose after /project failed", {
+								channelId: channelId,
+								reason: errorMessage(err),
+							});
 						});
 					},
 					dispatchTask: async (id) => {
@@ -562,8 +609,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			const trimmedQueueText = queueText.trim();
 
 			if (!trimmedQueueText) {
-				const commandName = mode === "followUp" ? "followup" : "steer";
-				await bot.sendPlain(event.channelId, `无法排队：/${commandName} 需要带上消息内容。`);
+				await bot.sendPlain(event.channelId, formatMissingQueueMessage(mode === "followUp" ? "followup" : "steer"));
 				return { kind: "handled" };
 			}
 
@@ -571,7 +617,9 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			// kept as a normal queued turn instead of trying to steer an agent loop that
 			// is currently disconnected for summarization.
 			if (runner.interruptCompaction()) {
-				log.logInfo(`[${event.channelId}] Interrupted compaction for a new user message`);
+				log.logInfoEvent("agent.compaction.interrupted", "Compaction interrupted for a new user message", {
+					channelId: event.channelId,
+				});
 				return { kind: "requeue", text: trimmedQueueText };
 			}
 
@@ -618,10 +666,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					`${mode} message`,
 				);
 
-				const confirmation = event.text.trim().startsWith("/")
-					? "已作为 steer 排队，当前工具步骤结束后生效。"
-					: "已作为 steer 排队，当前工具步骤结束后生效。想等整个回合结束再执行，用 `/followup <消息>`。";
-				await bot.sendPlain(event.channelId, confirmation);
+				await bot.sendPlain(event.channelId, formatSteerQueued(!event.text.trim().startsWith("/")));
 				log.logEvent("info", "agent.turn.steer_queued", "Steer queued", {
 					ctx: { channelId: event.channelId, userName: event.userName },
 					fields: { messageLength: trimmedQueueText.length },
@@ -630,11 +675,21 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			} catch (err) {
 				const errMsg = errorMessage(err);
 				if (isNoRunningTaskQueueError(err)) {
-					log.logInfo(`[${event.channelId}] Busy ${mode} window closed; requeueing as a normal message`);
+					log.logInfoEvent("agent.turn.requeued", "Busy window closed; message requeued as a normal turn", {
+						channelId: event.channelId,
+						fields: { mode },
+					});
 					return { kind: "requeue", text: trimmedQueueText };
 				}
-				log.logWarning(`[${event.channelId}] Failed to queue ${mode}`, errMsg);
-				await bot.sendPlain(event.channelId, `无法排队这条消息：${errMsg}`);
+				log.logWarn("agent.turn.queue_failed", "Busy message queueing failed", {
+					channelId: event.channelId,
+					reason: errMsg,
+					fields: { mode },
+				});
+				await bot.sendPlain(
+					event.channelId,
+					`这条消息没能排进当前回合：${errMsg}\n等当前回合结束后重发，或用 \`/followup <消息>\` 排到它之后。`,
+				);
 				return { kind: "handled" };
 			}
 		},
@@ -665,7 +720,10 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					...(image.mimeType === null ? { unsupportedFormat: true } : {}),
 				};
 			} catch (err) {
-				log.logWarning(`[${channelId}] Failed to persist inbound image`, errorMessage(err));
+				log.logWarn("dingtalk.media.persist_failed", "Inbound image persist failed", {
+					channelId: channelId,
+					reason: errorMessage(err),
+				});
 				return null;
 			}
 		},
@@ -679,7 +737,9 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		async handleEvent(inboundEvent: ChannelEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
 			let event = inboundEvent;
 			if (isShuttingDown()) {
-				log.logInfo(`[${event.channelId}] Ignoring event during shutdown`);
+				log.logInfoEvent("runtime.shutdown.event_ignored", "Event ignored during shutdown", {
+					channelId: event.channelId,
+				});
 				return;
 			}
 
@@ -739,10 +799,10 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 									markdown: true,
 								});
 								if (!delivered) {
-									log.logWarning(
-										`[${event.channelId}] Failed to deliver /${builtInCommand.name} reply`,
-										`${response.length} chars`,
-									);
+									log.logWarn("delivery.command_reply.failed", "Command reply delivery failed", {
+										channelId: event.channelId,
+										fields: { command: builtInCommand.name, chars: response.length },
+									});
 								}
 							} else if (isRunnerBuiltInCommand(builtInCommand)) {
 								await runner.handleBuiltinCommand(ctx, builtInCommand);
@@ -790,9 +850,10 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 							options.wakeTransitionHooks?.[kind],
 						);
 						if (!claimed) {
-							log.logWarning(
-								`[${event.channelId}] Ignored an unverifiable ${kind} wake for ${resourceId} claiming task ${wakeTaskId}`,
-							);
+							log.logWarn("dispatch.wake.unverified", "Unverifiable wake ignored", {
+								channelId: event.channelId,
+								fields: { kind, resourceId, taskId: wakeTaskId },
+							});
 							structuredWakeFinalized = true;
 							return;
 						}
@@ -817,7 +878,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					if (taskStep) await finishTaskStep(event.channelId, taskStep.taskId, bot);
 
 					if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
-						log.logInfo(`[${event.channelId}] Stopped`);
+						log.logInfoEvent("agent.turn.stopped", "Turn stopped", { channelId: event.channelId });
 					}
 				} catch (err) {
 					log.logEvent("error", "agent.turn.failed", "Turn failed", {
@@ -826,7 +887,10 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					});
 				} finally {
 					await baseCtx?.close().catch((error: unknown) => {
-						log.logWarning(`[${event.channelId}] Failed to close delivery`, errorMessage(error));
+						log.logWarn("delivery.close.failed", "Delivery close failed", {
+							channelId: event.channelId,
+							reason: errorMessage(error),
+						});
 					});
 					if (structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
 					else await getDurableDispatch()?.markRetryable(event.dispatchId);
@@ -888,7 +952,11 @@ export async function createRuntimeContext(
 		try {
 			await store.logMessage(channelId, message);
 		} catch (err) {
-			log.logWarning(`[${channelId}] Failed to archive ${contextLabel}`, errorMessage(err));
+			log.logWarn("channel.archive.write_failed", "Message archive failed", {
+				channelId: channelId,
+				reason: errorMessage(err),
+				fields: { label: contextLabel },
+			});
 		}
 	};
 
@@ -953,24 +1021,21 @@ export async function createRuntimeContext(
 	const bot = options.createBot
 		? options.createBot(handler, options.dingtalkConfig)
 		: new DingTalkBot(handler, options.dingtalkConfig);
+	const dispatchStateDir = join(options.paths.appHomeDir, "state", "dispatch");
 	durableDispatch = new DurableDispatchService({
-		stateDir: join(options.paths.appHomeDir, "state", "dispatch"),
+		stateDir: dispatchStateDir,
 		bot,
 		// A structured wake (job/subagent completion, task-driver) that keeps failing before it can
 		// ever mark itself complete would otherwise redeliver forever (30s tick, no backoff prior to
 		// this notice). Surface it once instead of looping silently; the record stays on disk for
 		// inspection until a human clears it.
 		onExhausted: async (record) => {
-			log.logWarning(
-				`[${record.event.channelId}] Dispatch ${record.id} exhausted after ${record.deliveries} deliveries`,
-				record.event.text.slice(0, 500),
-			);
-			await bot.sendPlain(
-				record.event.channelId,
-				`一个后台唤醒（${record.event.user}）连续 ${record.deliveries} 次投递均未能完成，已停止自动重试：\n` +
-					`${record.event.text.slice(0, 300)}\n` +
-					`记录文件：state/dispatch/${record.id}.json（已保留，供排查）。`,
-			);
+			log.logEvent("warn", "dispatch.exhausted", "Dispatch exhausted", {
+				ctx: { channelId: record.event.channelId },
+				details: record.event.text.slice(0, 500),
+				fields: { dispatchId: record.id, deliveries: record.deliveries, producer: record.event.user },
+			});
+			await bot.sendPlain(record.event.channelId, renderDispatchExhaustedNotice(record, dispatchStateDir));
 		},
 	});
 	const executor = options.executor ?? createExecutor();
@@ -1019,18 +1084,18 @@ export async function createRuntimeContext(
 		model: defaultModel.id,
 	});
 	if (recoveryReport.repaired.length > 0) {
-		log.logWarning(
-			"Repaired interrupted turns on restart",
-			`${recoveryReport.repaired.length}/${recoveryReport.scanned} channel(s): ${recoveryReport.repaired
-				.map((r) => r.channelDir)
-				.join(", ")}`,
-		);
+		log.logWarn("runtime.recovery.repaired", "Interrupted turns repaired on restart", {
+			fields: {
+				repaired: recoveryReport.repaired.length,
+				scanned: recoveryReport.scanned,
+				channels: recoveryReport.repaired.map((r) => r.channelDir),
+			},
+		});
 	}
 	if (recoveryReport.blocked.length > 0) {
-		log.logWarning(
-			"Some channels have an unrecoverable session and will refuse new turns",
-			recoveryReport.blocked.map((b) => `${b.channelDir}: ${b.reason}`).join("; "),
-		);
+		log.logWarn("runtime.recovery.blocked", "Channels with an unrecoverable session will refuse new turns", {
+			reason: recoveryReport.blocked.map((b) => `${b.channelDir}: ${b.reason}`).join("; "),
+		});
 	}
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
@@ -1108,7 +1173,7 @@ export async function createRuntimeContext(
 
 		shutdownPromise = (async () => {
 			shuttingDown = true;
-			log.logInfo(`Shutting down (${reason})...`);
+			log.logInfoEvent("runtime.shutdown.started", "Shutting down", { fields: { reason } });
 
 			taskDriver.stop();
 			durableDispatch?.stop();
@@ -1120,19 +1185,28 @@ export async function createRuntimeContext(
 
 			const runningTasks = Array.from(activeTasks);
 			if (runningTasks.length > 0) {
-				log.logInfo(`Waiting for ${runningTasks.length} active task(s) to finish`);
+				log.logInfoEvent("runtime.shutdown.waiting", "Waiting for active turns to finish", {
+					fields: { activeTurns: runningTasks.length },
+				});
 				const completed = await waitForTasks(runningTasks, SHUTDOWN_WAIT_MS);
 
 				if (!completed) {
-					log.logWarning(`Shutdown grace period exceeded ${SHUTDOWN_WAIT_MS}ms, aborting active runs`);
+					log.logWarn("runtime.shutdown.grace_exceeded", "Shutdown grace period exceeded; aborting active turns", {
+						fields: { waitMs: SHUTDOWN_WAIT_MS },
+					});
 					const aborts: Promise<void>[] = [];
 					for (const [channelId, runner] of channelRunners) {
 						if (!runner.isBusy()) continue;
 						runner.requestStop();
-						log.logInfo(`[${channelId}] Aborting active run for shutdown`);
+						log.logInfoEvent("runtime.shutdown.aborting", "Aborting active turn for shutdown", {
+							channelId: channelId,
+						});
 						aborts.push(
 							runner.abort().catch((err) => {
-								log.logWarning(`[${channelId}] Failed to abort run during shutdown`, errorMessage(err));
+								log.logWarn("runtime.shutdown.abort_failed", "Turn abort during shutdown failed", {
+									channelId: channelId,
+									reason: errorMessage(err),
+								});
 							}),
 						);
 					}
@@ -1142,7 +1216,9 @@ export async function createRuntimeContext(
 					if (remainingTasks.length > 0) {
 						const abortedCompleted = await waitForTasks(remainingTasks, SHUTDOWN_ABORT_WAIT_MS);
 						if (!abortedCompleted) {
-							log.logWarning(`Shutdown forced exit with ${remainingTasks.length} task(s) still active`);
+							log.logWarn("runtime.shutdown.forced", "Shutdown forced with turns still active", {
+								fields: { activeTurns: remainingTasks.length },
+							});
 						}
 					}
 				}
@@ -1156,15 +1232,22 @@ export async function createRuntimeContext(
 				if (runner.isBusy()) continue;
 				disposals.push(
 					runner.dispose().catch((err) => {
-						log.logWarning(`[${channelId}] Failed to dispose runner during shutdown`, errorMessage(err));
+						log.logWarn("runtime.shutdown.dispose_failed", "Runner dispose during shutdown failed", {
+							channelId: channelId,
+							reason: errorMessage(err),
+						});
 					}),
 				);
 			}
 			if (disposals.length > 0) {
-				log.logInfo(`Disposing ${disposals.length} idle channel runner(s) before shutdown`);
+				log.logInfoEvent("runtime.shutdown.disposing", "Disposing idle channel runners", {
+					fields: { count: disposals.length },
+				});
 				const disposed = await waitForTasks(disposals, SHUTDOWN_FLUSH_WAIT_MS);
 				if (!disposed) {
-					log.logWarning(`Shutdown runner disposal exceeded ${SHUTDOWN_FLUSH_WAIT_MS}ms`);
+					log.logWarn("runtime.shutdown.dispose_timeout", "Runner disposal during shutdown timed out", {
+						fields: { waitMs: SHUTDOWN_FLUSH_WAIT_MS },
+					});
 				}
 			}
 			channelRunners.clear();
@@ -1179,7 +1262,9 @@ export async function createRuntimeContext(
 			];
 			const storageFlushed = await waitForTasks(storageFlushes, SHUTDOWN_LOG_FLUSH_WAIT_MS);
 			if (!storageFlushed) {
-				log.logWarning(`Shutdown log flush exceeded ${SHUTDOWN_LOG_FLUSH_WAIT_MS}ms`);
+				log.logWarn("runtime.shutdown.flush_timeout", "Log flush during shutdown timed out", {
+					fields: { waitMs: SHUTDOWN_LOG_FLUSH_WAIT_MS },
+				});
 			}
 			await waitForTasks([log.flushLogging()], SHUTDOWN_LOG_FLUSH_WAIT_MS);
 		})();
@@ -1236,9 +1321,11 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	const bootstrapResult = bootstrapAppHome(paths);
 	printBootstrapSummary(bootstrapResult, io, paths);
 
+	// A freshly written template is the expected first-run outcome, not a failure: guide and exit 0.
+	// A template that exists but is still unfilled is caught by `loadConfig` below and exits 1.
 	if (bootstrapResult.channelTemplateCreated) {
-		io.error(`Fill in ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
-		throw new BootstrapExitError(1);
+		printFirstRunGuide(io, paths);
+		throw new BootstrapExitError(0);
 	}
 
 	const dingtalkConfig = loadConfig(paths, io);

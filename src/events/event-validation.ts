@@ -31,12 +31,43 @@ export const MIN_PERIODIC_INTERVAL_WITH_PREACTION_MS = 5 * 60 * 1000;
 /** sanity cap on total scheduled events to keep the directory (and the scheduler) from being flooded. */
 export const MAX_EVENT_FILES = 50;
 
-export class EventValidationError extends Error {
+/**
+ * What is wrong with an event definition, as data (spec 053, D2). The error `message` is English
+ * and written for the model (`event_manage` returns it as a recoverable rejection); `/events list`
+ * renders `kind` in the user's terms instead of pasting that text into the chat.
+ */
+export type EventProblemKind =
+	| "malformed"
+	| "missing-field"
+	| "payload"
+	| "task-template"
+	| "pre-action"
+	| "immediate"
+	| "unknown-type"
+	| "one-shot-time"
+	| "one-shot-too-soon"
+	| "one-shot-too-far"
+	| "cron-invalid"
+	| "cadence-too-frequent"
+	| "pre-action-blocked";
+
+/** A definition the file parser rejects. Kept distinct from `EventValidationError`, which the tool treats as model-fixable. */
+export class EventDefinitionError extends Error {
+	constructor(
+		readonly kind: EventProblemKind,
+		message: string,
+	) {
+		super(message);
+		this.name = "EventDefinitionError";
+	}
+}
+
+export class EventValidationError extends EventDefinitionError {
 	/** Whether the model can usefully retry with a corrected definition. */
 	readonly recoverable: boolean;
 
-	constructor(message: string, recoverable = true) {
-		super(message);
+	constructor(kind: EventProblemKind, message: string, recoverable = true) {
+		super(kind, message);
 		this.name = "EventValidationError";
 		this.recoverable = recoverable;
 	}
@@ -45,20 +76,24 @@ export class EventValidationError extends Error {
 export function validateOneShotLead(event: ScheduledEvent & { type: "one-shot" }, now = Date.now()): void {
 	const atTime = parseLocalTime(event.at);
 	if (atTime === undefined) {
-		throw new EventValidationError(`one-shot 'at' is not a valid local time: ${event.at}`);
+		throw new EventValidationError("one-shot-time", `one-shot 'at' is not a valid local time: ${event.at}`);
 	}
 	if (atTime < now + MIN_ONE_SHOT_LEAD_MS) {
-		throw new EventValidationError("one-shot 'at' must be at least 2 minutes in the future (self-triggering guard).");
+		throw new EventValidationError(
+			"one-shot-too-soon",
+			"one-shot 'at' must be at least 2 minutes in the future (self-triggering guard).",
+		);
 	}
 }
 
 function validateOneShotMaximumDelay(event: ScheduledEvent & { type: "one-shot" }, now = Date.now()): void {
 	const atTime = parseLocalTime(event.at);
 	if (atTime === undefined) {
-		throw new EventValidationError(`one-shot 'at' is not a valid local time: ${event.at}`);
+		throw new EventValidationError("one-shot-time", `one-shot 'at' is not a valid local time: ${event.at}`);
 	}
 	if (atTime - now > MAX_ONE_SHOT_DELAY_MS) {
 		throw new EventValidationError(
+			"one-shot-too-far",
 			"one-shot 'at' must be within about 24.8 days; use a periodic event for longer delays.",
 		);
 	}
@@ -71,7 +106,10 @@ export function validatePeriodicCadence(event: ScheduledEvent & { type: "periodi
 		runs = cron.nextRuns(3);
 		cron.stop();
 	} catch (error) {
-		throw new EventValidationError(`Invalid cron schedule "${event.schedule}": ${errorMessage(error)}`);
+		throw new EventValidationError(
+			"cron-invalid",
+			`Invalid cron schedule "${event.schedule}": ${errorMessage(error)}`,
+		);
 	}
 	// A preAction gate makes a tighter cadence safe (the sensor keeps most fires silent);
 	// without one, hold the 30-minute floor so a bare high-frequency cron can't burn tokens.
@@ -81,6 +119,7 @@ export function validatePeriodicCadence(event: ScheduledEvent & { type: "periodi
 	for (let i = 1; i < runs.length; i++) {
 		if (runs[i].getTime() - runs[i - 1].getTime() < floorMs) {
 			throw new EventValidationError(
+				"cadence-too-frequent",
 				`periodic events must fire no more often than every ${floorMinutes} minutes` +
 					`${event.preAction ? " (even with a preAction gate)" : "; for tighter checks add a preAction gate (min 5 minutes) instead of a high-frequency cron"}.`,
 			);
@@ -95,7 +134,11 @@ export function validatePreActionCommand(
 	if (!event.preAction || !commandGuardConfig) return;
 	const result = guardCommand(event.preAction.command, commandGuardConfig);
 	if (!result.allowed) {
-		throw new EventValidationError(`preAction command blocked by guard: ${result.reason ?? "not allowed"}`, false);
+		throw new EventValidationError(
+			"pre-action-blocked",
+			`preAction command blocked by guard: ${result.reason ?? "not allowed"}`,
+			false,
+		);
 	}
 }
 

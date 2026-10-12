@@ -395,7 +395,10 @@ export class ChannelJobManager {
 			await chmod(path, 0o600).catch(() => undefined);
 		} catch (error) {
 			if (required) throw error;
-			log.logWarning(`Failed to persist background job ${record.id}`, errorMessage(error));
+			log.logWarn("job.persist.failed", "Background job persist failed", {
+				reason: errorMessage(error),
+				fields: { jobId: record.id },
+			});
 		}
 	}
 
@@ -609,7 +612,10 @@ export class ChannelJobManager {
 				agent: "job",
 				label,
 			}).catch((error) => {
-				log.logWarning(`Failed to log dispatch of job ${id} to task ${options.taskId}`, errorMessage(error));
+				log.logWarn("job.task_dispatch.log_failed", "Task dispatch record failed", {
+					reason: errorMessage(error),
+					fields: { jobId: id, taskId: options.taskId },
+				});
 			});
 		}
 		this.ensureSweeper();
@@ -682,7 +688,7 @@ export class ChannelJobManager {
 			// rejection here (a probe that cannot spawn — EAGAIN/EMFILE/ENOMEM) exits the
 			// whole daemon, since nothing installs a process-level rejection handler.
 			this.sweep().catch((error) => {
-				log.logWarning("Background job sweep failed", errorMessage(error));
+				log.logWarn("job.sweep.failed", "Background job sweep failed", { reason: errorMessage(error) });
 			});
 		}, this.sweepIntervalMs);
 		// Do not keep the process alive just for the sweeper.
@@ -723,7 +729,10 @@ export class ChannelJobManager {
 						await this.applyProbe(record, probes.get(record.id) ?? "");
 					})
 					.catch((error) => {
-						log.logWarning(`Background job sweep failed to refresh job ${record.id}`, errorMessage(error));
+						log.logWarn("job.sweep.refresh_failed", "Background job refresh failed", {
+							reason: errorMessage(error),
+							fields: { jobId: record.id },
+						});
 					});
 			}
 			await this.collectGarbage();
@@ -917,7 +926,10 @@ export class ChannelJobManager {
 			tail: output?.text.slice(-WAKE_OUTPUT_TAIL_BYTES).trim() || undefined,
 			durationMs: record.durationMs,
 		}).catch((error) => {
-			log.logWarning(`Failed to log settlement of job ${record.id} to task ${taskId}`, errorMessage(error));
+			log.logWarn("job.task_settle.log_failed", "Task settlement record failed", {
+				reason: errorMessage(error),
+				fields: { jobId: record.id, taskId },
+			});
 		});
 		await this.persist(record);
 	}
@@ -969,7 +981,10 @@ export class ChannelJobManager {
 		try {
 			await this.options.dispatch(event);
 		} catch (error) {
-			log.logWarning(`Failed to dispatch completion wake for job ${record.id}`, errorMessage(error));
+			log.logWarn("job.wake.dispatch_failed", "Completion wake dispatch failed", {
+				reason: errorMessage(error),
+				fields: { jobId: record.id },
+			});
 			return;
 		}
 		record.notified = true;
@@ -1180,7 +1195,9 @@ export class ChannelJobManager {
 				record = undefined;
 			}
 			if (!record) {
-				log.logWarning(`Discarding unreadable background job record: ${filename}`);
+				log.logWarn("job.record.unreadable", "Unreadable background job record discarded", {
+					fields: { file: filename },
+				});
 				await unlink(path).catch(() => undefined);
 				continue;
 			}
@@ -1189,7 +1206,10 @@ export class ChannelJobManager {
 			// One probe decides between "still running", "finished while we were down", and "gone";
 			// refresh already encodes all three, including the late completion wake.
 			await this.refresh(record, signal).catch((error) => {
-				log.logWarning(`Failed to reconcile background job ${record?.id}`, errorMessage(error));
+				log.logWarn("job.reconcile.failed", "Background job reconcile failed", {
+					reason: errorMessage(error),
+					fields: { jobId: record?.id },
+				});
 			});
 		}
 
@@ -1243,7 +1263,7 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 	function runningLines(channelId: string): string[] {
 		const manager = managers.get(channelId);
 		if (!manager) return [];
-		return manager.listRunning().map((job) => `job \`${job.id}\`: ${job.command.slice(0, 80)}`);
+		return manager.listRunning().map((job) => `后台作业 \`${job.id}\` 仍在运行：${job.command.slice(0, 80)}`);
 	}
 
 	function get(channelId: string): ChannelJobManager {
@@ -1280,7 +1300,7 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 				.filter((entry) => entry.isDirectory())
 				.map((entry) => entry.name);
 		} catch (error) {
-			log.logWarning("Failed to scan persisted background jobs", errorMessage(error));
+			log.logWarn("job.scan.failed", "Persisted background job scan failed", { reason: errorMessage(error) });
 			return 0;
 		}
 
@@ -1289,7 +1309,7 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 			restored += await get(channelId).restore();
 		}
 		if (restored > 0) {
-			log.logInfo(`Restored ${restored} background job record(s)`);
+			log.logInfoEvent("job.restore.done", "Background job records restored", { fields: { count: restored } });
 		}
 		return restored;
 	}

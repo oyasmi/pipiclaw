@@ -69,13 +69,16 @@ export function installLlmProxy(): ProxyInstallResult {
 		try {
 			parsed = new URL(explicitProxy);
 		} catch {
-			log.logWarning("PIPICLAW_PROXY is not a valid URL; LLM requests will connect directly", explicitProxy);
+			log.logWarn("runtime.proxy.invalid", "PIPICLAW_PROXY is not a valid URL; LLM requests connect directly", {
+				reason: explicitProxy,
+			});
 			return { installed: false, source: "none" };
 		}
 		if (!SUPPORTED_PROXY_PROTOCOLS.has(parsed.protocol)) {
-			log.logWarning(
-				`PIPICLAW_PROXY uses unsupported protocol "${parsed.protocol}" (only http:// and https:// proxy URLs are supported, no SOCKS); LLM requests will connect directly`,
-				explicitProxy,
+			log.logWarn(
+				"runtime.proxy.unsupported",
+				"PIPICLAW_PROXY protocol unsupported (http/https only, no SOCKS); LLM requests connect directly",
+				{ reason: explicitProxy, fields: { protocol: parsed.protocol } },
 			);
 			return { installed: false, source: "none" };
 		}

@@ -394,10 +394,10 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		await closePromise;
 		const reason = `Failed to persist external launch state: ${errorMessage(error)}`;
 		await runManager.settle(input.runId, failedSettleInput(reason), { announce: false }).catch((settleError) => {
-			log.logWarning(
-				`Failed to settle external run ${input.runId} after launch persistence failed`,
-				errorMessage(settleError),
-			);
+			log.logWarn("subagent.settle.failed", "External run settlement after launch-persistence failure failed", {
+				reason: errorMessage(settleError),
+				fields: { runId: input.runId },
+			});
 		});
 		throw error;
 	}
@@ -440,17 +440,21 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		Promise.resolve().then(() => (input.probeCliVersionFn ?? probeCliVersion)(invocation.executable)),
 	])
 		.then(async ([pidStartedAt, cliVersion]) => {
-			await runManager
-				.updateLaunchMetadata(input.runId, { pidStartedAt, cliVersion })
-				.catch((error) =>
-					log.logWarning(`Failed to persist launch probes for run ${input.runId}`, errorMessage(error)),
-				);
+			await runManager.updateLaunchMetadata(input.runId, { pidStartedAt, cliVersion }).catch((error) =>
+				log.logWarn("subagent.launch_probes.persist_failed", "Launch probe persist failed", {
+					reason: errorMessage(error),
+					fields: { runId: input.runId },
+				}),
+			);
 		})
 		.catch((error) => {
 			// The production probes are already best-effort; keep the same property for test seams or
 			// a future host implementation and never leave a spawned child unobserved because metadata
 			// collection failed.
-			log.logWarning(`Failed to collect launch probes for run ${input.runId}`, errorMessage(error));
+			log.logWarn("subagent.launch_probes.collect_failed", "Launch probe collection failed", {
+				reason: errorMessage(error),
+				fields: { runId: input.runId },
+			});
 		});
 
 	// Deliberately attach the close watcher before waiting for probe metadata. A fast child can exit
@@ -487,7 +491,10 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			(settleInput, options) => runManager.settle(input.runId, settleInput, options),
 			{ announce: terminationReason !== "cancelled" },
 		).catch((error) => {
-			log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
+			log.logWarn("subagent.settle.failed", "External run settlement failed", {
+				reason: errorMessage(error),
+				fields: { runId: input.runId },
+			});
 		});
 	});
 	await launchMetadataPromise;

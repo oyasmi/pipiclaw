@@ -50,7 +50,7 @@ export function parseProjectCommand(args: string): ProjectCommand {
 		if (parts.length > 1) throw new Error("用法：/project reset");
 		return { action: "reset" };
 	}
-	throw new Error(`未知的 /project 子命令：${parts[0]}`);
+	throw new Error(`未知子命令 \`${parts[0]}\`。`);
 }
 
 function formatShow(options: HandleProjectCommandOptions): string {
@@ -59,28 +59,27 @@ function formatShow(options: HandleProjectCommandOptions): string {
 	const sandbox = currentProjectSandboxStatus();
 	const selection = readProjectSelection(options.channelDir);
 
-	const lines = ["**项目作用域**"];
+	const lines = ["**项目目录**"];
 	if (!selection) {
-		lines.push(`- 项目目录：\`${resolution.policy.defaultRoot}\`（尚未选择过，将在下次准入时采用 app 默认值）`);
+		lines.push(`- 当前：\`${resolution.policy.defaultRoot}\`（尚未选择过，下一条消息起采用默认目录）`);
 	} else {
-		lines.push(`- 项目目录：\`${selection.projectRoot}\`（${selection.updatedBy}，更新于 ${selection.updatedAt}）`);
+		const by = selection.updatedBy === "tui-command" ? "终端" : "钉钉";
+		lines.push(`- 当前：\`${selection.projectRoot}\`（${by}中设置，更新于 ${selection.updatedAt}）`);
 	}
 	lines.push(
-		`- 边界：${resolution.configured ? "project（文件工具被约束在此目录内）" : "unbounded（沿用旧的全局文件权限）"}`,
+		`- 访问范围：${resolution.configured ? "仅限项目目录（project）" : "不限制（unbounded，沿用全局文件权限）"}`,
 	);
-	lines.push(`- Enforcement：${sandbox.level}（${sandbox.summary}）`);
+	lines.push(`- 隔离级别：${sandbox.level}（${sandbox.summary}）`);
 
 	if (!resolution.configured) {
-		lines.push(
-			`- 未配置 projectAccess：\`/project set\` 不可用。在 \`security.json\` 写入 projectAccess 段后即可使用。`,
-		);
+		lines.push("- `/project set` 不可用：请部署者在 `security.json` 中配置 `projectAccess` 后再用。");
 	} else if (!resolution.mutable) {
-		lines.push("- projectAccess.defaultRoot 配置有误，项目切换已被禁用，见启动诊断。");
+		lines.push("- `projectAccess.defaultRoot` 配置有误，项目切换已被禁用；请部署者查看启动日志。");
 	} else {
-		lines.push(`- 可选根：${resolution.policy.allowedRoots.map((root) => `\`${root}\``).join("、")}`);
+		lines.push(`- 允许的根目录：${resolution.policy.allowedRoots.map((root) => `\`${root}\``).join("、")}`);
 	}
 	for (const diagnostic of resolution.diagnostics) {
-		lines.push(`- ⚠ ${diagnostic.message}`);
+		lines.push(`- ⚠️ ${diagnostic.message}`);
 	}
 	return lines.join("\n");
 }
@@ -93,10 +92,10 @@ async function applyScopeChange(
 	const securityLoad = loadSecurityConfigWithDiagnostics(options.appHomeDir);
 	const resolution = resolveProjectAccessPolicy(securityLoad.config, process.cwd());
 	if (!resolution.configured) {
-		return `无法切换项目：未配置 projectAccess。在 \`security.json\` 写入 projectAccess 段（defaultRoot/allowedRoots）后重试。`;
+		return "无法切换项目：未配置 `projectAccess`。请部署者在 `security.json` 中写入 `projectAccess`（`defaultRoot`、`allowedRoots`）后重试。";
 	}
 	if (!resolution.mutable) {
-		return `无法切换项目：projectAccess.defaultRoot 配置有误（见启动诊断），项目切换已被禁用直到修复。`;
+		return "无法切换项目：`projectAccess.defaultRoot` 配置有误，修复前项目切换已被禁用；请部署者查看启动日志。";
 	}
 
 	const real = resolveExistingDirectory(requestedPath);
@@ -104,13 +103,13 @@ async function applyScopeChange(
 		return `无法切换项目：\`${requestedPath}\` 不是一个存在的绝对目录。`;
 	}
 	if (!isWithinAllowedRoots(real, resolution.policy)) {
-		return `无法切换项目：\`${real}\` 不在允许的可选根内。可选根：${resolution.policy.allowedRoots
+		return `无法切换项目：\`${real}\` 不在允许的根目录内。允许的根目录：${resolution.policy.allowedRoots
 			.map((root) => `\`${root}\``)
 			.join("、")}。`;
 	}
 
 	if (options.isBusy()) {
-		return "无法切换项目：当前频道有回合正在进行，请等待结束后重试。";
+		return "无法切换项目：当前频道有回合正在进行。等它结束后重试，或先用 `/stop` 停止。";
 	}
 	const blockers = await options.listActiveBlockers();
 	if (blockers.length > 0) {
@@ -119,7 +118,7 @@ async function applyScopeChange(
 
 	await commitProjectSelection(options.channelDir, real, options.actor);
 	await options.onScopeChanged?.();
-	return `${label}：\`${real}\`。下一次消息将在新的项目目录下运行。`;
+	return `${label}：\`${real}\`。下一条消息起在新的项目目录下运行。`;
 }
 
 export async function handleProjectCommand(options: HandleProjectCommandOptions): Promise<string> {

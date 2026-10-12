@@ -126,7 +126,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 
 		// Mutation check: revert `handleBusyMessage`'s steer branch to drop `event.images` and the
 		// second assertion below fails — the request lands but with no image_url part.
-		expect(harness.deliveries.some((d) => (d.text ?? "").includes("无法排队"))).toBe(false);
+		expect(harness.deliveries.some((d) => (d.text ?? "").includes("没能排进"))).toBe(false);
 		const steerRequest = harness.mainTurnRequests().find((r) => r.lastUserText.includes("STEER_IMG"));
 		expect(steerRequest).toBeDefined();
 		expect(requestCarriesImage(steerRequest!.raw)).toBe(true);

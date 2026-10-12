@@ -1,6 +1,14 @@
+import { formatElapsedZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
+import { truncate } from "../shared/text-utils.js";
 import { parseTaskItems, type TaskItem } from "./ledger.js";
-import { readTaskLog, type TaskDispatchRecord, type TaskSettleRecord } from "./log.js";
+import {
+	describeSettlement,
+	describeWorkRef,
+	readTaskLog,
+	type TaskDispatchRecord,
+	type TaskSettleRecord,
+} from "./log.js";
 
 /**
  * The team board (spec 052, D5): what the leader's delegations and jobs are doing right now.
@@ -117,7 +125,7 @@ function renderRef(entry: BoardRef, nowMs: number): string {
 
 const ITEM_MARKER: Record<TaskItem["status"], string> = { todo: " ", done: "x", blocked: "!", dropped: "~" };
 
-/** Render the `<task_board>` block body. */
+/** Render the `<task_board>` block body (model-facing; `/tasks show` uses `renderTaskBoardForUser`). */
 export function renderTaskBoard(board: TaskBoard, nowMs: number = Date.now()): string {
 	const lines: string[] = [];
 	for (const { item, refs } of board.items) {
@@ -131,6 +139,43 @@ export function renderTaskBoard(board: TaskBoard, nowMs: number = Date.now()): s
 	}
 	for (const entry of board.unlinked) lines.push(`- （未关联工作项）${renderRef(entry, nowMs)}`);
 	if (board.hiddenSettled > 0) lines.push(`- （另有 ${board.hiddenSettled} 项已结算且已看过，见 task_log）`);
+	return lines.join("\n");
+}
+
+const ITEM_STATUS_LABEL: Record<TaskItem["status"], string> = {
+	todo: "待办",
+	done: "已完成",
+	blocked: "受阻",
+	dropped: "已放弃",
+};
+
+function renderRefForUser(entry: BoardRef, nowMs: number): string {
+	const who =
+		entry.agent && entry.agent !== "job" ? `（${entry.agent}${entry.purpose === "verify" ? "，验收" : ""}）` : "";
+	const state = entry.settled
+		? describeSettlement(entry.settled)
+		: `进行中 ${formatElapsedZh(nowMs - entry.dispatchedAtMs)}`;
+	return `${describeWorkRef(entry.ref)}${who} ${state}`;
+}
+
+/**
+ * The board as `/tasks show` presents it (spec 053, D2): flat bullets only — DingTalk drops
+ * indentation, so the brief's `↳` continuation lines would read as orphans — with every ref a
+ * work item has folded into its one line. No "seen / new" split (that is the leader's
+ * de-duplication aid) and no pointer at a model tool.
+ */
+export function renderTaskBoardForUser(board: TaskBoard, taskId: string, nowMs: number = Date.now()): string {
+	const lines: string[] = [];
+	for (const { item, refs } of board.items) {
+		const head = `- ${item.id} ${truncate(item.text.replace(/\s+/g, " "), 80)}（${ITEM_STATUS_LABEL[item.status]}）`;
+		lines.push(refs.length > 0 ? `${head}：${refs.map((ref) => renderRefForUser(ref, nowMs)).join("、")}` : head);
+	}
+	if (board.unlinked.length > 0) {
+		lines.push(`- 未关联工作项：${board.unlinked.map((ref) => renderRefForUser(ref, nowMs)).join("、")}`);
+	}
+	if (board.hiddenSettled > 0) {
+		lines.push(`- 另有 ${board.hiddenSettled} 项较早结束的工作未列出，用 \`/tasks log ${taskId}\` 查看`);
+	}
 	return lines.join("\n");
 }
 

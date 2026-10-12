@@ -16,6 +16,7 @@
 import {
 	BUILT_IN_COMMANDS,
 	type CommandSpec,
+	formatMissingQueueMessage,
 	parseBuiltInCommand,
 	type RuntimeCommandName,
 	SESSION_COMMANDS,
@@ -73,11 +74,11 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 		case "steer":
 			return command.args.trim()
 				? { kind: "steer", text: command.args }
-				: { kind: "noop", text: "/steer requires a message." };
+				: { kind: "noop", text: formatMissingQueueMessage("steer") };
 		case "followup":
 			return command.args.trim()
 				? { kind: "followup", text: command.args }
-				: { kind: "noop", text: "/followup requires a message." };
+				: { kind: "noop", text: formatMissingQueueMessage("followup") };
 	}
 }
 
@@ -92,5 +93,5 @@ function toAutocompleteEntry(spec: CommandSpec): { name: string; description: st
 export const TUI_SLASH_COMMANDS: Array<{ name: string; description: string; argumentHint?: string }> = [
 	...BUILT_IN_COMMANDS.map(toAutocompleteEntry),
 	...SESSION_COMMANDS.map(toAutocompleteEntry),
-	{ name: "exit", description: "Leave the TUI" },
+	{ name: "exit", description: "退出终端界面" },
 ];

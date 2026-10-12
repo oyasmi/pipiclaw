@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { errorMessage } from "../shared/text-utils.js";
+import { GuardBlockedError } from "./block-message.js";
 import type { SecurityConfig } from "./types.js";
 
 type ValidationStage = "request" | "redirect";
@@ -15,7 +16,7 @@ export interface ValidatedNetworkTarget {
 	resolvedAddress?: string;
 }
 
-export class NetworkGuardError extends Error {
+export class NetworkGuardError extends GuardBlockedError {
 	readonly url: string;
 	readonly stage: ValidationStage;
 	readonly category: string;
@@ -30,7 +31,7 @@ export class NetworkGuardError extends Error {
 		resolvedHost?: string;
 		resolvedAddress?: string;
 	}) {
-		super(options.message);
+		super(options.message, { guard: "network", category: options.category, target: options.url });
 		this.name = "NetworkGuardError";
 		this.url = options.url;
 		this.stage = options.stage;

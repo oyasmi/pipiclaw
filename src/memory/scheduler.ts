@@ -119,7 +119,9 @@ export class MemoryMaintenanceScheduler {
 		// mean flipping `memoryMaintenance.enabled` on at runtime never actually starts the timer.
 		this.timer = setInterval(() => {
 			void this.runOnce().catch((error) => {
-				log.logWarning("Memory maintenance scheduler tick failed", errorMessage(error));
+				log.logWarn("memory.scheduler.tick_failed", "Memory maintenance tick failed", {
+					reason: errorMessage(error),
+				});
 			});
 		}, this.options.intervalMs ?? DEFAULT_TICK_INTERVAL_MS);
 		this.timer.unref?.();

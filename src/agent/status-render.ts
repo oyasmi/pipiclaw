@@ -3,6 +3,7 @@
  * the DingTalk runtime and the terminal TUI can render the same status block
  * from an `AgentRunner` status snapshot. Pure functions, no side effects.
  */
+import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { AgentRunner } from "./types.js";
 
@@ -21,18 +22,6 @@ export function formatTokenCount(count: number): string {
 	return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
-export function formatUptime(ms: number): string {
-	const totalSeconds = Math.floor(ms / 1000);
-	const days = Math.floor(totalSeconds / 86400);
-	const hours = Math.floor((totalSeconds % 86400) / 3600);
-	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const parts: string[] = [];
-	if (days > 0) parts.push(`${days}d`);
-	if (hours > 0) parts.push(`${hours}h`);
-	parts.push(`${minutes}m`);
-	return parts.join(" ");
-}
-
 export function renderStatus(options: RenderStatusOptions): string {
 	const { runner, version, uptimeMs } = options;
 
@@ -49,12 +38,12 @@ export function renderStatus(options: RenderStatusOptions): string {
 	if (runner) {
 		try {
 			const snapshot = runner.getStatusSnapshot();
-			let modelLine = `- 模型：\`${snapshot.model}\`（thinking \`${snapshot.thinkingLevel}\`）`;
+			let modelLine = `- 模型：\`${snapshot.model}\`（思考档位 \`${snapshot.thinkingLevel}\`）`;
 			if (snapshot.fallback) {
 				const until = new Date(snapshot.fallback.cooldownUntilMs);
 				const hh = String(until.getHours()).padStart(2, "0");
 				const mm = String(until.getMinutes()).padStart(2, "0");
-				modelLine += ` · fallback 生效中（primary ${snapshot.fallback.primary} 冷却至 ${hh}:${mm}）`;
+				modelLine += ` · 正在使用备用模型（主模型 \`${snapshot.fallback.primary}\` 暂停到 ${hh}:${mm}）`;
 			}
 			lines.push(modelLine);
 			if (snapshot.contextTokens !== undefined && snapshot.contextWindow > 0) {
@@ -70,6 +59,6 @@ export function renderStatus(options: RenderStatusOptions): string {
 		lines.push("- 模型：本频道尚未开始过会话");
 	}
 
-	lines.push(`- 已运行 ${formatUptime(uptimeMs)} · 版本 \`${version}\``);
+	lines.push(`- 已运行 ${formatElapsedZh(uptimeMs)} · 版本 \`${version}\``);
 	return lines.join("\n");
 }

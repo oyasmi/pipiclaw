@@ -1,6 +1,8 @@
 import { renderSubcommandUsage } from "../commands/catalog.js";
-import { capReply } from "../commands/reply-limits.js";
+import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
+import { GuardBlockedError, renderGuardBlockForUser } from "../security/block-message.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { listWorkspaceSkills, loadWorkspaceSkillFile } from "../tools/skill.js";
 
@@ -13,7 +15,7 @@ import { listWorkspaceSkills, loadWorkspaceSkillFile } from "../tools/skill.js";
  * loaded catalog: that keeps `/skills` usable while a turn is streaming and for a channel with no
  * active runner, and — the whole reason this exists rather than reusing `/help`'s discovery tail
  * — it is the only place that shows a skill that failed the content scan and was silently dropped
- * from `<available_skills>` (`src/agent/workspace-resources.ts`).
+ * from the prompt's skill list (`src/agent/workspace-resources.ts`).
  */
 
 export interface HandleSkillsCommandOptions {
@@ -38,29 +40,29 @@ export function parseSkillsCommand(args: string): SkillsCommand {
 		if (!parts[1] || parts.length > 2) throw new Error("用法：/skills show <name>");
 		return { action: "show", name: parts[1] };
 	}
-	throw new Error(`未知的 /skills 子命令：${parts[0]}`);
+	throw new Error(`未知子命令 \`${parts[0]}\`。`);
 }
 
 async function listSkills(workspaceDir: string): Promise<string> {
 	const skills = await listWorkspaceSkills({ workspaceDir });
 	if (skills.length === 0) {
 		return (
-			`**Workspace skills**\n\n暂无工作区 skill（\`${workspaceDir}/skills/\` 下没有）。\n\n` +
-			"用 write/edit 在 `workspace/skills/<name>/SKILL.md` 直接创建，frontmatter 需要非空的 `name`（与目录名一致）和 `description`。"
+			"暂无工作区 skill。\n" +
+			`让我帮你创建，或手动放到 \`${workspaceDir}/skills/<name>/SKILL.md\`（文件头需要非空的 \`name\`，与目录名一致，以及 \`description\`）。`
 		);
 	}
 
 	const loaded = skills.filter((skill) => !skill.warning);
 	const rejected = skills.filter((skill) => skill.warning);
 
-	const lines = [`**Workspace skills**（${loaded.length} 个）· 用 \`/skill:<名称>\` 调用`, ""];
+	const lines = [`**工作区 skills**（${loaded.length} 个）· 用 \`/skill:<名称>\` 调用`, ""];
 	if (loaded.length > 0) {
-		lines.push(...loaded.map((skill) => `- \`${skill.name}\` — ${skill.description || "(无 description)"}`));
+		lines.push(...loaded.map((skill) => `- \`${skill.name}\` — ${skill.description || "（无 description）"}`));
 	} else {
 		lines.push("（全部未通过加载，见下）");
 	}
 	if (rejected.length > 0) {
-		lines.push("", "⚠ 未加载（不在 `<available_skills>` 中，也无法通过 `/skill:名称` 调用）", "");
+		lines.push("", "⚠️ 未加载（助手看不到，也无法用 `/skill:名称` 调用）", "");
 		lines.push(...rejected.map((skill) => `- \`${skill.name}\` — ${skill.warning}`));
 	}
 	return capReply(lines.join("\n"), { nextStepHint: "用 `/skills show <name>` 查看单个 skill 的完整正文" }).text;
@@ -77,10 +79,13 @@ async function showSkill(options: HandleSkillsCommandOptions, name: string): Pro
 			},
 			name,
 		);
-		const body = `**Skill \`${file.name}\`**\n\n路径：\`${file.path}\`\n\n${file.content}`;
-		return capReply(body, { nextStepHint: `用 read 工具打开 ${file.path} 继续查看` }).text;
+		const body = `**Skill \`${file.name}\`**\n\n路径：\`${file.path}\`\n\n${flattenMarkdownForChat(file.content)}`;
+		return capReply(body, { nextStepHint: `完整内容在 \`${file.path}\`` }).text;
 	} catch (error) {
-		return `无法查看 skill：${errorMessage(error)}`;
+		// The loader's errors are written for the model (`Use action "list"…`); say it in the user's terms.
+		if (error instanceof RecoverableToolError) return `未找到 skill \`${name}\`。用 \`/skills\` 查看可用的 skill。`;
+		if (error instanceof GuardBlockedError) return renderGuardBlockForUser(error.blocked);
+		return `无法读取 skill \`${name}\`：${errorMessage(error)}`;
 	}
 }
 

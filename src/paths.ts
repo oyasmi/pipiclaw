@@ -13,6 +13,17 @@ const bundledPlaybooksDir = fileURLToPath(new URL("./playbooks", import.meta.url
 const checkoutPlaybooksDir = fileURLToPath(new URL("../src/playbooks", import.meta.url));
 /** Prefer live source docs in a checkout; installed packages fall back to dist/playbooks. */
 export const PLAYBOOKS_DIR = existsSync(checkoutPlaybooksDir) ? checkoutPlaybooksDir : bundledPlaybooksDir;
+/**
+ * Where user- and deployer-facing text points for documentation (spec 053, D5.4). An npm install
+ * has no local `docs/`, so a bare `docs/x.md` reference leads nowhere; this is the one base URL.
+ */
+const DOCS_BASE_URL = "https://github.com/oyasmi/pipiclaw/blob/master/docs";
+
+/** `docsUrl("configuration.md")` → the published copy of `docs/configuration.md`. */
+export function docsUrl(relativePath: string): string {
+	return `${DOCS_BASE_URL}/${relativePath}`;
+}
+
 /** The built-in default app home, independent of any `PIPICLAW_HOME` override. */
 export const DEFAULT_APP_HOME_DIR = join(homedir(), `.${APP_NAME}`);
 export const APP_HOME_DIR = process.env.PIPICLAW_HOME ?? DEFAULT_APP_HOME_DIR;

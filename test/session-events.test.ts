@@ -93,7 +93,10 @@ describe("session compaction events", () => {
 		);
 
 		expect(runState.lastCompactionError).toBe("Context overflow recovery failed: summarization failed");
-		expect(respond).toHaveBeenCalledWith("✕ Context overflow recovery failed: summarization failed", false);
+		// The card gets a classified error line; the raw provider text stays in run state and the log.
+		expect(respond).toHaveBeenCalledTimes(1);
+		expect(respond).toHaveBeenCalledWith(expect.stringMatching(/^✕ /), false);
+		expect(String((respond.mock.calls[0] as unknown[])[0])).not.toContain("summarization failed");
 	});
 
 	it("clears stale compaction diagnostics after a successful compaction", async () => {

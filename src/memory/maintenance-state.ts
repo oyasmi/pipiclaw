@@ -99,7 +99,10 @@ export async function readMemoryMaintenanceState(
 			return createDefaultState(channelId);
 		}
 		const message = errorMessage(error);
-		log.logWarning(`[${channelId}] Failed to read memory maintenance state; rebuilding defaults`, message);
+		log.logWarn("memory.state.read_failed", "Memory maintenance state unreadable; rebuilding defaults", {
+			channelId: channelId,
+			reason: message,
+		});
 		return createDefaultState(channelId);
 	}
 }

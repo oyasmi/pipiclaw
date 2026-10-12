@@ -1,4 +1,4 @@
-import { formatBlockMessage } from "./block-message.js";
+import { formatBlockMessage, GuardBlockedError } from "./block-message.js";
 import { logSecurityEvent } from "./logger.js";
 import { guardPath } from "./path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "./types.js";
@@ -44,7 +44,10 @@ export async function checkPathGuard(
 			category: guardResult.category,
 			reason: guardResult.reason,
 		});
-		throw new Error(formatPathBlockMessage(guardResult.resolvedPath, guardResult.category, guardResult.reason));
+		throw new GuardBlockedError(
+			formatPathBlockMessage(guardResult.resolvedPath, guardResult.category, guardResult.reason),
+			{ guard: "path", category: guardResult.category, target: guardResult.resolvedPath ?? rawPath, operation },
+		);
 	}
 	// `guardPath` always populates `resolvedPath` on an allowed result (see D1.1 above).
 	return guardResult.resolvedPath as string;

@@ -2,6 +2,7 @@ import type { ChannelContext, ProgressStyle } from "../channel/channel-context.j
 import type { ChannelEvent } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
+import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { DingTalkBot } from "./dingtalk.js";
 
@@ -89,7 +90,10 @@ class ChannelDeliveryController {
 				}
 				const delivered = await this.bot.sendPlain(this.event.channelId, text);
 				if (!delivered) {
-					log.logWarning(`[${this.event.channelId}] Failed to send light notice`, text.substring(0, 200));
+					log.logWarn("delivery.notice.failed", "Light notice delivery failed", {
+						channelId: this.event.channelId,
+						fields: { text: text.substring(0, 200) },
+					});
 				}
 			},
 			setTyping: async (_isTyping: boolean) => {},
@@ -138,7 +142,10 @@ class ChannelDeliveryController {
 
 	private archiveBotResponse(text: string): void {
 		void this.store.logBotResponse(this.event.channelId, text, Date.now().toString()).catch((err) => {
-			log.logWarning(`[${this.event.channelId}] Failed to archive bot response`, errorMessage(err));
+			log.logWarn("channel.archive.write_failed", "Bot response archive failed", {
+				channelId: this.event.channelId,
+				reason: errorMessage(err),
+			});
 		});
 	}
 
@@ -323,7 +330,7 @@ class ChannelDeliveryController {
 							const finalProgressText =
 								this.progressStyle === "rolling"
 									? this.buildSummaryText()
-									: [body, "答复已发送。"].filter(Boolean).join("\n\n");
+									: [body, "已答复。"].filter(Boolean).join("\n\n");
 							touchedRemote = await this.bot.finalizeExistingCard(
 								this.event.channelId,
 								finalProgressText,
@@ -343,13 +350,16 @@ class ChannelDeliveryController {
 						if (content) {
 							touchedRemote = await this.bot.finalizeExistingCard(
 								this.event.channelId,
-								[body, "处理已结束。"].filter(Boolean).join("\n\n"),
+								[body, "已处理，无需答复。"].filter(Boolean).join("\n\n"),
 								this.cardGeneration,
 							);
 						}
 					}
 				} catch (err) {
-					log.logWarning(`[${this.event.channelId}] Delivery sync failed`, errorMessage(err));
+					log.logWarn("delivery.sync.failed", "Delivery sync failed", {
+						channelId: this.event.channelId,
+						reason: errorMessage(err),
+					});
 					if (mode === "progress") {
 						this.progressFailures++;
 						this.replayRequired = true;
@@ -394,9 +404,10 @@ class ChannelDeliveryController {
 			this.flushWaiters.push(resolve);
 			deadlineTimer = setTimeout(() => {
 				if (this.flushWaiters.includes(resolve)) {
-					log.logWarning(
-						`[${this.event.channelId}] Delivery flush deadline exceeded (${FLUSH_DEADLINE_MS}ms); releasing caller`,
-					);
+					log.logWarn("delivery.flush.timeout", "Delivery flush deadline exceeded; releasing caller", {
+						channelId: this.event.channelId,
+						fields: { deadlineMs: FLUSH_DEADLINE_MS },
+					});
 					this.flushWaiters = this.flushWaiters.filter((waiter) => waiter !== resolve);
 					resolve();
 				}
@@ -435,12 +446,13 @@ class ChannelDeliveryController {
 		return this.cachedProgressText;
 	}
 
-	private formatElapsed(ms: number): string {
+	/** Clock-style elapsed time (`0:42`, `1:02`, `1:05:09`) for the narrow rolling header. */
+	private formatClock(ms: number): string {
 		const seconds = Math.max(0, Math.round(ms / 1000));
-		if (seconds < 60) return `${seconds}s`;
 		const minutes = Math.floor(seconds / 60);
-		if (minutes < 60) return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
-		return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
+		const ss = String(seconds % 60).padStart(2, "0");
+		if (minutes < 60) return `${minutes}:${ss}`;
+		return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${ss}`;
 	}
 
 	private elapsedMs(): number {
@@ -449,11 +461,12 @@ class ChannelDeliveryController {
 
 	/**
 	 * Standing first line for rolling mode. The window only keeps the last few entries, so a long
-	 * turn otherwise gave no way to tell "still working, 14 steps in" from "stuck": every visible
-	 * line looked the same as a minute ago. The numbers are already tracked for the closing summary.
+	 * turn otherwise gave no way to tell "still working, 14 tool calls in" from "stuck": every
+	 * visible line looked the same as a minute ago. The numbers are already tracked for the closing
+	 * summary. Counted as tool calls, never "steps" — a step is a task's unit (spec 053, D4).
 	 */
 	private buildRollingHeader(): string {
-		return `⏱ ${this.formatElapsed(this.elapsedMs())} · ${this.toolCallCount} 步`;
+		return `⏱ ${this.formatClock(this.elapsedMs())} · 工具 ${this.toolCallCount}`;
 	}
 
 	private trimToRecentEntries(maxEntries: number): void {
@@ -486,7 +499,7 @@ class ChannelDeliveryController {
 	}
 
 	private buildSummaryText(): string {
-		return `完成 · ${this.toolCallCount} 步 · ${this.formatElapsed(this.elapsedMs())}`;
+		return `完成 · 工具调用 ${this.toolCallCount} 次 · ${formatElapsedZh(this.elapsedMs())}`;
 	}
 }
 

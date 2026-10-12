@@ -2,22 +2,33 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { renderSubcommandUsage } from "../commands/catalog.js";
+import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
+import { docsUrl } from "../paths.js";
+import { formatSpanZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
-import { clipText, errorMessage } from "../shared/text-utils.js";
-import { buildTaskBoard, renderTaskBoard } from "../tasks/board.js";
-import type { TaskBudget } from "../tasks/frontmatter.js";
+import { errorMessage } from "../shared/text-utils.js";
+import { buildTaskBoard, renderTaskBoardForUser } from "../tasks/board.js";
+import { type TaskBudget, taskStateLabel } from "../tasks/frontmatter.js";
 import { normalizeTaskId, readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
-import { readTaskLog, renderTaskLogLine } from "../tasks/log.js";
+import {
+	readTaskLog,
+	renderTaskLogLineForUser,
+	taskArchiveLogPath,
+	taskLogIsArchived,
+	taskLogPath,
+} from "../tasks/log.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { hasTaskSteer, queueTaskSteer } from "../tasks/steer.js";
 import {
+	archivedTaskPath,
 	pauseTask as pauseTaskDocument,
 	readStoredTask,
 	redeemTicket,
 	resumeTask as resumeTaskDocument,
+	taskPath,
 	updateStoredTask,
 } from "../tasks/store.js";
-import { describeTicket } from "../tasks/ticket.js";
+import { describeTicketForUser } from "../tasks/ticket.js";
 
 export interface HandleTasksCommandOptions {
 	args: string;
@@ -27,9 +38,12 @@ export interface HandleTasksCommandOptions {
 	dispatchTask?: (id: string) => Promise<boolean>;
 }
 
-/** `/tasks show <id>` head-snippet cap; the full file is always readable at its own path. */
-const TASK_SHOW_MAX_CHARS = 2_400;
-const SHOW_LOG_LINES = 8;
+/** `/tasks show <id>` contract excerpt; the full file is always readable at its own path. */
+const TASK_SHOW_CONTRACT_CHARS = 500;
+const SHOW_LOG_LINES = 5;
+/** `/tasks log <id>`: the most recent records; older ones are in the `.jsonl` it names. */
+const LOG_LINES = 15;
+const ARCHIVE_LIST_LIMIT = 20;
 /** A backstop this far past due means the driver is not running, not that it is merely about to act. */
 const EXPIRED_GRACE_MS = 60 * 60 * 1000;
 
@@ -92,52 +106,44 @@ export function parseTasksCommand(args: string): TasksCommand {
 		if (!match) throw new Error(`用法：/tasks ${action} <id> <内容>`);
 		return { action, id: match[1], text: match[2].trim() };
 	}
-	throw new Error(`未知的 /tasks 动作：${action}`);
+	throw new Error(`未知子命令 \`${action}\`。`);
 }
 
 function tasksDir(channelDir: string): string {
 	return join(channelDir, "tasks");
 }
 
-/** Compact relative time, e.g. `12m` / `3h` / `2d`; `due` when already past. */
-function relative(atMs: number | undefined, now: number): string | undefined {
-	if (atMs === undefined || !Number.isFinite(atMs)) return undefined;
+/** `（最晚 3 小时后重新检查）` — when the runtime looks at a parked task again no matter what. */
+function backstopHint(by: string, now: number): string {
+	const atMs = parseLocalTime(by);
+	if (atMs === undefined || !Number.isFinite(atMs)) return "";
 	const diffMs = atMs - now;
-	if (diffMs <= 0) return "已到期";
-	const minutes = Math.round(diffMs / 60000);
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.round(hours / 24)}d`;
+	return diffMs <= 0 ? "（已过最晚检查时间）" : `（最晚 ${formatSpanZh(diffMs)}后重新检查）`;
 }
-
-const STATE_LABEL: Record<string, string> = { open: "进行中", parked: "等待中", done: "已关闭" };
 
 function usageSummary(entry: TaskLedgerEntry): string | undefined {
 	const usage = entry.fields.usage;
 	if (!usage) return undefined;
-	const cost = usage.usd > 0 ? `，$${usage.usd.toFixed(2)}${usage.usdEstimated ? "（含估算）" : ""}` : "";
-	return `${usage.steps} 步${cost}`;
+	const cost = usage.usd > 0 ? ` · 花费 $${usage.usd.toFixed(2)}${usage.usdEstimated ? "（含估算）" : ""}` : "";
+	return `已用 ${usage.steps} 步${cost}`;
 }
 
 function ticketSummary(entry: TaskLedgerEntry, now: number): string | undefined {
 	const ticket = entry.fields.ticket;
-	if (!ticket) return undefined;
-	const by = relative(parseLocalTime(ticket.by), now);
-	return `${describeTicket(ticket)}${by ? `（兜底 ${by}）` : ""}`;
+	return ticket ? `${describeTicketForUser(ticket)}${backstopHint(ticket.by, now)}` : undefined;
 }
 
 function renderListLine(entry: TaskLedgerEntry, channelDir: string, now: number): string {
-	const bits = [`${entry.id} — ${entry.title}`, STATE_LABEL[entry.fields.state] ?? entry.fields.state];
+	const bits = [`\`${entry.id}\` ${entry.title}`, taskStateLabel(entry.fields.state)];
 	if (entry.fields.paused) bits.push(`已暂停（${entry.fields.paused.reason}）`);
 	const ticket = ticketSummary(entry, now);
 	if (ticket) bits.push(ticket);
-	if (entry.items) bits.push(`items ${entry.items.done}/${entry.items.total}`);
+	if (entry.items) bits.push(`工作项 ${entry.items.done}/${entry.items.total}`);
 	if (entry.fields.origin) bits.push(`来自 ${entry.fields.origin}`);
 	const usage = usageSummary(entry);
 	if (usage) bits.push(usage);
 	if (hasTaskSteer(channelDir, entry.id)) bits.push("有待处理的指示");
-	if (!entry.readable) bits.push("⚠ frontmatter 不可读");
+	if (!entry.readable) bits.push("⚠️ 文件头（frontmatter）不可读");
 	return `- ${bits.join(" · ")}`;
 }
 
@@ -145,43 +151,77 @@ async function listTasks(channelDir: string): Promise<string> {
 	const now = Date.now();
 	const entries = (await readActiveTasks(tasksDir(channelDir), now)).filter((entry) => !entry.fields.outcome);
 	if (entries.length === 0) {
-		return "暂无进行中的任务。\n让 Agent 用 task_create 建立一个长程任务后再回来查看。";
+		return "暂无进行中的任务。\n在对话里告诉我目标，并说明作为长程任务推进。";
 	}
-	return [`**任务（${entries.length}）**`, ...entries.map((entry) => renderListLine(entry, channelDir, now))].join(
-		"\n",
-	);
+	const report = [
+		`**任务（${entries.length}）**`,
+		...entries.map((entry) => renderListLine(entry, channelDir, now)),
+	].join("\n");
+	return capReply(report, { nextStepHint: "用 `/tasks show <id>` 查看单个任务" }).text;
+}
+
+function notFound(id: string): string {
+	return `未找到任务 \`${id}\`。用 \`/tasks\` 查看进行中的任务，或 \`/tasks archive\` 查看已归档的。`;
+}
+
+/** The head of the contract, reshaped for chat and cut on a line boundary; the full file is one path away. */
+function contractExcerpt(body: string, maxChars: number): { text: string; clipped: boolean } {
+	const flat = flattenMarkdownForChat(body.trim());
+	if (flat.length <= maxChars) return { text: flat, clipped: false };
+	const cut = flat.lastIndexOf("\n", maxChars);
+	const head = flat.slice(0, cut > 0 ? cut : maxChars).trimEnd();
+	// A cut inside a fenced block would leave the rest of the reply rendered as code.
+	const openFence = (head.match(/^```/gm)?.length ?? 0) % 2 === 1;
+	return { text: openFence ? `${head}\n\`\`\`` : head, clipped: true };
 }
 
 async function showTask(channelDir: string, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const document = (await readStoredTask(channelDir, id, true)) ?? undefined;
-	if (!document) return `未找到任务 \`${id}\`。\n用 /tasks list 查看进行中的任务，或 /tasks archive 查看已归档的。`;
+	if (!document) return notFound(id);
 	const now = Date.now();
 	const entry = (await readActiveTasks(tasksDir(channelDir), now)).find((candidate) => candidate.id === id);
 
 	const head: string[] = [`**任务 ${id}**`];
-	head.push(`- 状态：${STATE_LABEL[document.fields.state] ?? document.fields.state}`);
-	if (document.fields.paused) head.push(`- 已暂停（${document.fields.paused.by}）：${document.fields.paused.reason}`);
+	head.push(`- 状态：${taskStateLabel(document.fields.state)}`);
+	if (document.fields.paused) {
+		const by = document.fields.paused.by === "user" ? "由你暂停" : "由系统暂停";
+		head.push(`- 已暂停（${by}）：${document.fields.paused.reason}`);
+	}
 	if (document.fields.ticket) {
-		const by = relative(parseLocalTime(document.fields.ticket.by), now);
-		head.push(`- 等待：${describeTicket(document.fields.ticket)}${by ? `（兜底 ${by}）` : ""}`);
+		const ticket = document.fields.ticket;
+		head.push(`- 等待：${describeTicketForUser(ticket)}${backstopHint(ticket.by, now)}`);
 	}
 	if (document.fields.origin) head.push(`- 来自事件：${document.fields.origin}`);
 	const usage = entry ? usageSummary(entry) : undefined;
 	if (usage) head.push(`- 用量：${usage}`);
 
 	const board = await buildTaskBoard(channelDir, id, document.body);
-	const boardLines = board ? ["", "**团队看板**", renderTaskBoard(board, now)] : [];
+	const boardLines = board ? ["", "**工作项**", renderTaskBoardForUser(board, id, now)] : [];
 
 	const log = await readTaskLog(channelDir, id, {
 		kinds: ["step", "expired", "close", "note"],
 		limit: SHOW_LOG_LINES,
 	});
-	const logLines = log.length > 0 ? ["", `**最近 ${log.length} 条日志**`, ...log.map(renderTaskLogLine)] : [];
+	const logLines = log.length > 0 ? ["", "**最近记录**", ...log.map(renderTaskLogLineForUser)] : [];
 
-	const body = clipText(document.body.trim(), TASK_SHOW_MAX_CHARS);
-	return [...head, ...boardLines, ...logLines, "", "**契约**", body, "", `完整日志：/tasks log ${id}`].join("\n");
+	const path = existsSync(taskPath(channelDir, id)) ? taskPath(channelDir, id) : archivedTaskPath(channelDir, id);
+	const contract = contractExcerpt(document.body, TASK_SHOW_CONTRACT_CHARS);
+	const report = [
+		...head,
+		...boardLines,
+		...logLines,
+		"",
+		"**任务说明**",
+		contract.text,
+		...(contract.clipped ? ["（仅显示开头）"] : []),
+		"",
+		`完整记录：\`/tasks log ${id}\`；任务文件：\`${path}\``,
+	].join("\n");
+	return capReply(report, { nextStepHint: `用 \`/tasks log ${id}\` 查看记录，完整任务说明在 \`${path}\`` }).text;
 }
+
+const ARCHIVE_OUTCOME: Record<string, string> = { completed: "已完成", cancelled: "已取消" };
 
 async function listArchive(channelDir: string): Promise<string> {
 	const archiveDir = join(tasksDir(channelDir), "archive");
@@ -189,22 +229,35 @@ async function listArchive(channelDir: string): Promise<string> {
 	const files = (await readdir(archiveDir)).filter((name) => name.endsWith(".md")).sort();
 	if (files.length === 0) return "暂无已归档任务。\n任务完成或取消后会出现在这里。";
 	const lines: string[] = [];
-	for (const filename of files.slice(0, 20)) {
+	for (const filename of files.slice(0, ARCHIVE_LIST_LIMIT)) {
 		const id = filename.slice(0, -".md".length);
 		const document = await readStoredTask(channelDir, id, true).catch(() => undefined);
-		lines.push(
-			`- ${id}${document?.fields.outcome ? ` · ${document.fields.outcome}` : ""}${document?.fields.closedAt ? ` · ${document.fields.closedAt}` : ""}`,
-		);
+		const outcome = document?.fields.outcome;
+		const bits = [`\`${id}\``];
+		if (outcome) bits.push(ARCHIVE_OUTCOME[outcome] ?? outcome);
+		if (document?.fields.closedAt) bits.push(document.fields.closedAt.slice(0, 16).replace("T", " "));
+		lines.push(`- ${bits.join(" · ")}`);
 	}
-	if (files.length > 20) lines.push(`- （另有 ${files.length - 20} 个，见 tasks/archive/）`);
-	return [`**已归档任务（${files.length}）**`, ...lines].join("\n");
+	if (files.length > ARCHIVE_LIST_LIMIT) {
+		lines.push(`- 另有 ${files.length - ARCHIVE_LIST_LIMIT} 个，在 \`${archiveDir}\``);
+	}
+	return capReply([`**已归档任务（${files.length}）**`, ...lines].join("\n"), {
+		nextStepHint: `完整列表在 \`${archiveDir}\``,
+	}).text;
 }
 
 async function showTaskLog(channelDir: string, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const records = await readTaskLog(channelDir, id, { limit: 30 });
-	if (records.length === 0) return `任务 \`${id}\` 暂无循环日志。`;
-	return [`**任务 ${id} 日志（${records.length} 条）**`, ...records.map(renderTaskLogLine)].join("\n");
+	const all = await readTaskLog(channelDir, id);
+	if (all.length === 0) return `任务 \`${id}\` 暂无记录。\n任务执行第一步后会出现在这里。`;
+	const records = all.slice(-LOG_LINES);
+	const path = taskLogIsArchived(channelDir, id) ? taskArchiveLogPath(channelDir, id) : taskLogPath(channelDir, id);
+	const lines = [
+		`**任务 ${id} 的记录（最近 ${records.length} 条，共 ${all.length} 条）**`,
+		...records.map(renderTaskLogLineForUser),
+	];
+	if (all.length > records.length) lines.push("", `更早的记录在 \`${path}\``);
+	return capReply(lines.join("\n"), { nextStepHint: `完整记录在 \`${path}\`` }).text;
 }
 
 async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
@@ -213,8 +266,8 @@ async function pauseTask(options: HandleTasksCommandOptions, idInput: string): P
 		by: "user",
 		reason: "用户通过 /tasks pause 暂停。",
 	});
-	if (!document) return `未找到任务 \`${id}\`。`;
-	return `已暂停任务 \`${id}\`。当前阶段与等待票已保留；需要继续时用 /tasks resume ${id}。`;
+	if (!document) return notFound(id);
+	return `已暂停任务 \`${id}\`，等待条件已保留；需要继续时用 \`/tasks resume ${id}\`。`;
 }
 
 export async function resumeTask(
@@ -224,7 +277,7 @@ export async function resumeTask(
 ): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const document = await resumeTaskDocument(options.channelDir, id);
-	if (!document) return `未找到任务 \`${id}\`。`;
+	if (!document) return notFound(id);
 	const granted: string[] = [];
 	if (Object.keys(grants).length > 0) {
 		await updateStoredTask(options.channelDir, id, (task) => {
@@ -237,20 +290,20 @@ export async function resumeTask(
 				// on the next step.
 				const spent = key === "steps" ? task.fields.usage?.steps : task.fields.usage?.usd;
 				budget[key] = (spent ?? 0) + extra;
-				granted.push(`${key}+${extra}`);
+				granted.push(key === "steps" ? `${extra} 步` : `$${extra}`);
 			}
 			task.fields.budget = budget;
 		});
 	}
-	return `已恢复任务 \`${id}\`${granted.length > 0 ? `（${granted.join("，")}）` : ""}。`;
+	return `已恢复任务 \`${id}\`${granted.length > 0 ? `，追加预算 ${granted.join("、")}` : ""}。`;
 }
 
 async function steerTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const document = await readStoredTask(options.channelDir, id);
-	if (!document) return `未找到任务 \`${id}\`。`;
+	if (!document) return notFound(id);
 	await queueTaskSteer(options.channelDir, id, text);
-	return `已把这条指示排给任务 \`${id}\` 的下一步（不会打断当前正在跑的一步）。`;
+	return `已把这条指示排给任务 \`${id}\` 的下一步，不会打断正在执行的这一步。`;
 }
 
 /**
@@ -261,7 +314,7 @@ async function steerTask(options: HandleTasksCommandOptions, idInput: string, te
 async function replyToTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const document = await readStoredTask(options.channelDir, id);
-	if (!document) return `未找到任务 \`${id}\`。`;
+	if (!document) return notFound(id);
 	await queueTaskSteer(options.channelDir, id, text, "用户回答");
 	const redeemed = await redeemTicket(options.channelDir, id, (ticket) => ticket.kind === "ask");
 	if (!redeemed) {
@@ -289,26 +342,34 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 
 	for (const entry of entries) {
 		if (!entry.readable) {
-			problems.push(issue(`${entry.id} 的 frontmatter 不可读`, `用 edit 修复 tasks/${entry.id}.md 的首部`));
+			problems.push(
+				issue(
+					`\`${entry.id}\` 的文件头（frontmatter）不可读`,
+					`让我修复 \`${taskPath(options.channelDir, entry.id)}\` 的文件头，或手动修改`,
+				),
+			);
 			continue;
 		}
 		if (entry.legacy) {
 			problems.push(
 				issue(
-					`${entry.id} 仍含旧版本的字段（status / enabled / control / wake / schedule）`,
-					"保留原件，按 docs/events-and-tasks.md 的升级步骤处理；不要仅删旧字段",
+					`\`${entry.id}\` 仍含旧版本的字段（status / enabled / control / wake / schedule）`,
+					`保留原件，按 ${docsUrl("events-and-tasks.md")} 的升级步骤处理；不要只删旧字段`,
 				),
 			);
 		}
 		const by = entry.fields.ticket ? parseLocalTime(entry.fields.ticket.by) : undefined;
 		if (entry.expired && !entry.fields.paused && by !== undefined && by < now - EXPIRED_GRACE_MS) {
 			problems.push(
-				issue(`${entry.id} 的等待票已过兜底时限超过 1 小时`, "driver 本该重开或通知；检查 daemon 是否在跑"),
+				issue(
+					`\`${entry.id}\` 的等待条件已超过最晚检查时间 1 小时以上`,
+					"自动调度本该重新开始或通知；请部署者确认服务器上的 pipiclaw 仍在运行",
+				),
 			);
 		}
 	}
 
-	if (problems.length === 0) return `**任务体检**\n- ${entries.length} 个任务，未发现问题。`;
+	if (problems.length === 0) return `检查了 ${entries.length} 个任务，未发现问题。`;
 	return [`**任务体检（${problems.length} 项）**`, ...problems].join("\n");
 }
 

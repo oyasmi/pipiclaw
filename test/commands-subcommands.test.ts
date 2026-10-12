@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILT_IN_COMMANDS, type CommandSubSpec, SESSION_COMMANDS } from "../src/commands/catalog.js";
+import { BUILT_IN_COMMANDS, type CommandSubSpec, formatBusyHint, SESSION_COMMANDS } from "../src/commands/catalog.js";
 import { parseEventsCommand } from "../src/events/event-commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
@@ -118,11 +118,26 @@ describe("command subcommand examples round-trip through their parser", () => {
 							expect(result).toContain("memory journal route sentinel");
 							break;
 					}
-					expect(result, example).not.toMatch(/未知的 memory 命令/);
+					expect(result, example).not.toMatch(/未知子命令/);
 					continue;
 				}
 				throw new Error(`No parser wired up in this test for /${name} — add one alongside its subcommands`);
 			}
 		});
 	}
+});
+
+// Spec 053 F6: the busy refusal was hand-copied into DingTalk and the TUI with its own list of
+// "idle-only" commands, which missed `/memory` and `/thinking`. It is now derived from the
+// catalog; this pins the derivation, not the wording.
+describe("busy hint", () => {
+	it("names exactly the catalog's commands, split by availableWhileBusy", () => {
+		const hint = formatBusyHint();
+		const [whilePart, idlePart] = hint.split("。运行中可用：")[1]?.split("。") ?? [];
+		const names = (text: string | undefined) =>
+			new Set([...(text ?? "").matchAll(/`\/([a-z:-]+)`/g)].map((m) => m[1]));
+		const all = [...BUILT_IN_COMMANDS, ...SESSION_COMMANDS];
+		expect(names(whilePart)).toEqual(new Set(all.filter((c) => c.availableWhileBusy).map((c) => c.name)));
+		expect(names(idlePart)).toEqual(new Set(all.filter((c) => !c.availableWhileBusy).map((c) => c.name)));
+	});
 });

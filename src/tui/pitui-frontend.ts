@@ -82,7 +82,7 @@ export class PiTuiFrontend implements Frontend {
 			this.ui,
 			(s) => cyan(s),
 			(s) => gray(s),
-			"Working…",
+			"处理中…",
 		);
 		if (options.commands?.length) {
 			this.editor.setAutocompleteProvider(

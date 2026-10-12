@@ -286,7 +286,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 三个工具让主 agent 按需 `memory_save`（存一条持久事实，一条记忆一个 `memory/<name>.md` 文件，写入后自动重建索引）、`memory_search`（在频道记忆、journal、workspace `MEMORY.md` 里按需查找，索引已在首轮整份注入，中途怀疑"以前可能记过"才用它）、`memory_forget`（按 `name` 精确删除，写入不含原文的 tombstone 防止后台反思复活，不走裸 edit）。`forget` 不清理原始 session/log 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台反思的竞态。核心能力，无开关、始终注册，只发给主 agent；`memory_save` 撞到相似已有条目（Jaccard 相似度）会先拒绝并要求带 `replaces` 二次调用。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
 
-用户可用 `/memory status` 查看记忆条数、按类型分布、试用期条目、上次反思时间、索引是否超预算；`/memory list` 按 `name` 列出频道记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的日志；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
+用户可用 `/memory status` 查看记忆条数、按类型分布、观察期条目、上次后台整理时间、索引是否超预算；`/memory list` 按 `name` 列出频道记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的工作日记；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
 
 ### 出站附件工具（`send_media`，随渠道自动启用）
 
@@ -918,7 +918,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 - `memoryMaintenance` 是内置后台 scheduler，不依赖也不会写入 `workspace/events/`。
 - `memoryMaintenance.enabled` 只门控这条空闲 scheduler；会话边界反思由同一个 reflect 实现处理，但不受该开关控制。
 - spec 050 起只有一个后台任务——反思（reflect），取代此前的 session refresh / memory checkpoint / structural maintenance 三个 job。调用 LLM 前有本地 gate：无新内容、channel 仍活跃、未到间隔时不会调用 LLM。内置间隔为 20 分钟，channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
-- 后台反思的 durable 写入有固定置信度闸门（`necessity: high` 且 `confidence ≥ 0.85`）；`necessity: medium` 的 `add` 以 30 天试用期写入（`confidence ≥ 0.9`），更新用户保存的条目还要求 `confidence ≥ 0.95`。显式 `memory_save` 不要求这两个判断字段，会检查凭据、名称与相似条目，并走相同的存储队列和落盘机制。被拒绝的反思候选记进 `memory-review.jsonl`，素材仍留在冷存储。
+- 后台反思的 durable 写入有固定置信度闸门（`necessity: high` 且 `confidence ≥ 0.85`）；`necessity: medium` 的 `add` 以 30 天观察期写入（`confidence ≥ 0.9`），更新用户保存的条目还要求 `confidence ≥ 0.95`。显式 `memory_save` 不要求这两个判断字段，会检查凭据、名称与相似条目，并走相同的存储队列和落盘机制。被拒绝的反思候选记进 `memory-review.jsonl`，素材仍留在冷存储。
 - 记忆是一条一文件，没有整份 `MEMORY.md` 重写导致的缩水风险——每次写入只影响被 `add`/`update`/`delete` 点名的那个 `name`，索引文件只是从这些文件生成的只读投影。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
 - workspace skill 只能通过显式的 `write`/`edit` 调用创建/更新（`skill` 工具本身只读），后台记忆管线不会自动写 skill。

@@ -70,8 +70,8 @@ function printTuiHelp(io: BootstrapIO): void {
 	io.log("  --channel <id>            Channel to attach to (default: tui_local).");
 	io.log("                            Use dm_<staffId> to share a DingTalk conversation's memory.");
 	io.log("  --print, -p               One-shot: run [prompt] (or stdin), print the answer, exit");
-	io.log("  --quiet, -q               Plain mode: print only the final answer");
-	io.log("  --plain                   Force the plain frontend (no full-screen UI)");
+	io.log("  --plain                   Use the line-based frontend instead of the full-screen UI");
+	io.log("  --quiet, -q               Print only the final answer, no progress (implies --plain)");
 	io.log("  --version                 Print the version and exit");
 	io.log("");
 	io.log("Note: do not attach --channel to a DingTalk conversation the daemon is actively serving.");

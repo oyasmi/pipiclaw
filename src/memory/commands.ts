@@ -1,5 +1,5 @@
 import { renderSubcommandUsage } from "../commands/catalog.js";
-import { capReply } from "../commands/reply-limits.js";
+import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
 import { localDayKey } from "../shared/local-time.js";
 import { getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import { buildChannelIndexForBootstrap, CHANNEL_INDEX_MAX_UNITS } from "./index-budget.js";
@@ -58,10 +58,10 @@ async function handleStatus(options: MemoryCommandOptions): Promise<string> {
 		"**记忆状态**",
 		"",
 		`- 频道条目：\`${entries.length}\`（${MEMORY_TYPE_ORDER.map((type) => `${type} ${byType.get(type) ?? 0}`).join(" / ")}）`,
-		`- 试用期条目：\`${probationary.length}\`${probationary.length > 0 ? `（最早到期 \`${probationary[0].expires}\`）` : ""}`,
-		`- frontmatter 解析异常的文件：\`${malformed.length}\`${malformed.length > 0 ? `（${malformed.map((e) => e.name).join(", ")}）` : ""}`,
-		`- 上次反思：\`${state?.lastReflectAt ?? "从未"}\`${state?.lastReflectedEntryId ? `（游标 \`${state.lastReflectedEntryId}\`）` : ""}`,
-		`- 索引预算：${tiered.overBudget ? `超出，注入时按 updated 降序分层；下次反思会尝试合并` : "未超出，整份注入"}`,
+		`- 观察期条目：\`${probationary.length}\`${probationary.length > 0 ? `（最早到期 \`${probationary[0].expires}\`）` : ""}`,
+		`- 文件头解析异常：\`${malformed.length}\`${malformed.length > 0 ? `（${malformed.map((e) => e.name).join("、")}）` : ""}`,
+		`- 上次后台整理：\`${state?.lastReflectAt ?? "从未"}\``,
+		`- 索引大小：${tiered.overBudget ? "超出预算，注入时优先带最近更新的条目；下次整理会尝试合并" : "未超出预算，整份注入"}`,
 	].join("\n");
 }
 
@@ -72,10 +72,12 @@ async function handleList(options: MemoryCommandOptions, typeArg: string | undef
 	const entries = await listMemoryEntries(options.channelDir);
 	const filtered = typeArg ? entries.filter((entry) => entry.type === typeArg) : entries;
 	if (filtered.length === 0) {
-		return typeArg ? `**记忆条目（${typeArg}）**\n\n暂无该类型的记忆。` : "**记忆条目**\n\n暂无生效的频道记忆。";
+		return typeArg
+			? `暂无 \`${typeArg}\` 类型的记忆。\n用 \`/memory list\` 查看全部。`
+			: "暂无生效的频道记忆。\n在对话里告诉我需要长期记住的事，我会保存下来。";
 	}
 	const lines = filtered.map((entry) => {
-		const marker = entry.body.trim() ? " (+)" : "";
+		const marker = entry.body.trim() ? "（有正文）" : "";
 		const probation = entry.expires ? `（观察期至 \`${entry.expires}\`）` : "";
 		return `- \`${entry.name}\` [${entry.type}]${probation} ${entry.description}${marker}`;
 	});
@@ -85,27 +87,29 @@ async function handleList(options: MemoryCommandOptions, typeArg: string | undef
 }
 
 async function handleShow(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
-	if (!name) return `缺少记忆名称。${renderUsage()}`;
+	if (!name) return `缺少记忆名称。\n\n${renderUsage()}`;
 	const entry = await readMemoryEntry(options.channelDir, name);
 	if (!entry) return `未找到记忆 \`${name}\`。用 \`/memory list\` 查看可用名称。`;
+	// Frontmatter keys stay visible (the user sees them when opening the file), introduced by a
+	// Chinese label rather than shown bare (spec 053, D1).
 	const lines = [
 		`**记忆 ${name}**`,
 		"",
-		`- type: \`${entry.type}\``,
-		`- source: \`${entry.source}\``,
-		`- created: \`${entry.created}\` / updated: \`${entry.updated}\``,
+		`- 类型（type）：\`${entry.type}\``,
+		`- 来源（source）：\`${entry.source}\``,
+		`- 创建（created）：\`${entry.created}\`；更新（updated）：\`${entry.updated}\``,
 	];
-	if (entry.expires) lines.push(`- expires: \`${entry.expires}\``);
-	if (entry.malformed) lines.push("- ⚠️ frontmatter 解析异常，以第一段作为 description");
+	if (entry.expires) lines.push(`- 观察期至（expires）：\`${entry.expires}\``);
+	if (entry.malformed) lines.push("- ⚠️ 文件头解析异常，以第一段作为描述");
 	lines.push("", entry.description);
-	if (entry.body.trim()) lines.push("", entry.body.trim());
-	return lines.join("\n");
+	if (entry.body.trim()) lines.push("", flattenMarkdownForChat(entry.body.trim()));
+	return capReply(lines.join("\n"), { nextStepHint: "完整内容在频道目录的 `memory/` 下" }).text;
 }
 
 async function handleForget(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
-	if (!name) return `缺少记忆名称。${renderUsage()}`;
+	if (!name) return `缺少记忆名称。\n\n${renderUsage()}`;
 	const entry = await readMemoryEntry(options.channelDir, name);
-	if (!entry) return `未找到记忆 \`${name}\`；未做任何改动。`;
+	if (!entry) return `未找到记忆 \`${name}\`，未做任何改动。用 \`/memory list\` 查看可用名称。`;
 	await getDefaultChannelMemoryQueue().run(options.channelId, () =>
 		applyMemoryOps(options.channelDir, [{ op: "delete", name, reason: "/memory forget" }]),
 	);
@@ -115,21 +119,24 @@ async function handleForget(options: MemoryCommandOptions, name: string | undefi
 		reason: "memory-forget",
 		actions: [{ op: "forget", name, contentHash: hashMemoryContent(entry.description) }],
 	}).catch(() => {});
-	return `已删除 \`${name}\`。内容按哈希墓碑化，避免被反思重新写入；重新说出该事实仍可被学到。`;
+	return `已删除 \`${name}\`，并记入忽略名单，后台整理不会再自动写回；你之后重新说起这件事，仍然可以被记住。`;
 }
 
 async function handleJournal(options: MemoryCommandOptions, dateArg: string | undefined): Promise<string> {
 	const date = dateArg ?? localDayKey();
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-		return `日期格式应为 \`YYYY-MM-DD\`。${renderUsage()}`;
+		return `日期格式应为 \`YYYY-MM-DD\`。\n\n${renderUsage()}`;
 	}
 	const content = await readJournalDay(options.channelDir, date);
 	if (!content.trim()) {
 		const dates = await listJournalDates(options.channelDir);
-		const hint = dates.length > 0 ? `\n\n有记录的日期：${dates.slice(-10).join(", ")}` : "";
-		return `**日志 ${date}**\n\n当天没有记录。${hint}`;
+		const hint =
+			dates.length > 0
+				? `有记录的日期：${dates.slice(-10).join("、")}`
+				: "工作日记由后台整理按天写入，有对话之后会出现。";
+		return `暂无 ${date} 的工作日记。\n${hint}`;
 	}
-	return capReply(`**日志 ${date}**\n\n${content.trim()}`, {
+	return capReply(`**工作日记 ${date}**\n\n${flattenMarkdownForChat(content.trim())}`, {
 		nextStepHint: "用 `/memory journal <YYYY-MM-DD>` 查看其他日期",
 	}).text;
 }
@@ -143,5 +150,5 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 	if (action === "forget") return handleForget(options, argument);
 	if (action === "journal") return handleJournal(options, argument);
 
-	return `未知的 memory 命令 \`${action}\`。${renderUsage()}`;
+	return `未知子命令 \`${action}\`。\n\n${renderUsage()}`;
 }

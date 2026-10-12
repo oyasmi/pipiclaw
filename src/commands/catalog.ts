@@ -10,7 +10,7 @@
  * `memory/commands.ts`, `agent/command-extension.ts`). This file has no imports at all, so nothing
  * here can drag a layer into another one.
  *
- * The six reply conventions these commands follow are recorded in AGENTS.md; `reply-limits.ts`
+ * The user-facing copy conventions these commands follow are recorded in AGENTS.md; `reply-limits.ts`
  * next to this file enforces rule 5 (the length budget).
  */
 
@@ -59,7 +59,7 @@ export interface CommandSubSpec {
 
 /**
  * Single source of truth for a slash command's metadata. `HELP_TEXT`, the TUI
- * autocomplete list, the busy-time hint, and the known-command set are all
+ * autocomplete list, the busy-time hint (`formatBusyHint`), and the known-command set are all
  * derived from these tables — do not hand-maintain those in parallel.
  *
  * `subcommands`, where present, is *also* the single source for that command's own `usage()`
@@ -87,6 +87,8 @@ export interface CommandSpec {
 	runnerHandled?: boolean;
 	/** Broadcast list of this command's subcommands, for commands with a `/<name> <action> ...` shape. */
 	subcommands?: CommandSubSpec[];
+	/** Extra paragraph shown only in `/help <name>`, for context too specific for the top-level list. */
+	note?: string;
 }
 
 /**
@@ -103,7 +105,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "stop",
-		description: "停止当前回合；若该回合由任务驱动，同时暂停该任务",
+		description: "停止当前回合；若该回合是某个任务的一步，同时暂停该任务",
 		examples: ["/stop"],
 		availableWhileBusy: true,
 		runnerHandled: true,
@@ -111,8 +113,9 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "steer",
 		argumentHint: "<消息>",
-		description: "在当前工具步骤结束后调整正在运行的回合",
-		examples: ["/steer Use the Shanghai time zone and summarize only the latest updates"],
+		description: "在当前工具调用结束后调整正在运行的回合",
+		examples: ["/steer 改用上海时区，只汇总最新的更新"],
+		note: "回合进行中直接发送的普通消息默认按 `/steer` 处理。部署者可以在 channel.json 把 `busyMessageDefault` 设为 `followUp`，改为排到当前回合之后执行；`responseMode` 控制答复的输出形态。",
 		availableWhileBusy: true,
 		runnerHandled: true,
 	},
@@ -120,7 +123,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		name: "followup",
 		argumentHint: "<消息>",
 		description: "排队一条请求，等当前回合结束后再执行",
-		examples: ["/followup After that, draft a short executive summary"],
+		examples: ["/followup 完成后再写一份简短的总结"],
 		availableWhileBusy: true,
 		runnerHandled: true,
 	},
@@ -150,27 +153,27 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		name: "tasks",
 		argumentHint:
 			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|archive|doctor]",
-		description: "查看、指挥并诊断本频道的长程任务；pause 只停用执行，保留阶段与等待票",
+		description: "查看、指挥并诊断本频道的长程任务；pause 只停止自动执行，保留等待条件",
 		availableWhileBusy: true,
 		subcommands: [
 			{ name: "list", description: "列出本频道进行中的任务（默认动作，可省略）", example: "/tasks" },
 			{
 				name: "show",
 				args: "<id>",
-				description: "查看契约、团队看板、最近日志与用量",
+				description: "查看任务说明、工作项、最近记录与用量",
 				example: "/tasks show weekly-report",
 			},
 			{
 				name: "log",
 				args: "<id>",
-				description: "翻看该任务的循环日志（含派发与结算记录）",
+				description: "查看该任务的记录（含每次委派的开始与结束）",
 				example: "/tasks log weekly-report",
 			},
 			{ name: "archive", description: "列出已归档（已关闭）的任务", example: "/tasks archive" },
 			{
 				name: "pause",
 				args: "<id>",
-				description: "停止该任务的自动执行（保留当前阶段与等待票）",
+				description: "停止该任务的自动执行（保留等待条件）",
 				example: "/tasks pause weekly-report",
 			},
 			{
@@ -182,7 +185,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			{
 				name: "steer",
 				args: "<id> <内容>",
-				description: "把一条指示排给该任务的下一步，不打断当前步骤",
+				description: "把一条指示排给该任务的下一步，不打断正在执行的这一步",
 				example: "/tasks steer weekly-report 先跑一遍 npm run check",
 			},
 			{
@@ -210,7 +213,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "context",
 		argumentHint: "[detail]",
-		description: "显示实际发给模型的内容：system prompt 分段、工具 schema、上一回合上下文",
+		description: "显示实际发给模型的内容：系统提示词分段、工具定义、上一回合的上下文",
 		examples: ["/context", "/context detail"],
 		// Read-only accounting of state the runner already holds: no LLM call, no session
 		// access, so it answers mid-turn like /status and /usage do.
@@ -220,7 +223,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "subagents",
 		argumentHint: "<list [running|failed|all]|show <id>|output <id>|cancel <id|all>|roles [name]>",
-		description: "查看与控制委派 run（内置与外部）、浏览角色目录；cancel 不经过模型，直接终止",
+		description: "查看与控制委派（内置与外部）、浏览角色目录；cancel 不经过模型，直接终止",
 		// A human control path independent of the model (spec 040, D6): /stop no longer kills a
 		// dispatched delegation, so cancel must work even when the model/turn is unavailable.
 		availableWhileBusy: true,
@@ -228,19 +231,19 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			{
 				name: "list",
 				args: "[running|failed|all]",
-				description: "运行中的 run + 最近完成的几条（不带筛选时）",
+				description: "运行中的委派，以及最近完成的几条（不带筛选时）",
 				example: "/subagents list failed",
 			},
 			{
 				name: "show",
 				args: "<runId>",
-				description: "单个 run 的完整详情（含实际 argv、stderr 尾部）",
+				description: "单个委派的详情（含实际命令行、stderr 尾部）",
 				example: "/subagents show run_a1b2c3",
 			},
 			{
 				name: "output",
 				args: "<runId>",
-				description: "该 run 的文本产出（output.md 尾部）",
+				description: "该委派的文本产出（output.md 尾部）",
 				example: "/subagents output run_a1b2c3",
 			},
 			{
@@ -260,7 +263,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "project",
 		argumentHint: "[set <absolute-path>|reset]",
-		description: "查看或切换本频道的项目目录（文件工具/shell 的工作面）；set/reset 需频道空闲",
+		description: "查看或切换本频道的项目目录（读写文件与执行命令的工作目录）；set/reset 需频道空闲",
 		// The read form answers like /status; set/reset validate idleness themselves and reply
 		// with a plain error instead of blocking the built-in-command dispatch path.
 		availableWhileBusy: true,
@@ -269,10 +272,10 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			{
 				name: "set",
 				args: "<absolute-path>",
-				description: "切换项目目录（需频道空闲，且目录在允许的可选根内）",
+				description: "切换项目目录（需频道空闲，且目录在允许的根目录内）",
 				example: "/project set /home/me/projects/foo",
 			},
-			{ name: "reset", description: "切回 app 默认项目目录", example: "/project reset" },
+			{ name: "reset", description: "切回默认项目目录", example: "/project reset" },
 		],
 	},
 	{
@@ -301,11 +304,11 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "memory",
 		argumentHint: "[status|list [type]|show <name>|forget <name>|journal [date]]",
-		description: "查看频道记忆索引、试用期与反思状态；不经过模型的记忆管理入口",
+		description: "查看频道记忆、观察期条目与后台整理状态；不经过模型的记忆管理入口",
 		subcommands: [
 			{
 				name: "status",
-				description: "记忆状态概览：分类计数、试用期、上次反思、索引预算",
+				description: "记忆状态概览：分类计数、观察期条目、上次整理、索引大小",
 				example: "/memory status",
 			},
 			{
@@ -317,16 +320,21 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 			{
 				name: "show",
 				args: "<name>",
-				description: "查看单条记忆的全文与 frontmatter",
+				description: "查看单条记忆的全文与元信息",
 				example: "/memory show deploy-window-thursday",
 			},
 			{
 				name: "forget",
 				args: "<name>",
-				description: "不经过模型直接删除一条记忆（墓碑化，避免被反思重新写入）",
+				description: "不经过模型直接删除一条记忆，并记入忽略名单，后台整理不会再自动写回",
 				example: "/memory forget deploy-window-thursday",
 			},
-			{ name: "journal", args: "[YYYY-MM-DD]", description: "查看某天的日志，默认今天", example: "/memory journal" },
+			{
+				name: "journal",
+				args: "[YYYY-MM-DD]",
+				description: "查看某天的工作日记，默认今天",
+				example: "/memory journal",
+			},
 		],
 	},
 	{
@@ -356,7 +364,7 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 		name: "compact",
 		argumentHint: "[压缩要求]",
 		description: "手动压缩当前会话上下文，可附加自定义要求",
-		examples: ["/compact", "/compact Keep the latest TODOs and decisions"],
+		examples: ["/compact", "/compact 保留最新的待办和决定"],
 	},
 ];
 
@@ -393,12 +401,19 @@ export function isRunnerBuiltInCommand(command: BuiltInCommand): command is Runn
 	return RUNNER_BUILT_IN_NAMES.has(command.name);
 }
 
-/** Comma-separated list of commands usable while a task is streaming (names only). */
-export function formatBusyCommandList(): string {
-	return [...BUILT_IN_COMMANDS, ...SESSION_COMMANDS]
-		.filter((command) => command.availableWhileBusy)
-		.map((command) => `\`/${command.name}\``)
-		.join(", ");
+function commandList(specs: readonly CommandSpec[]): string {
+	return specs.map((command) => `\`/${command.name}\``).join("、");
+}
+
+/**
+ * The reply to a slash command that cannot run mid-turn — one source for DingTalk and the TUI
+ * (spec 053, D8). Both lists are derived from `availableWhileBusy`, so a command whose busy
+ * behaviour changes moves between them on its own instead of a hand-kept list going stale.
+ */
+export function formatBusyHint(): string {
+	const whileBusy = ALL_COMMANDS.filter((command) => command.availableWhileBusy);
+	const idleOnly = ALL_COMMANDS.filter((command) => !command.availableWhileBusy);
+	return `当前已有回合在运行。运行中可用：${commandList(whileBusy)}。${commandList(idleOnly)} 需要等空闲后再用。`;
 }
 
 /**
@@ -424,8 +439,10 @@ function renderCommandSummaryLine(spec: CommandSpec): string {
 
 /** The full detail for one command: argument syntax, subcommands or examples. Used by `/help <name>`. */
 function renderCommandDetail(spec: CommandSpec): string {
-	const header = `**/${spec.name}${spec.argumentHint ? ` ${spec.argumentHint}` : ""}**`;
-	const lines = [header, spec.description];
+	const lines = [`**/${spec.name}**`, spec.description];
+	// With subcommands, each bullet already spells out its own syntax.
+	if (spec.argumentHint && !spec.subcommands?.length) lines.push(`用法：\`/${spec.name} ${spec.argumentHint}\``);
+	if (spec.note) lines.push(spec.note);
 	if (spec.subcommands?.length) {
 		for (const sub of spec.subcommands) {
 			const base = `- \`/${spec.name} ${sub.name}${sub.args ? ` ${sub.args}` : ""}\` — ${sub.description}`;
@@ -445,22 +462,24 @@ export function renderCommandHelp(name: string): string | undefined {
 	return spec ? renderCommandDetail(spec) : undefined;
 }
 
+/**
+ * Grouped by when a command can be used — the one thing a user needs to know before sending it —
+ * rather than by which layer handles it (spec 053, D4/D8).
+ */
 function renderHelpText(): string {
-	const transport = BUILT_IN_COMMANDS.map(renderCommandSummaryLine).join("\n");
-	const session = SESSION_COMMANDS.map(renderCommandSummaryLine).join("\n");
+	const anytime = ALL_COMMANDS.filter((command) => command.availableWhileBusy).map(renderCommandSummaryLine);
+	const idleOnly = ALL_COMMANDS.filter((command) => !command.availableWhileBusy).map(renderCommandSummaryLine);
 	return `**斜杠命令**
 
-Pipiclaw 的命令分为两组；用 \`/help <命令名>\` 查看某个命令的详细用法和示例（例如 \`/help tasks\`）。
+助手处理一条消息的完整过程称为一个回合。用 \`/help <命令名>\` 查看某个命令的用法和示例，例如 \`/help tasks\`。
 
-**传输层命令** · 由钉钉传输层／运行时直接处理，回合进行中也可以用
+**随时可用** · 回合进行中也可以发送
 
-${transport}
+${anytime.join("\n")}
 
-回合进行中发送的普通消息按 \`busyMessageDefault\` 处理，默认是 \`steer\`；在 channel.json 里设为 \`followUp\`（或 \`followup\`）则改为排队到当前回合之后执行。channel.json 的 \`responseMode\` 控制输出形态，详见文档。
+**空闲时可用** · 需要等当前回合结束
 
-**会话层命令** · 由 Pipiclaw 会话层处理，需要在空闲时使用
-
-${session}
+${idleOnly.join("\n")}
 `;
 }
 
@@ -499,6 +518,40 @@ export function isKnownCommandName(name: string, knownSkillNames?: Iterable<stri
 		if (candidate === skillName) return true;
 	}
 	return false;
+}
+
+/**
+ * Replies around queueing that DingTalk and the TUI both give (spec 053, D10). One wording per
+ * situation, so the two surfaces cannot drift into two languages again.
+ */
+export function formatMissingQueueMessage(name: "steer" | "followup"): string {
+	return `缺少消息内容。用法：\`/${name} <消息>\``;
+}
+
+/** `explainFollowup`: a plain busy-time message was steered implicitly, so say how to defer it instead. */
+export function formatSteerQueued(explainFollowup: boolean): string {
+	const base = "已作为 steer 排队，当前工具调用结束后生效。";
+	return explainFollowup ? `${base}想等整个回合结束再执行，用 \`/followup <消息>\`。` : base;
+}
+
+export function formatFollowupQueued(): string {
+	return "已排队，当前回合结束后执行。";
+}
+
+export function formatNoRunningTurn(name: "stop" | "steer" | "followup"): string {
+	switch (name) {
+		case "stop":
+			return "当前没有运行中的回合，`/stop` 只在回合进行中有用。";
+		case "steer":
+			return "当前没有运行中的回合，直接发消息即可，不用 `/steer`。";
+		case "followup":
+			return "当前没有运行中的回合，直接发消息即可；`/followup` 用于回合进行中排队。";
+	}
+}
+
+/** The `/new` confirmation, shared by the DingTalk runtime path and the session-layer command. */
+export function formatNewSessionReply(sessionId: string): string {
+	return `已开启新会话（会话 ID：\`${sessionId}\`）。`;
 }
 
 export function formatUnknownCommandMessage(name: string): string {

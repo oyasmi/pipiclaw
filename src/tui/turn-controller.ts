@@ -10,7 +10,10 @@
 import type { AgentRunner } from "../agent/types.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
-	formatBusyCommandList,
+	formatBusyHint,
+	formatFollowupQueued,
+	formatNoRunningTurn,
+	formatSteerQueued,
 	formatUnknownCommandMessage,
 	isSessionCommandName,
 	slashCommandName,
@@ -97,7 +100,10 @@ export class TurnController {
 		this.submitChain = this.submitChain
 			.then(() => this.processSubmit(text))
 			.catch((err) => {
-				log.logWarning(`[${this.deps.channelId}] TUI submit failed`, errorMessage(err));
+				log.logWarn("tui.submit.failed", "Submit failed", {
+					channelId: this.deps.channelId,
+					reason: errorMessage(err),
+				});
 			});
 	}
 
@@ -121,7 +127,7 @@ export class TurnController {
 					void this.deps.runner.abort();
 					this.deps.frontend.showNotice("正在停止…");
 				} else {
-					this.deps.frontend.showNotice("当前没有运行中的回合。");
+					this.deps.frontend.showNotice(formatNoRunningTurn("stop"));
 				}
 				return;
 			case "followup":
@@ -143,9 +149,7 @@ export class TurnController {
 				// steered into the running turn as literal text (review 2026-08-24 §1.6; matches
 				// the DingTalk busy refusal in dingtalk.ts).
 				if (name && isSessionCommandName(name) && this.deps.runner.isBusy()) {
-					this.deps.frontend.showFinal(
-						`当前已有回合在运行。运行中可用：${formatBusyCommandList()}。会话命令（\`/model\`、\`/compact\`、\`/session\`）需要等空闲后再用。`,
-					);
+					this.deps.frontend.showFinal(formatBusyHint());
 					return;
 				}
 				await this.applyText(outcome.text);
@@ -159,7 +163,7 @@ export class TurnController {
 		if (this.deps.runner.isBusy()) {
 			try {
 				await this.deps.runner.queueSteer(text, this.deps.userName);
-				this.deps.frontend.showNotice("Queued as steer.");
+				this.deps.frontend.showNotice(formatSteerQueued(false));
 				return;
 			} catch {
 				// The busy window closed between dispatch and here; run it fresh.
@@ -171,7 +175,7 @@ export class TurnController {
 	private applyFollowup(text: string): void {
 		if (this.deps.runner.isBusy()) {
 			this.followups.push(text);
-			this.deps.frontend.showNotice("Queued as follow-up.");
+			this.deps.frontend.showNotice(formatFollowupQueued());
 			return;
 		}
 		this.beginTurn(text);
@@ -191,7 +195,7 @@ export class TurnController {
 			try {
 				await this.deps.runner.run(ctx, this.deps.store);
 			} catch (err) {
-				this.deps.frontend.showNotice(`Run failed: ${errorMessage(err)}`);
+				this.deps.frontend.showNotice(`处理失败：${errorMessage(err)}`);
 			} finally {
 				await ctx.close();
 				this.deps.runner.endTurn();
@@ -205,7 +209,10 @@ export class TurnController {
 		void this.currentTurn.then(
 			() => this.drainFollowups(),
 			(err) => {
-				log.logWarning(`[${this.deps.channelId}] TUI turn finalizer failed`, errorMessage(err));
+				log.logWarn("tui.turn.finalizer_failed", "Turn finalizer failed", {
+					channelId: this.deps.channelId,
+					reason: errorMessage(err),
+				});
 				this.deps.runner.endTurn();
 				this.drainFollowups();
 			},
@@ -239,7 +246,10 @@ export class TurnController {
 				isBot: false,
 			});
 		} catch (err) {
-			log.logWarning(`[${this.deps.channelId}] Failed to archive user message`, errorMessage(err));
+			log.logWarn("channel.archive.write_failed", "User message archive failed", {
+				channelId: this.deps.channelId,
+				reason: errorMessage(err),
+			});
 		}
 	}
 
@@ -256,7 +266,7 @@ export class TurnController {
 			return;
 		}
 		this.exitArmed = true;
-		this.deps.frontend.showNotice("Press Ctrl-C again to exit.");
+		this.deps.frontend.showNotice("再按一次 Ctrl-C 退出。");
 	}
 
 	private requestExit(): void {
@@ -264,7 +274,10 @@ export class TurnController {
 		// the memory-flush bookkeeping failed — log it rather than leak an unhandled
 		// rejection that could abort the process before exitResolve runs.
 		this.shutdown().catch((err) => {
-			log.logWarning(`[${this.deps.channelId}] TUI shutdown failed`, errorMessage(err));
+			log.logWarn("tui.shutdown.failed", "Shutdown failed", {
+				channelId: this.deps.channelId,
+				reason: errorMessage(err),
+			});
 			this.exitResolve();
 		});
 	}
@@ -277,11 +290,12 @@ export class TurnController {
 			// Snapshot may be unavailable before the first turn; omit the model.
 		}
 		const meta = model ? `${this.deps.channelId} · ${model}` : this.deps.channelId;
-		return [
-			`${bold("pipiclaw")} ${dim("· terminal chat")}`,
-			dim(meta),
-			dim("Type a message to start. /help for commands."),
-		].join("\n");
+		return [`${bold("pipiclaw")} ${dim("· 终端对话")}`, dim(meta), dim("输入消息开始；/help 查看命令。")].join("\n");
+	}
+
+	/** One word per state; `idle` and `ready` used to name the same one. */
+	private runStateLabel(): string {
+		return this.deps.runner.isBusy() ? "运行中" : "空闲";
 	}
 
 	private updateStatus(): void {
@@ -289,12 +303,12 @@ export class TurnController {
 			const snapshot = this.deps.runner.getStatusSnapshot();
 			let line = snapshot.model;
 			if (snapshot.contextTokens !== undefined && snapshot.contextWindow > 0) {
-				line += ` · ctx ${((snapshot.contextTokens / snapshot.contextWindow) * 100).toFixed(0)}%`;
+				line += ` · 上下文 ${((snapshot.contextTokens / snapshot.contextWindow) * 100).toFixed(0)}%`;
 			}
-			line += this.deps.runner.isBusy() ? " · running" : " · idle";
+			line += ` · ${this.runStateLabel()}`;
 			this.deps.frontend.setStatus(`${this.deps.channelId} · ${line}`);
 		} catch {
-			this.deps.frontend.setStatus(`${this.deps.channelId} · ${this.deps.runner.isBusy() ? "running" : "ready"}`);
+			this.deps.frontend.setStatus(`${this.deps.channelId} · ${this.runStateLabel()}`);
 		}
 	}
 
@@ -320,11 +334,14 @@ export class TurnController {
 			// pause without polluting stdout (which carries the answer in --print).
 			// Guaranteed via finally: a flush failure must not leave the terminal raw.
 			this.deps.frontend.stop();
-			process.stderr.write("Saving session memory…\n");
+			process.stderr.write("正在保存会话记忆…\n");
 
 			await Promise.race([
 				this.deps.runner.flushMemoryForShutdown().catch((err) => {
-					log.logWarning(`[${this.deps.channelId}] Failed to flush memory on exit`, errorMessage(err));
+					log.logWarn("memory.flush.failed", "Memory flush on exit failed", {
+						channelId: this.deps.channelId,
+						reason: errorMessage(err),
+					});
 				}),
 				new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_FLUSH_WAIT_MS)),
 			]);

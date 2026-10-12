@@ -90,8 +90,10 @@ export function initializeThinkingLevelCompat(
 export function setSessionBaseToolsOverride(session: AgentSession, tools: AgentTool<any>[], channelId: string): void {
 	const target = session as unknown as { _baseToolsOverride?: Record<string, AgentTool<any>> };
 	if (!("_baseToolsOverride" in target)) {
-		log.logWarning(
-			`[${channelId}] AgentSession no longer exposes _baseToolsOverride; tool reloads may use stale tools (SDK change?)`,
+		log.logWarn(
+			"agent.session.sdk_drift",
+			"AgentSession no longer exposes _baseToolsOverride; tool reloads may use stale tools",
+			{ channelId: channelId },
 		);
 	}
 	target._baseToolsOverride = Object.fromEntries(tools.map((tool) => [tool.name, tool]));

@@ -6,7 +6,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager } from "../agent/job-manager.js";
 import { CommandTerminatedError, EXECUTOR_SHELL_IS_BASH, type Executor } from "../executor.js";
-import { formatBlockMessage } from "../security/block-message.js";
+import { formatBlockMessage, GuardBlockedError } from "../security/block-message.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
@@ -268,8 +268,9 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 						reason: guardResult.reason,
 						matchedText: guardResult.matchedText,
 					});
-					throw new Error(
+					throw new GuardBlockedError(
 						formatCommandBlockMessage(command, guardResult.category, guardResult.reason, guardResult.matchedText),
+						{ guard: "command", category: guardResult.category, target: command },
 					);
 				}
 			}

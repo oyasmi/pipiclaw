@@ -8,8 +8,11 @@ import type {
 	SessionStats,
 } from "@earendil-works/pi-coding-agent";
 import { basename } from "path";
-import { sessionCommandDescription } from "../commands/catalog.js";
+import { formatNewSessionReply, sessionCommandDescription } from "../commands/catalog.js";
+import { capReply } from "../commands/reply-limits.js";
 import { findModelReferenceMatch, formatModelList, formatModelReference } from "../models/utils.js";
+import { estimateTokens } from "../shared/format.js";
+import { truncate } from "../shared/text-utils.js";
 
 export const COMMAND_RESULT_CUSTOM_TYPE = "pipiclaw.command_result";
 
@@ -34,22 +37,39 @@ function buildSessionText(
 	lastResponseModel?: string,
 ): string {
 	const configuredRef = currentModel ? formatModelReference(currentModel) : null;
-	const modelText = configuredRef ? `\`${configuredRef}\`` : "(none)";
+	const modelText = configuredRef ? `\`${configuredRef}\`` : "（无）";
 	const actualText =
 		lastResponseModel && configuredRef && lastResponseModel !== configuredRef
-			? ` (actual: \`${lastResponseModel}\`)`
+			? `（实际响应：\`${lastResponseModel}\`）`
 			: "";
-	const sessionFile = stats.sessionFile ? `\`${basename(stats.sessionFile)}\`` : "(none)";
+	const sessionFile = stats.sessionFile ? `\`${basename(stats.sessionFile)}\`` : "（无）";
+	const tokens = stats.tokens;
 	return `**会话**
 
-- Session ID：\`${stats.sessionId}\`
-- Session file：${sessionFile}
+- 会话 ID：\`${stats.sessionId}\`
+- 会话文件：${sessionFile}
 - 模型：${modelText}${actualText}
-- Thinking level：\`${thinkingLevel}\`
+- 思考档位（thinking）：\`${thinkingLevel}\`
 - 消息：用户 \`${stats.userMessages}\` · 助手 \`${stats.assistantMessages}\` · 共 \`${stats.totalMessages}\`
 - 工具调用：\`${stats.toolCalls}\` · 工具结果：\`${stats.toolResults}\`
-- Tokens：\`${stats.tokens.total}\`（input \`${stats.tokens.input}\`，output \`${stats.tokens.output}\`，cache read \`${stats.tokens.cacheRead}\`，cache write \`${stats.tokens.cacheWrite}\`）
-- Cost：\`$${stats.cost.toFixed(4)}\``;
+- token 用量：共 \`${tokens.total}\`（输入 \`${tokens.input}\`，输出 \`${tokens.output}\`，缓存读 \`${tokens.cacheRead}\`，缓存写 \`${tokens.cacheWrite}\`）
+- 花费：\`$${stats.cost.toFixed(4)}\``;
+}
+
+/**
+ * The `/compact` confirmation: sizes and the summary's first line only — the summary itself is
+ * the model's working notes and can run to pages (spec 053, D9).
+ */
+function buildCompactText(result: CompactionResult): string {
+	const after = result.estimatedTokensAfter ?? estimateTokens(result.summary);
+	const firstLine =
+		result.summary
+			.split("\n")
+			.map((line) => line.replace(/^#+\s*/, "").trim())
+			.find(Boolean) ?? "";
+	const lines = [`已压缩当前会话上下文：压缩前 \`${result.tokensBefore}\` tokens，压缩后约 \`${after}\` tokens。`];
+	if (firstLine) lines.push(`摘要开头：${truncate(firstLine, 120)}`);
+	return lines.join("\n");
 }
 
 async function runCompact(
@@ -81,12 +101,12 @@ function sendCommandResult(sender: CommandMessageSender, text: string): void | P
 }
 
 function buildThinkingText(current: ThinkingLevel, available: ThinkingLevel[]): string {
-	return `**Thinking**
+	return `**思考档位**
 
 - 当前档位：\`${current}\`
-- 可用档位：${available.map((level) => `\`${level}\``).join(", ")}
+- 可用档位：${available.map((level) => `\`${level}\``).join("、")}
 
-用 \`/thinking <level>\` 设置档位，或 \`/thinking cycle\` 切到下一个支持的档位。`;
+用 \`/thinking <档位>\` 设置，或 \`/thinking cycle\` 切到下一个可用档位。`;
 }
 
 export function createCommandExtension(options: PipiclawCommandExtensionOptions): ExtensionFactory {
@@ -127,26 +147,26 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 				if (normalized === "cycle") {
 					const next = options.cycleThinkingLevel();
 					if (!next) {
-						sendCommandResult(pi, "当前模型不支持 thinking/reasoning。");
+						sendCommandResult(pi, "当前模型不支持思考档位。用 `/model` 换一个支持推理的模型。");
 						return;
 					}
-					sendCommandResult(pi, `Thinking level 已切换为 \`${next}\`。`);
+					sendCommandResult(pi, `思考档位已切换为 \`${next}\`。`);
 					return;
 				}
 
 				if (!available.includes(normalized as ThinkingLevel)) {
 					sendCommandResult(
 						pi,
-						`不支持 thinking level \`${args.trim()}\`。当前模型可用值：${available
+						`当前模型不支持思考档位 \`${args.trim()}\`。可用档位：${available
 							.map((level) => `\`${level}\``)
-							.join(", ")}`,
+							.join("、")}。`,
 					);
 					return;
 				}
 
 				const level = normalized as ThinkingLevel;
 				options.setThinkingLevel(level);
-				sendCommandResult(pi, `Thinking level 已设置为 \`${level}\`。`);
+				sendCommandResult(pi, `思考档位已设置为 \`${level}\`。`);
 			},
 		});
 
@@ -157,30 +177,28 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 				const currentModel = options.getCurrentModel();
 
 				if (!args.trim()) {
-					const current = currentModel ? `\`${formatModelReference(currentModel)}\`` : "(none)";
+					const current = currentModel ? `\`${formatModelReference(currentModel)}\`` : "（无）";
 					const available =
-						availableModels.length > 0 ? formatModelList(availableModels, currentModel) : "- (none)";
-					sendCommandResult(
-						pi,
-						`**模型**
+						availableModels.length > 0 ? formatModelList(availableModels, currentModel) : "- （无可用模型）";
+					const report = `**模型**
 
 当前模型：${current}
 
-用 \`/model <provider/modelId>\`、\`/model <modelId>\` 或任意能唯一匹配的子串切换。
+用 \`/model <provider/modelId>\`、\`/model <modelId>\` 或任意能唯一匹配的片段切换。
 
 可用模型：
-${available}`,
-					);
+${available}`;
+					sendCommandResult(pi, capReply(report, { nextStepHint: "用 `/model <片段>` 按名称直接切换" }).text);
 					return;
 				}
 
 				const match = findModelReferenceMatch(args, availableModels);
 				const available =
-					availableModels.length > 0 ? formatModelList(availableModels, currentModel, 10) : "- (none)";
+					availableModels.length > 0 ? formatModelList(availableModels, currentModel, 10) : "- （无可用模型）";
 
 				if (match.match) {
 					await options.switchModel(match.match);
-					sendCommandResult(pi, `已切换模型到 \`${formatModelReference(match.match)}\``);
+					sendCommandResult(pi, `已切换模型到 \`${formatModelReference(match.match)}\`。`);
 					return;
 				}
 
@@ -213,17 +231,14 @@ ${available}`,
 					withSession: async (nextCtx) => {
 						sentFromReplacement = true;
 						await options.refreshSessionResources();
-						await sendCommandResult(
-							nextCtx,
-							`已开启新会话。\n\nSession ID：\`${nextCtx.sessionManager.getSessionId()}\``,
-						);
+						await sendCommandResult(nextCtx, formatNewSessionReply(nextCtx.sessionManager.getSessionId()));
 					},
 				});
 				if (result.cancelled) {
 					sendCommandResult(pi, "新会话已取消。");
 				} else if (!sentFromReplacement) {
 					await options.refreshSessionResources();
-					sendCommandResult(pi, `已开启新会话。\n\nSession ID：\`${ctx.sessionManager.getSessionId()}\``);
+					sendCommandResult(pi, formatNewSessionReply(ctx.sessionManager.getSessionId()));
 				}
 			},
 		});
@@ -233,17 +248,7 @@ ${available}`,
 			handler: async (args, ctx) => {
 				const customInstructions = args.trim() || undefined;
 				const result = await runCompact(ctx, customInstructions);
-				sendCommandResult(
-					pi,
-					`已压缩当前会话上下文。
-
-- 压缩前 tokens：\`${result.tokensBefore}\`
-- 摘要：
-
-\`\`\`text
-${result.summary}
-\`\`\``,
-				);
+				sendCommandResult(pi, buildCompactText(result));
 			},
 		});
 	};

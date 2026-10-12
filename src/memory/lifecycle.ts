@@ -201,7 +201,10 @@ export class MemoryLifecycle {
 			});
 		} catch (error) {
 			const message = errorMessage(error);
-			log.logWarning(`[${this.options.channelId}] Failed to write memory review log`, message);
+			log.logWarn("memory.review_log.write_failed", "Memory review log write failed", {
+				channelId: this.options.channelId,
+				reason: message,
+			});
 		}
 	}
 
@@ -279,7 +282,11 @@ export class MemoryLifecycle {
 			});
 		} catch (error) {
 			const message = errorMessage(error);
-			log.logWarning(`[${this.options.channelId}] Memory reflect failed (${reason})`, message);
+			log.logWarn("memory.reflect.failed", "Memory reflect failed", {
+				channelId: this.options.channelId,
+				reason: message,
+				fields: { trigger: reason },
+			});
 			await this.appendReviewLog({
 				reason: "reflect-boundary",
 				error: message,
@@ -305,10 +312,15 @@ export class MemoryLifecycle {
 			);
 			if (!bounded.truncated) continue;
 			event.preparation[key] = bounded.messages;
-			log.logWarning(
-				`[${this.options.channelId}] Bounded oversized compaction input (${key})`,
-				`${bounded.originalChars} -> ${bounded.boundedChars} chars; model=${model.provider}/${model.id}`,
-			);
+			log.logWarn("memory.compaction_input.bounded", "Oversized compaction input bounded", {
+				channelId: this.options.channelId,
+				fields: {
+					key,
+					originalChars: bounded.originalChars,
+					boundedChars: bounded.boundedChars,
+					model: `${model.provider}/${model.id}`,
+				},
+			});
 		}
 	}
 
@@ -341,7 +353,10 @@ export class MemoryLifecycle {
 			sessionEntrySnapshot,
 		).catch((error) => {
 			const message = errorMessage(error);
-			log.logWarning(`[${this.options.channelId}] Background new-session reflect rejected`, message);
+			log.logWarn("memory.reflect.rejected", "Background new-session reflect rejected", {
+				channelId: this.options.channelId,
+				reason: message,
+			});
 		});
 		this.recordActivity("boundary");
 	}
@@ -370,7 +385,10 @@ export class MemoryLifecycle {
 			void this.options.recordMemoryActivity?.(event);
 		} catch (error) {
 			const message = errorMessage(error);
-			log.logWarning(`[${this.options.channelId}] Failed to record memory activity`, message);
+			log.logWarn("memory.activity.record_failed", "Memory activity record failed", {
+				channelId: this.options.channelId,
+				reason: message,
+			});
 		}
 	}
 }

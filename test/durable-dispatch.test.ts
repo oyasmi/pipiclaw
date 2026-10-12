@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as log from "../src/log.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
-import { type DurableDispatchRecord, DurableDispatchService } from "../src/runtime/durable-dispatch.js";
+import {
+	type DurableDispatchRecord,
+	DurableDispatchService,
+	renderDispatchExhaustedNotice,
+} from "../src/runtime/durable-dispatch.js";
+import { createTaskDriverEvent } from "../src/runtime/task-driver.js";
 import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { readStoredTask } from "../src/tasks/store.js";
@@ -49,7 +54,7 @@ describe("DurableDispatchService", () => {
 		});
 		await service.dispatch(event());
 
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 		const rejections: unknown[] = [];
 		const onRejection = (reason: unknown): void => {
 			rejections.push(reason);
@@ -61,7 +66,7 @@ describe("DurableDispatchService", () => {
 			service.start();
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(rejections).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledWith("Durable dispatch drain failed", expect.any(String));
+			expect(warnSpy).toHaveBeenCalledWith("dispatch.drain.failed", expect.any(String), expect.anything());
 
 			// The record is untouched on disk, so recovery is just the next drain succeeding.
 			chmodSync(stateDir, 0o755);
@@ -515,5 +520,39 @@ describe("DurableDispatchService", () => {
 		accept = true;
 		await service.drainOnce();
 		expect(delivered).toHaveLength(1);
+	});
+
+	// Spec 053 F1.1: the exhausted-wake notice used to forward `event.text` and `event.user` — for a
+	// task step that is the model's English prompt and the `TASK_DRIVER` tag, sent to the user.
+	it("names the wake's task in the exhausted notice without forwarding the prompt or producer tag", () => {
+		const wake = createTaskDriverEvent(
+			"group_cid+a/b==",
+			{
+				id: "weekly-report",
+				title: "周报",
+				fields: { state: "open" },
+				readable: true,
+				legacy: false,
+				runnable: true,
+				expired: false,
+			},
+			Date.now(),
+		);
+		const record: DurableDispatchRecord = {
+			version: 1,
+			id: wake.dispatchId as string,
+			createdAt: new Date().toISOString(),
+			status: "exhausted",
+			event: wake,
+			deliveries: 8,
+		};
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const notice = renderDispatchExhaustedNotice(record, stateDir);
+
+		expect(notice).not.toContain("TASK_DRIVER");
+		expect(notice).not.toContain("Resume task");
+		expect(notice).toContain("/tasks show weekly-report");
+		// An absolute path to the kept record, not a path relative to an unnamed directory.
+		expect(notice).toContain(stateDir);
 	});
 });

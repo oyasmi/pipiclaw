@@ -94,7 +94,7 @@ export async function runReportCommand(
 					...context.runManager
 						.list()
 						.filter((record) => record.status === "running")
-						.map((record) => `subagent run \`${record.runId}\` (${record.agent})`),
+						.map((record) => `委派 \`${record.runId}\`（${record.agent}）仍在运行`),
 					...context.runningJobLines(),
 				],
 				onScopeChanged: context.onScopeChanged,

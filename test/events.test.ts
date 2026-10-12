@@ -604,7 +604,7 @@ describe("EventsWatcher", () => {
 				throw new Error("ENOSPC: no space left on device");
 			},
 		});
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 		const rejections: unknown[] = [];
 		const onRejection = (reason: unknown): void => {
 			rejections.push(reason);
@@ -616,8 +616,9 @@ describe("EventsWatcher", () => {
 			// rather than guessing how many ticks it needs.
 			await vi.waitFor(() => {
 				expect(warnSpy).toHaveBeenCalledWith(
-					`Failed to load event file: ${filename}`,
-					expect.stringContaining("ENOSPC"),
+					"events.file.load_failed",
+					expect.any(String),
+					expect.objectContaining({ reason: expect.stringContaining("ENOSPC"), fields: { file: filename } }),
 				);
 			});
 			expect(rejections).toEqual([]);

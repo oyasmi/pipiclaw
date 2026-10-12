@@ -25,7 +25,7 @@ import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
 import type { ChannelObservation } from "../channel/channel-index.js";
 import { getChannelDir } from "../channel/channel-paths.js";
 import {
-	formatBusyCommandList,
+	formatBusyHint,
 	parseBuiltInCommand,
 	type RuntimeCommandName,
 	renderBuiltInHelp,
@@ -516,16 +516,22 @@ export class DingTalkBot implements MediaSender {
 			try {
 				socket.close?.();
 			} catch (err) {
-				log.logWarning(`DingTalk: socket close failed during ${reason}`, errorMessage(err));
+				log.logWarn("dingtalk.socket.close_failed", "Socket close failed", {
+					reason: errorMessage(err),
+					fields: { during: reason },
+				});
 			}
 
 			const closed = await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_CLOSE_GRACE_MS);
 			if (!closed) {
-				log.logWarning(`DingTalk: forcing socket termination during ${reason}`);
+				log.logWarn("dingtalk.socket.terminating", "Forcing socket termination", { fields: { during: reason } });
 				try {
 					socket.terminate?.();
 				} catch (err) {
-					log.logWarning(`DingTalk: socket terminate failed during ${reason}`, errorMessage(err));
+					log.logWarn("dingtalk.socket.terminate_failed", "Socket terminate failed", {
+						reason: errorMessage(err),
+						fields: { during: reason },
+					});
 				}
 				await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_TERMINATE_GRACE_MS);
 			}
@@ -580,7 +586,7 @@ export class DingTalkBot implements MediaSender {
 		this.reconnectTimer = this.setTrackedTimeout(() => {
 			this.reconnectTimer = null;
 			this.doReconnect(immediate).catch((err) => {
-				log.logWarning("DingTalk: reconnect failed", errorMessage(err));
+				log.logWarn("dingtalk.reconnect.failed", "Reconnect failed", { reason: errorMessage(err) });
 			});
 		}, delayMs);
 	}
@@ -591,12 +597,15 @@ export class DingTalkBot implements MediaSender {
 
 	async start(): Promise<void> {
 		if (!this.config.clientId || !this.config.clientSecret) {
-			log.logWarning("DingTalk: clientId / clientSecret not configured");
+			log.logWarn("dingtalk.config.missing_credentials", "clientId / clientSecret not configured");
 			return;
 		}
 
 		if (!this.config.cardTemplateId) {
-			log.logWarning("DingTalk: cardTemplateId not configured — AI Card streaming will not work");
+			log.logWarn(
+				"dingtalk.config.missing_card_template",
+				"cardTemplateId not configured; AI Card streaming is off",
+			);
 		}
 
 		log.logEvent("info", "runtime.dingtalk.connecting", "Initializing stream client", {
@@ -620,7 +629,7 @@ export class DingTalkBot implements MediaSender {
 
 		const connected = await this.doReconnect(true); // Initial connection
 		if (!connected) {
-			log.logWarning("DingTalk: initial stream connection not ready yet; retrying in background");
+			log.logWarn("dingtalk.connect.pending", "Initial stream connection not ready; retrying in background");
 		}
 	}
 
@@ -648,10 +657,10 @@ export class DingTalkBot implements MediaSender {
 
 			// Fire-and-forget processing
 			this.onStreamMessage(data).catch((err: unknown) => {
-				log.logWarning("DingTalk handler error", errorMessage(err));
+				log.logWarn("dingtalk.handler.failed", "Message handler failed", { reason: errorMessage(err) });
 			});
 		} catch (err) {
-			log.logWarning("DingTalk: failed to parse message", errorMessage(err));
+			log.logWarn("dingtalk.message.parse_failed", "Message parse failed", { reason: errorMessage(err) });
 		}
 
 		return { status: "SUCCESS", message: "OK" };
@@ -711,7 +720,7 @@ export class DingTalkBot implements MediaSender {
 					// never emit a close event. Proactively force a reconnect instead
 					// of waiting indefinitely. scheduleReconnect no-ops if an attempt
 					// is already in flight or the bot has stopped.
-					log.logWarning("DingTalk: connection timeout detected (>90s); forcing reconnect.");
+					log.logWarn("dingtalk.connection.timeout", "Connection timeout (>90s); forcing reconnect");
 					this.scheduleReconnect(1000, true);
 					return;
 				}
@@ -734,7 +743,7 @@ export class DingTalkBot implements MediaSender {
 			});
 
 			s?.on("close", (code: number, reason: string) => {
-				log.logWarning(`DingTalk: WebSocket closed: code=${code}, reason=${reason}`);
+				log.logWarn("dingtalk.socket.closed", "WebSocket closed", { fields: { code, reason } });
 				if (this.isStopped) return;
 				this.scheduleReconnect(1000, true);
 			});
@@ -743,7 +752,7 @@ export class DingTalkBot implements MediaSender {
 				try {
 					const msg = JSON.parse(raw);
 					if (msg.type === "SYSTEM" && msg.headers?.topic === "disconnect") {
-						log.logWarning("DingTalk: disconnect event received from server.");
+						log.logWarn("dingtalk.connection.disconnected", "Server sent a disconnect event");
 						if (!this.isStopped) {
 							this.doReconnect(true).catch(() => {});
 						}
@@ -756,7 +765,7 @@ export class DingTalkBot implements MediaSender {
 			await this.cleanupSocket("reconnect failure");
 			this.reconnectAttempts++;
 			connectionFailed = true;
-			log.logWarning("DingTalk: connection failed", errorMessage(err));
+			log.logWarn("dingtalk.connect.failed", "Connection failed", { reason: errorMessage(err) });
 		} finally {
 			this.isReconnecting = false;
 		}
@@ -769,7 +778,7 @@ export class DingTalkBot implements MediaSender {
 	}
 
 	async stop(): Promise<void> {
-		log.logInfo("DingTalk: stopping bot");
+		log.logInfoEvent("dingtalk.bot.stopping", "Stopping bot");
 		this.isStopped = true;
 		this.clearAllTimers();
 		if (this.channelCacheSweepTimer) {
@@ -783,7 +792,7 @@ export class DingTalkBot implements MediaSender {
 			try {
 				await this.cleanupSocket("stop");
 			} catch (err) {
-				log.logWarning("DingTalk: failed to disconnect cleanly", errorMessage(err));
+				log.logWarn("dingtalk.disconnect.failed", "Clean disconnect failed", { reason: errorMessage(err) });
 			} finally {
 				this.client = null;
 			}
@@ -827,9 +836,10 @@ export class DingTalkBot implements MediaSender {
 		const queuedEvent = textOverride === undefined ? event : { ...event, text: textOverride };
 		const queue = this.getQueue(event.channelId);
 		if (queue.size() >= USER_MESSAGE_QUEUE_LIMIT) {
-			log.logWarning(
-				`Message queue full for ${event.channelId} (limit ${USER_MESSAGE_QUEUE_LIMIT}), discarding: ${queuedEvent.text.substring(0, 50)}`,
-			);
+			log.logWarn("dingtalk.queue.full", "Message discarded: channel queue full", {
+				channelId: event.channelId,
+				fields: { limit: USER_MESSAGE_QUEUE_LIMIT, preview: queuedEvent.text.substring(0, 50) },
+			});
 			this.sendPlain(
 				event.channelId,
 				`⚠️ 消息积压过多（超过 ${USER_MESSAGE_QUEUE_LIMIT} 条待处理），本条消息已丢弃，请稍后重试。`,
@@ -998,7 +1008,9 @@ export class DingTalkBot implements MediaSender {
 	async sendPlain(channelId: string, text: string, opts?: { title?: string; markdown?: boolean }): Promise<boolean> {
 		const meta = this.getConversationMeta(channelId);
 		if (!meta) {
-			log.logWarning(`No conversation metadata for ${channelId}, cannot send plain message`);
+			log.logWarn("dingtalk.send.no_metadata", "Plain message not sent: no conversation metadata", {
+				channelId: channelId,
+			});
 			return false;
 		}
 
@@ -1082,19 +1094,27 @@ export class DingTalkBot implements MediaSender {
 			);
 			const body = isRecord(resp.data) ? resp.data : {};
 			if (body.errcode && body.errcode !== 0) {
-				log.logWarning(`DingTalk media upload failed (errcode=${body.errcode})`, String(body.errmsg ?? ""));
+				log.logWarn("dingtalk.media.upload_failed", "Media upload failed", {
+					reason: String(body.errmsg ?? ""),
+					fields: { errcode: body.errcode },
+				});
 				return null;
 			}
 			const mediaId = typeof body.media_id === "string" ? body.media_id : null;
 			if (!mediaId) {
-				log.logWarning("DingTalk media upload returned no media_id", JSON.stringify(body));
+				log.logWarn("dingtalk.media.upload_failed", "Media upload returned no media_id", {
+					reason: JSON.stringify(body),
+				});
 			}
 			return mediaId;
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
-				log.logWarning(`DingTalk media upload error (${err.response.status})`, JSON.stringify(err.response.data));
+				log.logWarn("dingtalk.media.upload_failed", "Media upload failed", {
+					reason: JSON.stringify(err.response.data),
+					fields: { status: err.response.status },
+				});
 			} else {
-				log.logWarning("DingTalk media upload error", errorMessage(err));
+				log.logWarn("dingtalk.media.upload_failed", "Media upload failed", { reason: errorMessage(err) });
 			}
 			return null;
 		}
@@ -1128,10 +1148,9 @@ export class DingTalkBot implements MediaSender {
 			);
 			const downloadUrl = isRecord(downloadUrlResp.data) ? downloadUrlResp.data.downloadUrl : undefined;
 			if (typeof downloadUrl !== "string" || !downloadUrl) {
-				log.logWarning(
-					"DingTalk: messageFiles/download returned no downloadUrl",
-					JSON.stringify(downloadUrlResp.data),
-				);
+				log.logWarn("dingtalk.file.download_failed", "Inbound file download returned no downloadUrl", {
+					reason: JSON.stringify(downloadUrlResp.data),
+				});
 				return null;
 			}
 
@@ -1144,12 +1163,12 @@ export class DingTalkBot implements MediaSender {
 			return { data: Buffer.from(fileResp.data as ArrayBuffer) };
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
-				log.logWarning(
-					`DingTalk: inbound file download failed (${err.response.status})`,
-					JSON.stringify(err.response.data),
-				);
+				log.logWarn("dingtalk.file.download_failed", "Inbound file download failed", {
+					reason: JSON.stringify(err.response.data),
+					fields: { status: err.response.status },
+				});
 			} else {
-				log.logWarning("DingTalk: inbound file download failed", errorMessage(err));
+				log.logWarn("dingtalk.file.download_failed", "Inbound file download failed", { reason: errorMessage(err) });
 			}
 			return null;
 		}
@@ -1252,12 +1271,15 @@ export class DingTalkBot implements MediaSender {
 			return true;
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
-				log.logWarning(
-					`DingTalk ${msgKey} send failed (${err.response.status})`,
-					JSON.stringify(err.response.data),
-				);
+				log.logWarn("dingtalk.send.failed", "Message send failed", {
+					reason: JSON.stringify(err.response.data),
+					fields: { msgKey, status: err.response.status },
+				});
 			} else {
-				log.logWarning(`DingTalk ${msgKey} send error`, errorMessage(err));
+				log.logWarn("dingtalk.send.failed", "Message send failed", {
+					reason: errorMessage(err),
+					fields: { msgKey },
+				});
 			}
 			return false;
 		}
@@ -1296,7 +1318,9 @@ export class DingTalkBot implements MediaSender {
 
 		const meta = this.getConversationMeta(channelId);
 		if (!meta) {
-			log.logWarning(`No conversation metadata for ${channelId}, cannot create card`);
+			log.logWarn("dingtalk.card.no_metadata", "Card not created: no conversation metadata", {
+				channelId: channelId,
+			});
 			return null;
 		}
 
@@ -1346,9 +1370,12 @@ export class DingTalkBot implements MediaSender {
 			});
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
-				log.logWarning(`DingTalk Card: create failed (${err.response.status})`, JSON.stringify(err.response.data));
+				log.logWarn("dingtalk.card.create_failed", "Card create failed", {
+					reason: JSON.stringify(err.response.data),
+					fields: { status: err.response.status },
+				});
 			} else {
-				log.logWarning("DingTalk Card: create failed", errorMessage(err));
+				log.logWarn("dingtalk.card.create_failed", "Card create failed", { reason: errorMessage(err) });
 			}
 			return null;
 		}
@@ -1380,7 +1407,7 @@ export class DingTalkBot implements MediaSender {
 				return this.streamCardRequest(card, content, options);
 			})
 			.catch((error: unknown) => {
-				log.logWarning("DingTalk Card: streaming failed", errorMessage(error));
+				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", { reason: errorMessage(error) });
 				return false;
 			});
 		card.pendingWrite = pending;
@@ -1421,7 +1448,9 @@ export class DingTalkBot implements MediaSender {
 
 			const duration = Date.now() - start;
 			if (duration > 1000) {
-				log.logWarning(`DingTalk Card: streaming request took ${duration}ms (slow)`);
+				log.logWarn("dingtalk.card.stream_slow", "Card streaming request slow", {
+					fields: { durationMs: duration },
+				});
 			}
 
 			card.lastUpdated = Date.now() / 1000;
@@ -1432,12 +1461,12 @@ export class DingTalkBot implements MediaSender {
 			return true;
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
-				log.logWarning(
-					`DingTalk Card: streaming failed (${err.response.status})`,
-					JSON.stringify(err.response.data),
-				);
+				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", {
+					reason: JSON.stringify(err.response.data),
+					fields: { status: err.response.status },
+				});
 			} else {
-				log.logWarning("DingTalk Card: streaming failed", errorMessage(err));
+				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", { reason: errorMessage(err) });
 			}
 			return false;
 		}
@@ -1480,12 +1509,12 @@ export class DingTalkBot implements MediaSender {
 			return this.accessToken;
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
-				log.logWarning(
-					`DingTalk: failed to get access token (${err.response.status})`,
-					JSON.stringify(err.response.data),
-				);
+				log.logWarn("dingtalk.token.failed", "Access token request failed", {
+					reason: JSON.stringify(err.response.data),
+					fields: { status: err.response.status },
+				});
 			} else {
-				log.logWarning("DingTalk: failed to get access token", errorMessage(err));
+				log.logWarn("dingtalk.token.failed", "Access token request failed", { reason: errorMessage(err) });
 			}
 			return null;
 		}
@@ -1508,13 +1537,15 @@ export class DingTalkBot implements MediaSender {
 
 		if (!parsed.text && parsed.downloadCodes.length === 0) {
 			const msgtype = typeof data.msgtype === "string" ? data.msgtype : "unknown";
-			log.logWarning(`DingTalk: empty message (type=${msgtype})`);
+			log.logWarn("dingtalk.message.empty", "Empty message ignored", { fields: { msgtype } });
 			return;
 		}
 
 		if (this.config.allowFrom && this.config.allowFrom.length > 0) {
 			if (!this.config.allowFrom.includes(senderId)) {
-				log.logWarning(`DingTalk: ignoring message from unauthorized user ${senderName} (${senderId})`);
+				log.logWarn("dingtalk.message.unauthorized", "Message from unauthorized user ignored", {
+					fields: { senderName, senderId },
+				});
 				return;
 			}
 		}
@@ -1640,10 +1671,10 @@ export class DingTalkBot implements MediaSender {
 							markdown: true,
 						});
 						if (!delivered) {
-							log.logWarning(
-								`[${channelId}] Failed to deliver /${builtInCommand.name} reply`,
-								`${response.length} chars`,
-							);
+							log.logWarn("delivery.command_reply.failed", "Command reply delivery failed", {
+								channelId: channelId,
+								fields: { command: builtInCommand.name, chars: response.length },
+							});
 						}
 						return;
 					}
@@ -1653,10 +1684,7 @@ export class DingTalkBot implements MediaSender {
 			// Other session commands (/model, /compact, …) and unknown slash commands cannot
 			// run mid-turn: they would need the idle session layer.
 			if (isSlashCommand) {
-				await this.sendPlain(
-					channelId,
-					`当前已有回合在运行。运行中可用：${formatBusyCommandList()}。会话命令（\`/model\`、\`/compact\`、\`/session\`）需要等空闲后再用。`,
-				);
+				await this.sendPlain(channelId, formatBusyHint());
 				return;
 			}
 
@@ -1736,7 +1764,10 @@ export class DingTalkBot implements MediaSender {
 			this.convMeta.set(channelId, meta);
 			return meta;
 		} catch (err) {
-			log.logWarning(`Failed to load conversation metadata for ${channelId}`, errorMessage(err));
+			log.logWarn("dingtalk.metadata.load_failed", "Conversation metadata load failed", {
+				channelId: channelId,
+				reason: errorMessage(err),
+			});
 			return null;
 		}
 	}
@@ -1752,7 +1783,10 @@ export class DingTalkBot implements MediaSender {
 			mkdirSync(dirname(metaPath), { recursive: true });
 			writeFileAtomicallySync(metaPath, JSON.stringify(meta, null, 2));
 		} catch (err) {
-			log.logWarning(`Failed to persist conversation metadata for ${channelId}`, errorMessage(err));
+			log.logWarn("dingtalk.metadata.persist_failed", "Conversation metadata persist failed", {
+				channelId: channelId,
+				reason: errorMessage(err),
+			});
 		}
 	}
 

@@ -2,6 +2,7 @@ import type { ChannelContext } from "../channel/channel-context.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import type { MemoryLifecycle } from "../memory/lifecycle.js";
+import { renderGuardBlockForUser } from "../security/block-message.js";
 import { truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { addUsage, type UsageTotals } from "../shared/types.js";
@@ -11,10 +12,12 @@ import {
 	isArgumentValidationFailure,
 	isRecoverableRejection,
 	type ToolDetails,
+	takeGuardBlock,
 	toolResultDetails,
 } from "../tools/tool-details.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
+import { renderCompactionFailure } from "./turn-error.js";
 import {
 	extractCustomCommandResultText,
 	isAssistantEventMessage,
@@ -66,6 +69,10 @@ function isWorkspaceSkillWrite(
 		return false;
 	}
 	return details.path === skillsDir || details.path.startsWith(`${skillsDir}/`);
+}
+
+function firstLine(text: string): string {
+	return text.trim().split("\n", 1)[0] ?? "";
 }
 
 function mergeSubAgentUsage(totalUsage: UsageTotals, details: SubAgentToolDetails): void {
@@ -149,7 +156,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			isWorkspaceSkillWrite(event.toolName, details, context.skillsDir)
 		) {
 			queue.enqueue(() => context.refreshSessionResources?.() ?? Promise.resolve(), "refresh skills");
-			queue.enqueue(() => ctx.respondInThread("已沉淀：workspace skill 已更新，下一轮生效。"), "skill notice");
+			queue.enqueue(() => ctx.respondInThread("已更新 workspace skill，下一条消息起生效。"), "skill notice");
 		}
 
 		// A recoverable rejection (bad arguments, unmet precondition the model can fix) is not a
@@ -178,8 +185,14 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			runState.toolsUsed.push(event.toolName);
 		}
 
+		// Claimed on every error, shown or not, so the parked refusal never outlives its call.
+		const blocked = event.isError ? takeGuardBlock(event.toolCallId, resultStr) : undefined;
 		if (treatAsError && showProgress) {
-			queue.enqueue(() => ctx.respond(formatProgressEntry("error", truncate(resultStr, 200)), false), "tool error");
+			// The tool's error text is written for the model (spec 053, D2): a guard refusal is shown
+			// from its structured form; anything else as its first line only — the full text is in
+			// the log (`agent.tool.failed`).
+			const line = blocked ? renderGuardBlockForUser(blocked) : truncate(firstLine(resultStr), 120);
+			queue.enqueue(() => ctx.respond(formatProgressEntry("error", line), false), "tool error");
 		}
 		return;
 	}
@@ -311,7 +324,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	}
 
 	if (isAutoCompactionStartEvent(event)) {
-		const label = "Compacting context...";
+		const label = "正在压缩上下文…";
 		log.logEvent("info", "agent.compaction.started", "Compaction started", {
 			ctx: logCtx,
 			fields: { reason: event.reason },
@@ -340,10 +353,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			if (showProgress) {
 				queue.enqueue(
 					() =>
-						ctx.respond(
-							formatProgressEntry("error", truncate(event.errorMessage ?? "Compaction failed", 200)),
-							false,
-						),
+						ctx.respond(formatProgressEntry("error", renderCompactionFailure(event.errorMessage ?? "")), false),
 					"compaction error",
 				);
 			}
@@ -360,7 +370,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			queue.enqueue(
 				() =>
 					ctx.respond(
-						formatProgressEntry("assistant", `Retrying (${event.attempt}/${event.maxAttempts})...`),
+						formatProgressEntry("assistant", `模型请求失败，正在重试（${event.attempt}/${event.maxAttempts}）…`),
 						false,
 					),
 				"retry",

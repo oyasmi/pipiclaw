@@ -426,7 +426,10 @@ export class SubAgentRunManager {
 			await writeFileAtomically(path, `${JSON.stringify(record)}\n`);
 		} catch (error) {
 			if (required) throw error;
-			log.logWarning(`Failed to persist sub-agent run ${record.runId}`, errorMessage(error));
+			log.logWarn("subagent.persist.failed", "Run persist failed", {
+				reason: errorMessage(error),
+				fields: { runId: record.runId },
+			});
 		}
 	}
 
@@ -443,7 +446,10 @@ export class SubAgentRunManager {
 			await writeFileAtomically(join(record.artifactDir, "output.md"), outputText);
 			return true;
 		} catch (error) {
-			log.logWarning(`Failed to write output.md for sub-agent run ${record.runId}`, errorMessage(error));
+			log.logWarn("subagent.output.write_failed", "Run output.md write failed", {
+				reason: errorMessage(error),
+				fields: { runId: record.runId },
+			});
 			return false;
 		}
 	}
@@ -454,7 +460,12 @@ export class SubAgentRunManager {
 		if (!notify) return;
 		void Promise.resolve()
 			.then(() => notify(this.channelId, notice))
-			.catch((error) => log.logWarning(`Failed to emit run notice for ${notice.runId}`, errorMessage(error)));
+			.catch((error) =>
+				log.logWarn("subagent.notice.failed", "Run notice failed", {
+					reason: errorMessage(error),
+					fields: { runId: notice.runId },
+				}),
+			);
 	}
 
 	/** Start tailing a just-launched external run's artifact file for a human-readable step label
@@ -601,10 +612,10 @@ export class SubAgentRunManager {
 						purpose: record.purpose,
 						label: record.label,
 					}).catch((error) => {
-						log.logWarning(
-							`Failed to log dispatch of ${record.runId} to task ${record.taskId}`,
-							errorMessage(error),
-						);
+						log.logWarn("subagent.task_dispatch.log_failed", "Task dispatch record failed", {
+							reason: errorMessage(error),
+							fields: { runId: record.runId, taskId: record.taskId },
+						});
 					});
 				}
 				return record;
@@ -744,7 +755,10 @@ export class SubAgentRunManager {
 			if (!record || record.status !== "running") return;
 			record.terminationReason = reason;
 			await this.persist(record).catch((error) => {
-				log.logWarning(`Failed to persist termination reason for run ${runId}`, errorMessage(error));
+				log.logWarn("subagent.persist.failed", "Termination reason persist failed", {
+					reason: errorMessage(error),
+					fields: { runId },
+				});
 			});
 		});
 	}
@@ -842,7 +856,10 @@ export class SubAgentRunManager {
 						artifactDir: record.artifactDir,
 					})
 					.catch((error) => {
-						log.logWarning(`Failed to archive sub-agent run ${record.runId}`, errorMessage(error));
+						log.logWarn("subagent.archive.failed", "Run archive failed", {
+							reason: errorMessage(error),
+							fields: { runId: record.runId },
+						});
 					});
 				await this.persist(record);
 			}
@@ -854,7 +871,10 @@ export class SubAgentRunManager {
 			if (!record.taskAccounted && record.taskId && record.channelDir) {
 				record.taskAccounted = true;
 				await this.creditOwningTask(record, input, outputSaved).catch((error) => {
-					log.logWarning(`Failed to credit task ${record.taskId} for run ${record.runId}`, errorMessage(error));
+					log.logWarn("subagent.task_settle.log_failed", "Task credit for run failed", {
+						reason: errorMessage(error),
+						fields: { runId: record.runId, taskId: record.taskId },
+					});
 				});
 				await this.persist(record);
 			}
@@ -988,7 +1008,10 @@ export class SubAgentRunManager {
 		try {
 			await this.options.dispatch(event);
 		} catch (error) {
-			log.logWarning(`Failed to dispatch completion wake for run ${record.runId}`, errorMessage(error));
+			log.logWarn("subagent.wake.dispatch_failed", "Completion wake dispatch failed", {
+				reason: errorMessage(error),
+				fields: { runId: record.runId },
+			});
 			return;
 		}
 		record.wakeEnqueued = true;
@@ -1047,7 +1070,10 @@ export class SubAgentRunManager {
 		if (!adoptedRecord) return status;
 		this.clearExternalRecoveryTimer(runId);
 		await this.reconcileExternalRun(adoptedRecord).catch((error) => {
-			log.logWarning(`Failed to reconcile cancelled adopted run ${runId}`, errorMessage(error));
+			log.logWarn("subagent.reconcile.failed", "Cancelled adopted run reconcile failed", {
+				reason: errorMessage(error),
+				fields: { runId },
+			});
 		});
 		return this.runs.get(runId)?.status ?? status;
 	}
@@ -1082,7 +1108,10 @@ export class SubAgentRunManager {
 			try {
 				raw = await readFile(path, "utf-8");
 			} catch (error) {
-				log.logWarning(`Skipping unreadable sub-agent run record ${filename} (left on disk)`, errorMessage(error));
+				log.logWarn("subagent.record.unreadable", "Unreadable run record skipped (left on disk)", {
+					reason: errorMessage(error),
+					fields: { file: filename },
+				});
 				continue;
 			}
 			let record: RunRecord | undefined;
@@ -1095,7 +1124,9 @@ export class SubAgentRunManager {
 				// Genuinely corrupt content (bad JSON or shape) — quarantine rather than delete, so
 				// the evidence survives for a manual look; `.corrupt` files never match the `.json`
 				// filter above, so this cannot loop.
-				log.logWarning(`Quarantining corrupt sub-agent run record: ${filename}`);
+				log.logWarn("subagent.record.quarantined", "Corrupt run record quarantined", {
+					fields: { file: filename },
+				});
 				await rename(path, `${path}.corrupt`).catch(() => undefined);
 				continue;
 			}
@@ -1128,7 +1159,10 @@ export class SubAgentRunManager {
 					},
 					{ announce: pending.announce },
 				).catch((error) => {
-					log.logWarning(`Failed to finish pending sub-agent settlement ${record?.runId}`, errorMessage(error));
+					log.logWarn("subagent.settle.failed", "Pending settlement could not be finished", {
+						reason: errorMessage(error),
+						fields: { runId: record?.runId },
+					});
 				});
 				continue;
 			}
@@ -1148,7 +1182,10 @@ export class SubAgentRunManager {
 					},
 					{ announce: true },
 				).catch((error) => {
-					log.logWarning(`Failed to reconcile sub-agent run ${record?.runId}`, errorMessage(error));
+					log.logWarn("subagent.reconcile.failed", "Run reconcile failed", {
+						reason: errorMessage(error),
+						fields: { runId: record?.runId },
+					});
 				});
 			}
 			if (record.runtime === "external" && record.status === "running") {
@@ -1167,13 +1204,16 @@ export class SubAgentRunManager {
 						// realpath drift between restarts.
 						record.leaseKey = rebuilt.leaseKey;
 						await this.persist(record).catch((error) => {
-							log.logWarning(`Failed to persist rebuilt lease for run ${record.runId}`, errorMessage(error));
+							log.logWarn("subagent.lease.persist_failed", "Rebuilt lease persist failed", {
+								reason: errorMessage(error),
+								fields: { runId: record.runId },
+							});
 						});
 					} else {
-						log.logWarning(
-							`Could not rebuild workspace lease for adopted run ${record.runId}`,
-							formatWorkspaceLeaseConflict(rebuilt.heldBy),
-						);
+						log.logWarn("subagent.lease.rebuild_failed", "Workspace lease for adopted run could not be rebuilt", {
+							reason: formatWorkspaceLeaseConflict(rebuilt.heldBy),
+							fields: { runId: record.runId },
+						});
 						// This run cannot safely continue without its lease: it could write concurrently
 						// with the holder that won the restart race. Kill the adopted process only after
 						// confirming its persisted pid identity; a reused pid must never receive a signal.
@@ -1195,7 +1235,10 @@ export class SubAgentRunManager {
 						// Clear the stale key first so settlement cannot delete the other run's lease.
 						record.leaseKey = undefined;
 						await this.persist(record).catch((error) => {
-							log.logWarning(`Failed to persist cleared lease for run ${record.runId}`, errorMessage(error));
+							log.logWarn("subagent.lease.persist_failed", "Cleared lease persist failed", {
+								reason: errorMessage(error),
+								fields: { runId: record.runId },
+							});
 						});
 						await this.settle(
 							record.runId,
@@ -1215,13 +1258,19 @@ export class SubAgentRunManager {
 							},
 							{ announce: true },
 						).catch((error) => {
-							log.logWarning(`Failed to settle lease-conflicted run ${record?.runId}`, errorMessage(error));
+							log.logWarn("subagent.settle.failed", "Lease-conflicted run settlement failed", {
+								reason: errorMessage(error),
+								fields: { runId: record?.runId },
+							});
 						});
 						continue;
 					}
 				}
 				await this.reconcileExternalRunAtDeadline(record, Date.now()).catch((error) => {
-					log.logWarning(`Failed to reconcile external run ${record?.runId}`, errorMessage(error));
+					log.logWarn("subagent.reconcile.failed", "External run reconcile failed", {
+						reason: errorMessage(error),
+						fields: { runId: record?.runId },
+					});
 				});
 				if (record.status === "running") this.scheduleExternalRecovery(record);
 			}
@@ -1233,7 +1282,10 @@ export class SubAgentRunManager {
 				if (!record.wakeEnqueued) {
 					const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => "");
 					await this.announce(record, outputText, Boolean(outputText.trim())).catch((error) => {
-						log.logWarning(`Failed to re-announce sub-agent run ${record?.runId}`, errorMessage(error));
+						log.logWarn("subagent.wake.reannounce_failed", "Run re-announce failed", {
+							reason: errorMessage(error),
+							fields: { runId: record?.runId },
+						});
 					});
 				}
 			}
@@ -1387,7 +1439,10 @@ export class SubAgentRunManager {
 				const current = this.runs.get(record.runId);
 				if (!current || current.status !== "running") return;
 				void this.reconcileExternalRunAtDeadline(current).catch((error) => {
-					log.logWarning(`Failed to reconcile adopted external run ${current.runId}`, errorMessage(error));
+					log.logWarn("subagent.reconcile.failed", "Adopted external run reconcile failed", {
+						reason: errorMessage(error),
+						fields: { runId: current.runId },
+					});
 				});
 			},
 			Math.max(0, record.deadlineAt - Date.now()),
@@ -1412,7 +1467,10 @@ export class SubAgentRunManager {
 		for (const record of Array.from(this.runs.values())) {
 			if (!isTerminal(record.status)) continue;
 			await this.collectGarbageIfExpired(record, now).catch((error) => {
-				log.logWarning(`Failed to garbage-collect sub-agent run ${record.runId}`, errorMessage(error));
+				log.logWarn("subagent.gc.failed", "Run garbage collection failed", {
+					reason: errorMessage(error),
+					fields: { runId: record.runId },
+				});
 			});
 		}
 	}
@@ -1467,9 +1525,11 @@ export function createSubAgentRuntime(options: RunManagerOptions = {}) {
 		collectingGarbage = true;
 		try {
 			for (const manager of managers.values()) {
-				await manager
-					.collectGarbage()
-					.catch((error) => log.logWarning("Sub-agent garbage collection failed", errorMessage(error)));
+				await manager.collectGarbage().catch((error) =>
+					log.logWarn("subagent.gc.failed", "Run garbage collection pass failed", {
+						reason: errorMessage(error),
+					}),
+				);
 			}
 		} finally {
 			collectingGarbage = false;
@@ -1517,7 +1577,7 @@ export function createSubAgentRuntime(options: RunManagerOptions = {}) {
 			await mkdir(stateDir, { recursive: true });
 			channelIds = await listRecordChannelIds(stateDir);
 		} catch (error) {
-			log.logWarning("Failed to scan persisted sub-agent runs", errorMessage(error));
+			log.logWarn("subagent.scan.failed", "Persisted run scan failed", { reason: errorMessage(error) });
 			return 0;
 		}
 
@@ -1528,7 +1588,7 @@ export function createSubAgentRuntime(options: RunManagerOptions = {}) {
 		// Reclaim stale runs once as a host-wide startup batch; subsequent batches run daily.
 		await collectGarbageAllChannels();
 		if (restored > 0) {
-			log.logInfo(`Restored ${restored} sub-agent run record(s)`);
+			log.logInfoEvent("subagent.restore.done", "Sub-agent run records restored", { fields: { count: restored } });
 		}
 		return restored;
 	}

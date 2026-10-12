@@ -354,7 +354,10 @@ export function createChannelIndex(options: CreateChannelIndexOptions): ChannelI
 			})
 			.catch((error: unknown) => {
 				dirty = true;
-				log.logWarning(`Failed to update ${CHANNELS_INDEX_FILENAME}`, errorMessage(error));
+				log.logWarn("channel.index.write_failed", "Channel index update failed", {
+					reason: errorMessage(error),
+					fields: { file: CHANNELS_INDEX_FILENAME },
+				});
 			});
 		return pending;
 	};

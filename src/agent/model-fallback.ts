@@ -150,8 +150,9 @@ export async function runPromptWithFallback(promptText: string, deps: FallbackRu
 	if (deps.promptWasSubmitted()) {
 		truncated = takeFailedTurn(deps.getMessages());
 		if (!truncated) {
-			log.logWarning(
-				"[fallback] transcript tail is not [user, assistant(error)]; skipping fallback to avoid corrupting context",
+			log.logWarn(
+				"agent.model.fallback_skipped",
+				"Fallback skipped: transcript tail is not [user, assistant(error)]",
 			);
 			return false;
 		}

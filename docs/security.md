@@ -78,6 +78,15 @@ $PIPICLAW_HOME/security.json
 - `scp` 默认允许
 - 普通开发命令，如 `git`、`npm`、`python3 -c "print(42)"`、普通 `rm file.txt`，默认不拦截
 
+**拦截在聊天里的样子。** 守卫拦截时，模型收到的是一段英文说明（`Path blocked [category]`、`Command blocked [category]` 加原因与目标），它据此改用别的做法，或向你解释为什么需要放行。你在进度卡片里看到的是由同一次拦截的结构化信息渲染的一行中文，例如：
+
+```text
+✕ 已拦截：写入允许范围以外的路径 `/etc/hosts`（如需放行，由部署者调整 security.json）
+✕ 已拦截：命令 `rm -rf /` 属于破坏性文件操作（如需放行，由部署者调整 security.json）
+```
+
+主机名无法解析、网址无效这类不是安全策略能放行的问题，只说明原因，不提示调整 security.json。完整的拦截记录仍写入审计日志。
+
 ### 2. 文件工具默认允许访问哪些地方
 
 当前默认允许：

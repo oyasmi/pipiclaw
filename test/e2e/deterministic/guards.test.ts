@@ -36,6 +36,14 @@ describe("E2E deterministic: path guard & /project", () => {
 		expect(existsSync(targetInB)).toBe(false);
 		expect(JSON.stringify(harness.mainTurnRequests().at(-1)?.messages)).toContain("outside the current project root");
 		expect(harness.readAuditLog()).toContain("out.txt");
+		// Spec 053 D5.2: the model keeps the English refusal (asserted above), while the channel
+		// gets a line rendered from the refusal's structured form — it names the blocked path and
+		// carries none of the model text. Mutation check (2026-10-12): dropping the `blocked`
+		// branch in session-events.ts falls back to the error's first line ("Path blocked
+		// [outside-allowed-roots]"), which has no path, and the first assertion goes red.
+		const delivered = harness.deliveries.map((d) => d.text ?? "").join("\n");
+		expect(delivered).toContain(targetInB);
+		expect(delivered).not.toMatch(/Path blocked|Resolved path/);
 
 		// Move the root to B, then the same write is inside the boundary.
 		const setReply = await harness.runCommand("project", `set ${rootB}`);

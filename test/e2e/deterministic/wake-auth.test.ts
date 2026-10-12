@@ -179,7 +179,10 @@ describe("E2E deterministic: wake authenticity", () => {
 			() =>
 				harness.deliveries
 					.slice(deliveriesBeforeWake)
-					.some((d) => d.method === "sendPlain" && /^✅ .+ 完成 ·/.test(d.text ?? "")),
+					// Structure, not wording: a completion marker plus the run id the user can act on (spec 053, D6).
+					.some(
+						(d) => d.method === "sendPlain" && (d.text ?? "").startsWith("✅") && (d.text ?? "").includes(runId),
+					),
 			{ timeoutMs: 5_000, intervalMs: 50 },
 		);
 	});

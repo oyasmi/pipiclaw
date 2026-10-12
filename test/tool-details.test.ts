@@ -190,6 +190,40 @@ describe("rejections stay out of the user's chat", () => {
 });
 
 describe("registry wiring", () => {
+	// Spec 053 D5.2: a guard refusal used to reach the card as the model's English text
+	// ("Path blocked [...] Resolved path: ..."). The model must keep that exact text and the error
+	// flag; the chat gets a line rendered from the refusal's structured form instead.
+	it("shows a guard refusal from its structured form while the model keeps the original text", async () => {
+		const tools = buildToolSet({ ...testManagers(), ...registryContext() });
+		const write = tools.find((entry) => entry.name === "write");
+		if (!write) throw new Error("write not registered");
+
+		const error = await write.execute("guard-1", { label: "w", path: "/etc/pipiclaw-probe", content: "x" }).then(
+			() => undefined,
+			(thrown: unknown) => thrown as Error,
+		);
+		// Still thrown (so the SDK marks the result isError), with the model-facing text unchanged.
+		expect(error?.message).toMatch(/^Path blocked \[[a-z-]+\]\nReason: /);
+
+		const respond = vi.fn(async (_text: string, _final?: boolean) => {});
+		await handleSessionEvent(
+			{
+				type: "tool_execution_end",
+				toolCallId: "guard-1",
+				toolName: "write",
+				// What the SDK's createErrorToolResult builds from a thrown error: message only, empty details.
+				result: { content: [{ type: "text", text: error?.message }], details: {} },
+				isError: true,
+			},
+			handlerContext(createContext(respond), createEmptyRunState()),
+		);
+		expect(respond).toHaveBeenCalledTimes(1);
+		const line = String(respond.mock.calls[0][0]);
+		expect(line).toContain("/etc/pipiclaw-probe");
+		expect(line).not.toMatch(/blocked|Resolved path|Reason:/);
+		expect(line.split("\n")).toHaveLength(1);
+	});
+
 	it("delivers a real task_create validation failure as a rejection, not a thrown error", async () => {
 		// End-to-end through buildToolSet: the same call used to reach the user as a red
 		// error bubble mid-turn; it must now come back as data the model can act on.

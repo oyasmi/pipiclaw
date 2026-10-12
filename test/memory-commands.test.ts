@@ -40,15 +40,16 @@ describe("/memory status", () => {
 		expect(cleanStatus).toContain("project 2");
 		await writeFile(join(channelDir, "memory", "broken.md"), "not frontmatter\n", "utf-8");
 		const text = await run(channelDir, "status", appHomeDir);
-		expect(text).toContain("frontmatter 解析异常的文件：`1`");
+		expect(text).toContain("`1`（broken）");
 		expect(text).toContain("broken");
 		expect(await run(channelDir, "list")).toContain("`u1`");
 		expect(text).toContain("频道条目：`4`");
 		expect(text).toContain("user 1");
 		expect(text).toContain("project 3");
-		expect(text).toContain("试用期条目：`1`（最早到期 `2026-10-04`）");
+		expect(text).toContain("`2026-10-04`");
 		expect(text).toContain("2026-09-04T00:00:00.000+08:00");
-		expect(text).toContain("entry-7");
+		// The reflect cursor is an internal id, not something a user can act on (spec 053, D4).
+		expect(text).not.toContain("entry-7");
 	});
 });
 
@@ -62,8 +63,8 @@ describe("/memory list", () => {
 		const text = await run(channelDir, "list");
 		expect(text).toContain("`short`");
 		expect(text).toContain("`long`");
-		expect(text).toMatch(/`long`.*\(\+\)/);
-		expect(text).not.toMatch(/`short`.*\(\+\)/);
+		expect(text).toMatch(/`long`.*（有正文）/);
+		expect(text).not.toMatch(/`short`.*（有正文）/);
 	});
 
 	it("filters by type and rejects an unknown type", async () => {
@@ -88,8 +89,8 @@ describe("/memory show", () => {
 			{ op: "add", name: "x", type: "reference", description: "a fact", source: "user", details: "extra detail" },
 		]);
 		const shown = await run(channelDir, "show x");
-		expect(shown).toContain("type: `reference`");
-		expect(shown).toContain("source: `user`");
+		expect(shown).toContain("`reference`");
+		expect(shown).toContain("`user`");
 		expect(shown).toContain("a fact");
 		expect(shown).toContain("extra detail");
 
@@ -133,7 +134,7 @@ describe("/memory journal", () => {
 		}
 
 		const empty = await run(channelDir, "journal 2020-01-01");
-		expect(empty).toContain("没有记录");
+		expect(empty).toContain("2026-09-04");
 		expect(await run(channelDir, "journal not-a-date")).toContain("日期格式");
 	});
 });

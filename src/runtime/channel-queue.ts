@@ -36,7 +36,7 @@ export class ChannelQueue {
 		try {
 			await work();
 		} catch (err) {
-			log.logWarning("Queue error", errorMessage(err));
+			log.logWarn("runtime.queue.item_failed", "Channel queue item failed", { reason: errorMessage(err) });
 		}
 		this.processing = false;
 		this.processNext();

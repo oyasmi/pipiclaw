@@ -5,7 +5,7 @@ import * as log from "../src/log.js";
 describe("createRunQueue", () => {
 	it("logs a warning and keeps draining when an enqueued job throws", async () => {
 		const { queue, drain } = createRunQueue();
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 		let ranAfterFailure = false;
 		const order: number[] = [];
 		let release!: () => void;
@@ -32,7 +32,11 @@ describe("createRunQueue", () => {
 		await drain();
 		expect(order).toEqual([1, 2, 3]);
 		expect(ranAfterFailure).toBe(true);
-		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failing step"), "boom");
+		expect(warnSpy).toHaveBeenCalledWith(
+			"delivery.api.failed",
+			expect.any(String),
+			expect.objectContaining({ reason: "boom", fields: { context: expect.stringContaining("failing step") } }),
+		);
 		warnSpy.mockRestore();
 	});
 });

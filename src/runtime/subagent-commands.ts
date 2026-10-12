@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { renderSubcommandUsage } from "../commands/catalog.js";
-import { formatDuration } from "../shared/format.js";
-import { errorMessage } from "../shared/text-utils.js";
+import { capReply } from "../commands/reply-limits.js";
+import { formatElapsedZh } from "../shared/format.js";
+import { errorMessage, truncate } from "../shared/text-utils.js";
 import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
-import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
+import { elapsedMs, formatCost, harnessLabel } from "../subagents/format.js";
 import type { RunNotice, RunRecord, RunResolution, SubAgentRunManager } from "../subagents/runs.js";
 
 /**
@@ -70,7 +71,7 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
 		if (parts.length > 2) throw new Error("用法：/subagents roles [name]");
 		return { action: "roles", name: parts[1] };
 	}
-	throw new Error(`未知的 /subagents 子命令：${action}`);
+	throw new Error(`未知子命令 \`${action}\`。`);
 }
 
 function statusLabel(status: RunRecord["status"]): string {
@@ -84,19 +85,25 @@ function statusLabel(status: RunRecord["status"]): string {
 		case "cancelled":
 			return "已取消";
 		case "lost":
-			return "丢失（daemon 重启或无法确认）";
+			return "已丢失（服务重启后无法确认状态）";
 	}
 }
 
+/** User-facing run duration; a restart-reconciled run's figure is an estimate (spec 042 D1). */
+function runDuration(record: RunRecord): string {
+	const text = formatElapsedZh(elapsedMs(record));
+	return record.durationEstimated ? `约 ${text}` : text;
+}
+
 function formatRunLine(record: RunRecord): string {
-	const bits = [harnessLabel(record), formatRunDuration(record)];
-	if (record.taskId) bits.push(`task ${record.taskId}`);
+	const bits = [harnessLabel(record), runDuration(record)];
+	if (record.taskId) bits.push(`任务 ${record.taskId}`);
 	if (record.leaseKey) bits.push("持有写锁");
 	const cost = formatCost(record);
 	if (cost) bits.push(cost);
-	const header = `- \`${record.runId}\` ${record.agent} (${bits.join(", ")}) — ${statusLabel(record.status)} — "${record.label}"`;
+	const header = `- \`${record.runId}\` ${record.agent}（${bits.join("，")}）· ${statusLabel(record.status)} · “${truncate(record.label, 60)}”`;
 	if (record.status === "failed" && record.failureReason) {
-		return `${header}（失败原因：${record.failureReason}）`;
+		return `${header}（失败原因：${truncate(record.failureReason.replace(/\s+/g, " "), 120)}）`;
 	}
 	return header;
 }
@@ -116,9 +123,9 @@ function formatRolesTail(discovery: SubAgentDiscoveryResult): string {
 	const available = discovery.agents.length - unavailable.length;
 	const parts = [`角色目录：${available} 个可用`];
 	if (unavailable.length > 0) parts.push(`${unavailable.length} 个不可用`);
-	let line = `${parts.join("，")} — 用 /subagents roles 查看`;
-	for (const warning of discovery.warnings) {
-		line += `\n⚠ discovery: ${warning}`;
+	let line = `${parts.join("，")}，用 \`/subagents roles\` 查看`;
+	if (discovery.warnings.length > 0) {
+		line += `\n⚠️ 角色目录有 ${discovery.warnings.length} 个问题，用 \`/subagents roles\` 查看`;
 	}
 	return line;
 }
@@ -133,13 +140,21 @@ function capListForDisplay<T>(records: T[]): { shown: T[]; truncatedNote?: strin
 	if (records.length <= LIST_FILTER_CAP) return { shown: records };
 	return {
 		shown: records.slice(0, LIST_FILTER_CAP),
-		truncatedNote: `显示最近 ${LIST_FILTER_CAP} 条，共 ${records.length} 条——用更具体的筛选缩小范围。`,
+		truncatedNote: `显示最近 ${LIST_FILTER_CAP} 条，共 ${records.length} 条；用更具体的筛选缩小范围。`,
 	};
 }
 
 async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilter): Promise<string> {
+	const report = await renderRunList(options, filter);
+	return capReply(report, {
+		nextStepHint:
+			"用 `/subagents list running` 或 `/subagents list failed` 缩小范围，`/subagents show <runId>` 查看单个委派",
+	}).text;
+}
+
+async function renderRunList(options: HandleSubagentsCommandOptions, filter: ListFilter): Promise<string> {
 	const records = options.runManager.list();
-	if (records.length === 0) return "**委派 Run**\n\n没有委派记录。";
+	if (records.length === 0) return "暂无委派记录。\n让我把一件事交给某个角色去做之后，会出现在这里。";
 
 	const running = records.filter((record) => record.status === "running").sort((a, b) => b.startedAt - a.startedAt);
 	const terminal = records
@@ -150,21 +165,21 @@ async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilt
 
 	if (filter === "running") {
 		const { shown, truncatedNote } = capListForDisplay(running);
-		sections.push(shown.length === 0 ? "没有正在运行的 run。" : shown.map(formatRunLine).join("\n"));
+		sections.push(shown.length === 0 ? "没有正在运行的委派。" : shown.map(formatRunLine).join("\n"));
 		if (truncatedNote) sections.push(truncatedNote);
-		return `**委派 Run** · 运行中\n\n${sections.join("\n\n")}`;
+		return `**委派** · 运行中\n\n${sections.join("\n\n")}`;
 	}
 	if (filter === "failed") {
 		const { shown, truncatedNote } = capListForDisplay(terminal.filter((record) => record.status === "failed"));
-		sections.push(shown.length === 0 ? "没有失败的 run。" : shown.map(formatRunLine).join("\n"));
+		sections.push(shown.length === 0 ? "没有失败的委派。" : shown.map(formatRunLine).join("\n"));
 		if (truncatedNote) sections.push(truncatedNote);
-		return `**委派 Run** · 失败\n\n${sections.join("\n\n")}`;
+		return `**委派** · 失败\n\n${sections.join("\n\n")}`;
 	}
 	if (filter === "all") {
 		const { shown, truncatedNote } = capListForDisplay([...running, ...terminal]);
 		sections.push(shown.map(formatRunLine).join("\n"));
 		if (truncatedNote) sections.push(truncatedNote);
-		return `**委派 Run** · 全部（${records.length}）\n\n${sections.join("\n\n")}`;
+		return `**委派** · 全部（${records.length}）\n\n${sections.join("\n\n")}`;
 	}
 
 	// default: an overview — every running run, plus a capped tail of recent completions.
@@ -174,26 +189,32 @@ async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilt
 	const shown = terminal.slice(0, DEFAULT_LIST_COMPLETED_LIMIT);
 	if (shown.length > 0) {
 		const countNote =
-			terminal.length > shown.length ? `显示 ${shown.length} / 共 ${terminal.length}` : `${shown.length}`;
+			terminal.length > shown.length ? `显示 ${shown.length} 条，共 ${terminal.length} 条` : `${shown.length}`;
 		sections.push(`**最近完成**（${countNote}）\n${shown.map(formatRunLine).join("\n")}`);
 	}
-	if (sections.length === 0) sections.push("没有委派记录。");
 
 	const discovery = await resolveDiscovery(options);
 	if (discovery) sections.push(formatRolesTail(discovery));
 	sections.push("用 `/subagents show <runId>` 看详情，`/subagents output <runId>` 看产出。");
 
-	return `**委派 Run**\n\n${sections.join("\n\n")}`;
+	return `**委派**\n\n${sections.join("\n\n")}`;
 }
 
-const STDERR_TAIL_CHARS = 2_000;
-const OUTPUT_TAIL_CHARS = 4_000;
+/** `/subagents show`: the stderr tail it quotes, and how much of the argv. The rest is on disk. */
+const STDERR_TAIL_LINES = 10;
+const ARGV_SHOW_CHARS = 200;
+/** `/subagents output`: the output tail it quotes; the full `output.md` is in the artifact dir. */
+const OUTPUT_TAIL_CHARS = 1_200;
+
+function runNotFound(ref: string): string {
+	return `未找到委派 \`${ref}\`。用 \`/subagents list all\` 查看。`;
+}
 
 function formatRunResolution(resolution: RunResolution, ref: string): string | undefined {
-	if (resolution.kind === "not_found") return `未找到 run：\`${ref}\``;
+	if (resolution.kind === "not_found") return runNotFound(ref);
 	if (resolution.kind === "ambiguous") {
-		const candidates = resolution.candidates.map((record) => `\`${record.runId}\` (${record.agent})`).join("、");
-		return `"${ref}" 匹配到多个 run：${candidates}。请提供更完整的 runId。`;
+		const candidates = resolution.candidates.map((record) => `\`${record.runId}\`（${record.agent}）`).join("、");
+		return `\`${ref}\` 匹配到多个委派：${candidates}。请提供更完整的 runId。`;
 	}
 	return undefined;
 }
@@ -201,98 +222,103 @@ function formatRunResolution(resolution: RunResolution, ref: string): string | u
 async function showRun(manager: SubAgentRunManager, ref: string): Promise<string> {
 	const resolution = manager.resolveRef(ref);
 	const error = formatRunResolution(resolution, ref);
-	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
+	if (error || resolution.kind !== "found") return error ?? runNotFound(ref);
 	const record = resolution.record;
 
 	const lines = [
-		`**Run \`${record.runId}\`**`,
-		`- 角色：${record.agent} (${harnessLabel(record)}, ${record.source})`,
+		`**委派 \`${record.runId}\`**`,
+		`- 角色：${record.agent}（${harnessLabel(record)}，${record.source}）`,
 		`- 标签：${record.label}`,
-		`- 状态：${statusLabel(record.status)}（耗时 ${formatRunDuration(record)}）`,
+		`- 状态：${statusLabel(record.status)}（耗时 ${runDuration(record)}）`,
 	];
-	if (record.failureReason) lines.push(`- 失败原因：${record.failureReason}`);
+	if (record.failureReason) lines.push(`- 失败原因：${truncate(record.failureReason.replace(/\s+/g, " "), 300)}`);
 	if (record.verificationVerdict) {
-		lines.push(`- 检查结论：${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}`);
+		lines.push(`- 验收结论：${record.verificationVerdict === "pass" ? "通过" : "未通过"}`);
 	}
 	lines.push(`- 开始：${new Date(record.startedAt).toLocaleString()}`);
 	if (record.finishedAt) lines.push(`- 结束：${new Date(record.finishedAt).toLocaleString()}`);
 	lines.push(
-		`- purpose：${record.purpose}`,
+		`- 用途（purpose）：${record.purpose}`,
 		`- 工作目录：\`${record.workingDirectory}\``,
 		`- 产物目录：\`${record.artifactDir}\``,
 	);
-	if (record.taskId) lines.push(`- 所属任务：${record.taskId}`);
+	if (record.taskId) lines.push(`- 所属任务：\`${record.taskId}\``);
 	if (record.leaseKey) lines.push("- 持有写锁：是");
 	if (record.model) lines.push(`- 模型：${record.model}`);
 	const cost = formatCost(record);
-	lines.push(
-		`- usage：input=${record.usage.input} output=${record.usage.output}${cost ? ` cost=${cost}` : record.costKnown ? "" : "（cost 未知）"}`,
-	);
-	if (record.argv) lines.push("", "实际 argv：", "```", JSON.stringify(record.argv), "```");
+	const costText = cost ? `，花费 ${cost}` : record.costKnown ? "" : "，花费未知";
+	lines.push(`- 用量：输入 ${record.usage.input} tokens，输出 ${record.usage.output} tokens${costText}`);
+	if (record.argv) {
+		lines.push(`- 实际命令行：\`${truncate(JSON.stringify(record.argv).replace(/`/g, "'"), ARGV_SHOW_CHARS)}\``);
+	}
 	if (record.parserVersion !== undefined || record.cliVersion) {
 		// Spec 042 D12: lets a human tell "the target CLI's own protocol drifted out from under this
 		// adapter" apart from "the agent itself failed" — the two look identical from status alone.
 		const parts = [];
-		if (record.parserVersion !== undefined) parts.push(`parserVersion=${record.parserVersion}`);
-		parts.push(`cliVersion=${record.cliVersion ?? "(未知)"}`);
-		lines.push(`- 适配器/CLI：${parts.join("，")}`);
+		if (record.parserVersion !== undefined) parts.push(`适配器版本（parserVersion）${record.parserVersion}`);
+		parts.push(`CLI 版本 ${record.cliVersion ?? "未知"}`);
+		lines.push(`- ${parts.join("，")}`);
 	}
-	if (record.invocationWarnings?.length) {
-		lines.push("", "⚠ 派发时的警告：", ...record.invocationWarnings.map((warning) => `- ${warning}`));
+	for (const warning of record.invocationWarnings ?? []) lines.push(`- ⚠️ 启动时的警告：${warning}`);
+	if (record.sessionId) {
+		lines.push(`- 会话（sessionId）：\`${record.sessionId}\`，可以让我在这个会话上继续追问`);
 	}
-	if (record.sessionId) lines.push(`- sessionId：\`${record.sessionId}\`（可用于 subagent_run op=follow_up）`);
 
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
-			.then((text) => text.slice(-STDERR_TAIL_CHARS))
+			.then((text) => text.trimEnd().split("\n").slice(-STDERR_TAIL_LINES).join("\n"))
 			.catch(() => undefined);
 		if (stderrTail?.trim()) {
-			lines.push("", "**stderr（尾部）**", "```", stderrTail, "```");
+			lines.push("", `**stderr（最后 ${STDERR_TAIL_LINES} 行）**`, "```", stderrTail, "```");
 		}
 	}
-	return lines.join("\n");
+	return capReply(lines.join("\n"), {
+		nextStepHint: `用 \`/subagents output ${record.runId}\` 查看产出，完整文件在 \`${record.artifactDir}\``,
+	}).text;
 }
 
 async function showOutput(manager: SubAgentRunManager, ref: string): Promise<string> {
 	const resolution = manager.resolveRef(ref);
 	const error = formatRunResolution(resolution, ref);
-	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
+	if (error || resolution.kind !== "found") return error ?? runNotFound(ref);
 	const record = resolution.record;
 
-	const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => undefined);
+	const outputPath = join(record.artifactDir, "output.md");
+	const outputText = await readFile(outputPath, "utf-8").catch(() => undefined);
 	if (!outputText?.trim()) {
-		const runningNote = record.status === "running" ? "该 run 仍在运行，可能还没有产出。" : "该 run 没有文本产出。";
-		return `**Run \`${record.runId}\` 的产出**\n\n${runningNote}产物目录：\`${record.artifactDir}\``;
+		const runningNote = record.status === "running" ? "该委派仍在运行，可能还没有产出。" : "该委派没有文本产出。";
+		return `${runningNote}产物目录：\`${record.artifactDir}\``;
 	}
 	const tail = outputText.slice(-OUTPUT_TAIL_CHARS);
 	const truncatedNote =
-		outputText.length > tail.length ? `（只显示末尾 ${OUTPUT_TAIL_CHARS} 字符，完整内容见上方产物目录）\n\n` : "";
-	return `**Run \`${record.runId}\` 的产出**\n\n${truncatedNote}\`\`\`\n${tail}\n\`\`\``;
+		outputText.length > tail.length ? `只显示末尾 ${OUTPUT_TAIL_CHARS} 字，完整内容在 \`${outputPath}\`。\n\n` : "";
+	return `**委派 \`${record.runId}\` 的产出**\n\n${truncatedNote}\`\`\`\n${tail}\n\`\`\``;
 }
 
 async function cancelRun(manager: SubAgentRunManager, ref: string): Promise<string> {
 	if (ref === "all") {
 		const running = manager.list().filter((record) => record.status === "running");
-		if (running.length === 0) return "没有正在运行的 run。";
+		if (running.length === 0) return "没有正在运行的委派。";
 		const results = await Promise.all(
 			running.map(async (record) => {
 				const status = await manager.cancel(record.runId);
-				return `- \`${record.runId}\` (${record.agent})：${status}`;
+				return `- \`${record.runId}\`（${record.agent}）：${status === "not_found" ? "未找到" : statusLabel(status)}`;
 			}),
 		);
-		return `**已请求终止 ${running.length} 个 run**\n\n${results.join("\n")}`;
+		return `**已请求终止 ${running.length} 个委派**\n\n${results.join("\n")}`;
 	}
 	const resolution = manager.resolveRef(ref);
 	const error = formatRunResolution(resolution, ref);
-	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
+	if (error || resolution.kind !== "found") return error ?? runNotFound(ref);
 	const status = await manager.cancel(resolution.record.runId);
-	return `已请求终止 run \`${resolution.record.runId}\`：${status}`;
+	if (status === "running") return `已请求终止委派 \`${resolution.record.runId}\`。`;
+	return `委派 \`${resolution.record.runId}\` 已不在运行（${status === "not_found" ? "未找到" : statusLabel(status)}），无需终止。`;
 }
 
 function formatRoleSummaryLine(agent: SubAgentConfig): string {
 	const kind = agent.runtime === "external" ? `外部/${agent.harness}` : "内置";
 	const mutates = agent.mutates ?? (agent.tools.includes("write") || agent.tools.includes("edit") ? "write" : "read");
-	const unavailable = agent.unavailable ? ` — ⚠ 不可用：${agent.unavailable}` : "";
+	const unavailable = agent.unavailable ? ` — ⚠️ 不可用：${agent.unavailable}` : "";
 	const modelLabel =
 		agent.runtime === "external" ? (agent.externalModelRef ?? "CLI 决定") : (agent.modelRef ?? "默认");
 	const thinkingLabel = agent.thinkingLevel ?? (agent.runtime === "external" ? "未设置" : "默认 medium");
@@ -308,7 +334,7 @@ function formatRoleDetail(agent: SubAgentConfig): string {
 		`- 来源：${agent.source} (${agent.filePath ?? "inline"})`,
 		`- 说明：${agent.description}`,
 	];
-	if (agent.unavailable) lines.push(`- ⚠ 不可用：${agent.unavailable}`);
+	if (agent.unavailable) lines.push(`- ⚠️ 不可用：${agent.unavailable}`);
 	lines.push(`- mutates：${agent.mutates ?? "(未声明，由 tools 推断)"}`);
 	if (agent.runtime === "internal") {
 		lines.push(
@@ -324,12 +350,12 @@ function formatRoleDetail(agent: SubAgentConfig): string {
 			`- maxWallTimeSec：${agent.maxWallTimeSec}`,
 		);
 		lines.push(`- model：${agent.externalModelRef ?? "CLI 决定"}`);
-		lines.push(`- thinking：${agent.thinkingLevel ?? "未设置（verify 派发默认 medium）"}`);
+		lines.push(`- thinking：${agent.thinkingLevel ?? "未设置（验收委派默认 medium）"}`);
 		// spec 042 D4: contextMode/memory are effective for external roles too (memory 默认 none，
 		// 显式声明 session/relevant 才会把频道会话状态发给外部进程) — 显示出来而不是只在内置分支里说明。
 		lines.push(`- contextMode：${agent.contextMode}，memory：${agent.memory}`);
 		if (agent.memory !== "none") {
-			lines.push(`- ⚠ 该角色会把频道会话状态/记忆片段发送给外部进程（memory: ${agent.memory}）`);
+			lines.push(`- ⚠️ 该角色会把频道会话状态或记忆片段发送给外部进程（memory：${agent.memory}）`);
 		}
 	}
 	if (agent.paths.length > 0) lines.push(`- paths：${agent.paths.join(", ")}`);
@@ -340,7 +366,7 @@ function formatRoleDetail(agent: SubAgentConfig): string {
 	return lines.join("\n");
 }
 
-const SYSTEM_PROMPT_SHOW_MAX_CHARS = 4_000;
+const SYSTEM_PROMPT_SHOW_MAX_CHARS = 800;
 
 function renderCappedPromptBlock(agent: SubAgentConfig): string {
 	const prompt = agent.systemPrompt;
@@ -362,7 +388,7 @@ async function showRoles(options: HandleSubagentsCommandOptions, name?: string):
 		const agent = discovery.agents.find((candidate) => candidate.name === name);
 		if (!agent) {
 			const available = discovery.agents.length > 0 ? discovery.agents.map((a) => a.name).join(", ") : "(none)";
-			return `未找到角色 "${name}"。可用角色：${available}`;
+			return `未找到角色 \`${name}\`。可用角色：${available}`;
 		}
 		return formatRoleDetail(agent);
 	}
@@ -373,7 +399,7 @@ async function showRoles(options: HandleSubagentsCommandOptions, name?: string):
 	if (external.length > 0) sections.push(`**外部**\n${external.map(formatRoleSummaryLine).join("\n")}`);
 	if (internal.length > 0) sections.push(`**内置**\n${internal.map(formatRoleSummaryLine).join("\n")}`);
 	if (discovery.agents.length === 0) sections.push("目录为空。");
-	for (const warning of discovery.warnings) sections.push(`⚠ discovery: ${warning}`);
+	for (const warning of discovery.warnings) sections.push(`⚠️ 角色文件问题：${warning}`);
 	sections.push("用 `/subagents roles <name>` 看单个角色的详情。");
 	return sections.join("\n\n");
 }
@@ -405,22 +431,26 @@ export async function handleSubagentsCommand(options: HandleSubagentsCommandOpti
 }
 
 /**
- * Render a `RunNotice` (P0-1/P1a) as a one-line reply — a confirmation, per the command reply
- * conventions. `notices: "off"` is enforced by the caller not invoking this at all; a `"settled"`
- * caller filters `kind: "progress"` out before calling. Returns `undefined` for a notice with
- * nothing worth showing (a progress step that never resolved to a label).
+ * Render a `RunNotice` (P0-1/P1a) as a runtime push (spec 053, D6): one marker, the run id the
+ * user can act on, and — for a failure — the command that shows why. `notices: "off"` is enforced
+ * by the caller not invoking this at all; a `"settled"` caller filters `kind: "progress"` out
+ * before calling. Returns `undefined` for a notice with nothing worth showing (a progress step
+ * that never resolved to a label).
  */
 export function renderRunNotice(notice: RunNotice): string | undefined {
+	const subject = `委派 \`${notice.runId}\`（${notice.agent}）`;
 	if (notice.kind === "progress") {
-		return notice.step ? `⏳ ${notice.agent} · ${notice.step}` : undefined;
+		return notice.step ? `⏳ ${subject} · ${notice.step}` : undefined;
 	}
-	const durationText = formatDuration(notice.durationMs);
+	const durationText = formatElapsedZh(notice.durationMs);
 	switch (notice.status) {
 		case "completed":
-			return `✅ ${notice.agent} 完成 · ${durationText}`;
+			return `✅ ${subject}完成 · ${durationText}`;
 		case "cancelled":
-			return `🛑 ${notice.agent} 已取消 · ${durationText}`;
+			return `🛑 ${subject}已取消 · ${durationText}`;
+		case "lost":
+			return `⚠️ ${subject}状态无法确认 · ${durationText}\n用 \`/subagents show ${notice.runId}\` 查看详情。`;
 		default:
-			return `⚠️ ${notice.agent} 失败 · ${durationText}`;
+			return `⚠️ ${subject}失败 · ${durationText}\n用 \`/subagents show ${notice.runId}\` 查看原因。`;
 	}
 }

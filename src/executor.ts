@@ -1,7 +1,7 @@
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import { join as joinPath, delimiter as PATH_DELIMITER } from "node:path";
 import { spawn } from "child_process";
-import { logWarning } from "./log.js";
+import * as log from "./log.js";
 
 /**
  * The `bash` tool's schema says "Bash command" and models write bash-only syntax (`[[ ]]`, arrays,
@@ -25,7 +25,10 @@ function resolveShell(): { path: string; isBash: boolean } {
 
 const RESOLVED_SHELL = resolveShell();
 if (!RESOLVED_SHELL.isBash) {
-	logWarning("executor: no `bash` binary found on this host; the bash tool is running commands via POSIX /bin/sh");
+	log.logWarn(
+		"runtime.executor.no_bash",
+		"No bash binary on this host; the bash tool runs commands via POSIX /bin/sh",
+	);
 }
 
 /** True when the executor found a real `bash`; `bash.ts` uses this to keep its description honest. */

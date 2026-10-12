@@ -140,7 +140,7 @@ describe("ChannelJobManager", () => {
 		const executor = new FakeJobExecutor();
 		const manager = new ChannelJobManager("dm_1", executor, 5);
 		await manager.start("sleep 100", "wait", 300);
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 		const rejections: unknown[] = [];
 		const onRejection = (reason: unknown): void => {
 			rejections.push(reason);
@@ -150,7 +150,11 @@ describe("ChannelJobManager", () => {
 			executor.probeThrows = true;
 			await new Promise((resolve) => setTimeout(resolve, 40));
 			expect(rejections).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledWith("Background job sweep failed", expect.stringContaining("EAGAIN"));
+			expect(warnSpy).toHaveBeenCalledWith(
+				"job.sweep.failed",
+				expect.any(String),
+				expect.objectContaining({ reason: expect.stringContaining("EAGAIN") }),
+			);
 
 			// One failed tick must not wedge the sweeper: the next one still reconciles.
 			executor.probeThrows = false;

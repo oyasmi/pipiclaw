@@ -74,9 +74,9 @@ Pipiclaw 不会自动把频道记忆升格到这里。项目边界启用时，�
 
 **"我不想让它保留这次对话。"** 当前没有单轮“不留存”模式。说明“不必写入长期记忆”只会影响模型判断，不能阻止原始会话落盘或保证 journal 不记录。已经写入的 durable memory 可用遗忘删除；journal 和原始会话需由管理员按数据保留政策处理。
 
-**"后台记忆维护花了多少钱？"** `/usage` 会把 `sidecar`（记忆相关的 LLM 调用）单列。维护间隔是内置常量；`memoryMaintenance.enabled: false` 只关闭空闲定时反思，压缩、`/new` 和正常退出等边界仍可能触发反思，详情见 [configuration.md](./configuration.md)。
+**"后台记忆维护花了多少钱？"** `/usage` 会把"后台整理"（账本里的 `sidecar`，记忆相关的 LLM 调用）单列。维护间隔是内置常量；`memoryMaintenance.enabled: false` 只关闭空闲定时反思，压缩、`/new` 和正常退出等边界仍可能触发反思，详情见 [configuration.md](./configuration.md)。
 
-**"想看它到底自动写了什么。"** `/memory status` 给一眼概览（分类计数、试用期、上次反思时间、索引是否超预算）；`/memory journal [date]` 看某天发生了什么；每个频道目录下的 `memory-review.jsonl` 记录了每次反思的动作、跳过原因和失败，是排查自动写回行为的第一现场。
+**"想看它到底自动写了什么。"** `/memory status` 给一眼概览（分类计数、观察期条目、上次后台整理时间、索引是否超预算）；`/memory journal [date]` 看某天的工作日记；每个频道目录下的 `memory-review.jsonl` 记录了每次反思的动作、跳过原因和失败，是排查自动写回行为的第一现场。
 
 ## 相关文档
 

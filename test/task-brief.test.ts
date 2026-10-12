@@ -2,12 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PLAYBOOKS_DIR } from "../src/paths.js";
-import { BOARD_REF_LINE_BUDGET, buildTaskBoard, renderTaskBoard } from "../src/tasks/board.js";
+import { BOARD_REF_LINE_BUDGET, buildTaskBoard, renderTaskBoard, renderTaskBoardForUser } from "../src/tasks/board.js";
 import { buildTaskStepBrief } from "../src/tasks/brief.js";
 import { createUsage } from "../src/tasks/budget.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { appendTaskLog, readTaskLog, renderTaskLogLineForUser, resetTaskLogAppenders } from "../src/tasks/log.js";
 import { archiveTask } from "../src/tasks/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -179,5 +179,65 @@ describe("team board (spec 052, D5)", () => {
 		const board = await buildTaskBoard(channelDir, "T", body);
 		expect(board?.hiddenSettled).toBe(total + 1 - BOARD_REF_LINE_BUDGET);
 		expect(renderTaskBoard(board!)).toContain("run_live");
+	});
+});
+
+// Spec 053 D2: `/tasks show` used to reuse the brief's renderers, so the chat got `↳` continuation
+// lines (DingTalk drops the indent), `VERDICT`/`exit` field dumps and a pointer at the `task_log`
+// tool. The user renderers share the data, not the output; these pin the shape, not the wording.
+describe("user-facing task board and log (spec 053, D2)", () => {
+	const body = renderStandardTaskBody({
+		title: "T",
+		goal: "G",
+		dod: "- [ ] D",
+		items: [{ text: "implement" }, { text: "review" }],
+	});
+
+	it("folds every ref of a work item into its one flat line and keeps model vocabulary out", async () => {
+		const channelDir = tempDir();
+		await writeTask(channelDir, "T", body);
+		for (let index = 0; index < BOARD_REF_LINE_BUDGET + 2; index++) {
+			await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: `run_old${index}`, agent: "a" });
+			await appendTaskLog(channelDir, "T", {
+				kind: "settle",
+				ref: `run_old${index}`,
+				status: "failed",
+				exitCode: 1,
+			});
+		}
+		await appendTaskLog(channelDir, "T", {
+			kind: "step",
+			seq: 1,
+			outcome: "park",
+			note: "waiting\non W1",
+			tools: [],
+		});
+		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_a1", item: "W1", agent: "builder" });
+		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_a2", item: "W1", agent: "builder" });
+		await appendTaskLog(channelDir, "T", {
+			kind: "settle",
+			ref: "run_a1",
+			item: "W1",
+			status: "completed",
+			verdict: "pass",
+			exitCode: 0,
+		});
+
+		const board = await buildTaskBoard(channelDir, "T", body);
+		const rendered = renderTaskBoardForUser(board!, "T");
+		const lines = rendered.split("\n");
+		expect(lines.filter((line) => line.includes("run_a1"))).toHaveLength(1);
+		expect(lines.find((line) => line.includes("run_a1"))).toContain("run_a2");
+		// Fold notice is there (hidden refs exist) and points at a command, not a tool.
+		expect(board?.hiddenSettled).toBeGreaterThan(0);
+		expect(rendered).toContain("/tasks log T");
+
+		const logLines = (await readTaskLog(channelDir, "T")).map(renderTaskLogLineForUser);
+		for (const text of [rendered, ...logLines]) {
+			expect(text).not.toMatch(/^\s/m);
+			expect(text).not.toMatch(/task_log|VERDICT|↳|\bexit \d|\bcontinue\b|\bpark\b/);
+		}
+		// A multi-line note stays on its bullet.
+		expect(logLines.every((line) => !line.includes("\n"))).toBe(true);
 	});
 });

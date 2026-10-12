@@ -249,9 +249,11 @@ export function logResponse(ctx: LogContext, text: string): void {
 }
 
 // Compatibility helpers keep lower-risk call sites centralized while they use
-// the same output contract as structured events.
+// the same output contract as structured events. The channel prefix accepts any non-blank id:
+// a group channel is `group_<conversationId>`, and DingTalk conversation ids are base64 (`+`, `/`,
+// `=`), which a word-character class silently failed to match — group logs lost their `channel`.
 function legacyContext(message: string): { message: string; ctx?: LogContext } {
-	const match = /^\[([A-Za-z0-9._-]+)\]\s*/.exec(message);
+	const match = /^\[([^\]\s]+)\]\s*/.exec(message);
 	return match ? { message: message.slice(match[0].length), ctx: { channelId: match[1] } } : { message };
 }
 
@@ -263,18 +265,45 @@ export function logInfo(message: string, details?: string): void {
 	});
 }
 
-export function logWarning(message: string, details?: string): void {
-	const legacy = legacyContext(message);
-	logEvent("warn", "system.warning", legacy.message, {
-		ctx: legacy.ctx,
-		...(details ? { details, fields: { reason: details } } : {}),
+export interface EventLogOptions {
+	channelId?: string;
+	/** Why it happened (an error message, a rejection). Kept out of `message` so the message stays greppable. */
+	reason?: string;
+	/** Ids and counts the event is about. */
+	fields?: Record<string, unknown>;
+}
+
+/**
+ * One runtime event with a filterable `<domain>.<object>.<verb>` name (spec 053, D12). `message`
+ * is a fixed sentence (`<Subject> failed`); what varies goes to `reason` and `fields`, which the
+ * console line and the JSONL record both carry.
+ */
+function logNamedEvent(level: LogLevel, event: string, message: string, options: EventLogOptions): void {
+	const fields = { ...options.fields, ...(options.reason ? { reason: options.reason } : {}) };
+	logEvent(level, event, message, {
+		...(options.channelId ? { ctx: { channelId: options.channelId } } : {}),
+		...(options.reason ? { details: options.reason } : {}),
+		...(Object.keys(fields).length > 0 ? { fields } : {}),
 	});
+}
+
+export function logWarn(event: string, message: string, options: EventLogOptions = {}): void {
+	logNamedEvent("warn", event, message, options);
+}
+
+export function logInfoEvent(event: string, message: string, options: EventLogOptions = {}): void {
+	logNamedEvent("info", event, message, options);
+}
+
+export function logDebugEvent(event: string, message: string, options: EventLogOptions = {}): void {
+	logNamedEvent("debug", event, message, options);
 }
 
 export function logModelFallback(ctx: LogContext, from: string, to: string, error: string): void {
 	logEvent("warn", "agent.model.fallback", "Using fallback model", { ctx, fields: { from, to, error } });
 }
 
+/** One structured record per turn's usage; the context fill rides along when known. */
 export function logUsageSummary(
 	ctx: LogContext,
 	usage: {
@@ -286,31 +315,7 @@ export function logUsageSummary(
 	},
 	contextTokens?: number,
 	contextWindow?: number,
-): string {
-	const formatTokens = (count: number): string => {
-		if (count < 1000) return count.toString();
-		if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-		if (count < 1000000) return `${Math.round(count / 1000)}k`;
-		return `${(count / 1000000).toFixed(1)}M`;
-	};
-
-	const lines = [
-		"**Usage Summary**",
-		`Tokens: ${usage.input.toLocaleString()} in, ${usage.output.toLocaleString()} out`,
-		...(usage.cacheRead > 0 || usage.cacheWrite > 0
-			? [`Cache: ${usage.cacheRead.toLocaleString()} read, ${usage.cacheWrite.toLocaleString()} write`]
-			: []),
-		...(contextTokens && contextWindow
-			? [
-					`Context: ${formatTokens(contextTokens)} / ${formatTokens(contextWindow)} (${((contextTokens / contextWindow) * 100).toFixed(1)}%)`,
-				]
-			: []),
-		`Cost: $${usage.cost.input.toFixed(4)} in, $${usage.cost.output.toFixed(4)} out` +
-			(usage.cacheRead > 0 || usage.cacheWrite > 0
-				? `, $${usage.cost.cacheRead.toFixed(4)} cache read, $${usage.cost.cacheWrite.toFixed(4)} cache write`
-				: ""),
-		`**Total: $${usage.cost.total.toFixed(4)}** (incl. sub-agents)`,
-	];
+): void {
 	logEvent("info", "agent.usage", "Usage recorded", {
 		ctx,
 		fields: {
@@ -319,9 +324,9 @@ export function logUsageSummary(
 			cacheRead: usage.cacheRead,
 			cacheWrite: usage.cacheWrite,
 			cost: usage.cost,
+			...(contextTokens && contextWindow ? { contextTokens, contextWindow } : {}),
 		},
 	});
-	return lines.join("\n");
 }
 
 export function logStartup(workingDir: string): void {

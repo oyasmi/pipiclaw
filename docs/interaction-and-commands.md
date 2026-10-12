@@ -50,13 +50,15 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 一个频道同一时刻只执行一个主回合。忙碌时可以使用：
 
-- `/steer <消息>`：在当前工具步骤结束后调整方向。
+- `/steer <消息>`：在当前工具调用结束后调整方向。
 - `/followup <消息>`：把新请求排到当前回合之后。
 - `/stop`：停止当前回合；如果它由任务 driver 唤醒，还会暂停对应任务。
 
-忙碌时发送普通消息，默认按 `channel.json.busyMessageDefault: "steer"` 处理；设置成 `"followUp"` 或 `"followup"` 后改为排队。正在跑的是后台任务的一步时，普通消息和 `/steer` 都不会进入任务会话，而是排到这一步之后作为普通聊天处理；要给任务补充指示，用 `/tasks steer <id> <内容>`。
+忙碌时发送普通消息，默认按 `channel.json.busyMessageDefault: "steer"` 处理（这条说明也在 `/help steer` 里）；设置成 `"followUp"` 或 `"followup"` 后改为排队。正在跑的是后台任务的一步时，普通消息和 `/steer` 都不会进入任务会话，而是排到这一步之后作为普通聊天处理；要给任务补充指示，用 `/tasks steer <id> <内容>`。
 
 `/stop` 只停止主回合，不会杀掉已经派发并独立运行的委派 run。查看和终止委派请使用 `/subagents` 与 `/subagents cancel`。
+
+回合进行中发送一个需要空闲的命令，会收到一条忙碌提示，列出"运行中可用"和"需要等空闲"的两组命令。两组都由命令目录的 `availableWhileBusy` 派生，所以和 `/help` 的分组永远一致。
 
 ## 运行时命令
 
@@ -64,7 +66,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 | 命令 | 作用 |
 |---|---|
-| `/help` | 列出所有命令（一行一个）；`/help <命令名>` 查看该命令的参数、子命令和示例；空闲时还会列出当前可用的 prompt templates |
+| `/help` | 按"随时可用 / 空闲时可用"两组列出所有命令；`/help <命令名>` 查看该命令的用法、子命令和示例；空闲时还会列出当前可用的提示模板 |
 | `/stop` | 停止当前回合；必要时暂停任务 |
 | `/steer <消息>` | 调整当前回合 |
 | `/followup <消息>` | 排队下一条请求 |
@@ -72,7 +74,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | `/tasks ...` | 查看、诊断和控制任务台账 |
 | `/status` | 查看执行状态、模型、上下文、运行时长和版本 |
 | `/usage [7d\|month]` | 查看频道与全局用量、成本和未知用量条目 |
-| `/context [detail]` | 查看 system prompt 分段、工具 schema 和动态上下文体量 |
+| `/context [detail]` | 查看系统提示词、工具定义和每回合自动附加内容的体量；`detail` 列出各分段来源和工具、skill 清单 |
 | `/subagents ...` | 查看、控制委派 run 和角色目录 |
 | `/project [set <绝对路径>\|reset]` | 查看或切换本频道的项目目录；切换需频道空闲 |
 | `/skills [list\|show <name>]` | 列出工作区 skills（含未通过内容扫描而未加载的，附原因），或查看单个 skill 的完整正文 |
@@ -107,12 +109,38 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 | 命令 | 作用 |
 |---|---|
-| `/memory [status\|list [type]\|show <name>\|journal [date]\|forget <name>]` | 查看或删除频道记忆，并查看 journal |
+| `/memory [status\|list [type]\|show <name>\|journal [date]\|forget <name>]` | 查看或删除频道记忆，并查看工作日记 |
 | `/session` | 查看当前会话、消息、token 和模型状态 |
 | `/thinking [level\|cycle]` | 查看或切换当前模型的推理强度 |
 | `/model [provider/modelId]` | 查看或切换模型；唯一子串也可匹配 |
 | `/new` | 开启新会话，并在边界上固化必要记忆；忙碌时也可使用，会绕过旧队列立即建立新会话边界 |
 | `/compact [要求]` | 手动压缩当前上下文 |
+
+回复一律是中文；只有你会输入或会在文件里看到的标识符（命令名、id、模型名、路径、frontmatter 键）保留英文。轮次失败时，错误气泡先说明是哪一类问题（模型凭据、限流或额度、上下文已满、网络、其他）和你能做的下一步，最后一行才是原始错误。
+
+## 界面用语对照
+
+界面上的用语和设计文档、spec、架构文档里的术语不同。读过设计文档的话，可以按下表对应（完整表见 [spec 053 §D4](specs/053-user-facing-copy/design.md)）：
+
+| 界面用语 | 设计文档中的词 |
+|---|---|
+| 回合 | turn |
+| 等待条件 | 等待票（ticket） |
+| 最晚检查时间 | 兜底时限（ticket `by`） |
+| 任务说明 | 契约（contract） |
+| 工作项 | 团队看板（team board） |
+| 任务记录 | 循环日志（loop log） |
+| 开始 / 结束（委派、后台作业） | 派发 / 结算（dispatch / settle） |
+| 进行中 / 等待中 / 已结束 | `open` / `parked` / `done` |
+| 步 | 任务步（只指任务的一步） |
+| 工具调用 | 卡片上的工具调用次数 |
+| 观察期 | probation（`expires`） |
+| 已记入忽略名单 | 墓碑化（tombstone） |
+| 工作日记 | journal |
+| 后台整理 | reflect |
+| 允许的根目录 | `projectAccess.allowedRoots` |
+| 隔离级别 | enforcement level |
+| 随时可用 / 空闲时可用 | 传输层 / 会话层命令 |
 
 Workspace skill 用 `/skills` 查看目录、用 `/skills show <name>` 查看正文，用 `/skill:<名称>` 直接调用。未知斜杠命令会被拒绝并提示 `/help`，不会因为拼写错误开启一个模型回合。
 

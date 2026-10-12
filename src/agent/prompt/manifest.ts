@@ -10,6 +10,7 @@
  * next to the report — not in the builder's budget path (spec 026 §9, §10.9).
  */
 
+import { capReply } from "../../commands/reply-limits.js";
 import { estimateTokens } from "../../shared/format.js";
 import { countPromptUnits } from "../../shared/prompt-units.js";
 import { RUNTIME_PROMPT_TARGET_UNITS, sha256 } from "./builder.js";
@@ -40,7 +41,7 @@ export interface ToolSchemaMeasurement {
 	units: number;
 }
 
-/** The one wording for "the tool set is over budget", shared by `/context` and the rebuild log. */
+/** The operator wording for "the tool set is over budget", for the rebuild log (`/context` says it in Chinese). */
 export function toolSchemaBudgetWarning(measurement: ToolSchemaMeasurement): string {
 	return `tool JSON schemas are ${measurement.units} units (${measurement.chars} chars), over the ${TOOL_SCHEMA_TARGET_UNITS} unit target. Shorten a tool description, move detail into a playbook, or unregister a tool; \`/context detail\` lists the set.`;
 }
@@ -147,106 +148,81 @@ function formatNumber(value: number): string {
 	return value.toLocaleString("en-US");
 }
 
-function renderWorkspaceResourceLine(label: string, resource: LoadedPromptResource | undefined): string | undefined {
+function renderWorkspaceResource(label: string, resource: LoadedPromptResource | undefined): string | undefined {
 	if (!resource || resource.isDefaultTemplate) return undefined;
-	const state = resource.truncated ? "truncated" : "complete";
-	return `- ${label}: ${formatNumber(resource.injectedUnits)} / ${formatNumber(resource.budgetUnits)} units, ${state}`;
+	const state = resource.truncated ? "，已截断" : "";
+	return `${label} ${formatNumber(resource.injectedUnits)} / ${formatNumber(resource.budgetUnits)} 单位${state}`;
 }
 
+/**
+ * `/context` (spec 053, D9): the default view is a summary a user can read on a phone; `detail`
+ * adds the per-section sources and the tool/skill inventory, still under the reply budget.
+ * "单位" is the prompt-unit measure the budgets are written in (`countPromptUnits`).
+ */
 export function renderContextReport(input: PromptContextReportInput): string {
 	const { build, finalPrompt, detail } = input;
-	const lines: string[] = ["# Context Report", ""];
+	const lines: string[] = ["**上下文**", ""];
 
 	lines.push(
-		`Pipiclaw runtime-authored: ${formatNumber(build.runtimeAuthoredUnits)} units (target ${formatNumber(RUNTIME_PROMPT_TARGET_UNITS)}) · Pipiclaw sections total: ${formatNumber(build.totalUnits)} units / ${formatNumber(build.totalChars)} chars, ~${formatNumber(build.estimatedTokens)} tokens`,
+		`- 系统提示词（Pipiclaw 部分）：${formatNumber(build.totalUnits)} 单位，约 ${formatNumber(build.estimatedTokens)} tokens；其中运行时自带 ${formatNumber(build.runtimeAuthoredUnits)} / 目标 ${formatNumber(RUNTIME_PROMPT_TARGET_UNITS)} 单位`,
 	);
 	if (finalPrompt) {
 		// The string the provider actually caches: our sections + pi's skills/date/cwd tail +
 		// the boundary footer. It is the fingerprint that matters for cache hits — the build
-		// fingerprint below only covers the part Pipiclaw owns, and stays stable across a
-		// date rollover that does invalidate the provider's cached prefix.
+		// fingerprint only covers the part Pipiclaw owns, and stays stable across a date rollover
+		// that does invalidate the provider's cached prefix.
 		lines.push(
-			`Sent to the model (incl. skills, date, cwd): ${formatNumber(finalPrompt.length)} chars, ~${formatNumber(estimateTokens(finalPrompt))} tokens, sha256:${sha256(finalPrompt).slice(0, 16)}`,
+			`- 实际发送（含 skills、日期、工作目录）：${formatNumber(finalPrompt.length)} 字，约 ${formatNumber(estimateTokens(finalPrompt))} tokens，指纹 \`${sha256(finalPrompt).slice(0, 16)}\``,
 		);
 	}
-	lines.push(`Fingerprint (Pipiclaw sections): sha256:${build.fingerprint.slice(0, 16)}`);
-	lines.push("");
-
-	// Space-padded column alignment relies on a monospace font: DingTalk's proportional rendering
-	// collapses it back into unaligned runs, so each field is punctuation-delimited instead of
-	// column-aligned (review 2026-08-24 §1.3a).
-	for (const section of build.sections) {
-		const flags: string[] = [section.cacheClass];
-		if (section.truncated) flags.push(`truncated from ${formatNumber(section.rawUnits)} units`);
-		lines.push(
-			`- ${section.id}: ${formatNumber(section.injectedUnits)} units, ${formatNumber(section.injectedChars)} chars, ${flags.join(", ")}`,
-		);
-	}
-
-	const soulLine = renderWorkspaceResourceLine("SOUL.md", input.soul);
-	const agentsLine = renderWorkspaceResourceLine("AGENTS.md", input.agents);
-	if (soulLine || agentsLine) {
-		lines.push("");
-		lines.push("Workspace resources (independent budgets, not competing with the runtime):");
-		if (soulLine) lines.push(soulLine);
-		if (agentsLine) lines.push(agentsLine);
-	}
-
-	lines.push("");
 	const overToolBudget = input.toolSchemas.units > TOOL_SCHEMA_TARGET_UNITS;
 	lines.push(
-		`Tools: ${input.toolNames.length} registered; JSON schemas ≈ ${formatNumber(input.toolSchemas.units)} / ${formatNumber(TOOL_SCHEMA_TARGET_UNITS)} units, ${formatNumber(input.toolSchemas.chars)} chars${overToolBudget ? " — over target" : ""} (billed on top of the system prompt)`,
+		`- 工具定义：${input.toolNames.length} 个，${formatNumber(input.toolSchemas.units)} / 目标 ${formatNumber(TOOL_SCHEMA_TARGET_UNITS)} 单位${overToolBudget ? "（超出目标）" : ""}，在系统提示词之外另计`,
 	);
 	lines.push(
-		`Skills: ${input.skills.length} visible, ≈${formatNumber(estimateSkillsPromptChars(input.skills))} chars (rendered and managed by pi, not budgeted by Pipiclaw)`,
+		`- Skills：${input.skills.length} 个可见，约 ${formatNumber(estimateSkillsPromptChars(input.skills))} 字（由 pi 渲染，不计入 Pipiclaw 预算）`,
 	);
+	const resources = [
+		renderWorkspaceResource("SOUL.md", input.soul),
+		renderWorkspaceResource("AGENTS.md", input.agents),
+	]
+		.filter(Boolean)
+		.join("；");
+	if (resources) lines.push(`- 工作区文件（独立预算）：${resources}`);
 
 	if (input.lastTurn) {
 		const turn = input.lastTurn;
 		const automaticUnits = turn.channelCapsuleUnits + turn.taskDigestUnits + turn.durableMemoryUnits;
-		lines.push("");
 		lines.push(
-			`Last automatic turn context: ${formatNumber(automaticUnits)} / ${formatNumber(AUTOMATIC_TURN_CONTEXT_BUDGET_UNITS)} units (per-turn, not cached):`,
+			`- 上一回合自动附加：${formatNumber(automaticUnits)} / ${formatNumber(AUTOMATIC_TURN_CONTEXT_BUDGET_UNITS)} 单位（频道信息 ${formatNumber(turn.channelCapsuleUnits)}，任务清单 ${formatNumber(turn.taskDigestUnits)}，记忆 ${formatNumber(turn.durableMemoryUnits)}，记忆只在首个回合附加）；用户消息 ${formatNumber(turn.userMessageChars)} 字`,
 		);
-		lines.push(`- channel capsule: ${formatNumber(turn.channelCapsuleUnits)} units`);
-		lines.push(
-			`- task agenda: ${formatNumber(turn.taskDigestUnits)} units / ${formatNumber(turn.taskDigestChars)} chars`,
-		);
-		lines.push(
-			`- memory bootstrap: ${formatNumber(turn.durableMemoryUnits)} units / ${formatNumber(turn.durableMemoryChars)} chars (first turn only)`,
-		);
-		lines.push(`- user message: ${formatNumber(turn.userMessageChars)} chars (not automatic; not capped here)`);
 	}
 
-	if (build.diagnostics.length > 0 || overToolBudget) {
-		lines.push("");
-		lines.push("Diagnostics:");
-		for (const diagnostic of build.diagnostics) {
-			lines.push(`- [${diagnostic.level}] ${diagnostic.sectionId}: ${diagnostic.message}`);
-		}
-		if (overToolBudget) {
-			lines.push(`- [warning] tools: ${toolSchemaBudgetWarning(input.toolSchemas)}`);
-		}
+	for (const diagnostic of build.diagnostics) {
+		lines.push(`- ⚠️ ${diagnostic.sectionId}：${diagnostic.message}`);
+	}
+	if (overToolBudget) {
+		lines.push(
+			"- ⚠️ 工具定义超出目标：缩短某个工具的说明、把细节移到 playbook，或停用一个工具；`/context detail` 列出全部工具",
+		);
 	}
 
-	if (detail) {
-		lines.push("");
-		lines.push("Detail:");
-		for (const section of build.sections) {
-			lines.push(
-				`- ${section.id} (${section.authority}) ← ${section.source} · sha256:${section.sha256.slice(0, 12)}`,
-			);
-		}
-		if (input.toolNames.length > 0) {
-			lines.push(`- tools: ${input.toolNames.join(", ")}`);
-		}
-		if (input.skills.length > 0) {
-			lines.push(`- skills: ${input.skills.map((skill) => skill.name).join(", ")}`);
-		}
-	} else {
-		lines.push("");
-		lines.push("Run `/context detail` for per-section sources, hashes, and the tool/skill inventory.");
+	if (!detail) {
+		lines.push("", "用 `/context detail` 查看各分段的来源与工具、skill 清单。");
+		return lines.join("\n");
 	}
 
-	return lines.join("\n");
+	lines.push("", "**分段**");
+	for (const section of build.sections) {
+		const truncated = section.truncated ? `，已截断（原 ${formatNumber(section.rawUnits)} 单位）` : "";
+		lines.push(
+			`- ${section.id}：${formatNumber(section.injectedUnits)} 单位，${formatNumber(section.injectedChars)} 字，${section.cacheClass}${truncated}；来源 ${section.source}（${section.authority}）`,
+		);
+	}
+	if (input.toolNames.length > 0) lines.push("", `**工具**：${input.toolNames.join("、")}`);
+	if (input.skills.length > 0) lines.push("", `**Skills**：${input.skills.map((skill) => skill.name).join("、")}`);
+	return capReply(lines.join("\n"), {
+		nextStepHint:
+			"用 `/context` 只看汇总；完整提示词需部署者在服务器上设 `PIPICLAW_DEBUG=1`，之后查看频道目录的 `last_prompt.json`",
+	}).text;
 }

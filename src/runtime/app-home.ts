@@ -11,6 +11,7 @@ import {
 	APP_NAME,
 	AUTH_CONFIG_PATH,
 	CHANNEL_CONFIG_PATH,
+	docsUrl,
 	EVENT_HISTORY_PATH,
 	MODELS_CONFIG_PATH,
 	SECURITY_CONFIG_PATH,
@@ -225,7 +226,10 @@ function hardenExistingSecretFile(path: string): void {
 			log.logInfo(`Tightened permissions on ${path} to 0600`);
 		}
 	} catch (err) {
-		log.logWarning(`Failed to tighten permissions on ${path}`, errorMessage(err));
+		log.logWarn("runtime.permissions.tighten_failed", "Config file permission tightening failed", {
+			reason: errorMessage(err),
+			fields: { path },
+		});
 	}
 }
 
@@ -364,6 +368,23 @@ export function printBootstrapSummary(
 	io.log("");
 }
 
+/**
+ * What a new deployer does after the very first run created the templates (spec 053, D11). A
+ * fresh template is not an error, so the caller exits 0 after this; it names the required fields,
+ * where they come from, and the model credential step the daemon cannot run without.
+ */
+export function printFirstRunGuide(io: BootstrapIO = console, paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): void {
+	io.log("Next steps:");
+	io.log(`  1. Edit ${paths.channelConfigPath} — required: clientId, clientSecret`);
+	io.log("     (DingTalk Open Platform → your app → Credentials). Optional: cardTemplateId for AI Card");
+	io.log("     streaming; set it to an empty string to disable cards.");
+	io.log(
+		`  2. Configure a model: run \`${paths.appName} auth login\`, or add a provider to ${paths.modelsConfigPath}.`,
+	);
+	io.log(`  3. Run \`${paths.appName}\` again.`);
+	io.log(`Docs: ${docsUrl("configuration.md")}`);
+}
+
 export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: BootstrapIO = console): DingTalkConfig {
 	let parsed: DingTalkConfig;
 
@@ -382,7 +403,8 @@ export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: 
 			io.error(`  - ${issue}`);
 		}
 		io.error("");
-		io.error(`Fill in ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
+		io.error(`Fix ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
+		io.error(`Docs: ${docsUrl("configuration.md")}`);
 		throw new BootstrapExitError(1);
 	}
 

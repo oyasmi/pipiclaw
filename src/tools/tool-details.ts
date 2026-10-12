@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { type GuardBlock, GuardBlockedError } from "../security/block-message.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { isRecord } from "../shared/type-guards.js";
 
@@ -102,8 +103,43 @@ export function isArgumentValidationFailure(result: unknown, isError: boolean): 
 }
 
 /**
- * Bind a tool to the contract: stamp `kind` on every result it returns, and convert a
- * `RecoverableToolError` into a normal result the model can read and act on.
+ * Guard refusals waiting for their `tool_execution_end` (spec 053, D5.2).
+ *
+ * A refusal must stay a *thrown* error — that is what makes the SDK mark the result `isError`,
+ * which the model sees — but the SDK rebuilds a thrown error's result from `message` alone
+ * (`createErrorToolResult`, `details: {}`), so structured data cannot ride on the result itself.
+ * It is parked here under the tool call id instead and claimed by the session-event handler.
+ * Bounded, because a tool set whose events nobody consumes (an internal sub-agent) never claims.
+ */
+const pendingGuardBlocks = new Map<string, { message: string; blocked: GuardBlock }>();
+const MAX_PENDING_GUARD_BLOCKS = 64;
+
+function noteGuardBlock(toolCallId: string, error: GuardBlockedError): void {
+	pendingGuardBlocks.delete(toolCallId);
+	pendingGuardBlocks.set(toolCallId, { message: error.message, blocked: error.blocked });
+	while (pendingGuardBlocks.size > MAX_PENDING_GUARD_BLOCKS) {
+		const oldest = pendingGuardBlocks.keys().next().value;
+		if (oldest === undefined) break;
+		pendingGuardBlocks.delete(oldest);
+	}
+}
+
+/**
+ * Claim the guard refusal behind a failed tool call. `resultText` must be the error text the SDK
+ * reported for that call: a stale or colliding id from another channel never matches it, so the
+ * worst case is falling back to the plain error line, never showing someone else's refusal.
+ */
+export function takeGuardBlock(toolCallId: string, resultText: string): GuardBlock | undefined {
+	const entry = pendingGuardBlocks.get(toolCallId);
+	if (!entry || entry.message !== resultText) return undefined;
+	pendingGuardBlocks.delete(toolCallId);
+	return entry.blocked;
+}
+
+/**
+ * Bind a tool to the contract: stamp `kind` on every result it returns, convert a
+ * `RecoverableToolError` into a normal result the model can read and act on, and park a guard
+ * refusal's structured form for the chat (`takeGuardBlock`).
  *
  * Applied once in `buildToolSet`, so every registered tool is covered without each one
  * having to remember. `kind` is stamped last and unconditionally: the name a tool is
@@ -128,6 +164,7 @@ export function withToolDetails(tool: AgentTool<any>, kind: ToolDetailsKind): Ag
 						details: { kind, recoverable: true },
 					};
 				}
+				if (error instanceof GuardBlockedError) noteGuardBlock(toolCallId, error);
 				throw error;
 			}
 		},

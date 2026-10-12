@@ -59,6 +59,16 @@ export interface ParsedTaskFrontmatter {
 }
 
 const STATES: readonly TaskState[] = ["open", "parked", "done"];
+
+const STATE_LABELS: Record<TaskState, string> = { open: "进行中", parked: "等待中", done: "已结束" };
+
+/**
+ * The one user-facing name for a task state (spec 053, D8). `/tasks`, the stop receipt and the
+ * spawn-skip receipt all read it here, so a third hand-written copy cannot drift again.
+ */
+export function taskStateLabel(state: TaskState): string {
+	return STATE_LABELS[state] ?? state;
+}
 /** Fixed render order, so a diff of a task file reads the same way every time. */
 const FIELD_ORDER = ["state", "paused", "origin", "ticket", "usage", "budget"] as const;
 /** v3 frontmatter keys; their presence means the one-time conversion has not run on this file. */

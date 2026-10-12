@@ -57,8 +57,11 @@ function topEntries(map: Record<string, number>, limit: number): Array<[string, 
 		.slice(0, limit);
 }
 
+/** The ledger's kinds in the user's terms: a turn is the assistant itself, a sidecar is background memory work. */
+const KIND_LABEL: Record<string, string> = { turn: "对话", subagent: "委派", sidecar: "后台整理" };
+
 function renderKindBreakdown(summary: UsageSummary): string | null {
-	const parts = topEntries(summary.byKind, 3).map(([kind, cost]) => `${kind} ${money(cost)}`);
+	const parts = topEntries(summary.byKind, 3).map(([kind, cost]) => `${KIND_LABEL[kind] ?? kind} ${money(cost)}`);
 	return parts.length > 0 ? parts.join(" · ") : null;
 }
 

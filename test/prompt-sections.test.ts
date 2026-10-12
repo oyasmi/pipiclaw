@@ -104,14 +104,13 @@ describe("tool schema budget", () => {
 	it("reports the schemas against their target — quiet under it, a warning once over", () => {
 		const under = report({ chars: 20_000, units: TOOL_SCHEMA_TARGET_UNITS });
 
-		expect(under).toContain(`${TOOL_SCHEMA_TARGET_UNITS.toLocaleString("en-US")} units`);
-		expect(under).not.toContain("over target");
-		expect(under).not.toContain("[warning] tools:");
+		expect(under).toContain(TOOL_SCHEMA_TARGET_UNITS.toLocaleString("en-US"));
+		expect(under).not.toContain("⚠️");
 
 		const over = report({ chars: 40_000, units: TOOL_SCHEMA_TARGET_UNITS + 1 });
-		expect(over).toContain("over target");
-		expect(over).toContain("[warning] tools:");
-		expect(over).toContain("unregister a tool");
+		// One warning line, and it says what to do about it (the detail view lists the tools).
+		expect(over.split("\n").filter((line) => line.includes("⚠️"))).toHaveLength(1);
+		expect(over).toContain("/context detail");
 	});
 });
 

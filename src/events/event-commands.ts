@@ -5,6 +5,7 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
 import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
+import { EventDefinitionError, type EventProblemKind, validateScheduledEvent } from "./event-validation.js";
 import {
 	describeEventPayload,
 	type EventHistoryRecord,
@@ -58,7 +59,7 @@ export function parseEventsCommand(args: string): EventsCommand {
 		return name ? { action, name } : { action };
 	}
 
-	throw new Error(`未知的 /events 动作：${action}`);
+	throw new Error(`未知子命令 \`${action}\`。`);
 }
 
 function eventsDir(workspaceDir: string): string {
@@ -83,27 +84,50 @@ function clipText(text: string, maxChars = TEXT_PREVIEW_MAX_CHARS): string {
 }
 
 function formatEventSummary(name: string, event: ScheduledEvent): string {
-	const lines = [`**${name}**`, `- 类型：${event.type}`, `- channelId：${event.channelId}`];
+	const lines = [`**${name}**`, `- 类型：${event.type}`, `- 频道（channelId）：${event.channelId}`];
 	if (event.type === "one-shot") {
 		lines.push(`- 触发时间：${event.at}`);
 	}
 	if (event.type === "periodic") {
-		lines.push(`- schedule：${event.schedule}`);
+		lines.push(`- 时间表（schedule）：${event.schedule}`);
 	}
 	lines.push(`- 内容：${clipText(describeEventPayload(event))}`);
 	return lines.join("\n");
 }
 
+/**
+ * Why a definition is invalid, in the user's terms (spec 053, D2). The error's own message is
+ * English text for the model (`event_manage`), so it is never pasted here.
+ */
+const PROBLEM_TEXT: Record<EventProblemKind, string> = {
+	malformed: "文件不是有效的 JSON",
+	"missing-field": "缺少必填字段（type、channelId、at 或 schedule，以及 text 或 task 之一）",
+	payload: "text 和 task 必须恰好填一个",
+	"task-template": "task 模板无效",
+	"pre-action": "preAction 配置无效",
+	immediate: "不再支持 immediate 类型",
+	"unknown-type": "未知的事件类型",
+	"one-shot-time": "at 不是有效的时间",
+	"one-shot-too-soon": "at 距现在不足 2 分钟",
+	"one-shot-too-far": "at 超过约 24.8 天，更远的时间请改用 periodic",
+	"cron-invalid": "schedule 不是有效的 cron 表达式",
+	"cadence-too-frequent": "触发过于频繁（没有 preAction 时至少间隔 30 分钟，有 preAction 时至少 5 分钟）",
+	"pre-action-blocked": "preAction 命令被安全策略拦截",
+};
+
+function describeEventProblem(error: unknown, name: string): string {
+	if (error instanceof EventDefinitionError) return PROBLEM_TEXT[error.kind];
+	return `定义无效，用 \`/events show ${name}\` 查看`;
+}
+
+const EMPTY_EVENTS = "暂无定时事件。\n在对话里告诉我要定时做什么，我会创建事件。";
+
 async function listEvents(workspaceDir: string): Promise<string> {
 	const dir = eventsDir(workspaceDir);
-	if (!existsSync(dir)) {
-		return "**定时事件**\n\n没有找到 events 目录。";
-	}
+	if (!existsSync(dir)) return EMPTY_EVENTS;
 
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".json")).sort();
-	if (filenames.length === 0) {
-		return "**定时事件**\n\n暂无事件文件。";
-	}
+	if (filenames.length === 0) return EMPTY_EVENTS;
 
 	const blocks: string[] = [];
 	for (const filename of filenames) {
@@ -111,10 +135,12 @@ async function listEvents(workspaceDir: string): Promise<string> {
 		const name = eventNameFromFilename(filename);
 		try {
 			const event = parseScheduledEventContent(await readFile(eventPath, "utf-8"), filename);
+			// The same definition rules the watcher applies, so "listed as fine" means "will run".
+			// The lead-time rule is creation-only (an overdue one-shot is a legitimate recovery).
+			validateScheduledEvent(event, { enforceOneShotLead: false });
 			blocks.push(formatEventSummary(name, event));
 		} catch (error) {
-			const message = errorMessage(error);
-			blocks.push(`**${name}**\n- ⚠ 无效：${message}`);
+			blocks.push(`**${name}**\n- ⚠️ 无效：${describeEventProblem(error, name)}`);
 		}
 	}
 
@@ -123,26 +149,30 @@ async function listEvents(workspaceDir: string): Promise<string> {
 	}).text;
 }
 
+function eventNotFound(eventName: string): string {
+	return `未找到事件 \`${eventName}\`。用 \`/events list\` 查看。`;
+}
+
 async function showEvent(workspaceDir: string, name: string): Promise<string> {
 	const { eventName, eventPath } = resolveEventPath(workspaceDir, name);
-	if (!existsSync(eventPath)) {
-		return `找不到事件：${eventName}`;
-	}
+	if (!existsSync(eventPath)) return eventNotFound(eventName);
 
 	const raw = await readFile(eventPath, "utf-8");
-	const parsed = JSON.parse(raw);
-	return `**事件 ${eventName}**
-
-\`\`\`json
-${JSON.stringify(parsed, null, 2)}
-\`\`\``;
+	let body: string;
+	try {
+		body = JSON.stringify(JSON.parse(raw), null, 2);
+	} catch {
+		// Show the bytes as they are: an unparseable file is exactly the case the user needs to see.
+		body = raw;
+	}
+	return capReply(`**事件 ${eventName}**\n\n\`\`\`json\n${body}\n\`\`\``, {
+		nextStepHint: `完整文件在 \`${eventPath}\``,
+	}).text;
 }
 
 async function deleteEvent(workspaceDir: string, name: string): Promise<string> {
 	const { eventName, eventPath } = resolveEventPath(workspaceDir, name);
-	if (!existsSync(eventPath)) {
-		return `找不到事件：${eventName}`;
-	}
+	if (!existsSync(eventPath)) return eventNotFound(eventName);
 
 	// Read before deleting so the reply carries what was removed (review 2026-08-24 §3.4):
 	// an accidental delete stays recoverable from chat history instead of a bare confirmation.
@@ -155,7 +185,7 @@ async function deleteEvent(workspaceDir: string, name: string): Promise<string> 
 	}
 
 	await unlink(eventPath);
-	return summary ? `已删除事件：\n\n${summary}` : `已删除事件：${eventName}`;
+	return summary ? `已删除事件：\n\n${summary}` : `已删除事件 \`${eventName}\`。`;
 }
 
 function parseHistoryLine(line: string): EventHistoryRecord | null {
@@ -170,23 +200,46 @@ function parseHistoryLine(line: string): EventHistoryRecord | null {
 	}
 }
 
+const HISTORY_ACTION: Record<string, string> = {
+	loaded: "已加载",
+	scheduled: "已排程",
+	triggered: "已触发",
+	skipped: "已跳过",
+	enqueued: "已送达频道",
+	queue_full: "频道队列已满",
+	deleted: "已删除",
+	invalid: "无效",
+	pre_action_started: "preAction 开始",
+	pre_action_passed: "preAction 通过",
+	pre_action_blocked: "preAction 未通过",
+	pre_action_failed: "preAction 出错",
+	cancelled: "已取消",
+};
+
+const HISTORY_RESULT: Record<string, string> = { ok: "成功", error: "失败", skipped: "跳过" };
+
+/** `2026-10-11T14:02:33.000+08:00` → `10-11 14:02`. */
+function minuteStamp(ts: string): string {
+	const match = /^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/.exec(ts);
+	return match ? `${match[1]} ${match[2]}` : ts;
+}
+
+/** One flat bullet per record; the operator detail (`reason`) is quoted as-is, it is a log entry. */
 function formatHistoryRecord(record: EventHistoryRecord): string {
-	const details: string[] = [];
-	if (record.channelId) details.push(`- channelId：${record.channelId}`);
-	if (record.schedule) details.push(`- schedule：${record.schedule}`);
-	if (record.at) details.push(`- 触发时间：${record.at}`);
-	if (record.nextRunAt) details.push(`- 下次运行：${record.nextRunAt}`);
-	if (record.reason) details.push(`- 原因：${record.reason}`);
-	if (record.textPreview) details.push(`- 内容：${clipText(record.textPreview)}`);
-	const header = `**${record.ts} ${record.eventName}** ${record.action} · ${record.result}`;
-	return details.length > 0 ? `${header}\n${details.join("\n")}` : header;
+	const action = HISTORY_ACTION[record.action] ?? record.action;
+	const result = HISTORY_RESULT[record.result] ?? record.result;
+	const bits = [`${minuteStamp(record.ts)} ${record.eventName}`, `${action}（${result}）`];
+	if (record.nextRunAt) bits.push(`下次 ${minuteStamp(record.nextRunAt)}`);
+	if (record.reason) bits.push(`详情：\`${clipText(record.reason.replace(/`/g, "'"))}\``);
+	return `- ${bits.join(" · ")}`;
 }
 
 async function showHistory(historyPath: string, name?: string): Promise<string> {
 	const eventName = name ? normalizeEventName(name) : undefined;
-	if (!existsSync(historyPath)) {
-		return "**事件历史**\n\n暂无事件历史。";
-	}
+	const empty = eventName
+		? `暂无事件 \`${eventName}\` 的触发记录。\n事件触发后会记录在这里。`
+		: "暂无事件触发记录。\n事件触发后会记录在这里。";
+	if (!existsSync(historyPath)) return empty;
 
 	const raw = await readFile(historyPath, "utf-8");
 	const records = raw
@@ -199,12 +252,15 @@ async function showHistory(historyPath: string, name?: string): Promise<string> 
 		.slice(-DEFAULT_HISTORY_LIMIT)
 		.reverse();
 
-	if (records.length === 0) {
-		return eventName ? `**事件历史**\n\n未找到事件 ${eventName} 的历史。` : "**事件历史**\n\n暂无事件历史。";
-	}
+	if (records.length === 0) return empty;
 
 	const suffix = eventName ? ` · ${eventName}` : "";
-	return `**事件历史**${suffix}\n\n${records.map(formatHistoryRecord).join("\n\n")}`;
+	return capReply(
+		`**事件历史**${suffix}（最近 ${records.length} 条）\n\n${records.map(formatHistoryRecord).join("\n")}`,
+		{
+			nextStepHint: `用 \`/events history <name>\` 只看一个事件；完整记录在 \`${historyPath}\``,
+		},
+	).text;
 }
 
 export async function handleEventsCommand(options: HandleEventsCommandOptions): Promise<string> {

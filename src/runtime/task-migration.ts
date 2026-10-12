@@ -331,10 +331,10 @@ async function convertOneTask(
 				stage = "archive";
 				await archiveTask(channelDir, id, "cancelled");
 			}
-			log.logInfo(
-				`Task ${id} converted to v5`,
-				`state=${fields.state}${fields.paused ? " paused" : ""}${origin ? ` origin=${origin}` : ""}${retire ? " (retired)" : ""}`,
-			);
+			log.logInfoEvent("tasks.migration.converted", "Task converted to v5", {
+				reason: `state=${fields.state}${fields.paused ? " paused" : ""}${origin ? ` origin=${origin}` : ""}${retire ? " (retired)" : ""}`,
+				fields: { taskId: id },
+			});
 			return true;
 		} catch (error) {
 			// Leave nothing runnable behind: put the v3 original back and drop the artifacts this attempt created.
@@ -450,7 +450,9 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 		channelIds = await discoverTaskChannels(workspaceDir, [], { strict: true });
 	} catch (error) {
 		// An undiscoverable workspace is not an empty one: no task was looked at, so no marker.
-		log.logWarning("Channels of the workspace could not be discovered", errorMessage(error));
+		log.logWarn("tasks.migration.discover_failed", "Workspace channels could not be discovered", {
+			reason: errorMessage(error),
+		});
 		failures.push({ channelId: "*", stage: "discover", error: errorMessage(error), rollback: "ok" });
 	}
 	for (const channelId of channelIds) {
@@ -460,7 +462,10 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 			filenames = (await listDirectory(join(channelDir, "tasks"))).filter((name) => name.endsWith(".md"));
 		} catch (error) {
 			// An unreadable task directory is not an empty one: the originals were not looked at.
-			log.logWarning(`Tasks of ${channelId} could not be listed`, errorMessage(error));
+			log.logWarn("tasks.migration.list_failed", "Channel tasks could not be listed", {
+				channelId: channelId,
+				reason: errorMessage(error),
+			});
 			failures.push({ channelId, stage: "scan", error: errorMessage(error), rollback: "ok" });
 		}
 		for (const filename of filenames) {
@@ -468,7 +473,10 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 			try {
 				if (await convertOneTask(workspaceDir, channelId, channelDir, normalizeTaskId(id), now)) converted++;
 			} catch (error) {
-				log.logWarning(`Task ${id} could not be converted to v5`, errorMessage(error));
+				log.logWarn("tasks.migration.convert_failed", "Task could not be converted to v5", {
+					reason: errorMessage(error),
+					fields: { taskId: id },
+				});
 				failures.push({
 					channelId,
 					task: id,
@@ -479,7 +487,10 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 			}
 		}
 		await moveTaskOwnedEvents(workspaceDir, channelId, channelDir).catch((error) => {
-			log.logWarning(`Task-owned events of ${channelId} could not be moved`, errorMessage(error));
+			log.logWarn("tasks.migration.events_failed", "Task-owned events could not be moved", {
+				channelId: channelId,
+				reason: errorMessage(error),
+			});
 			failures.push({ channelId, stage: "events", error: errorMessage(error), rollback: "ok" });
 		});
 	}
@@ -492,5 +503,9 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 	}
 	await rm(reportPath, { force: true });
 	await writeFile(markerPath, `${formatLocalTime(now)}\n`, "utf-8");
-	if (converted > 0) log.logInfo("Task conversion to v5 complete", `${converted} task(s)`);
+	if (converted > 0)
+		log.logInfoEvent("tasks.migration.done", "Task conversion to v5 complete", {
+			reason: `${converted} task(s)`,
+			fields: { converted },
+		});
 }

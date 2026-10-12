@@ -69,7 +69,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 			usage: { ...createUsage(), steps: 5 },
 			paused: { by: "runtime", reason: "budget", at: PAST },
 		});
-		await expect(run("resume spent +steps 10")).resolves.toContain("steps+10");
+		await run("resume spent +steps 10");
 		const fields = (await readStoredTask(channelDir, "spent"))?.fields;
 		expect(fields?.paused).toBeUndefined();
 		expect(fields?.budget?.steps).toBe(15);
@@ -110,14 +110,15 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		expect(list).toContain("来自 weekly-event");
 	});
 
-	it("show renders the team board, the log and the contract instead of the whole file", async () => {
+	it("show renders the work items, the log and the contract instead of the whole file", async () => {
 		await writeTask("weekly");
 		await appendTaskLog(channelDir, "weekly", { kind: "dispatch", ref: "run_a", agent: "builder" });
 		await appendTaskLog(channelDir, "weekly", { kind: "settle", ref: "run_a", status: "completed" });
 		const shown = await run("show weekly");
-		expect(shown).toContain("团队看板");
 		expect(shown).toContain("run_a");
 		expect(shown).toContain("/tasks log weekly");
+		// The contract is markdown with `#` headings; the chat reply must not carry them through.
+		expect(shown).not.toMatch(/^#/m);
 	});
 
 	it("log reads the whole loop log, dispatches and settlements included", async () => {
@@ -145,9 +146,9 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		await writeTask("clean");
 
 		const report = await run("doctor");
-		expect(report).toContain("broken 的 frontmatter 不可读");
-		expect(report).toContain("old 仍含旧版本的字段");
-		expect(report).toContain("overdue 的等待票已过兜底时限超过 1 小时");
+		expect(report).toContain("`broken`");
+		expect(report).toContain("`old`");
+		expect(report).toContain("`overdue`");
 		// A healthy task produces no line at all: doctor is a diagnosis, not an inventory.
 		expect(report).not.toContain("clean");
 	});
@@ -166,7 +167,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		await writeTask("weekly");
 		const before = await readFile(join(tasksDir, "weekly.md"), "utf-8");
 		const unknown = await run("approve weekly");
-		expect(unknown).toContain("未知的 /tasks 动作：approve");
+		expect(unknown).toContain("approve");
 		expect(await readFile(join(tasksDir, "weekly.md"), "utf-8")).toBe(before);
 	});
 

@@ -73,6 +73,26 @@ describe("parseArgs", () => {
 });
 
 describe("bootstrap", () => {
+	// Spec 053 D11: writing the templates on a first run is the expected outcome, so it exits 0
+	// with a guide; a template that is still unfilled on the next run is a real config error.
+	it("exits 0 after creating the channel template and 1 while it is still a placeholder", async () => {
+		const paths = createBootstrapPaths();
+		const exitCode = async () =>
+			bootstrap(["node", "pipiclaw"], {
+				paths,
+				io: createIO(),
+				registerSignalHandlers: false,
+				startServices: false,
+			}).then(
+				() => undefined,
+				(error: unknown) => (error instanceof BootstrapExitError ? error.code : error),
+			);
+
+		expect(await exitCode()).toBe(0);
+		expect(existsSync(paths.channelConfigPath)).toBe(true);
+		expect(await exitCode()).toBe(1);
+	});
+
 	it("creates app home templates and leaves an idempotent second run", () => {
 		const paths = createBootstrapPaths();
 

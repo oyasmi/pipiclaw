@@ -111,7 +111,10 @@ export async function endTaskStep(
 		// A task waiting on the user that says nothing is the same silent dead end tickets exist to
 		// prevent, so an `ask` park always speaks.
 		if (ticket.kind === "ask") {
-			pendingNotice = [report, `任务 ${id} 需要你的决定：${ticket.asked}\n用 /tasks reply ${id} <内容> 回答。`]
+			pendingNotice = [
+				report,
+				`⚠️ 任务 \`${id}\` 需要你的决定：${ticket.asked}\n用 \`/tasks reply ${id} <内容>\` 回答。`,
+			]
 				.filter(Boolean)
 				.join("\n\n");
 		}

@@ -263,10 +263,10 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 | 命令 | 说明 |
 |------|------|
-| `/events list` | 列出事件文件名、类型、`channelId`、`schedule` / `at`（无 timezone 列）和文本预览 |
+| `/events list` | 列出事件文件名、类型、`channelId`、`schedule` / `at`（无 timezone 列）和文本预览；定义无效（包括 watcher 会拒绝的过密 cron）时用一句中文说明原因 |
 | `/events show <name>` | 展示 `workspace/events/<name>.json` 的完整 JSON |
 | `/events delete <name>` | 删除对应事件文件 |
-| `/events history [name]` | 读取最近的事件调度历史；传入 `name` 时只显示该事件 |
+| `/events history [name]` | 读取最近的事件调度历史，一条一行；传入 `name` 时只显示该事件 |
 
 事件名只允许普通文件名字符（字母、数字、`.`、`_`、`-`）。可以写 `weekly-review` 或 `weekly-review.json`，Pipiclaw 会统一归一化。命令不会访问 `workspace/events/` 之外的路径。
 
@@ -536,15 +536,19 @@ events 与 tasks 之间只有一条边：**事件按模板生成任务实例**�
 ## 可见性与命令
 
 ```text
-/tasks                                  列表：状态、等待票+兜底时间、工作项进度、用量；实例显示来自哪个事件
-/tasks show <id>                        契约 + 团队看板 + 最近日志 + 用量
-/tasks log <id>                         翻看循环日志（含派发与结算）
+/tasks                                  列表：状态、等待条件+最晚检查时间、工作项进度、用量；实例显示来自哪个事件
+/tasks show <id>                        头部 + 工作项 + 最近 5 条记录 + 任务说明开头
+/tasks log <id>                         最近 15 条任务记录（含委派的开始与结束）
 /tasks steer <id> <内容>                 给下一步排一条指示（不打断当前步骤）
 /tasks reply <id> <内容>                 回答任务的提问，并让它继续
 /tasks pause <id> / resume <id> [+steps N|+usd X]
 /tasks archive                          已归档任务
 /tasks doctor                           只检查手工编辑或转换未完成造成的问题
 ```
+
+聊天里的回复使用界面用语（[对照表](interaction-and-commands.md#界面用语对照)）：契约显示为"任务说明"，团队看板为"工作项"，循环日志为"任务记录"，等待票为"等待条件"，兜底时限为"最晚检查时间"，状态为"进行中 / 等待中 / 已结束"。它们和模型看到的 step brief 读的是同一份数据，但由两个渲染器分别输出（`renderTaskBoardForUser` / `renderTaskLogLineForUser`）：给你的版本是平铺列表，一个工作项的多个委派合并在一行，不出现 `continue`、`VERDICT`、`exit` 这类参数值和工具名，时间只到分钟。回复受 1,500 字预算约束，超出时给出 `/tasks log <id>` 和任务文件的绝对路径。
+
+运行时的停止回执以 🛑 开头，带任务 id、状态、已用步数和可直接复制的命令；预算耗尽时附带对应维度的加码示例（`+steps 10` 或 `+usd 5`）。
 
 `resume` 的加码是在**已用量之上**的增量，所以恢复一个撞了上限的任务真的能跑起来；如果任务是在一张已过兜底时限的票上被停下的，`resume` 会把它重开并清掉过期计数，而不是让它在同一张死票上再次暂停。
 

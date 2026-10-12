@@ -417,7 +417,10 @@ export class PipiclawSettingsManager {
 			}
 			writeFileAtomicallySync(this.settingsPath, JSON.stringify(this.settings, null, 2));
 		} catch (error) {
-			log.logWarning(`Could not save settings file`, `${this.settingsPath}\n${String(error)}`);
+			log.logWarn("config.settings.save_failed", "Settings file save failed", {
+				reason: String(error),
+				fields: { path: this.settingsPath },
+			});
 		}
 	}
 

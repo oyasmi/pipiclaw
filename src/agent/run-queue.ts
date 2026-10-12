@@ -27,7 +27,10 @@ export function createRunQueue(): CreatedRunQueue {
 					await fn();
 				} catch (err) {
 					const errMsg = errorMessage(err);
-					log.logWarning(`DingTalk API error (${errorContext})`, errMsg);
+					log.logWarn("delivery.api.failed", "DingTalk API call failed", {
+						reason: errMsg,
+						fields: { context: errorContext },
+					});
 				}
 			});
 		},
@@ -41,7 +44,9 @@ export function createRunQueue(): CreatedRunQueue {
 					await queueChain;
 				});
 			} catch (err) {
-				log.logWarning("Run queue drain deadline exceeded; releasing the turn", errorMessage(err));
+				log.logWarn("delivery.queue.drain_timeout", "Run queue drain deadline exceeded; releasing the turn", {
+					reason: errorMessage(err),
+				});
 			}
 		},
 	};

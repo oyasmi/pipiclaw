@@ -29,3 +29,28 @@ export function capReply(text: string, options: CapReplyOptions): CapReplyResult
 	const head = text.slice(0, cut).trimEnd();
 	return { text: `${head}\n\n（内容过长已截断；${options.nextStepHint}）`, truncated: true };
 }
+
+/**
+ * Reshape a markdown file for a chat reply (rule 3/4): `#` headings become a bold line and
+ * indentation is dropped, since DingTalk keeps neither. Fenced code blocks pass through as-is.
+ * Used where a reply quotes a file the user wrote (a task contract, a skill body).
+ */
+export function flattenMarkdownForChat(text: string): string {
+	const out: string[] = [];
+	let fenced = false;
+	for (const raw of text.split("\n")) {
+		if (/^\s*```/.test(raw)) {
+			fenced = !fenced;
+			out.push(raw.trim());
+			continue;
+		}
+		if (fenced) {
+			out.push(raw);
+			continue;
+		}
+		const trimmed = raw.trim();
+		const heading = /^#{1,6}\s+(.*)$/.exec(trimmed);
+		out.push(heading ? `**${heading[1]}**` : trimmed);
+	}
+	return out.join("\n").replace(/\n{3,}/g, "\n\n");
+}

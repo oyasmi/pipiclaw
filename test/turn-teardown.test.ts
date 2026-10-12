@@ -25,7 +25,7 @@ describe("run queue drain deadline", () => {
 		await drain(5_000);
 		expect(done).toBe(true);
 
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 		const stalledQueue = createRunQueue();
 		const stalled = createDeferred();
 		stalledQueue.queue.enqueue(() => stalled.promise, "stalled delivery");
@@ -33,8 +33,9 @@ describe("run queue drain deadline", () => {
 		await stalledQueue.drain(20);
 
 		expect(warnSpy).toHaveBeenCalledWith(
-			expect.stringContaining("drain deadline exceeded"),
-			expect.stringContaining("timed out"),
+			"delivery.queue.drain_timeout",
+			expect.any(String),
+			expect.objectContaining({ reason: expect.stringContaining("timed out") }),
 		);
 		stalled.resolve();
 		warnSpy.mockRestore();
@@ -68,7 +69,7 @@ describe("SessionResourceGate refresh detachment", () => {
 	});
 
 	it("keeps serving prompts after a reload fails", async () => {
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 		const gate = new SessionResourceGate(async () => {
 			throw new Error("provider unreachable");
 		});
@@ -79,14 +80,16 @@ describe("SessionResourceGate refresh detachment", () => {
 		await gate.whenSettled();
 		await expect(gate.runPrompt(async () => "ok")).resolves.toBe("ok");
 
-		expect(warnSpy).toHaveBeenCalledWith("Session resource reload failed", "provider unreachable");
+		expect(warnSpy).toHaveBeenCalledWith("agent.session.resources_reload_failed", expect.any(String), {
+			reason: "provider unreachable",
+		});
 		warnSpy.mockRestore();
 	});
 });
 
 describe("forceEndStuckTurnAfterStop", () => {
 	it("force-releases a turn that never ends, but does nothing when it ends within the grace window", async () => {
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 
 		// Ends in time: no force, no notification.
 		const timely = createFakeTurnState();

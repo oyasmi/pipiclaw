@@ -280,7 +280,10 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 			reason: "memory-forget",
 			actions: [{ op: "forget", name: trimmed, contentHash: hashMemoryContent(entry.description) }],
 		}).catch((error) => {
-			log.logWarning(`Failed to append memory review log for channel ${options.channelId}`, errorMessage(error));
+			log.logWarn("memory.review_log.write_failed", "Memory review log write failed", {
+				channelId: options.channelId,
+				reason: errorMessage(error),
+			});
 		});
 		return textResult(
 			`Removed \`${trimmed}\` from channel memory. Its content is tombstoned against automatic replay; if the fact is stated again later it may be re-learned. Journal and session history are unchanged.`,

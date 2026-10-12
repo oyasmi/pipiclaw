@@ -66,7 +66,9 @@ export class SessionResourceGate {
 			} catch (error) {
 				// The chain is awaited by the next prompt and by detached callers, so a
 				// failed reload must never reject it: log and carry the previous resources.
-				log.logWarning("Session resource reload failed", errorMessage(error));
+				log.logWarn("agent.session.resources_reload_failed", "Session resource reload failed", {
+					reason: errorMessage(error),
+				});
 			}
 		};
 

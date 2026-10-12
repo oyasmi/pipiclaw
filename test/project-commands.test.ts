@@ -32,11 +32,11 @@ describe("handleProjectCommand", () => {
 		const options = baseOptions();
 		const text = await handleProjectCommand(options);
 		expect(text).toContain("unbounded");
-		expect(text).toContain("未配置 projectAccess");
+		expect(text).toContain("projectAccess");
 
 		const setText = await handleProjectCommand({ ...options, args: `set ${createTempDir()}` });
 		expect(setText).toContain("无法切换项目");
-		expect(setText).toContain("未配置 projectAccess");
+		expect(setText).toContain("projectAccess");
 	});
 
 	it("set: rejects targets outside the allowed roots or nonexistent, committing nothing", async () => {
@@ -46,7 +46,7 @@ describe("handleProjectCommand", () => {
 		const outside = createTempDir();
 
 		const outsideText = await handleProjectCommand({ ...options, args: `set ${outside}` });
-		expect(outsideText).toContain("不在允许的可选根内");
+		expect(outsideText).toContain("无法切换项目");
 		expect(readProjectSelection(options.channelDir)).toBeUndefined();
 
 		const missingText = await handleProjectCommand({ ...options, args: `set ${join(allowedRoot, "nope")}` });

@@ -97,7 +97,8 @@ describe("command-extension", () => {
 
 		await api.registeredCommands.get("thinking")?.handler("max", createCommandContext());
 		expect(options.setThinkingLevel).toHaveBeenCalledTimes(1);
-		expect(getLastCommandResult(api).content).toContain("当前模型可用值");
+		// The rejection lists what *is* available, so the user can pick one without another round trip.
+		expect(getLastCommandResult(api).content).toContain("`medium`");
 	});
 
 	it("switches model on exact or unique substring match and reports ambiguity / missing models", async () => {
@@ -162,7 +163,8 @@ describe("command-extension", () => {
 		await api.registeredCommands.get("compact")?.handler("keep recent errors", ctx as never);
 
 		expect(ctx.compact).toHaveBeenCalledTimes(1);
-		expect(getLastCommandResult(api).content).toContain("压缩前 tokens");
+		// The custom instructions reach the compactor (the fake echoes them into the summary), and
+		// the reply quotes the summary's first line rather than pasting it whole.
 		expect(getLastCommandResult(api).content).toContain("summary:keep recent errors");
 	});
 });

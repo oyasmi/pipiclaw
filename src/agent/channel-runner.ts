@@ -22,6 +22,8 @@ import { type InboundImage, MAX_INBOUND_IMAGE_BYTES } from "../channel/channel-e
 import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
+	formatMissingQueueMessage,
+	formatNoRunningTurn,
 	isKnownCommandName,
 	type RunnerBuiltInCommand,
 	renderBuiltInHelp,
@@ -110,6 +112,7 @@ import {
 } from "./session-adapter.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
+import { renderFallbackSwitch, renderTurnErrorReply } from "./turn-error.js";
 import { assembleTurnPrompt } from "./turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn-recovery.js";
 import { type TurnHandle, TurnStateMachine } from "./turn-state.js";
@@ -238,7 +241,7 @@ export class ChannelRunner implements AgentRunner {
 	private taskLoop?: { taskId: string };
 	/** Single owner of turn state; see TurnPhase in types.ts and TurnStateMachine in turn-state.ts. */
 	private readonly turnState = new TurnStateMachine((message, detail) =>
-		log.logWarning(`[${this.channelId}] ${message}`, detail),
+		log.logWarn("agent.session.warning", message, { channelId: this.channelId, reason: detail }),
 	);
 	/** Set once transport-level `/new` replaces this generation. A retired runner is never reused. */
 	private retired = false;
@@ -306,17 +309,23 @@ export class ChannelRunner implements AgentRunner {
 			);
 		}
 		if (recoveryOutcome.kind === "repaired") {
-			log.logWarning(
-				`[${channelId}] Repaired an interrupted turn on restart`,
-				`toolResults=${recoveryOutcome.appendedToolResults} abortedAssistant=${recoveryOutcome.appendedAbortedAssistant}`,
-			);
+			log.logWarn("agent.turn.repaired", "Interrupted turn repaired on restart", {
+				channelId: channelId,
+				fields: {
+					toolResults: recoveryOutcome.appendedToolResults,
+					abortedAssistant: recoveryOutcome.appendedAbortedAssistant,
+				},
+			});
 		}
 		this.settingsManager = paths.settingsManager;
 		this.reportSettingsDiagnostics();
 		this.memoryActivityRecorder = createMemoryActivityRecorder({
 			appHomeDir: this.appHomeDir,
 			onError: (channelId, error) =>
-				log.logWarning(`[${channelId}] Failed to record memory maintenance state`, errorMessage(error)),
+				log.logWarn("memory.state.record_failed", "Memory maintenance state record failed", {
+					channelId: channelId,
+					reason: errorMessage(error),
+				}),
 		});
 
 		this.activeModel = defaultModel;
@@ -412,7 +421,7 @@ export class ChannelRunner implements AgentRunner {
 				oversizedInputPath = await this.persistOversizedInput(ctx.message.text);
 				await ctx.respondInThread(
 					oversizedInputPath
-						? `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理；完整内容已存到 \`${oversizedInputPath}\`，可以让我 read 该文件查看被省略的部分。`
+						? `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理；完整内容已存到 \`${oversizedInputPath}\`，需要时让我读取这个文件查看被省略的部分。`
 						: `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理。`,
 				);
 			}
@@ -538,14 +547,14 @@ export class ChannelRunner implements AgentRunner {
 					if (this.runState.logCtx) {
 						log.logModelFallback(this.runState.logCtx, from, to, errorSummary);
 					}
-					const text = `⚠️ 模型 ${from} 出错（${errorSummary}），切换到 ${to} 重试…`;
+					const text = renderFallbackSwitch(from, to, errorSummary);
 					if (ctx.progressStyle !== "none") {
 						runQueue.queue.enqueue(
 							() => ctx.respond(formatProgressEntry("error", text), false),
 							"fallback switch",
 						);
 					} else {
-						runQueue.queue.enqueue(() => ctx.respondInThread(text), "fallback switch");
+						runQueue.queue.enqueue(() => ctx.respondInThread(`⚠️ ${text}`), "fallback switch");
 					}
 				},
 				markPrimaryFailed: () => {
@@ -622,16 +631,20 @@ export class ChannelRunner implements AgentRunner {
 			};
 			await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
 				(error: unknown) =>
-					log.logWarning(`[${this.channelId}] Failed to write last_prompt.json`, errorMessage(error)),
+					log.logWarn("agent.debug.dump_failed", "last_prompt.json write failed", {
+						channelId: this.channelId,
+						reason: errorMessage(error),
+					}),
 			);
 		}
 		if (!promptSubmitted) {
 			const discarded = this.session.clearQueue();
 			const discardedCount = discarded.steering.length + discarded.followUp.length;
 			if (discardedCount > 0) {
-				log.logWarning(
-					`[${this.channelId}] Discarded ${discardedCount} queued busy message(s) after run setup failed`,
-				);
+				log.logWarn("agent.turn.queue_discarded", "Queued busy messages discarded after run setup failed", {
+					channelId: this.channelId,
+					fields: { count: discardedCount },
+				});
 			}
 		}
 		await runQueue.drain();
@@ -645,50 +658,53 @@ export class ChannelRunner implements AgentRunner {
 				!this.runState.finalResponseDelivered
 			) {
 				try {
-					const baseErrorSummary =
-						this.runState.errorMessage.length > 240
-							? `${this.runState.errorMessage.slice(0, 237)}...`
-							: this.runState.errorMessage;
-					const compactionSummary =
-						this.runState.lastCompactionError && this.runState.lastCompactionError !== this.runState.errorMessage
-							? this.runState.lastCompactionError.length > 240
-								? `${this.runState.lastCompactionError.slice(0, 237)}...`
-								: this.runState.lastCompactionError
-							: undefined;
-					const detailLines = [`\`${baseErrorSummary}\``];
-					if (compactionSummary) {
-						detailLines.push(`恢复尝试：\`${compactionSummary}\``);
-					}
-					if (fallbackAttempted && fallbackTargetRef) {
-						detailLines.push(`已切换备用模型 \`${fallbackTargetRef}\` 重试，仍失败。`);
-					}
-					await ctx.replaceMessage(`_抱歉，出错了。_\n\n${detailLines.join("\n\n")}`);
+					const compactionError = this.runState.lastCompactionError;
+					await ctx.replaceMessage(
+						renderTurnErrorReply({
+							errorMessage: this.runState.errorMessage,
+							compactionError:
+								compactionError && compactionError !== this.runState.errorMessage ? compactionError : undefined,
+							fallbackRef: fallbackAttempted ? fallbackTargetRef : undefined,
+						}),
+					);
 				} catch (err) {
 					const errMsg = errorMessage(err);
-					log.logWarning("Failed to post error message", errMsg);
+					log.logWarn("delivery.error_reply.failed", "Error reply failed", {
+						channelId: this.channelId,
+						reason: errMsg,
+					});
 				}
 			} else if (isSilentOutcome(finalOutcome)) {
 				try {
 					await ctx.deleteMessage();
-					log.logInfo("Silent response - ended progress delivery");
+					log.logInfo(`[${this.channelId}] Silent response ended progress delivery`);
 				} catch (err) {
 					const errMsg = errorMessage(err);
-					log.logWarning("Failed to delete message for silent response", errMsg);
+					log.logWarn("delivery.silent_cleanup.failed", "Silent-response cleanup failed", {
+						channelId: this.channelId,
+						reason: errMsg,
+					});
 				}
 			} else if (this.runState.stopReason === "aborted" && !this.runState.finalResponseDelivered) {
 				try {
 					await ctx.deleteMessage();
-					log.logInfo("Aborted response - discarded active delivery state");
+					log.logInfo(`[${this.channelId}] Aborted response discarded active delivery state`);
 				} catch (err) {
 					const errMsg = errorMessage(err);
-					log.logWarning("Failed to discard active delivery state after abort", errMsg);
+					log.logWarn("delivery.abort_cleanup.failed", "Aborted-response cleanup failed", {
+						channelId: this.channelId,
+						reason: errMsg,
+					});
 				}
 			} else if (finalOutcomeText && !this.runState.finalResponseDelivered) {
 				try {
 					await ctx.replaceMessage(finalOutcomeText);
 				} catch (err) {
 					const errMsg = errorMessage(err);
-					log.logWarning("Failed to replace message with final text", errMsg);
+					log.logWarn("delivery.final_reply.failed", "Final reply replacement failed", {
+						channelId: this.channelId,
+						reason: errMsg,
+					});
 				}
 			}
 
@@ -767,19 +783,15 @@ export class ChannelRunner implements AgentRunner {
 					await this.sendCommandReply(ctx, this.renderContextReport(command.args), "context");
 					return;
 				case "stop":
-					await this.sendCommandReply(ctx, "当前没有运行中的回合，`/stop` 只在回合进行中有意义。", "stop");
+					await this.sendCommandReply(ctx, formatNoRunningTurn("stop"), "stop");
 					return;
 				case "steer":
 					this.requireQueuedMessage(command.args, "steer");
-					await this.sendCommandReply(ctx, "当前没有运行中的回合，直接发消息即可，不用 `/steer`。", "steer");
+					await this.sendCommandReply(ctx, formatNoRunningTurn("steer"), "steer");
 					return;
 				case "followup":
 					this.requireQueuedMessage(command.args, "followup");
-					await this.sendCommandReply(
-						ctx,
-						"当前没有运行中的回合，直接发消息即可；`/followup` 用于回合进行中排队。",
-						"followup",
-					);
+					await this.sendCommandReply(ctx, formatNoRunningTurn("followup"), "followup");
 					return;
 				default: {
 					// The stateless report commands (events/tasks/status/usage/subagents/project — see
@@ -792,7 +804,7 @@ export class ChannelRunner implements AgentRunner {
 			}
 		} catch (err) {
 			const errMsg = errorMessage(err);
-			log.logWarning(`[${this.channelId}] Built-in command failed`, errMsg);
+			log.logWarn("agent.command.failed", "Built-in command failed", { channelId: this.channelId, reason: errMsg });
 			await this.sendCommandReply(ctx, `命令执行失败：${errMsg}`, command.name);
 		}
 	}
@@ -841,7 +853,9 @@ export class ChannelRunner implements AgentRunner {
 		if (this.isBusy()) {
 			// `session.dispose()` aborts in-flight work; a busy runner keeps its session and
 			// subscription until whoever holds it calls dispose() again once idle.
-			log.logWarning(`[${this.channelId}] dispose() called while busy; session left intact`, "");
+			log.logWarn("agent.session.dispose_skipped", "Dispose skipped while busy; session left intact", {
+				channelId: this.channelId,
+			});
 			return;
 		}
 		// Guards a dispose() racing construction: initializeSession assigns `this.session`
@@ -852,7 +866,10 @@ export class ChannelRunner implements AgentRunner {
 		try {
 			this.session.dispose();
 		} catch (error) {
-			log.logWarning(`[${this.channelId}] Session dispose failed`, errorMessage(error));
+			log.logWarn("agent.session.dispose_failed", "Session dispose failed", {
+				channelId: this.channelId,
+				reason: errorMessage(error),
+			});
 		}
 	}
 
@@ -965,9 +982,7 @@ export class ChannelRunner implements AgentRunner {
 		const sections: string[] = [help];
 		if (this.session.promptTemplates.length > 0) {
 			sections.push(
-				`**Prompt templates**\n\n${this.session.promptTemplates
-					.map((template) => `- \`/${template.name}\``)
-					.join("\n")}`,
+				`**提示模板**\n\n${this.session.promptTemplates.map((template) => `- \`/${template.name}\``).join("\n")}`,
 			);
 		}
 		return sections.join("\n\n");
@@ -1027,14 +1042,17 @@ export class ChannelRunner implements AgentRunner {
 		try {
 			await this.memoryActivityRecorder.flush(this.channelId);
 		} catch (error) {
-			log.logWarning(`[${this.channelId}] Failed to flush memory maintenance state`, errorMessage(error));
+			log.logWarn("memory.state.flush_failed", "Memory maintenance state flush failed", {
+				channelId: this.channelId,
+				reason: errorMessage(error),
+			});
 		}
 	}
 
 	private requireQueuedMessage(text: string, commandName: "steer" | "followup"): string {
 		const trimmedText = text.trim();
 		if (!trimmedText) {
-			throw new Error(`/${commandName} requires a message.`);
+			throw new Error(formatMissingQueueMessage(commandName));
 		}
 		return trimmedText;
 	}
@@ -1062,7 +1080,10 @@ export class ChannelRunner implements AgentRunner {
 			await writeFile(path, text.replace(/\r/g, ""), { mode: 0o600 });
 			return path;
 		} catch (error) {
-			log.logWarning("Could not persist oversized user message", errorMessage(error));
+			log.logWarn("agent.input.persist_failed", "Oversized user message could not be saved", {
+				channelId: this.channelId,
+				reason: errorMessage(error),
+			});
 			return undefined;
 		}
 	}
@@ -1108,7 +1129,7 @@ export class ChannelRunner implements AgentRunner {
 				notices: [
 					`⚠️ 当前模型 ${modelRef} 不支持图片输入，收到的图片已保存但未加入本轮上下文：\n` +
 						images.map((image) => `- \`${image.path}\``).join("\n") +
-						"\n可以切换到支持视觉的模型后让我 read 该文件。",
+						"\n用 `/model` 切换到支持图片的模型后，再让我读取这些图片。",
 				],
 			};
 		}
@@ -1119,7 +1140,7 @@ export class ChannelRunner implements AgentRunner {
 			if (image.unsupportedFormat) continue;
 			if (image.byteSize > MAX_INBOUND_IMAGE_BYTES) {
 				notices.push(
-					`⚠️ 图片 \`${image.path}\`（${formatSize(image.byteSize)}）超过 ${formatSize(MAX_INBOUND_IMAGE_BYTES)} 上限，未加入本轮上下文，可以让我 read 该文件查看。`,
+					`⚠️ 图片 \`${image.path}\`（${formatSize(image.byteSize)}）超过 ${formatSize(MAX_INBOUND_IMAGE_BYTES)} 上限，未加入本轮上下文；需要时让我读取这个文件。`,
 				);
 				continue;
 			}
@@ -1158,7 +1179,10 @@ export class ChannelRunner implements AgentRunner {
 		const oversizedPath = oversized ? await this.persistOversizedInput(text) : undefined;
 		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS, oversizedPath);
 		if (oversized) {
-			log.logWarning(`[${this.channelId}] Queued message exceeded ${MAX_USER_MESSAGE_CHARS} chars and was clipped`);
+			log.logWarn("agent.input.clipped", "Queued message clipped", {
+				channelId: this.channelId,
+				fields: { limitChars: MAX_USER_MESSAGE_CHARS },
+			});
 		}
 		const queuedMessage = this.formatUserMessage(clippedText, userName);
 		const preparedImages = await this.prepareInboundImages(images);
@@ -1211,7 +1235,10 @@ export class ChannelRunner implements AgentRunner {
 			this.primaryFailedAt = null;
 			log.logInfo(`[${this.channelId}] Restored primary model ${formatModelReference(this.activeModel)}`);
 		} catch (err) {
-			log.logWarning(`[${this.channelId}] Failed to restore primary model`, errorMessage(err));
+			log.logWarn("agent.model.restore_failed", "Primary model restore failed", {
+				channelId: this.channelId,
+				reason: errorMessage(err),
+			});
 		}
 	}
 
@@ -1241,15 +1268,19 @@ export class ChannelRunner implements AgentRunner {
 		const available = this.modelRegistry.getAvailable();
 		const { match, ambiguous } = findExactModelReferenceMatch(reference, available);
 		if (!match) {
-			log.logWarning(
-				`[${this.channelId}] fallbackModel "${reference}" ${ambiguous ? "is ambiguous" : "not found"}; skipping fallback`,
-			);
+			log.logWarn("agent.model.fallback_unresolved", "Fallback model skipped", {
+				channelId: this.channelId,
+				fields: { reference, problem: ambiguous ? "ambiguous" : "not found" },
+			});
 			return null;
 		}
 		try {
 			await getApiKeyForModel(this.modelRegistry, match);
 		} catch {
-			log.logWarning(`[${this.channelId}] fallbackModel "${reference}" has no API key; skipping fallback`);
+			log.logWarn("agent.model.fallback_unresolved", "Fallback model skipped", {
+				channelId: this.channelId,
+				fields: { reference, problem: "no API key" },
+			});
 			return null;
 		}
 		return match;
@@ -1323,7 +1354,10 @@ export class ChannelRunner implements AgentRunner {
 				this.session.reload(),
 			);
 		} catch (error) {
-			log.logWarning(`[${this.channelId}] Session reload did not settle`, errorMessage(error));
+			log.logWarn("agent.session.reload_unsettled", "Session reload did not settle", {
+				channelId: this.channelId,
+				reason: errorMessage(error),
+			});
 		}
 	}
 
@@ -1385,7 +1419,10 @@ export class ChannelRunner implements AgentRunner {
 			log.logInfo(`[${this.channelId}] Preventive compaction complete in ${Date.now() - startedAt}ms`);
 		} catch (error) {
 			const message = errorMessage(error);
-			log.logWarning(`[${this.channelId}] Preventive compaction failed`, message);
+			log.logWarn("agent.compaction.preventive_failed", "Preventive compaction failed", {
+				channelId: this.channelId,
+				reason: message,
+			});
 		}
 	}
 
@@ -1399,30 +1436,38 @@ export class ChannelRunner implements AgentRunner {
 				this.modelRegistry.refresh(),
 			);
 		} catch (error) {
-			log.logWarning(
-				`[${this.channelId}] Model registry refresh did not settle; using the previous model snapshot`,
-				errorMessage(error),
+			log.logWarn(
+				"agent.models.refresh_unsettled",
+				"Model registry refresh did not settle; using the previous snapshot",
+				{ channelId: this.channelId, reason: errorMessage(error) },
 			);
 		}
 		const discovery = discoverSubAgents(this.workspaceDir, this.modelRegistry.getAvailable());
 		for (const warning of discovery.warnings) {
-			log.logWarning(`Sub-agent config warning (${this.channelId})`, warning);
+			log.logWarn("config.subagents.warning", "Sub-agent config warning", {
+				channelId: this.channelId,
+				reason: warning,
+			});
 		}
 		return discovery;
 	}
 
 	private reportSettingsDiagnostics(): void {
 		for (const { scope, error } of this.settingsManager.drainErrors()) {
-			log.logWarning(
-				`[${this.channelId}] Failed to load ${scope} settings`,
-				`${error.message}\n${join(this.appHomeDir, "settings.json")}`,
-			);
+			log.logWarn("config.settings.load_failed", "Settings load failed", {
+				channelId: this.channelId,
+				reason: error.message,
+				fields: { scope, path: join(this.appHomeDir, "settings.json") },
+			});
 		}
 	}
 
 	private reportConfigDiagnostics(diagnostics: ConfigDiagnostic[]): void {
 		for (const diagnostic of diagnostics) {
-			log.logWarning(`[${this.channelId}] ${formatConfigDiagnostic(diagnostic)}`, diagnostic.path);
+			log.logWarn("config.diagnostic", formatConfigDiagnostic(diagnostic), {
+				channelId: this.channelId,
+				fields: { path: diagnostic.path },
+			});
 		}
 	}
 
@@ -1461,7 +1506,11 @@ export class ChannelRunner implements AgentRunner {
 
 		for (const diagnostic of [...resources.diagnostics, ...build.diagnostics]) {
 			if (diagnostic.level === "info") continue;
-			log.logWarning(`[${this.channelId}] Prompt ${diagnostic.level} (${diagnostic.sectionId})`, diagnostic.message);
+			log.logWarn("agent.prompt.diagnostic", "Prompt section diagnostic", {
+				channelId: this.channelId,
+				reason: diagnostic.message,
+				fields: { level: diagnostic.level, section: diagnostic.sectionId },
+			});
 		}
 		// Only a real change is worth a line: a reload that produced the same bytes is noise.
 		if (this.lastPromptBuild?.fingerprint !== build.fingerprint) {
@@ -1528,10 +1577,11 @@ export class ChannelRunner implements AgentRunner {
 			skillsOverride: (base) => {
 				const merged = resolvePipiclawSkills(base, this.currentSkills);
 				for (const diagnostic of merged.diagnostics) {
-					log.logWarning(
-						`[${this.channelId}] Skill ${diagnostic.type}`,
-						`${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
-					);
+					log.logWarn("agent.skills.diagnostic", "Skill diagnostic", {
+						channelId: this.channelId,
+						reason: diagnostic.message,
+						fields: { type: diagnostic.type, path: diagnostic.path },
+					});
 				}
 				return merged;
 			},
@@ -1565,7 +1615,10 @@ export class ChannelRunner implements AgentRunner {
 				resourceLoader.reload(),
 			);
 		} catch (error) {
-			log.logWarning(`[${this.channelId}] Session resources did not load`, errorMessage(error));
+			log.logWarn("agent.session.resources_failed", "Session resources did not load", {
+				channelId: this.channelId,
+				reason: errorMessage(error),
+			});
 		}
 	}
 
@@ -1705,7 +1758,10 @@ export class ChannelRunner implements AgentRunner {
 		// Warn where the prompt's own budget diagnostics are reported, once per tool rebuild.
 		const schemas = measureToolSchemas(tools);
 		if (schemas.units > TOOL_SCHEMA_TARGET_UNITS) {
-			log.logWarning(`[${this.channelId}] Tool schema budget`, toolSchemaBudgetWarning(schemas));
+			log.logWarn("agent.tools.schema_over_budget", "Tool schemas over budget", {
+				channelId: this.channelId,
+				reason: toolSchemaBudgetWarning(schemas),
+			});
 		}
 		return tools;
 	}
@@ -1726,7 +1782,10 @@ export class ChannelRunner implements AgentRunner {
 			try {
 				this.onSessionEvent?.(event, this.channelId);
 			} catch (err) {
-				log.logWarning(`[${this.channelId}] session observer failed`, errorMessage(err));
+				log.logWarn("agent.session.observer_failed", "Session observer failed", {
+					channelId: this.channelId,
+					reason: errorMessage(err),
+				});
 			}
 			if (isRecord(event) && event.type === "message_start") {
 				this.turnState.markStreaming();
@@ -1761,7 +1820,10 @@ export class ChannelRunner implements AgentRunner {
 				},
 				skillsDir: join(this.workspaceDir, "skills"),
 			}).catch((err) => {
-				log.logWarning(`[${this.channelId}] session event handler failed`, errorMessage(err));
+				log.logWarn("agent.session.handler_failed", "Session event handler failed", {
+					channelId: this.channelId,
+					reason: errorMessage(err),
+				});
 			});
 		});
 	}

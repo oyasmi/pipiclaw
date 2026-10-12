@@ -89,6 +89,44 @@ function withRedeliveryNotice(event: ChannelEvent, deliveries: number): ChannelE
 	};
 }
 
+/**
+ * What a wake was for, in the user's terms (spec 053, D2). The wake's own `text` is a prompt for
+ * the model and its `user` an internal producer tag (`TASK_DRIVER`, `SUBAGENT`, …), so neither
+ * may reach the chat; every in-process producer prefixes its text with a `[KIND:id…]` tag, which
+ * is what this reads instead.
+ */
+function describeWakeSource(event: ChannelEvent): { label: string; nextStep?: string } {
+	const tag = /^\[(TASK_DRIVER|SUBAGENT|JOB|EVENT):([^:\]\s]+)/.exec(event.text);
+	const id = tag?.[2];
+	switch (tag?.[1]) {
+		case "TASK_DRIVER":
+			return { label: `任务 \`${id}\` 的一次后台唤醒`, nextStep: `用 \`/tasks show ${id}\` 确认任务状态` };
+		case "SUBAGENT":
+			return { label: `委派 \`${id}\` 的完成通知`, nextStep: `用 \`/subagents show ${id}\` 查看结果` };
+		case "JOB":
+			return { label: `后台作业 \`${id}\` 的完成通知`, nextStep: "需要时让我查看这个作业的结果" };
+		case "EVENT": {
+			const name = id?.replace(/\.json$/, "");
+			return { label: `定时事件 \`${name}\` 的一次触发`, nextStep: `用 \`/events history ${name}\` 查看触发记录` };
+		}
+		default:
+			return { label: "一次后台唤醒" };
+	}
+}
+
+/**
+ * The notice a channel gets when a wake is given up on (`onExhausted`). It names the source and
+ * the record's absolute path — never the wake text, which is a model prompt (spec 053, D2/D6).
+ */
+export function renderDispatchExhaustedNotice(record: DurableDispatchRecord, stateDir: string): string {
+	const source = describeWakeSource(record.event);
+	const where = `排查记录在 \`${recordPath(stateDir, record.id)}\``;
+	return (
+		`⚠️ ${source.label}连续 ${record.deliveries} 次未能完成，已停止重试。\n` +
+		(source.nextStep ? `${source.nextStep}；${where}。` : `${where}。`)
+	);
+}
+
 function dispatchId(event: ChannelEvent): string {
 	return createHash("sha256")
 		.update(JSON.stringify([event.channelId, event.user, event.ts, event.text, event.conversationId]))
@@ -159,7 +197,7 @@ export class DurableDispatchService {
 	 */
 	private drainSafely(): void {
 		this.drainOnce().catch((error) => {
-			log.logWarning("Durable dispatch drain failed", errorMessage(error));
+			log.logWarn("dispatch.drain.failed", "Durable dispatch drain failed", { reason: errorMessage(error) });
 		});
 	}
 
@@ -315,7 +353,10 @@ export class DurableDispatchService {
 				try {
 					await this.options.onExhausted?.(record);
 				} catch (err) {
-					log.logWarning(`Dispatch onExhausted handler failed for ${id}`, errorMessage(err));
+					log.logWarn("dispatch.exhausted_handler.failed", "Exhausted-dispatch handler failed", {
+						reason: errorMessage(err),
+						fields: { dispatchId: id },
+					});
 				}
 				return;
 			}

@@ -81,16 +81,27 @@ e2e hard rules:
 - Runtime playbooks are developer-curated and read-only at runtime; put mechanism knowledge there, not in a new runtime-writable carrier
 - External agents bypass Pipiclaw's guards. Their role command, CLI sandbox, host account, and environment are the permission boundary; `mutates` is not a sandbox
 
-## Command Reply Conventions
+## User-Facing Copy Conventions
 
-Slash-command output (`src/commands/catalog.ts`, `src/runtime/*-commands.ts`, `src/memory/commands.ts`, `src/agent/command-extension.ts`, `src/agent/status-render.ts`, `src/usage/render.ts`) follows six rules, established by the 2026-08-24 command-subsystem review to keep replies readable in DingTalk's markdown subset (which does not preserve indentation or run-together whitespace):
+Everything the runtime says to a person follows these rules — slash-command replies, runtime pushes (task receipts, delegation notices, wake failures, busy hints), progress cards, error bubbles and the TUI. They come from the 2026-08-24 command review and were widened to all user copy by [spec 053](docs/specs/053-user-facing-copy/design.md), whose §D4 glossary is the single source of interface terms (等待条件, 最晚检查时间, 任务说明, 工作项, 任务记录, 观察期, 工作日记, 工具调用 …). Design words (等待票, 兜底, 契约, 结算, 墓碑化) stay in specs and model-facing text only.
 
-1. A command reply is one of three shapes: a confirmation (one sentence), a report (a bold headline plus blocks), or an error (one reason + one next step; usage text only on a bad argument).
-2. Narrate in Chinese; keep only identifiers in English — command names, ids, field names (`wake`, `status`), model refs, and file paths.
-3. No `#` headings; use a `**bold**` first line as the headline.
-4. Only one flat level of `- ` bullets. Never use a 2-space continuation line as a sub-field, never align columns with spaces, never paste a long file/prompt verbatim into a reply.
-5. Every report has a length budget (DingTalk target: ≤ 20 lines / 1,500 chars). Over budget, say what command to run next — do not just show more content.
-6. Empty state uses one shape: `暂无 X。` plus a one-line "how to start".
+**Audiences and language.** Three audiences, one language each: users (DingTalk, TUI) read Chinese, keeping only identifiers they type or see in files in English (command names, ids, model refs, paths, frontmatter keys — introduced by a Chinese label, e.g. `类型（type）`); deployers and operators (CLI stdout/stderr, runtime logs) read English, deliberately; the model's text (prompts, tool `content`, step briefs, wake text) is out of scope here.
+
+**Audience isolation.** Model-facing text never reaches a user channel. When two audiences share data, render it twice from the same structure (`renderTaskLogLine` / `renderTaskLogLineForUser`, `renderTaskBoard` / `renderTaskBoardForUser`, a guard refusal's English `message` / its structured `blocked` form). User copy never contains tool names (`read`, `task_create`, `subagent_run` …), prompt tags (`<available_skills>`), call syntax (`op=…`) or producer tags (`TASK_DRIVER`); a next step is always something the user can do — send a message, send a slash command, or (said explicitly) a deployer action on the server.
+
+Shape rules:
+
+1. A reply is one of three shapes: a confirmation (one sentence), a report (a bold headline plus blocks), or an error (one reason + one next step; usage text only on a bad argument).
+2. No `#` headings; use a `**bold**` first line as the headline.
+3. Only one flat level of `- ` bullets. Never use a 2-space continuation line as a sub-field, never align columns with spaces, never paste a long file/prompt verbatim into a reply (`flattenMarkdownForChat` reshapes quoted markdown).
+4. Every report has a length budget — it goes through `capReply` (DingTalk target ≤ 1,500 chars). Over budget, say what command to run next — do not just show more content.
+5. Empty state uses one shape: `暂无 X。` plus a one-line "how to start".
+6. Runtime pushes carry the id the user acts on (task id, `run_…`) and use four markers only: ✅ done, ⚠️ needs attention, 🛑 stopped, ⏳ in progress (`✕` is reserved for error lines inside a progress card).
+7. Text used in more than one place is derived, not copied: the busy hint and `/help` grouping from `availableWhileBusy`, task state labels from `taskStateLabel`, queue replies and `/new` from `commands/catalog.ts`, durations from `formatElapsedZh` / `formatSpanZh`, doc links from `docsUrl`.
+
+`test/user-copy-shape.test.ts` pins these structurally (budget, no indentation, no `#`, no tags or tool names); never assert a literal wording.
+
+**Logs.** Warnings go through `log.logWarn(event, message, { channelId, reason, fields })` with a `<domain>.<object>.<verb>` event name; the message is a fixed `<Subject> failed` sentence and anything variable goes to `reason`/`fields`. A "task" in a log is a long-horizon task; a conversation round is a turn.
 
 ## Practical Notes
 

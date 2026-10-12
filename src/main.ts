@@ -63,6 +63,6 @@ if (command === "tui") {
 } else {
 	console.error(`Unknown command: ${command}`);
 	for (const line of formatCliCommandsHelp("pipiclaw")) console.error(line);
-	console.error("Run `pipiclaw --help` for options.");
+	console.error("Run `pipiclaw --help` for usage.");
 	process.exit(1);
 }

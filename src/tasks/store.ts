@@ -68,10 +68,9 @@ export async function writeStoredTask(document: StoredTaskDocument): Promise<voi
 	const rendered = renderTaskDocument(fields, document.body);
 	const size = Buffer.byteLength(rendered, "utf-8");
 	if (size > MAX_CONTRACT_BYTES) {
-		log.logWarning(
-			`Task ${document.id} exceeds the ${MAX_CONTRACT_BYTES}-byte contract target`,
-			`${size} bytes; every step pays for it — shorten Goal/DoD, or move detail into the loop log.`,
-		);
+		log.logWarn("tasks.contract.oversized", "Task contract exceeds its byte target; every step pays for it", {
+			fields: { taskId: document.id, bytes: size, targetBytes: MAX_CONTRACT_BYTES },
+		});
 	}
 	await writeFileAtomically(document.path, rendered);
 }
@@ -187,7 +186,7 @@ export async function expireTicket(
 			outcome = "paused";
 			task.fields.paused = {
 				by: "runtime",
-				reason: `等待票连续 ${expired} 次未兑现：${summary}`,
+				reason: `等待条件连续 ${expired} 次未满足：${summary}`,
 				at: formatLocalTime(),
 			};
 			return;
