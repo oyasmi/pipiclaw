@@ -235,9 +235,31 @@ export const claudeCodeHarness: ExternalHarness = {
 		const parts = Array.isArray(event.message.content) ? event.message.content : [];
 		for (const part of parts) {
 			if (isRecord(part) && part.type === "tool_use" && typeof part.name === "string") {
-				return part.name;
+				return describeClaudeToolUse(part.name, isRecord(part.input) ? part.input : {});
 			}
 		}
 		return undefined;
 	},
 };
+
+const PROGRESS_LABEL_MAX_CHARS = 80;
+/** The one input field that says what a claude-code tool call is acting on, in priority order. */
+const TOOL_SUBJECT_FIELDS = ["command", "file_path", "notebook_path", "path", "pattern", "url", "query", "description"];
+
+/**
+ * A bare tool name (`Bash`, `Edit`) says nothing about where a run is; the command or path it is
+ * acting on does. The todo list gets the same "done/total" shape codex-cli's progress uses.
+ */
+function describeClaudeToolUse(name: string, input: Record<string, unknown>): string {
+	if (Array.isArray(input.todos) && input.todos.length > 0) {
+		const done = input.todos.filter((todo) => isRecord(todo) && todo.status === "completed").length;
+		return `待办 ${done}/${input.todos.length}`;
+	}
+	for (const field of TOOL_SUBJECT_FIELDS) {
+		const value = input[field];
+		if (typeof value !== "string") continue;
+		const subject = value.split("\n")[0]?.trim();
+		if (subject) return `${name} ${subject}`.slice(0, PROGRESS_LABEL_MAX_CHARS);
+	}
+	return name;
+}

@@ -10,6 +10,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
   - Group-chat logging no longer drops the channel field: base64-encoded channel ids are decoded before the log entry is written.
   - A background wake whose delivery keeps failing no longer forwards the prompt and `TASK_DRIVER` text to the user; the notice now names the task / delegation / event that woke the channel, gives the next step, and points at the record file's absolute path.
   - Task status labels and busy notices come from a single source instead of per-callsite copies; the progress stream is localized; documentation references point to GitHub links.
+- **Delegation: `/stop` during an internal delegation's sync wait no longer loses its result.** The call used to ignore the turn's abort, so `/stop` waited for its 15s force-end, and a result that arrived inside the wait was handed to a turn that no longer existed. The wait now ends as soon as the turn is aborted; the run continues and wakes the channel when it finishes.
 
 ### Changed
 
@@ -18,6 +19,14 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
   - The glossary is applied throughout; `/help` groups commands by always-available vs idle-only, and `/context` is localized. All reports go through `capReply`; `/compact` replies with just the token counts and the summary's first line.
   - First run prints next-step guidance and exits 0; a placeholder `channel.json` still exits 1. `--quiet` now implies `--plain` (the full-screen UI used to ignore it). `/events list` runs the watcher's admission rules, so e.g. an over-frequent cron shows as invalid.
   - Logging: 199 warn sites migrated to `log.logWarn(event, …)` with `<domain>.<object>.<verb>` event names — the generic `system.warning` / `system.info` events are gone and `logWarning` is removed; per-step `taskdriver.step.enqueued` is demoted to debug; legacy log calls drop from 247 to 25.
+
+- **Delegation is faster and more robust.**
+  - The 120s sync wait is shared by all internal delegations in one turn. A batch that mixed `bash` with several delegations used to run them one after another, holding the channel for up to one full wait per delegation.
+  - Completion wakes that arrive while the channel is busy are handled together in the next wake turn (up to 6 per turn), instead of one full main-agent turn per finished run or job. The first result still wakes the channel immediately. Task-bound wakes keep their own claim path.
+  - Internal sub-agents retry transient provider errors (429, overloaded, 5xx, dropped connections) up to 3 times with backoff, then switch once to `fallbackModel` like the main turn does. A failure that the delegating model can handle itself no longer shows up in chat as an error bubble.
+  - Write delegations report only the files they changed: a snapshot taken at dispatch leaves out paths that were already dirty and untouched. Internal write runs now get this summary too.
+  - Progress notices also cover internal runs that went async. claude-code progress shows the command or file a tool call acts on. An external run that has written nothing for 10 minutes gets one "may be stuck" notice (also sent at `delegation.notices: "settled"`), and `/subagents show` reports how long ago it last produced output.
+  - `follow_up` sends only the new instruction and its artifact directory, not a second copy of the first dispatch's context. External dispatch no longer waits for the `ps` / `--version` probes, and the CLI version is cached for 10 minutes.
 
 ## [0.9.3] - 2026-10-07
 

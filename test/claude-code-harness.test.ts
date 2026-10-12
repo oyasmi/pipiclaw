@@ -203,7 +203,7 @@ describe("claude-code harness: parseOutcome", () => {
 });
 
 describe("claude-code harness: toProgressLabel (P1a)", () => {
-	it("labels the first tool_use block in a streamed assistant message with its tool name", () => {
+	it("labels the first tool_use block with its tool name and the subject it acts on", () => {
 		const line = JSON.stringify({
 			type: "assistant",
 			message: {
@@ -214,7 +214,23 @@ describe("claude-code harness: toProgressLabel (P1a)", () => {
 				],
 			},
 		});
-		expect(claudeCodeHarness.toProgressLabel?.(line)).toBe("Bash");
+		expect(claudeCodeHarness.toProgressLabel?.(line)).toBe("Bash npm test");
+	});
+
+	it("summarizes a todo list as done/total and falls back to the bare name without a known subject", () => {
+		const toolUse = (name: string, input: unknown) =>
+			JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+		const todos = [{ status: "completed" }, { status: "in_progress" }, { status: "pending" }];
+		expect(claudeCodeHarness.toProgressLabel?.(toolUse("TodoWrite", { todos }))).toBe("待办 1/3");
+		expect(claudeCodeHarness.toProgressLabel?.(toolUse("Edit", { file_path: "/repo/a.ts", old_string: "x" }))).toBe(
+			"Edit /repo/a.ts",
+		);
+		// Only the first line of a multi-line command, and the whole label stays bounded.
+		const longCommand = `${"x".repeat(200)}\nsecond line`;
+		const label = claudeCodeHarness.toProgressLabel?.(toolUse("Bash", { command: longCommand }));
+		expect(label?.length).toBe(80);
+		expect(label).not.toContain("second line");
+		expect(claudeCodeHarness.toProgressLabel?.(toolUse("ExitPlanMode", {}))).toBe("ExitPlanMode");
 	});
 
 	it("returns undefined for a text-only assistant message, garbage, and non-assistant events", () => {

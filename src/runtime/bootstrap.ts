@@ -74,6 +74,7 @@ import { migrateTasksToV5 } from "./task-migration.js";
 import { createTaskSpawner } from "./task-spawn.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { claimVerifiedWake } from "./task-wake.js";
+import { isCoalescableWake, MAX_COALESCED_WAKES, mergeCompletionWakes } from "./wake-coalescing.js";
 
 export interface BootstrapOptions {
 	env?: NodeJS.ProcessEnv;
@@ -744,8 +745,36 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			}
 
 			const runner = getRunner(event.channelId);
-			await getDurableDispatch()?.markStarted(event.dispatchId);
+			const durable = getDurableDispatch();
+			if (durable && !(await durable.markStarted(event.dispatchId))) {
+				// A stale delivery of a wake an earlier turn already absorbed and handled.
+				runner.endTurn();
+				return;
+			}
 			let structuredWakeFinalized = event.internalWake === undefined;
+			/** Other completion wakes folded into this turn; finished together with this one. */
+			let absorbedDispatchIds: string[] = [];
+			if (durable && event.dispatchId && isCoalescableWake(event)) {
+				const absorbed = await durable
+					.absorbPending(event.channelId, event.dispatchId, isCoalescableWake, MAX_COALESCED_WAKES - 1)
+					.catch((error: unknown) => {
+						log.logWarn("dispatch.wake.absorb_failed", "Wake coalescing failed", {
+							channelId: event.channelId,
+							reason: errorMessage(error),
+						});
+						return [] as ChannelEvent[];
+					});
+				if (absorbed.length > 0) {
+					event = mergeCompletionWakes(event, absorbed);
+					absorbedDispatchIds = absorbed.flatMap((absorbedEvent) =>
+						absorbedEvent.dispatchId ? [absorbedEvent.dispatchId] : [],
+					);
+					log.logInfoEvent("dispatch.wake.coalesced", "Completion wakes coalesced", {
+						channelId: event.channelId,
+						fields: { primary: event.dispatchId, absorbed: absorbedDispatchIds.length },
+					});
+				}
+			}
 			const task = (async () => {
 				let baseCtx: ChannelContext | undefined;
 				try {
@@ -894,6 +923,9 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					});
 					if (structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
 					else await getDurableDispatch()?.markRetryable(event.dispatchId);
+					// Absorbed wakes are chat-level only (no structured claim), so the turn finishing is
+					// what finalizes them — exactly as it would have for each on its own.
+					for (const absorbedId of absorbedDispatchIds) await getDurableDispatch()?.markCompleted(absorbedId);
 					runner.endTurn();
 					// A finished turn may have written task files; rescan now so `outcome: continue`
 					// queues the next step immediately instead of waiting out the current sleep.
@@ -1058,7 +1090,7 @@ export async function createRuntimeContext(
 		notify: (channelId, notice) => {
 			const level = runtimeSettingsManager.getDelegationSettings().notices;
 			if (level === "off") return;
-			if (level === "settled" && notice.kind !== "settled") return;
+			if (level === "settled" && notice.kind === "progress") return;
 			const text = renderRunNotice(notice);
 			if (text) void bot.sendPlain(channelId, text);
 		},

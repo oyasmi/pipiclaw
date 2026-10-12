@@ -1743,6 +1743,7 @@ export class ChannelRunner implements AgentRunner {
 			channelId: this.channelId,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
 			getSubAgentModelReference: () => this.settingsManager.getSubAgentModelReference(),
+			resolveFallbackModel: () => this.resolveFallbackModel(),
 			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,

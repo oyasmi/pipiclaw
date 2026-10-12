@@ -791,13 +791,13 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `defaultProvider` | unset | 默认模型提供方 |
 | `defaultModel` | unset | 默认模型 |
 | `defaultThinkingLevel` | `"medium"` | 主 agent 的默认 thinking level；会按当前模型能力自动 clamp |
-| `fallbackModel` | unset | 主模型回合失败时的备用模型引用，详见上文 |
+| `fallbackModel` | unset | 主模型回合失败时的备用模型引用，详见上文；内置子代理重试用尽后也会切到它一次 |
 | `subagentModel` | unset | 子代理的默认模型引用，详见上文 |
 | `compaction.enabled` | `true` | 启用自动上下文压缩 |
 | `retry.enabled` | `true` | 启用自动重试 |
 | `memoryMaintenance.enabled` | `true` | 启用内置后台 memory maintenance scheduler（spec 050 起单一反思 job，取代此前的 session refresh / memory checkpoint / structural maintenance 三个 job） |
 | `sessionSearch.summarizeWithModel` | `false` | 是否用模型对 `session_search` 命中做 focused summary。同样**会额外发起 LLM 调用** |
-| `delegation.notices` | `"live"` | 委派 run（`subagents/`）与后台 job 的旁路播报量：`"off"` 不播报；`"settled"` 只播报结算回执（一句话，run 结束后几秒内到达，独立于唤醒回合的 LLM 延迟）；`"live"` 在此基础上为长时间运行的外部 run 追加稀疏的进度提示 |
+| `delegation.notices` | `"live"` | 委派 run（`subagents/`）与后台 job 的旁路播报量：`"off"` 不播报；`"settled"` 播报结算回执（一句话，run 结束后几秒内到达，独立于唤醒回合的 LLM 延迟），以及外部 run 长时间无输出时的一次“可能卡住了”提示；`"live"` 在此基础上为长时间运行的 run（外部 run，以及转为异步的内置 run）追加稀疏的进度提示 |
 | `logging.level` | `"info"` | `debug` \| `info` \| `warn` \| `error`，详见上文可观测性一节 |
 | `logging.file.enabled` | `true` | 结构化日志是否落盘 |
 | `tui.responseMode` | `"full_progress_then_plain_final"` | 终端 TUI 的输出形态，详见上文 TUI 一节 |

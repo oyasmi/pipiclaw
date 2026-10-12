@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RunHarness, RunMutates, SettleInput } from "../runs.js";
 import { resolveVerificationVerdict } from "../verification-outcome.js";
-import { changedPathsSummary } from "../workspace-summary.js";
+import { changedPathsSummary, type WorkspaceBaseline } from "../workspace-summary.js";
 import { classifyExternalOutcome, type ExternalOutcome } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
 
@@ -78,6 +78,8 @@ export interface FinalizeExternalRunInput {
 	/** P2-2: only a `write` run's completion pays for a `git status` summary — a `read` run cannot
 	 *  have changed anything, and this must never become a hidden cost on the common read-only path. */
 	mutates?: RunMutates;
+	/** The run's dispatch-time snapshot, so the summary leaves out paths that were already dirty. */
+	workspaceBaseline?: WorkspaceBaseline;
 }
 
 /**
@@ -120,7 +122,9 @@ export async function finalizeExternalRun(
 	// P2-2: only for a run that actually could have changed the working directory, and only once it
 	// is known to have finished cleanly — best-effort, never blocks or fails settlement.
 	if (input.mutates === "write" && settleInput.status === "completed") {
-		const workspaceSummary = await changedPathsSummary(input.workingDirectory).catch(() => undefined);
+		const workspaceSummary = await changedPathsSummary(input.workingDirectory, input.workspaceBaseline).catch(
+			() => undefined,
+		);
 		if (workspaceSummary) settleInput = { ...settleInput, workspaceSummary };
 	}
 

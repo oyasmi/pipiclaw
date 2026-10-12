@@ -5,6 +5,7 @@ import { capReply } from "../commands/reply-limits.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage, truncate } from "../shared/text-utils.js";
 import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { elapsedMs, formatCost, harnessLabel } from "../subagents/format.js";
 import type { RunNotice, RunRecord, RunResolution, SubAgentRunManager } from "../subagents/runs.js";
 
@@ -264,6 +265,15 @@ async function showRun(manager: SubAgentRunManager, ref: string): Promise<string
 		lines.push(`- 会话（sessionId）：\`${record.sessionId}\`，可以让我在这个会话上继续追问`);
 	}
 
+	if (record.runtime === "external" && record.status === "running") {
+		const lastOutputAt = await readLastOutputAt(record.artifactDir);
+		const silentMs = Date.now() - (lastOutputAt ?? record.processStartedAt ?? record.startedAt);
+		lines.push(
+			silentMs >= STALL_THRESHOLD_MS
+				? `- ⚠️ 最近输出：${formatElapsedZh(silentMs)}前，可能卡住了；需要时用 \`/subagents cancel ${record.runId}\` 取消`
+				: `- 最近输出：${formatElapsedZh(silentMs)}前`,
+		);
+	}
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
 			.then((text) => text.trimEnd().split("\n").slice(-STDERR_TAIL_LINES).join("\n"))
@@ -434,13 +444,19 @@ export async function handleSubagentsCommand(options: HandleSubagentsCommandOpti
  * Render a `RunNotice` (P0-1/P1a) as a runtime push (spec 053, D6): one marker, the run id the
  * user can act on, and — for a failure — the command that shows why. `notices: "off"` is enforced
  * by the caller not invoking this at all; a `"settled"` caller filters `kind: "progress"` out
- * before calling. Returns `undefined` for a notice with nothing worth showing (a progress step
+ * before calling (a `"stalled"` warning needs attention, so it passes both levels). Returns `undefined` for a notice with nothing worth showing (a progress step
  * that never resolved to a label).
  */
 export function renderRunNotice(notice: RunNotice): string | undefined {
 	const subject = `委派 \`${notice.runId}\`（${notice.agent}）`;
 	if (notice.kind === "progress") {
 		return notice.step ? `⏳ ${subject} · ${notice.step}` : undefined;
+	}
+	if (notice.kind === "stalled") {
+		return (
+			`⚠️ ${subject}已经 ${formatElapsedZh(notice.silentMs ?? 0)}没有新输出，可能卡住了\n` +
+			`用 \`/subagents show ${notice.runId}\` 查看，确认卡住后用 \`/subagents cancel ${notice.runId}\` 取消。`
+		);
 	}
 	const durationText = formatElapsedZh(notice.durationMs);
 	switch (notice.status) {

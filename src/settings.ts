@@ -87,8 +87,9 @@ export interface PipiclawSessionSearchSettings {
  * How much out-of-band commentary a delegation run (`src/subagents/`) or background job produces
  * outside of its own completion wake — plain text, not an LLM turn, so it reaches the channel in
  * roughly the time the run itself takes rather than waiting on a wake turn's latency.
- * `"off"` is today's behavior; `"settled"` adds only the one-line completion receipt; `"live"`
- * also adds a sparse trickle of running-progress notices for long external runs.
+ * `"off"` is today's behavior; `"settled"` adds the one-line completion receipt and the "may be
+ * stuck" warning for an external run that stopped producing output; `"live"` also adds a sparse
+ * trickle of running-progress notices for long runs (external, or internal ones gone async).
  */
 export interface PipiclawDelegationSettings {
 	notices: "off" | "settled" | "live";

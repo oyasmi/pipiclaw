@@ -19,11 +19,22 @@ export class OperationTimeoutError extends Error {
 }
 
 /** A delay that never keeps the process alive on its own — every background-loop backoff and
- * budget wait in the codebase wants this, not a bare `setTimeout` promise. */
-export function sleepUnref(ms: number): Promise<void> {
+ * budget wait in the codebase wants this, not a bare `setTimeout` promise. An aborted `signal`
+ * ends the wait early (it still resolves; callers re-check whatever aborted it). */
+export function sleepUnref(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, ms);
+		if (signal?.aborted) {
+			resolve();
+			return;
+		}
+		const done = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", done);
+			resolve();
+		};
+		const timer = setTimeout(done, ms);
 		timer.unref?.();
+		signal?.addEventListener("abort", done, { once: true });
 	});
 }
 

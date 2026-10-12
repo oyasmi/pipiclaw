@@ -1,11 +1,18 @@
 import { realpathSync, statSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import {
+	Agent,
+	type AgentEvent,
+	type AgentMessage,
+	type AgentState,
+	type AgentTool,
+} from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel, isRetryableAssistantError, streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { shouldFallback } from "../agent/model-fallback.js";
 import { getChannelDir } from "../channel/channel-paths.js";
 import type { ExecOptions, ExecResult, Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
@@ -58,6 +65,7 @@ import {
 	formatWorkspaceLeaseConflict,
 	releaseWorkspaceLease,
 } from "./workspace-lease.js";
+import { changedPathsSummary, snapshotWorkspace, type WorkspaceBaseline } from "./workspace-summary.js";
 
 /** Shared by both invocation surfaces (spec 046, D2.1). */
 const workingDirectoryField = Type.Optional(
@@ -218,6 +226,14 @@ export interface SubAgentToolOptions {
 	convergenceWallClockMs?: number;
 	/** Test-only override for the D2 sync grace window; defaults to SYNC_GRACE_MS. */
 	syncGraceMs?: number;
+	/** Test-only override for the transient-error retry backoff base; defaults to RETRY_BASE_DELAY_MS. */
+	retryBaseDelayMs?: number;
+	/**
+	 * `settings.fallbackModel`, resolved the way the main agent resolves it (spec 017): `null` when
+	 * unset, unresolvable or missing a key. An internal run that still fails after its transient
+	 * retries switches to it once, like the main turn does.
+	 */
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	/** Channel manager owned by the application; also a seam for admission failures. */
 	getRunManager: (channelId: string) => SubAgentRunManager;
 	/** Present only inside a task session: every delegation is bound to this task automatically (spec 052, D4). */
@@ -234,10 +250,18 @@ export interface DelegationParams {
 }
 
 interface SubAgentWorker {
-	state: { messages: AgentMessage[]; tools: AgentTool<any>[] };
+	state: {
+		messages: AgentMessage[];
+		tools: AgentTool<any>[];
+		model?: Model<Api>;
+		thinkingLevel?: AgentState["thinkingLevel"];
+	};
 	subscribe(listener: (event: AgentEvent) => void): () => void;
 	abort(): void;
 	prompt(input: string): Promise<void>;
+	/** Resume from the current transcript (last message a user or tool result). Without it a
+	 *  provider error cannot be retried in place, so the run fails as before. */
+	continue?(): Promise<void>;
 	waitForIdle(): Promise<void>;
 }
 
@@ -262,6 +286,51 @@ const RESULT_TRUNCATION_HEAD_RATIO = 1;
  * This is a hard stop on that convergence turn itself, independent of maxWallTimeSec.
  */
 const CONVERGENCE_WALL_CLOCK_MS = 60_000;
+/**
+ * A provider error (429, overloaded, 5xx, dropped stream) used to fail an internal run outright —
+ * the main session retries those, a bare `Agent` does not. Retried in place with exponential
+ * backoff (2s, 4s, 8s) before falling back to the backup model; the wall-time budget still bounds
+ * the whole thing.
+ */
+const MAX_TRANSIENT_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 2_000;
+
+/**
+ * D2's grace window is per turn, not per call. The SDK runs a whole tool batch sequentially as
+ * soon as one call in it is sequential (`bash`, `edit`, `write`), so "a worktree, then three
+ * delegations" in one message used to block the channel for three back-to-back grace windows.
+ * Every call in one agent run shares that run's AbortSignal, which is what keys the deadline:
+ * the first delegation of a turn starts the clock, later ones get only what is left of it.
+ */
+const turnGraceDeadlines = new WeakMap<AbortSignal, number>();
+
+function graceDeadlineFor(signal: AbortSignal | undefined, graceMs: number, now: number): number {
+	if (!signal) return now + graceMs;
+	let deadline = turnGraceDeadlines.get(signal);
+	if (deadline === undefined) {
+		deadline = now + graceMs;
+		turnGraceDeadlines.set(signal, deadline);
+	}
+	return deadline;
+}
+
+/** Resolves once `signal` aborts (never rejects; pending forever without one). `dispose` drops
+ *  the listener, since a turn's signal outlives every call that raced against it. */
+function watchAbort(signal: AbortSignal | undefined): { aborted: Promise<"aborted">; dispose(): void } {
+	let dispose = () => {};
+	const aborted = new Promise<"aborted">((resolve) => {
+		if (!signal) return;
+		if (signal.aborted) {
+			resolve("aborted");
+			return;
+		}
+		const onAbort = () => resolve("aborted");
+		signal.addEventListener("abort", onAbort, { once: true });
+		dispose = () => signal.removeEventListener("abort", onAbort);
+	});
+	return { aborted, dispose };
+}
+
 const CONVERGENCE_PROMPT =
 	"Your turn/tool-call/wall-time budget for this task is exhausted. Based only on the work you have already completed, respond now with your conclusions: confirmed facts, what remains unfinished, and suggested next steps. Do not call any more tools.";
 
@@ -626,11 +695,8 @@ export function assertVerifyAdmissible(
 }
 
 /**
- * Exported for `subagent_run op=follow_up` (spec 042 D7), which builds a follow-up run's task
- * envelope the same way the initial dispatch does rather than a hand-rolled approximation.
- * `config` is deliberately narrowed to `{ name }` — the only field this function reads — so a
- * caller with a raw (unresolved) `SubAgentConfig` from discovery does not need to fabricate a
- * `model`/`modelRef`/`thinkingLevel` just to satisfy a wider type it never touches.
+ * The task envelope both runtimes' first dispatch sends (a follow-up sends `buildFollowUpTask`
+ * instead). `config` is narrowed to `{ name }` — the only field this function reads.
  */
 export function buildSubAgentTask(
 	task: string,
@@ -659,22 +725,45 @@ export function buildSubAgentTask(
 
 	lines.push("", `Task:`, taskText);
 	if (runContext.purpose === "verify") {
-		const taskPath = runContext.taskId
-			? join(
-					getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId),
-					"tasks",
-					`${runContext.taskId}.md`,
-				)
-			: undefined;
-		lines.push("", buildVerificationProtocol(taskPath, runContext.item));
+		lines.push("", buildVerificationProtocol(verificationTaskPath(runtimeContext, runContext), runContext.item));
 	}
 	return lines.join("\n");
 }
 
-/** The slice of `SubAgentToolOptions` `buildContextualBlocks` actually reads — narrowed (spec 042
- *  D7) so `subagent_run op=follow_up` only needs to wire these three fields, not the full tool
- *  option surface (executor, discovery, web config, etc. that a context-block build never touches). */
-export type ContextualBlocksOptions = Pick<SubAgentToolOptions, "channelDir" | "runtimeContext" | "workspaceDir">;
+function verificationTaskPath(
+	runtimeContext: SubAgentToolOptions["runtimeContext"],
+	runContext: SubAgentRunContext,
+): string | undefined {
+	return runContext.taskId
+		? join(getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId), "tasks", `${runContext.taskId}.md`)
+		: undefined;
+}
+
+/**
+ * The envelope for `subagent_run op=follow_up`. A resumed session already holds the first
+ * dispatch's whole envelope — runtime paths, injected memory/context blocks, the role — so sending
+ * it again only re-bills that context and buries the new instruction. Only what is new goes: the
+ * artifact directory (fresh per run) and the instruction itself, plus the checker protocol again
+ * for a verify run, since its final VERDICT line is what settlement reads.
+ */
+export function buildFollowUpTask(
+	task: string,
+	runtimeContext: SubAgentToolOptions["runtimeContext"],
+	runContext: SubAgentRunContext,
+): string {
+	const lines = [
+		"Follow-up in the same session. Your earlier instructions and context still apply unless this changes them.",
+		`- Working directory: ${runContext.workingDirectory}`,
+		`- Artifact directory for this follow-up: ${runContext.artifactDir}`,
+		"",
+		"Follow-up instruction:",
+		task.trim(),
+	];
+	if (runContext.purpose === "verify") {
+		lines.push("", buildVerificationProtocol(verificationTaskPath(runtimeContext, runContext), runContext.item));
+	}
+	return lines.join("\n");
+}
 
 /**
  * Spec 050, D12: `memory: index` injects the same three sections the main agent's first-turn
@@ -682,9 +771,9 @@ export type ContextualBlocksOptions = Pick<SubAgentToolOptions, "channelDir" | "
  * main agent's budget. No per-call LLM recall: a sub-agent task is short-lived, so there is no
  * "first turn" to bootstrap once and reuse; it gets the same snapshot every dispatch.
  */
-export async function buildContextualBlocks(
+async function buildContextualBlocks(
 	config: Pick<SubAgentConfig, "contextMode" | "paths" | "memory">,
-	options: ContextualBlocksOptions,
+	options: Pick<SubAgentToolOptions, "channelDir" | "workspaceDir">,
 ): Promise<string[]> {
 	if (config.contextMode !== "contextual") {
 		return [];
@@ -797,6 +886,7 @@ async function dispatchSubAgentRun(
 	config: ResolvedSubAgentConfig,
 	warning: string | undefined,
 	params: DelegationParams,
+	signal: AbortSignal | undefined,
 	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
 	// Derived rather than model-supplied (spec 045): `${agent}: ${task's first line}`, the
@@ -830,9 +920,22 @@ async function dispatchSubAgentRun(
 		}
 		leaseKey = lease.leaseKey;
 	}
+	// Taken under the lease, before the run can write: what "already dirty" means for this run.
+	const workspaceBaseline =
+		config.mutates === "write" ? await snapshotWorkspace(runContext.workingDirectory) : undefined;
 
 	if (config.runtime === "external") {
-		return dispatchExternalRun({ options, currentModel, config, runLabel, runContext, leaseKey, params, runManager });
+		return dispatchExternalRun({
+			options,
+			currentModel,
+			config,
+			runLabel,
+			runContext,
+			leaseKey,
+			params,
+			runManager,
+			workspaceBaseline,
+		});
 	}
 
 	return dispatchInternalRun({
@@ -844,8 +947,10 @@ async function dispatchSubAgentRun(
 		runContext,
 		leaseKey,
 		params,
+		signal,
 		onUpdate,
 		runManager,
+		workspaceBaseline,
 	});
 }
 
@@ -863,6 +968,7 @@ async function dispatchExternalRun(input: {
 	runContext: SubAgentRunContext;
 	leaseKey: string | undefined;
 	params: DelegationParams;
+	workspaceBaseline: WorkspaceBaseline | undefined;
 }): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
 	const { options, config, runLabel, runContext, leaseKey, params } = input;
 	let launchResult: ExternalLaunchResult;
@@ -902,6 +1008,7 @@ async function dispatchExternalRun(input: {
 			item: runContext.item,
 			leaseKey,
 			mutates: config.mutates,
+			workspaceBaseline: input.workspaceBaseline,
 			roleFingerprint: externalRoleFingerprint(config),
 			workspaceDir: options.workspaceDir,
 			securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
@@ -969,10 +1076,12 @@ async function dispatchInternalRun(input: {
 	runContext: SubAgentRunContext;
 	leaseKey: string | undefined;
 	params: DelegationParams;
+	signal: AbortSignal | undefined;
 	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void;
 	runManager: SubAgentRunManager;
+	workspaceBaseline: WorkspaceBaseline | undefined;
 }): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
-	const { options, config, runLabel, mutatesNote, runContext, leaseKey, params, onUpdate, runManager } = input;
+	const { options, config, runLabel, mutatesNote, runContext, leaseKey, params, signal, onUpdate, runManager } = input;
 	const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
 	let apiKey: string;
 	try {
@@ -993,6 +1102,12 @@ async function dispatchInternalRun(input: {
 	/** True once the sync grace window has elapsed and a "still running" placeholder has been returned. */
 	let detached = false;
 	let lastUpdateText = "";
+	/** The model actually answering; differs from `config.model` once a backup-model switch happened. */
+	let activeModel = config.model;
+	/** Set when the run switched to the backup model, for the reply and the record. */
+	let fallbackNote: string | undefined;
+	/** Wakes a retry backoff early when the run is cancelled or out of wall time. */
+	const retryBackoff = new AbortController();
 
 	let worker: SubAgentWorker | undefined;
 	try {
@@ -1013,6 +1128,7 @@ async function dispatchInternalRun(input: {
 			channelDir: options.channelDir,
 			leaseKey,
 			mutates: config.mutates,
+			workspaceBaseline: input.workspaceBaseline,
 		});
 	} catch (error) {
 		// Until the durable running record exists, setup still owns the lease. A channel/host
@@ -1026,6 +1142,7 @@ async function dispatchInternalRun(input: {
 	// start writing after the supposed cancellation (especially dangerous for a write verifier).
 	runManager.registerCancelHandle(runContext.runId, () => {
 		externallyCancelled = true;
+		retryBackoff.abort();
 		worker?.abort();
 	});
 
@@ -1049,6 +1166,7 @@ async function dispatchInternalRun(input: {
 				durationMs: Date.now() - startedAt,
 				failed: Boolean(failureReason),
 				failureReason,
+				modelOverride: fallbackNote ? formatModelReference(activeModel) : undefined,
 			}),
 		});
 	};
@@ -1082,6 +1200,7 @@ async function dispatchInternalRun(input: {
 					tools: filterToolsByName(availableTools, config.tools),
 				},
 				convertToLlm,
+				// Read on every request, so a backup-model switch only has to replace the key.
 				getApiKey: async () => apiKey,
 				streamFn: streamSimple,
 			});
@@ -1089,6 +1208,7 @@ async function dispatchInternalRun(input: {
 		wallClockTimer = setTimeout(() => {
 			failureReason = `Wall time budget exceeded (${config.maxWallTimeSec}s)`;
 			budgetExceeded = true;
+			retryBackoff.abort();
 			worker?.abort();
 		}, config.maxWallTimeSec * 1000);
 
@@ -1102,6 +1222,9 @@ async function dispatchInternalRun(input: {
 				toolCalls++;
 				const label = describeToolCall(event.toolName, event.args);
 				emitUpdate(formatStatus(config.name, label));
+				// After detaching, the step goes out as a paced run notice instead, like an external
+				// run's progress tail — otherwise an async internal run is silent until it settles.
+				if (detached) runManager.noteProgress(runContext.runId, label);
 				if (toolCalls > config.maxToolCalls) {
 					failureReason = `Tool call budget exceeded (${config.maxToolCalls})`;
 					budgetExceeded = true;
@@ -1156,6 +1279,61 @@ async function dispatchInternalRun(input: {
 	const activeWallClockTimer = wallClockTimer!;
 
 	/**
+	 * A transcript ending in a provider error is retried in place (the error message removed, the
+	 * loop continued from the last user/tool message): transient errors up to
+	 * MAX_TRANSIENT_RETRIES times with backoff, then — for anything but a context overflow — one
+	 * switch to the backup model, the same rule the main turn follows (`shouldFallback`). Budget
+	 * aborts and explicit cancels are never retried.
+	 */
+	async function recoverFromProviderErrors(): Promise<void> {
+		const resume = activeWorker.continue?.bind(activeWorker);
+		if (!resume) return;
+		let retries = 0;
+		let switched = false;
+		for (;;) {
+			if (budgetExceeded || externallyCancelled) return;
+			const last = activeWorker.state.messages.at(-1);
+			if (!last || !isAssistantMessage(last) || last.stopReason !== "error") return;
+			// `shouldFallback` is false only for a context overflow, which no retry or model switch fixes.
+			if (!shouldFallback(last.errorMessage)) return;
+			if (retries < MAX_TRANSIENT_RETRIES && isRetryableAssistantError(last)) {
+				retries++;
+				emitUpdate(formatStatus(config.name, `provider error, retrying (${retries}/${MAX_TRANSIENT_RETRIES})`));
+				const delayMs = (options.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS) * 2 ** (retries - 1);
+				await sleepUnref(delayMs, retryBackoff.signal);
+				if (budgetExceeded || externallyCancelled) return;
+			} else {
+				if (switched || !options.resolveFallbackModel) return;
+				const candidate = await options.resolveFallbackModel().catch(() => null);
+				if (!candidate || formatModelReference(candidate) === formatModelReference(activeModel)) return;
+				let candidateKey: string;
+				try {
+					candidateKey = await options.resolveApiKey(candidate);
+				} catch {
+					return;
+				}
+				switched = true;
+				retries = 0;
+				const fromRef = formatModelReference(activeModel);
+				activeModel = candidate;
+				apiKey = candidateKey;
+				activeWorker.state.model = candidate;
+				activeWorker.state.thinkingLevel = clampThinkingLevel(
+					candidate,
+					config.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+				);
+				fallbackNote = `switched from ${fromRef} to backup model ${formatModelReference(candidate)} after: ${
+					last.errorMessage?.split("\n")[0]?.slice(0, 200) ?? "unknown error"
+				}`;
+				emitUpdate(formatStatus(config.name, `switching to backup model ${formatModelReference(candidate)}`));
+			}
+			activeWorker.state.messages = activeWorker.state.messages.slice(0, -1);
+			await resume();
+			await activeWorker.waitForIdle();
+		}
+	}
+
+	/**
 	 * Runs the worker to completion, including the D6 convergence turn, and returns the
 	 * tool result plus the data `runs.ts` needs to settle. Rejects only for the single
 	 * fatal case (no assistant message at all) — every other outcome, including a budget
@@ -1174,6 +1352,7 @@ async function dispatchInternalRun(input: {
 					buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext),
 				);
 				await activeWorker.waitForIdle();
+				await recoverFromProviderErrors();
 			}
 
 			// D6: a self-inflicted budget abort gets one tool-free turn to converge on a
@@ -1210,6 +1389,8 @@ async function dispatchInternalRun(input: {
 
 		const lastAssistantMessage = getLastAssistantMessage(activeWorker.state.messages);
 		const durationMs = Date.now() - startedAt;
+		const modelRef = fallbackNote ? formatModelReference(activeModel) : undefined;
+		const fallbackLine = fallbackNote ? `Note: this run ${fallbackNote}.\n\n` : "";
 		if (!lastAssistantMessage) {
 			failureReason = failureReason || "Sub-agent returned no assistant message";
 			emitUpdate(formatStatus(config.name, "failed"));
@@ -1242,12 +1423,20 @@ async function dispatchInternalRun(input: {
 			toolCalls,
 			durationMs,
 			verificationVerdict,
+			model: modelRef,
 		};
 
 		if (effectiveFailureReason) {
 			if (!finalText.trim()) {
 				emitUpdate(formatStatus(config.name, "failed"));
-				throw new Error(buildFailureText(config, effectiveFailureReason, finalText));
+				// Settlement records the reason itself, not the next-step advice wrapped around it below.
+				failureReason = effectiveFailureReason;
+				// The delegating model can act on this alone — re-dispatch, narrow the task, or do the
+				// work itself — so it is not a user-facing error bubble.
+				throw new RecoverableToolError(
+					`${fallbackLine}${buildFailureText(config, effectiveFailureReason, finalText)}\n` +
+						`Retry the delegation (narrower if it hit a budget), or do the work directly; subagent_run op=show runId=${runContext.runId} has the details.`,
+				);
 			}
 			emitUpdate(formatStatus(config.name, "stopped"));
 			const finalized = finalizeSubAgentOutput(runContext, finalText);
@@ -1256,7 +1445,10 @@ async function dispatchInternalRun(input: {
 					content: [
 						{
 							type: "text",
-							text: mutatesNote + buildStoppedText(config, effectiveFailureReason, finalized.replyText),
+							text:
+								mutatesNote +
+								fallbackLine +
+								buildStoppedText(config, effectiveFailureReason, finalized.replyText),
 						},
 					],
 					details: createDetails({
@@ -1270,6 +1462,7 @@ async function dispatchInternalRun(input: {
 						failureReason: effectiveFailureReason,
 						verificationVerdict,
 						resultTruncated: finalized.truncated,
+						modelOverride: modelRef,
 					}),
 				},
 				settleInput: {
@@ -1283,6 +1476,15 @@ async function dispatchInternalRun(input: {
 			};
 		}
 
+		// P2-2, same as an external write run: what this run changed, so the reader does not spend
+		// its first tool call finding out. Only a cleanly completed write run pays for it.
+		const workspaceSummary =
+			config.mutates === "write"
+				? await changedPathsSummary(runContext.workingDirectory, input.workspaceBaseline).catch(() => undefined)
+				: undefined;
+		const workspaceLine = workspaceSummary
+			? `\n\nWorkspace after the run (git status --porcelain): ${workspaceSummary}`
+			: "";
 		const finalized = finalizeSubAgentOutput(runContext, finalText);
 		return {
 			toolResult: {
@@ -1290,7 +1492,10 @@ async function dispatchInternalRun(input: {
 					{
 						type: "text",
 						text:
-							mutatesNote + (finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`),
+							mutatesNote +
+							fallbackLine +
+							(finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`) +
+							workspaceLine,
 					},
 				],
 				details: createDetails({
@@ -1302,9 +1507,10 @@ async function dispatchInternalRun(input: {
 					durationMs,
 					verificationVerdict,
 					resultTruncated: finalized.truncated,
+					modelOverride: modelRef,
 				}),
 			},
-			settleInput: { ...baseSettleInput, status: "completed", outputText: finalText },
+			settleInput: { ...baseSettleInput, status: "completed", outputText: finalText, workspaceSummary },
 		};
 	}
 
@@ -1320,13 +1526,21 @@ async function dispatchInternalRun(input: {
 			toolCalls,
 			durationMs: Date.now() - startedAt,
 			outputText: "",
+			model: fallbackNote ? formatModelReference(activeModel) : undefined,
 		};
 	}
 
-	// D2: the tool call waits at most SYNC_GRACE_MS (never longer than the run's own wall
-	// clock budget) before degrading to a "still running" placeholder. The run itself keeps
-	// executing either way — only the *return* differs.
-	const graceMs = Math.min(config.maxWallTimeSec * 1000, resolveSyncGraceMs(options.syncGraceMs));
+	// D2: the tool call waits at most until this turn's shared grace deadline (never longer than
+	// the run's own wall clock budget) before degrading to a "still running" placeholder. It also
+	// stops waiting the moment the turn is aborted (`/stop`): the SDK awaits this call, so ignoring
+	// the signal held `/stop` until its force-end fallback — and a result that then arrived inside
+	// the grace window settled `announce: false` into a turn that no longer existed, so nobody
+	// ever saw it. The run itself keeps executing either way — only the *return* differs.
+	const now = Date.now();
+	const deadline = Math.min(
+		graceDeadlineFor(signal, resolveSyncGraceMs(options.syncGraceMs), now),
+		now + config.maxWallTimeSec * 1000,
+	);
 	const outcomePromise = runToCompletion().then(
 		(value) => ({ ok: true as const, value }),
 		(error: unknown) => ({
@@ -1334,9 +1548,15 @@ async function dispatchInternalRun(input: {
 			error: error instanceof Error ? error : new Error(String(error)),
 		}),
 	);
-	const raceResult = await Promise.race([outcomePromise, sleepUnref(graceMs).then(() => "timed-out" as const)]);
+	const abortWatch = watchAbort(signal);
+	const raceResult = await Promise.race([
+		outcomePromise,
+		sleepUnref(Math.max(0, deadline - now)).then(() => "timed-out" as const),
+		abortWatch.aborted,
+	]);
+	abortWatch.dispose();
 
-	if (raceResult !== "timed-out") {
+	if (raceResult !== "timed-out" && raceResult !== "aborted") {
 		runManager.clearCancelHandle(runContext.runId);
 		if (!raceResult.ok) {
 			await runManager.settle(runContext.runId, fatalSettleInput(raceResult.error), { announce: false });
@@ -1346,9 +1566,9 @@ async function dispatchInternalRun(input: {
 		return raceResult.value.toolResult;
 	}
 
-	// Grace window elapsed: hand back a placeholder now and let the run keep going in the
-	// background. It settles and, this time, announces itself with a completion wake (D2/D7)
-	// — the same "runtime guarantees completion" contract background jobs already keep.
+	// Grace window elapsed (or the turn was stopped): hand back a placeholder now and let the run
+	// keep going in the background. It settles and, this time, announces itself with a completion
+	// wake (D2/D7) — the same "runtime guarantees completion" contract background jobs already keep.
 	detached = true;
 	void outcomePromise.then(async (outcome) => {
 		runManager.clearCancelHandle(runContext.runId);
@@ -1416,7 +1636,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					`${invocation.error}\n\nAvailable configured sub-agents:\n${formatSubAgentList(discovery.agents)}`,
 				);
 			}
-			return dispatchSubAgentRun(options, currentModel, invocation.config, undefined, params, onUpdate);
+			return dispatchSubAgentRun(options, currentModel, invocation.config, undefined, params, signal, onUpdate);
 		},
 	};
 }
@@ -1458,7 +1678,15 @@ export function createSubAgentInlineTool(
 			if (!invocation.config) {
 				throw new RecoverableToolError(invocation.error ?? "Unable to resolve inline sub-agent.");
 			}
-			return dispatchSubAgentRun(options, currentModel, invocation.config, invocation.warning, params, onUpdate);
+			return dispatchSubAgentRun(
+				options,
+				currentModel,
+				invocation.config,
+				invocation.warning,
+				params,
+				signal,
+				onUpdate,
+			);
 		},
 	};
 }

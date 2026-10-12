@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import {
@@ -237,6 +237,58 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		await register(manager, { runId: "run-inline" });
 		await manager.settle("run-inline", baseSettleInput(), { announce: false });
 		expect(notices).toHaveLength(1); // Inline (already-held-by-the-model) results stay silent.
+	});
+
+	// K chat-level fan-out runs each wake the channel; without the count the model cannot tell which
+	// wake is the last one and re-checks with subagent_list every time.
+	it("tells a chat-level wake how many sibling runs on the channel are still running", async () => {
+		const { dispatch, events } = makeDispatch();
+		const manager = new SubAgentRunManager("dm_123", { dispatch });
+		await register(manager, { runId: "run-a" });
+		await register(manager, { runId: "run-b" });
+		await register(manager, { runId: "run-task", taskId: "T-1" });
+
+		await manager.settle("run-a", baseSettleInput(), { announce: true });
+		await manager.settle("run-b", baseSettleInput(), { announce: true });
+
+		// A task's run is not a chat-level sibling.
+		expect(events[0]?.text).toContain("1 other run(s) on this channel are still running.");
+		expect(events[1]?.text).not.toContain("other run(s)");
+	});
+
+	it("paces an async internal run's step notices like the external tail, and stops at settlement", async () => {
+		vi.useFakeTimers();
+		try {
+			const notices: Array<{ kind: string; step?: string }> = [];
+			const manager = new SubAgentRunManager("dm_123", {
+				notify: (_channelId, notice) => {
+					notices.push(notice);
+				},
+			});
+			await register(manager, { runId: "run-async" });
+			const flush = () => vi.advanceTimersByTimeAsync(0);
+
+			manager.noteProgress("run-async", "读取 src/a.ts");
+			await flush();
+			expect(notices).toEqual([]); // inside the first-notice delay
+
+			vi.advanceTimersByTime(60_000);
+			manager.noteProgress("run-async", "读取 src/b.ts");
+			await flush();
+			expect(notices).toEqual([expect.objectContaining({ kind: "progress", step: "读取 src/b.ts" })]);
+
+			manager.noteProgress("run-async", "执行 npm test");
+			await flush();
+			expect(notices).toHaveLength(1); // inside the minimum gap
+
+			await manager.settle("run-async", baseSettleInput(), { announce: false });
+			vi.advanceTimersByTime(600_000);
+			manager.noteProgress("run-async", "执行 npm run build");
+			await flush();
+			expect(notices).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not let a throwing notifier affect settlement", async () => {

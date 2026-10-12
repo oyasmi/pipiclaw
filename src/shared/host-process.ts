@@ -29,6 +29,8 @@ export async function readProcessStartTime(pid: number): Promise<string | undefi
 
 const CLI_VERSION_PROBE_TIMEOUT_MS = 1_000;
 const CLI_VERSION_MAX_CHARS = 200;
+const CLI_VERSION_CACHE_TTL_MS = 10 * 60_000;
+const cliVersionCache = new Map<string, { value: string | undefined; at: number }>();
 
 /**
  * Best-effort `<executable> --version`, so a run persists which build of the target CLI it ran
@@ -37,13 +39,21 @@ const CLI_VERSION_MAX_CHARS = 200;
  * a CLI that does not support `--version`, is slow to start, or fails outright.
  */
 export async function probeCliVersion(executable: string): Promise<string | undefined> {
+	// A CLI's version changes only when someone upgrades it, while a busy channel dispatches the
+	// same executable many times an hour — re-spawning `<cli> --version` (a cold Node start for
+	// claude/codex) per dispatch bought nothing. A short TTL keeps an upgrade visible soon after.
+	const cached = cliVersionCache.get(executable);
+	if (cached && Date.now() - cached.at < CLI_VERSION_CACHE_TTL_MS) return cached.value;
+	let value: string | undefined;
 	try {
 		const { stdout } = await execFileAsync(executable, ["--version"], { timeout: CLI_VERSION_PROBE_TIMEOUT_MS });
-		const value = stdout.trim().split("\n")[0]?.slice(0, CLI_VERSION_MAX_CHARS);
-		return value || undefined;
+		value = stdout.trim().split("\n")[0]?.slice(0, CLI_VERSION_MAX_CHARS) || undefined;
 	} catch {
-		return undefined;
+		value = undefined;
 	}
+	// Only a real answer is cached: a timeout on a cold start should not hide the version for the TTL.
+	if (value) cliVersionCache.set(executable, { value, at: Date.now() });
+	return value;
 }
 
 /** True if `pid` names a live process this user can at least see, without sending a real signal. */

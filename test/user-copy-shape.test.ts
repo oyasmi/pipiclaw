@@ -387,6 +387,16 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 				renderRunNotice({ kind: "settled", runId: "run_a1", agent: "builder", status, durationMs: 192_000 }) ?? "",
 			);
 		}
+		expectUserCopyShape(
+			"run notice stalled",
+			renderRunNotice({
+				kind: "stalled",
+				runId: "run_a1",
+				agent: "builder",
+				durationMs: 900_000,
+				silentMs: 660_000,
+			}) ?? "",
+		);
 		const wake = createTaskDriverEvent("dm_1", entry, 0);
 		const record: DurableDispatchRecord = {
 			version: 1,

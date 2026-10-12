@@ -223,7 +223,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(dispatched[0]?.text).toContain(`Full output: ${outputPath}`);
 	});
 
-	it("persists the pid before post-spawn probes finish", async () => {
+	// The probes (`ps`, `<cli> --version`) are diagnostics: the dispatching tool call must not wait
+	// on them — it used to, adding up to a second to every external dispatch.
+	it("persists the pid and returns the dispatch before post-spawn probes finish", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_ext_launch_handshake";
 		const stateDir = join(workspaceDir, "state");
@@ -273,9 +275,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			pid?: number;
 		};
 		expect(persisted).toMatchObject({ status: "running", pid: 73737 });
+		await expect(launchPromise).resolves.toEqual({ ok: true });
 
 		releaseProbe();
-		await launchPromise;
 		child.emit("close", 0);
 		await waitFor(() => getSubAgentRunManager(channelId).get("run-ext-handshake")?.status !== "running");
 	});

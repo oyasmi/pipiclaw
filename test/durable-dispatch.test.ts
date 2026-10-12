@@ -556,3 +556,107 @@ describe("DurableDispatchService", () => {
 		expect(notice).toContain(stateDir);
 	});
 });
+
+describe("DurableDispatchService.absorbPending (completion-wake coalescing)", () => {
+	function wake(channelId: string, runId: string, text = `[SUBAGENT:${runId}] finished`): DingTalkEvent {
+		return {
+			type: "dm",
+			channelId,
+			ts: String(Date.now()),
+			user: "SUBAGENT",
+			userName: "SUBAGENT",
+			text,
+			conversationId: "",
+			conversationType: "1",
+			dispatchId: `subagent:${channelId}:${runId}:done`,
+		};
+	}
+
+	function capturingService(stateDir: string, accept: () => boolean = () => true) {
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					if (!accept()) return false;
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		return { service, delivered };
+	}
+
+	const isWake = (candidate: DingTalkEvent) => candidate.user === "SUBAGENT";
+
+	it("folds this channel's waiting wakes into the starting turn and turns their stale deliveries away", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const { service, delivered } = capturingService(stateDir);
+		await service.dispatch(wake("dm_1", "run_a"));
+		await service.dispatch(wake("dm_1", "run_b"));
+		await service.dispatch(wake("dm_2", "run_other"));
+		await service.dispatch({ ...event(), dispatchId: "event:dm_1:x" });
+		const primary = delivered[0]?.dispatchId as string;
+
+		expect(await service.markStarted(primary)).toBe(true);
+		const absorbed = await service.absorbPending("dm_1", primary, isWake, 5);
+
+		// Only the same channel's matching wakes; never the primary, another channel, or an event.
+		expect(absorbed.map((item) => item.dispatchId)).toEqual(["subagent:dm_1:run_b:done"]);
+		// run_b's own queued delivery comes through later and must not run it a second time.
+		expect(await service.markStarted("subagent:dm_1:run_b:done")).toBe(false);
+		await service.markCompleted(primary);
+		await service.markCompleted("subagent:dm_1:run_b:done");
+		const remaining = readdirSync(stateDir).map((name) => decodeURIComponent(name));
+		expect(remaining).toEqual(expect.arrayContaining(["subagent:dm_2:run_other:done.json", "event:dm_1:x.json"]));
+		expect(remaining).toHaveLength(2);
+	});
+
+	it("claims a never-delivered wake too, and the drain does not deliver it underneath the turn", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		let accept = true;
+		const { service, delivered } = capturingService(stateDir, () => accept);
+		await service.dispatch(wake("dm_1", "run_a"));
+		accept = false; // channel queue full: run_b stays pending on disk
+		await service.dispatch(wake("dm_1", "run_b"));
+		accept = true;
+		const primary = delivered[0]?.dispatchId as string;
+		await service.markStarted(primary);
+
+		const absorbed = await service.absorbPending("dm_1", primary, isWake, 5);
+		expect(absorbed).toHaveLength(1);
+		await service.drainOnce();
+		expect(delivered).toHaveLength(1);
+	});
+
+	it("lets /stop redeliver absorbed wakes on their own", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const { service, delivered } = capturingService(stateDir);
+		await service.dispatch(wake("dm_1", "run_a"));
+		await service.dispatch(wake("dm_1", "run_b"));
+		const primary = delivered[0]?.dispatchId as string;
+		await service.markStarted(primary);
+		await service.absorbPending("dm_1", primary, isWake, 5);
+
+		// /stop dropped the queued closures and reset the channel's in-flight records.
+		await service.cancelChannel("dm_1");
+		await service.drainOnce();
+		const redelivered = delivered.slice(2).map((item) => item.dispatchId);
+		expect(redelivered).toEqual(expect.arrayContaining([primary, "subagent:dm_1:run_b:done"]));
+		// The redelivery of the formerly absorbed wake is a real delivery now, not a stale one.
+		expect(await service.markStarted("subagent:dm_1:run_b:done")).toBe(true);
+	});
+
+	it("respects the limit, oldest first", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const { service, delivered } = capturingService(stateDir);
+		for (const runId of ["run_a", "run_b", "run_c", "run_d"]) {
+			await service.dispatch(wake("dm_1", runId));
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		const primary = delivered[0]?.dispatchId as string;
+		await service.markStarted(primary);
+		const absorbed = await service.absorbPending("dm_1", primary, isWake, 2);
+		expect(absorbed.map((item) => item.dispatchId)).toEqual(["subagent:dm_1:run_b:done", "subagent:dm_1:run_c:done"]);
+	});
+});

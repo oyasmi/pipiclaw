@@ -16,6 +16,7 @@ import { errorMessage } from "../../shared/text-utils.js";
 import { createEmptyUsageTotals } from "../../shared/types.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
 import type { RunMutates, SettleInput, SubAgentRunManager } from "../runs.js";
+import type { WorkspaceBaseline } from "../workspace-summary.js";
 import { getExternalHarness } from "./registry.js";
 import { finalizeExternalRun } from "./settlement.js";
 
@@ -143,6 +144,8 @@ export interface LaunchExternalRunInput {
 	resumeSessionId?: string;
 	/** The role's own `mutates` declaration, carried through to the dispatch audit event (D8.1). */
 	mutates?: RunMutates;
+	/** A write run's dispatch-time dirty-path snapshot (see `workspace-summary.ts`). */
+	workspaceBaseline?: WorkspaceBaseline;
 	/** Spec 042 D7: fingerprint of the role's `command`/`externalModelRef`/`shell`, persisted so a
 	 *  later `follow_up` can detect a hot-edited role before resuming under it. */
 	roleFingerprint?: string;
@@ -256,6 +259,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		channelDir: input.channelDir,
 		leaseKey: input.leaseKey,
 		mutates: input.mutates,
+		workspaceBaseline: input.workspaceBaseline,
 	});
 
 	// The final executable/argv/cwd/capability record must be durable before a process can exist.
@@ -487,6 +491,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 				terminationReason,
 				maxWallTimeSec: input.maxWallTimeSec,
 				mutates: input.mutates,
+				workspaceBaseline: input.workspaceBaseline,
 			},
 			(settleInput, options) => runManager.settle(input.runId, settleInput, options),
 			{ announce: terminationReason !== "cancelled" },
@@ -497,7 +502,6 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			});
 		});
 	});
-	await launchMetadataPromise;
 	// The narrow window between the pre-spawn placeholder handle (claimExternalLaunch) and the
 	// real one just above: a cancel arriving there durably marked `terminationReason` (P1-1) but
 	// had no live process to kill yet. Act on it now.
@@ -505,6 +509,9 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		void killProcessGroup(pid);
 	}
 
+	// The dispatching tool call does not wait for the probes: the pid is already durable and the
+	// cancel handle installed, so they are diagnostics only. Settlement still waits for them (the
+	// close watcher above) so a run's terminal record carries them.
 	return { ok: true };
 
 	function failedSettleInput(reason: string): SettleInput {

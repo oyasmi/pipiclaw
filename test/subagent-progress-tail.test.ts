@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startExternalProgressTail } from "../src/subagents/external/progress-tail.js";
@@ -176,6 +176,39 @@ describe("startExternalProgressTail", () => {
 		} finally {
 			process.off("unhandledRejection", onRejection);
 		}
+	});
+
+	// A process can be alive and silent for its whole wall-time budget (an hour by default) with
+	// nothing telling anyone it is stuck; one warning per stall, re-armed once output resumes.
+	it("warns once per stall, including for exec, and re-arms once output resumes", async () => {
+		const artifactDir = tempDir();
+		const stderrPath = join(artifactDir, "stderr.log");
+		writeFileSync(stderrPath, "starting\n");
+		const stalls: number[] = [];
+		const tail = startExternalProgressTail({
+			artifactDir,
+			harnessId: "exec",
+			startedAt: Date.now(),
+			onProgress: () => undefined,
+			onStall: (silentMs) => stalls.push(silentMs),
+		});
+
+		await advance(9 * 60_000);
+		expect(stalls).toEqual([]);
+		await advance(2 * 60_000);
+		expect(stalls).toHaveLength(1);
+		expect(stalls[0]).toBeGreaterThanOrEqual(10 * 60_000);
+		await advance(20 * 60_000);
+		expect(stalls).toHaveLength(1); // the same stall is reported once
+
+		// Output resumes (the file's mtime moves to the faked "now"), then stops again.
+		writeFileSync(stderrPath, "starting\nprogress\n");
+		utimesSync(stderrPath, new Date(Date.now()), new Date(Date.now()));
+		await advance(30_000);
+		expect(stalls).toHaveLength(1);
+		await advance(11 * 60_000);
+		expect(stalls).toHaveLength(2);
+		tail.stop();
 	});
 
 	it("tolerates a missing artifact file instead of throwing", async () => {

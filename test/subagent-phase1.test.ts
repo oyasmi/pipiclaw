@@ -12,7 +12,7 @@ import {
 	writeFileSync,
 } from "fs";
 import { join } from "path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
@@ -28,7 +28,7 @@ import {
 } from "../src/subagents/discovery.js";
 import { buildSubAgentTask, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
-import { testManagers } from "./helpers/background-runtime.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const model = getModel("openai", "gpt-4o-mini")!;
@@ -786,12 +786,23 @@ describe("sub-agent convergence turn (D6)", () => {
 		expect(result.details.failureReason).toContain("Tool call budget exceeded");
 	});
 
-	it("keeps running (including the convergence turn) after the parent /stop signal aborts mid-run — spec 040 D2 decouples a run's lifecycle from the tool call's AbortSignal", async () => {
+	// Regression: the tool used to ignore the turn's AbortSignal for the whole grace window, so /stop
+	// waited for its force-end fallback and a result arriving inside the window was settled
+	// `announce: false` into a turn that no longer existed — nobody ever saw it. Now /stop detaches
+	// the call at once and the run still finishes and wakes the channel with its result.
+	it("detaches on /stop mid-run, keeps running (including the convergence turn) and wakes with the result — spec 040 D2", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
 		mkdirSync(channelDir, { recursive: true });
 		let callCount = 0;
 		const controller = new AbortController();
+		const wakes: string[] = [];
+		configureSubAgentRuntime({
+			dispatch: (event) => {
+				wakes.push(event.text);
+				return true;
+			},
+		});
 		const tool = createSubAgentTool({
 			...testManagers("dm_123"),
 			executor: fakeExecutor,
@@ -833,13 +844,16 @@ describe("sub-agent convergence turn (D6)", () => {
 			controller.signal,
 		);
 
-		// The budget abort still ran its D6 convergence turn — /stop no longer skips it, because
-		// /stop no longer reaches a dispatched run at all.
+		// The call returned the placeholder instead of holding /stop for the grace window.
+		expect(result.details.dispatched).toBe(true);
+		const runId = result.details.runId;
+		await vi.waitFor(() => expect(wakes).toHaveLength(1));
+		// The budget abort still ran its D6 convergence turn — /stop does not reach the run itself.
 		expect(callCount).toBe(2);
-		expect(result.details.failed).toBe(true);
-		expect(result.details.failureReason).toContain("Tool call budget exceeded");
-		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
-		expect(text).toContain("Confirmed: found the entrypoint despite /stop.");
+		const record = getSubAgentRunManager("dm_123").get(runId);
+		expect(record?.status).toBe("failed");
+		expect(record?.failureReason).toContain("Tool call budget exceeded");
+		expect(wakes[0]).toContain("Confirmed: found the entrypoint despite /stop.");
 	});
 
 	it("rejects immediately without launching when the signal is already aborted before the call starts", async () => {

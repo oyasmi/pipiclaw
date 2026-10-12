@@ -323,12 +323,11 @@ describe("subagent_manage tool", () => {
 			mutates: "read",
 			workspaceDir: "/workspace",
 		});
-		// Spec 042, D7: the follow-up task is the same envelope the initial dispatch builds — runtime
-		// context (including this run's own, freshly computed artifact directory), not just the bare
-		// instruction string a hand-rolled append used to produce.
+		// The resumed session already holds the first envelope: the follow-up carries the instruction
+		// and its own freshly computed artifact directory, not a second copy of the runtime context.
 		expect(launchInput.task).toContain("keep going");
-		expect(launchInput.task).toContain("Runtime context:");
-		expect(launchInput.task).toContain(`Artifact directory: ${launchInput.artifactDir}`);
+		expect(launchInput.task).toContain(launchInput.artifactDir);
+		expect(launchInput.task).not.toContain("Runtime context:");
 		expect(launchInput.artifactDir).toMatch(/^\/tmp\/checkout\/subagent-artifacts\/run_[a-z0-9]{6}$/);
 	});
 

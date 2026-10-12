@@ -6,14 +6,14 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
+import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
 import type { RunRecord, SubAgentRunManager } from "../subagents/runs.js";
 import {
 	assertVerifyAdmissible,
 	assertWithinProjectBoundary,
-	buildContextualBlocks,
-	buildSubAgentTask,
+	buildFollowUpTask,
 	type SubAgentRunContext,
 } from "../subagents/tool.js";
 import {
@@ -21,6 +21,7 @@ import {
 	formatWorkspaceLeaseConflict,
 	releaseWorkspaceLease,
 } from "../subagents/workspace-lease.js";
+import { snapshotWorkspace } from "../subagents/workspace-summary.js";
 
 // Spec 047, P3: `subagent_list` is zero-argument and shape-independent (like `task_list`); the
 // other three ops all take `runId`, so they stay together in `subagent_run` rather than being
@@ -41,7 +42,7 @@ export interface SubAgentManageToolOptions {
 	/**
 	 * Spec 042 D7: required, not defaulted. `follow_up` dispatches a new external process through
 	 * the same envelope and audit path the initial dispatch uses (D9's verify task path, D8.1's
-	 * audit log, D7's `buildSubAgentTask`) — all of which need the real value. The previous
+	 * audit log, D7's `buildFollowUpTask`) — all of which need the real value. The previous
 	 * `options.workspaceDir ?? ""` silently pointed the audit log at the daemon's own cwd and
 	 * malformed the verify task path; production has always supplied both, so making them required
 	 * only tightens what was already true rather than changing production behavior.
@@ -115,6 +116,13 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 		lines.push("dispatch warnings:", ...record.invocationWarnings.map((warning) => `- ${warning}`));
 	}
 	if (record.sessionId) lines.push(`sessionId: ${record.sessionId} (usable with subagent_run op=follow_up)`);
+	if (record.runtime === "external" && record.status === "running") {
+		// The one signal that tells a long, busy run apart from a stuck one without reading its logs.
+		const lastOutputAt = await readLastOutputAt(record.artifactDir);
+		const silentMs = Date.now() - (lastOutputAt ?? record.processStartedAt ?? record.startedAt);
+		const stalled = silentMs >= STALL_THRESHOLD_MS ? " — possibly stalled; cancel if it should have progressed" : "";
+		lines.push(`last output: ${Math.round(silentMs / 1000)}s ago${stalled}`);
+	}
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
 			.then((text) => text.slice(-STDERR_TAIL_CHARS))
@@ -310,24 +318,18 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				artifactDir,
 			};
 
-			// Spec 042 D7: the same envelope construction the initial dispatch uses — runtime context
-			// (including this run's own artifact directory), paths/memory context blocks, and (for a
-			// verify run) the verification protocol — not a hand-rolled "task + maybe verify protocol"
-			// that left the external agent unaware of its own working/artifact directories.
+			// The resumed session already holds the first dispatch's full envelope; the follow-up
+			// envelope carries only what is new (its own artifact directory, the instruction, and the
+			// checker protocol again for a verify run) — see `buildFollowUpTask`.
 			let launchResult: ExternalLaunchResult;
 			try {
-				const contextualBlocks = await buildContextualBlocks(role, {
-					channelDir: options.channelDir,
-					workspaceDir: options.workspaceDir,
-					runtimeContext: { workspaceDir: options.workspaceDir, channelId: options.channelId },
-				});
-				const envelopedTask = buildSubAgentTask(
+				const envelopedTask = buildFollowUpTask(
 					task,
-					role,
 					{ workspaceDir: options.workspaceDir, channelId: options.channelId },
-					contextualBlocks,
 					runContext,
 				);
+				const workspaceBaseline =
+					role.mutates === "write" ? await snapshotWorkspace(record.workingDirectory) : undefined;
 				launchResult = await launchExternalRun({
 					runManager: manager,
 					runId: newRunId,
@@ -353,6 +355,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 					leaseKey,
 					resumeSessionId: record.sessionId,
 					mutates: role.mutates,
+					workspaceBaseline,
 					roleFingerprint: currentFingerprint,
 					workspaceDir: options.workspaceDir,
 					securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,

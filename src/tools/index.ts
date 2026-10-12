@@ -32,6 +32,8 @@ export interface CreatePipiclawToolsOptions {
 	channelId: string;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getSubAgentModelReference?: () => string | null;
+	/** `settings.fallbackModel`, resolved; an internal sub-agent switches to it once on a failed run. */
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	getSessionSearchSettings: () => PipiclawSessionSearchSettings;
 	securityConfig: SecurityConfig;
 	toolsConfig: PipiclawToolsConfig;
@@ -106,6 +108,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		channelDir: options.channelDir,
 		getSubAgentDiscovery: options.getSubAgentDiscovery,
 		getSubAgentModelReference: options.getSubAgentModelReference,
+		resolveFallbackModel: options.resolveFallbackModel,
 		securityConfig,
 		webConfig: toolsConfig.tools.web,
 		rtkEnabled: toolsConfig.tools.rtk.enabled,

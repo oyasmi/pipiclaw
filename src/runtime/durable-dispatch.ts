@@ -179,6 +179,12 @@ export class DurableDispatchService {
 	 * lease lapses.
 	 */
 	private readonly running = new Set<string>();
+	/**
+	 * Queued dispatch ids folded into another record's turn by `absorbPending`. Each still has its
+	 * own closure waiting in the channel queue; `markStarted` turns that stale delivery away instead
+	 * of running the same wake a second time.
+	 */
+	private readonly absorbed = new Set<string>();
 	constructor(private readonly options: DurableDispatchOptions) {
 		this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
 	}
@@ -252,6 +258,8 @@ export class DurableDispatchService {
 				// Drop the liveness claim too, or the renew branch above would keep this record
 				// alive forever and the cancelled turn would never be redelivered.
 				this.running.delete(id);
+				// `/stop` already dropped the queued closures; the redelivery must not be turned away.
+				this.absorbed.delete(id);
 				record.leaseExpiresAt = undefined;
 				await this.write(record);
 				canceled++;
@@ -260,8 +268,13 @@ export class DurableDispatchService {
 		return canceled;
 	}
 
-	async markStarted(id: string | undefined): Promise<void> {
-		if (!id) return;
+	/**
+	 * Claim a dispatch for the turn about to run it. Returns false — run nothing — for a stale
+	 * delivery of a record another turn already absorbed (see `absorbPending`).
+	 */
+	async markStarted(id: string | undefined): Promise<boolean> {
+		if (!id) return true;
+		if (this.absorbed.delete(id)) return false;
 		this.running.add(id);
 		await this.queue.run(id, async () => {
 			const record = await this.read(id);
@@ -270,6 +283,71 @@ export class DurableDispatchService {
 			record.leaseExpiresAt = new Date(Date.now() + this.leaseMs).toISOString();
 			await this.write(record);
 		});
+		return true;
+	}
+
+	/**
+	 * Fold other not-yet-started dispatches of `channelId` that `accept` into the turn that is
+	 * starting `primaryId`, oldest first, at most `limit` of them. Each one is claimed exactly as
+	 * `markStarted` would claim it (running, leased, counted as a delivery), so the caller must
+	 * finish every returned id with `markCompleted` / `markRetryable` alongside the primary — and a
+	 * crash mid-turn redelivers each of them on its own, unchanged. Returned events carry their
+	 * own redelivery notice, like a normal delivery would.
+	 */
+	async absorbPending(
+		channelId: string,
+		primaryId: string,
+		accept: (event: ChannelEvent) => boolean,
+		limit: number,
+	): Promise<ChannelEvent[]> {
+		if (limit <= 0) return [];
+		let filenames: string[];
+		try {
+			filenames = (await readdir(this.options.stateDir)).filter((name) => name.endsWith(".json"));
+		} catch {
+			return [];
+		}
+		const candidates: Array<{ id: string; createdAt: string }> = [];
+		for (const filename of filenames) {
+			const id = decodeDispatchId(filename.slice(0, -".json".length));
+			if (id === primaryId || this.running.has(id)) continue;
+			const record = await this.read(id);
+			if (record && this.isAbsorbable(record, channelId, accept))
+				candidates.push({ id, createdAt: record.createdAt });
+		}
+		candidates.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+		const events: ChannelEvent[] = [];
+		for (const { id } of candidates.slice(0, limit)) {
+			await this.queue.run(id, async () => {
+				// Re-checked under the record's own lock: a drain or its own delivery may have moved it.
+				const record = await this.read(id);
+				if (!record || this.running.has(id) || !this.isAbsorbable(record, channelId, accept)) return;
+				if (record.status === "queued") this.absorbed.add(id);
+				else record.deliveries++;
+				record.status = "running";
+				record.leaseExpiresAt = new Date(Date.now() + this.leaseMs).toISOString();
+				record.nextAttemptAt = undefined;
+				this.running.add(id);
+				await this.write(record);
+				events.push(withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries));
+			});
+		}
+		return events;
+	}
+
+	/** Not started anywhere: still waiting for delivery (`pending`) or queued behind the current turn. */
+	private isAbsorbable(
+		record: DurableDispatchRecord,
+		channelId: string,
+		accept: (event: ChannelEvent) => boolean,
+	): boolean {
+		return (
+			record.event.channelId === channelId &&
+			(record.status === "pending" || record.status === "queued") &&
+			record.deliveries < MAX_DELIVERIES &&
+			accept(record.event)
+		);
 	}
 
 	async markCompleted(id: string | undefined): Promise<void> {

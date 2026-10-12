@@ -15,9 +15,10 @@ import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import { logTaskDispatch, logTaskSettlement } from "../tasks/work-log.js";
 import type { UsageLedger } from "../usage/ledger.js";
-import { startExternalProgressTail } from "./external/progress-tail.js";
+import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
 import { finalizeExternalRun } from "./external/settlement.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
+import type { WorkspaceBaseline } from "./workspace-summary.js";
 
 /**
  * The run: one abstraction level for delegation, whether it executes as an in-process sub-agent
@@ -127,6 +128,9 @@ export interface RunRecord extends RunUsage {
 	/** P2-2: `git status --porcelain` taken right after a `mutates: "write"` run finished, so the
 	 *  wake's reader does not have to spend its own first tool call finding out what changed. */
 	workspaceSummary?: string;
+	/** A write run's dirty-path snapshot at dispatch, so the post-run summary reports only what this
+	 *  run changed (see `workspace-summary.ts`). Persisted so restart reconciliation can use it too. */
+	workspaceBaseline?: WorkspaceBaseline;
 	/** Set once settlement (write output, free resources) has happened; guards against replay. */
 	settledAt?: number;
 	/**
@@ -211,6 +215,7 @@ export interface RegisterRunInput {
 	/** Set only when the caller already holds a workspace write lease for this run (D10.1). */
 	leaseKey?: string;
 	mutates?: RunMutates;
+	workspaceBaseline?: WorkspaceBaseline;
 }
 
 interface PendingSettlement {
@@ -226,6 +231,7 @@ interface PendingSettlement {
 	verificationVerdict?: "pass" | "fail";
 	workspaceSummary?: string;
 	sessionId?: string;
+	model?: string;
 	finishedAt: number;
 	announce: boolean;
 }
@@ -251,6 +257,9 @@ export interface SettleInput {
 	workspaceSummary?: string;
 	/** The harness's own session/thread id, captured even on failure so a later resume can still use it. */
 	sessionId?: string;
+	/** The model that actually produced the result, when it differs from the one registered (an
+	 *  internal run that switched to the backup model). Usage is billed against this one. */
+	model?: string;
 }
 
 /**
@@ -260,7 +269,7 @@ export interface SettleInput {
  * run itself takes to settle, not the wake turn's latency on top of that.
  */
 export interface RunNotice {
-	kind: "settled" | "progress";
+	kind: "settled" | "progress" | "stalled";
 	runId: string;
 	agent: string;
 	/** Only set for `kind: "settled"`. */
@@ -268,6 +277,8 @@ export interface RunNotice {
 	durationMs: number;
 	/** Only set for `kind: "progress"`: the harness's most recently observed step, already short. */
 	step?: string;
+	/** Only set for `kind: "stalled"`: how long the run has written no output. */
+	silentMs?: number;
 }
 
 export type RunNotifier = (channelId: string, notice: RunNotice) => void | Promise<void>;
@@ -329,6 +340,7 @@ function createPendingSettlement(input: SettleInput, finishedAt: number, announc
 		verificationVerdict: input.verificationVerdict,
 		workspaceSummary: input.workspaceSummary,
 		sessionId: input.sessionId,
+		model: input.model,
 		finishedAt,
 		announce,
 	};
@@ -347,6 +359,7 @@ function applyPendingSettlement(record: RunRecord, pending: PendingSettlement): 
 	record.verificationVerdict = pending.verificationVerdict;
 	record.workspaceSummary = pending.workspaceSummary;
 	if (pending.sessionId) record.sessionId = pending.sessionId;
+	if (pending.model) record.model = pending.model;
 	record.finishedAt = pending.finishedAt;
 	record.settledAt = pending.finishedAt;
 	record.settlementPending = undefined;
@@ -393,6 +406,9 @@ export class SubAgentRunManager {
 	 *  restart reconciliation already reads once from the finished process's own output. */
 	private stopped = false;
 	private readonly externalProgressTails = new Map<string, { stop(): void }>();
+	/** Internal runs that went async report their steps in-process; this paces them exactly like the
+	 *  external tail does. Created on first report, dropped at settlement. */
+	private readonly internalProgressPacers = new Map<string, ProgressPacer>();
 	private readonly queue = createSerialQueue<string>();
 
 	constructor(
@@ -487,8 +503,42 @@ export class SubAgentRunManager {
 					step,
 				});
 			},
+			onStall: (silentMs) => {
+				this.emitNotice({
+					kind: "stalled",
+					runId: record.runId,
+					agent: record.agent,
+					durationMs: Date.now() - (record.processStartedAt ?? record.startedAt),
+					silentMs,
+				});
+			},
 		});
 		this.externalProgressTails.set(record.runId, tail);
+	}
+
+	/**
+	 * A step label from an internal run that has outlived its sync grace window: nobody is watching
+	 * the tool call any more, so without this the run would be silent until it settles. Paced by the
+	 * same rules as an external run's tail; a no-op once the run is no longer running.
+	 */
+	noteProgress(runId: string, step: string): void {
+		if (this.stopped) return;
+		const record = this.runs.get(runId);
+		if (!record || record.status !== "running" || record.settlementPending) return;
+		let pacer = this.internalProgressPacers.get(runId);
+		if (!pacer) {
+			pacer = createProgressPacer(record.startedAt, (label) =>
+				this.emitNotice({
+					kind: "progress",
+					runId,
+					agent: record.agent,
+					durationMs: Date.now() - record.startedAt,
+					step: label,
+				}),
+			);
+			this.internalProgressPacers.set(runId, pacer);
+		}
+		pacer.offer(step);
 	}
 
 	private stopExternalProgressTail(runId: string): void {
@@ -512,6 +562,7 @@ export class SubAgentRunManager {
 		this.runs.delete(record.runId);
 		this.cancelHandles.delete(record.runId);
 		this.externalLaunches.delete(record.runId);
+		this.internalProgressPacers.delete(record.runId);
 		this.clearExternalRecoveryTimer(record.runId);
 	}
 
@@ -808,6 +859,7 @@ export class SubAgentRunManager {
 			this.externalLaunches.delete(runId);
 			this.clearExternalRecoveryTimer(runId);
 			this.stopExternalProgressTail(runId);
+			this.internalProgressPacers.delete(runId);
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
@@ -949,14 +1001,16 @@ export class SubAgentRunManager {
 		// K parallel fan-out runs otherwise produce K wake turns, each re-asking "is this the only
 		// one?" via a fresh subagent_list call — this answers it inline (review 2026-08-23
 		// §3.3), so the model can reliably reply [SILENT] to every wake but the last.
-		const siblingCount = record.taskId
-			? Array.from(this.runs.values()).filter(
-					(other) => other.taskId === record.taskId && other.status === "running" && other.runId !== record.runId,
-				).length
-			: 0;
-		const belongsTo = record.taskId
-			? ` It belongs to task ${record.taskId}.${siblingCount > 0 ? ` ${siblingCount} other run(s) for this task are still running.` : ""}`
-			: "";
+		// A chat-level run's siblings are the other chat-level runs on this channel: the same "was this
+		// the last one?" question, without a task to scope it.
+		const siblingCount = Array.from(this.runs.values()).filter(
+			(other) => other.taskId === record.taskId && other.status === "running" && other.runId !== record.runId,
+		).length;
+		const siblingNote =
+			siblingCount > 0
+				? ` ${siblingCount} other run(s) ${record.taskId ? "for this task" : "on this channel"} are still running.`
+				: "";
+		const belongsTo = record.taskId ? ` It belongs to task ${record.taskId}.${siblingNote}` : siblingNote;
 		const verdictLine =
 			record.verificationVerdict !== undefined
 				? `\nVerdict: ${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}`
@@ -1398,6 +1452,7 @@ export class SubAgentRunManager {
 				terminationReason: record.terminationReason,
 				maxWallTimeSec,
 				mutates: record.mutates,
+				workspaceBaseline: record.workspaceBaseline,
 			},
 			(settleInput, options) => this.settle(record.runId, settleInput, options),
 			{ announce: record.terminationReason !== "cancelled" },
