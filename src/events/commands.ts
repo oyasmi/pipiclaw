@@ -5,12 +5,8 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
 import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
-import {
-	describeEventPayload,
-	type EventHistoryRecord,
-	parseScheduledEventContent,
-	type ScheduledEvent,
-} from "./events.js";
+import { describeEventPayload, parseScheduledEventContent } from "./events.js";
+import type { EventHistoryRecord, ScheduledEvent } from "./types.js";
 import { EventDefinitionError, type EventProblemKind, validateScheduledEvent } from "./validation.js";
 
 const EVENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;

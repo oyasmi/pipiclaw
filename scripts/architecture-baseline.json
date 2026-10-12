@@ -6,10 +6,6 @@
 			"src/agent/runner-factory.ts"
 		],
 		[
-			"src/events/events.ts",
-			"src/events/validation.ts"
-		],
-		[
 			"src/tui/pitui-frontend.ts",
 			"src/tui/plain-frontend.ts",
 			"src/tui/renderer.ts"
@@ -18,7 +14,7 @@
 	"r3": {
 		"src/agent/channel-runner.ts": 1870,
 		"src/dingtalk/bot.ts": 1758,
-		"src/events/events.ts": 1003,
+		"src/events/events.ts": 908,
 		"src/jobs/manager.ts": 1328,
 		"src/runtime/bootstrap.ts": 1376,
 		"src/subagents/discovery.ts": 1040,

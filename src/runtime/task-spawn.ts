@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import type { SpawnTaskRequest, SpawnTaskResult } from "../events/events.js";
+import type { SpawnTaskRequest, SpawnTaskResult } from "../events/types.js";
 import * as log from "../log.js";
 import { readActiveTasks } from "../tasks/contract.js";
 import { createTaskDocument, instanceStamp } from "../tasks/create.js";

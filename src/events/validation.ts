@@ -3,7 +3,7 @@ import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { ScheduledEvent } from "./events.js";
+import type { ScheduledEvent } from "./types.js";
 
 /**
  * Admission rules for scheduled events (spec 031, D4).
