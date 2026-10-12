@@ -1,6 +1,6 @@
 # 设计记录
 
-`docs/specs/` 当前保留 spec 050、051、052 和 053。编号 050 之前的所有 spec 已完整移到 [历史归档](../archive/README.md)，保留原编号、目录名和文件名；这些历史设计仍可用于追溯决策。
+`docs/specs/` 当前保留 spec 050、051、052、053 和 054。编号 050 之前的所有 spec 已完整移到 [历史归档](../archive/README.md)，保留原编号、目录名和文件名；这些历史设计仍可用于追溯决策。
 
 ## 保留的设计
 
@@ -10,6 +10,7 @@
 | `051` | [长程任务循环](./051-long-horizon-task-loop/design.md)：契约、循环日志、等待票、任务会话与预算（cycle、`schedule`、验收门禁等部分已被 052 取代） |
 | `052` | [任务 v5：负责人模式](./052-task-lead/design.md)：一次性项目、工作项与委派、事件模板承载周期，已实施 |
 | `053` | [对外文案](./053-user-facing-copy/design.md)：按受众分渠道、统一界面术语、错误必带下一步；已实施（[实施计划](./053-user-facing-copy/plan.md)） |
+| `054` | [代码组织重构](./054-code-organization/design.md)：单向分层、模块归位、`npm run arch` 机器检查与大文件拆分；无行为变化，待实施（[实施计划](./054-code-organization/plan.md)） |
 
 050、051 已完成的实施清单也保存在归档中（[050](../archive/specs/050-memory-v2/plan.md)、[051](../archive/specs/051-long-horizon-task-loop/plan.md)）。
 
