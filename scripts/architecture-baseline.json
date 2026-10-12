@@ -1,10 +1,5 @@
 {
-	"r1": [
-		{
-			"from": "src/subagents/tool.ts",
-			"to": "src/tools/registry.ts"
-		}
-	],
+	"r1": [],
 	"r2": [
 		[
 			"src/agent/channel-runner.ts",

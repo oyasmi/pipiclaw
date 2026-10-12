@@ -10,7 +10,7 @@ import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
-import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.js";
+import { createSubAgentInlineTool, createSubAgentTool, type WorkerToolRequest } from "../subagents/tool.js";
 import { withToolDetails } from "./contract/details.js";
 import { buildToolSet } from "./registry.js";
 import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
@@ -94,6 +94,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		getStepCost: options.getStepCost,
 	});
 	const subAgentToolOptions = {
+		buildWorkerTools: (request: WorkerToolRequest) => buildToolSet(request, { forSubagent: true }),
 		getRunManager: () => options.runManager,
 		executor: options.executor,
 		fileStore: options.fileStore,

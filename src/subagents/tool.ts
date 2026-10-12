@@ -31,7 +31,7 @@ import { getChannelMemoryDir, getChannelMemoryIndexPath, listMemoryEntries } fro
 import { shouldFallback } from "../models/fallback.js";
 import { formatModelReference } from "../models/utils.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
-import type { SecurityConfig } from "../security/types.js";
+import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { localDayKey } from "../shared/local-time.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -40,7 +40,6 @@ import { sleepUnref } from "../shared/with-timeout.js";
 import { findTaskItem, parseTaskItems } from "../tasks/contract.js";
 import { readStoredTask } from "../tasks/store.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
-import { buildToolSet } from "../tools/registry.js";
 import { addUsage, createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
 import {
 	DEFAULT_THINKING_LEVEL,
@@ -193,7 +192,27 @@ export interface SubAgentToolFields {
 /** The shape consumers read post-wrap, once `withToolDetails` has stamped `kind`. */
 export type SubAgentToolDetails = SubAgentToolFields & { kind: "subagent" | "subagent_inline" };
 
+/**
+ * Everything the tool registry needs to build one sub-agent's tool set. Declared here, not
+ * imported, so `subagents/` never depends on `tools/`: the composition root injects
+ * `buildWorkerTools` (spec 054 D9). Structurally a subset of `ToolBuildContext`.
+ */
+export interface WorkerToolRequest {
+	executor: Executor;
+	fileStore: FileStore;
+	securityConfig: SecurityConfig;
+	securityContext: SecurityRuntimeContext;
+	channelId: string;
+	channelDir: string;
+	workspaceDir: string;
+	webConfig?: PipiclawWebToolsConfig;
+	rtkEnabled?: boolean;
+	bashDefaultTimeoutSeconds: number;
+}
+
 export interface SubAgentToolOptions {
+	/** Builds a sub-agent's scoped tool set from the shared registry; injected by `tools/index.ts`. */
+	buildWorkerTools: (request: WorkerToolRequest) => AgentTool<any>[];
 	executor: Executor;
 	fileStore: FileStore;
 	/** Host checkout used as the sub-agent's cwd. Defaults to process.cwd(). */
@@ -625,8 +644,8 @@ function buildSubagentTools(
 		options.channelDir,
 		options.workspaceDir,
 	);
-	return buildToolSet(
-		{
+	return options
+		.buildWorkerTools({
 			executor,
 			fileStore: options.fileStore,
 			securityConfig,
@@ -644,9 +663,8 @@ function buildSubagentTools(
 			webConfig: options.webConfig,
 			rtkEnabled: options.rtkEnabled,
 			bashDefaultTimeoutSeconds: bashTimeoutSec,
-		},
-		{ forSubagent: true },
-	).filter((tool) => runContext.purpose !== "verify" || (tool.name !== "write" && tool.name !== "edit"));
+		})
+		.filter((tool) => runContext.purpose !== "verify" || (tool.name !== "write" && tool.name !== "edit"));
 }
 
 /**
