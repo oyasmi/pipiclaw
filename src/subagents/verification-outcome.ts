@@ -1,5 +1,5 @@
 /**
- * The `purpose=verify` verdict rule, shared by the internal verifier path (`tool.ts`) and the
+ * The `purpose=verify` verdict rule, shared by the internal verifier path (`internal/outcome.ts`) and the
  * external one (`external/settlement.ts`).
  *
  * Spec 052, D6: a verifier's verdict is information for the leader, not a gate the runtime

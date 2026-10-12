@@ -5,7 +5,6 @@ import type { MemoryLifecycle } from "../memory/lifecycle.js";
 import { renderGuardBlockForUser } from "../security/block-message.js";
 import { truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import type { SubAgentToolDetails } from "../subagents/tool.js";
 import {
 	isArgumentValidationFailure,
 	isRecoverableRejection,
@@ -14,6 +13,7 @@ import {
 	toolResultDetails,
 } from "../tools/contract/details.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
+import type { SubAgentToolDetails } from "../tools/subagent.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { addUsage, type UsageTotals } from "../usage/totals.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";

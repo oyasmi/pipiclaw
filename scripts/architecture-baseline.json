@@ -6,7 +6,6 @@
 		"src/events/events.ts": 908,
 		"src/jobs/manager.ts": 1328,
 		"src/subagents/discovery.ts": 1040,
-		"src/subagents/runs.ts": 1464,
-		"src/subagents/tool.ts": 1692
+		"src/subagents/runs.ts": 1464
 	}
 }

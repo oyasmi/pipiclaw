@@ -6,7 +6,8 @@ import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
-import { createSubAgentInlineTool, type SubAgentToolOptions } from "../src/subagents/tool.js";
+import type { SubAgentToolOptions } from "../src/subagents/types.js";
+import { createSubAgentInlineTool } from "../src/tools/subagent.js";
 import { getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

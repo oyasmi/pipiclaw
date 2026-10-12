@@ -26,8 +26,9 @@ import {
 	SUB_AGENT_EFFORT_PRESETS,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
-import { buildSubAgentTask, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
+import { buildSubAgentTask } from "../src/subagents/task-envelope.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import { createSubAgentInlineTool, createSubAgentTool } from "../src/tools/subagent.js";
 import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

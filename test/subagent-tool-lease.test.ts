@@ -11,8 +11,8 @@ import {
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
-import { createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
+import { createSubAgentInlineTool, createSubAgentTool } from "../src/tools/subagent.js";
 import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

@@ -10,10 +10,10 @@ import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
-import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.js";
-import type { WorkerToolRequest } from "../subagents/worker-tools.js";
+import type { WorkerToolRequest } from "../subagents/types.js";
 import { withToolDetails } from "./contract/details.js";
 import { buildToolSet } from "./registry.js";
+import { createSubAgentInlineTool, createSubAgentTool } from "./subagent.js";
 import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
 import type { TaskStepCost } from "./task-manage/types.js";
 
@@ -70,7 +70,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	// The leaf tools (files, web, memory, skills) come from the single declarative
 	// registry so this set, the sub-agent set, and the prompt hints share one source.
 	// The `subagent` tool is appended separately: it is never available to sub-agents
-	// and keeping it out of the registry avoids a registry ↔ subagents/tool import cycle.
+	// and needs dispatch-time context the registry does not model.
 	const taskLoopExcluded = new Set(["task_create", "memory_save", "event_manage"]);
 	const leafTools = buildToolSet({
 		executor: options.executor,
@@ -104,7 +104,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		resolveApiKey: options.resolveApiKey,
 		workspaceDir: options.workspaceDir,
 		// D6.2: an internal sub-agent defaults to the parent's ProjectRoot; a model-requested
-		// explicit workingDirectory is validated (in subagents/tool.ts) to stay within it.
+		// explicit workingDirectory is validated (in subagents/dispatch.ts) to stay within it.
 		workingDirectory: options.projectScope.projectRoot,
 		projectBoundary: options.projectScope.boundary,
 		channelDir: options.channelDir,
@@ -133,8 +133,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	};
 	const all = [
 		...leafTools,
-		// Bound to the same `details` contract as the registry's tools; it is registered here
-		// rather than in TOOL_REGISTRY only to avoid a registry ↔ subagents/tool import cycle.
+		// Bound to the same `details` contract as the registry's tools; registered here rather than
+		// in TOOL_REGISTRY because it needs dispatch-time context the registry does not model.
 		withToolDetails(createSubAgentTool(subAgentToolOptions), "subagent"),
 		// Spec 046, D2.3: gated by `tools.json` (deployer decision, not a model-visible field) —
 		// omitted from the tool set entirely when off, not merely rejected at call time.

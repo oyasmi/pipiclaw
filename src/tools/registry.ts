@@ -138,9 +138,9 @@ function webEnabled(ctx: ToolBuildContext): boolean {
 
 /**
  * Single source of truth for the agent's leaf tools. The `subagent` tool is intentionally
- * NOT here: it is never available to sub-agents, needs runtime context the registry does
- * not model, and keeping it out avoids a `registry` ↔ `subagents/tool` import cycle (the
- * sub-agent tool set is built by importing `buildToolSet` from this module).
+ * NOT here: it is never available to sub-agents and needs dispatch-time context (role
+ * discovery, model resolvers, the run manager) that `ToolBuildContext` does not model; see
+ * `tools/subagent.ts` and `tools/index.ts`.
  */
 export const TOOL_REGISTRY: ToolRegistration[] = [
 	{

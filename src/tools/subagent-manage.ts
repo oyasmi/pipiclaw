@@ -6,17 +6,14 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
+import { assertWithinProjectBoundary } from "../subagents/dispatch.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
 import type { RunRecord } from "../subagents/run-record.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
-import {
-	assertVerifyAdmissible,
-	assertWithinProjectBoundary,
-	buildFollowUpTask,
-	type SubAgentRunContext,
-} from "../subagents/tool.js";
+import { assertVerifyAdmissible, buildFollowUpTask } from "../subagents/task-envelope.js";
+import type { SubAgentRunContext } from "../subagents/types.js";
 import {
 	acquireWorkspaceLease,
 	formatWorkspaceLeaseConflict,

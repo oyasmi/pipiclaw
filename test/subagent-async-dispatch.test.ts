@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
-import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/subagents/tool.js";
+import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/tools/subagent.js";
 import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

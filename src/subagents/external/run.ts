@@ -209,7 +209,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		);
 	}
 
-	// `tool.ts` already creates the artifact dir for a fresh run; `follow_up` (subagent-manage.ts)
+	// `dispatch.ts` already creates the artifact dir for a fresh run; `follow_up` (subagent-manage.ts)
 	// mints a new runId/artifactDir on the spot, so this is the one place that must be reliable
 	// either way.
 	await mkdir(input.artifactDir, { recursive: true });
