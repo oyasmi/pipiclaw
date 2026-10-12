@@ -1,8 +1,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai";
 import * as log from "../log.js";
-import { formatModelReference } from "../models/utils.js";
 import { isRecord } from "../shared/type-guards.js";
+import { formatModelReference } from "./utils.js";
 
 /**
  * Backup-model fallback (spec 017).

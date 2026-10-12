@@ -1,17 +1,17 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ChannelJobManager } from "../src/agent/job-manager.js";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
+import type { ChannelJobManager } from "../src/jobs/manager.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createBashTool } from "../src/tools/bash.js";
+import { withToolDetails } from "../src/tools/contract/details.js";
 import { createEditTool } from "../src/tools/edit.js";
 import { createGrepTool } from "../src/tools/grep.js";
 import { createJobTool } from "../src/tools/job.js";
 import { createReadTool } from "../src/tools/read.js";
 import { createSkillTool } from "../src/tools/skill.js";
-import { withToolDetails } from "../src/tools/tool-details.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**

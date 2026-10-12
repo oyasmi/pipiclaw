@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
-import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spawns a process that exits immediately and resolves its pid once it has been reaped, so a

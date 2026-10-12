@@ -8,8 +8,8 @@ vi.mock("axios", () => ({
 	},
 }));
 
+import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
-import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { createWebHttpClient } from "../src/web/client.js";
 
 // R5: a manually-followed redirect (maxRedirects: 0 on the underlying axios call, so this loop's

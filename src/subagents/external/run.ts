@@ -13,7 +13,7 @@ import {
 } from "../../shared/host-process.js";
 import { splitShellWords } from "../../shared/shell-words.js";
 import { errorMessage } from "../../shared/text-utils.js";
-import { createEmptyUsageTotals } from "../../shared/types.js";
+import { createEmptyUsageTotals } from "../../usage/totals.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
 import type { RunMutates, SettleInput, SubAgentRunManager } from "../runs.js";
 import type { WorkspaceBaseline } from "../workspace-summary.js";

@@ -13,7 +13,7 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
-import { logTaskDispatch, logTaskSettlement } from "../tasks/work-log.js";
+import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
 
 /**
  * Per-channel manager for background bash jobs. A long command that ran synchronously would hold

@@ -9,7 +9,12 @@ import { readGuardAllows } from "../security/path-guard-filter.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { isNodeError } from "../shared/os.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { resolveSkillPath, scanSkillContent, validateSkillFrontmatter, validateSkillName } from "./skill-security.js";
+import {
+	resolveSkillPath,
+	scanSkillContent,
+	validateSkillFrontmatter,
+	validateSkillName,
+} from "../skills/validation.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 /**

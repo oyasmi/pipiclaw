@@ -6,7 +6,7 @@ import { clipText } from "../shared/text-utils.js";
 import { buildTaskBoard, renderNewResults, renderTaskBoard } from "./board.js";
 import { effectiveBudget } from "./budget.js";
 import type { TaskFrontmatter } from "./frontmatter.js";
-import { readTaskLog, renderTaskLogLine } from "./log.js";
+import { readTaskLog, renderTaskLogLine } from "./loop-log.js";
 import { consumeTaskSteer } from "./steer.js";
 import { readStoredTask, tasksDir } from "./store.js";
 import { describeTicket } from "./ticket.js";

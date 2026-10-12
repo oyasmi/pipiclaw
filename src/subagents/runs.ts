@@ -11,10 +11,10 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
-import { logTaskDispatch, logTaskSettlement } from "../tasks/work-log.js";
+import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
 import type { UsageLedger } from "../usage/ledger.js";
+import { createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
 import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
 import { finalizeExternalRun } from "./external/settlement.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
@@ -25,7 +25,7 @@ import type { WorkspaceBaseline } from "./workspace-summary.js";
  * or (from spec 040 phase 2 onward) a short-lived external CLI process. See
  * `docs/archive/specs/040-async-delegation-and-external-agents/design.md`, D1.
  *
- * State machine vocabulary is borrowed from `job-manager.ts`'s `JobStatus` rather than inventing
+ * State machine vocabulary is borrowed from `jobs/manager.ts`'s `JobStatus` rather than inventing
  * a second one. Only three facts are persisted as idempotent markers (D1/P5) because only three
  * side effects cannot be safely replayed: settling (writes output, frees a lease), recording
  * usage (a ledger write is a real charge), and enqueuing the completion wake (redelivery makes
@@ -971,7 +971,7 @@ export class SubAgentRunManager {
 	 * Dispatch the completion wake. Durable-dispatch persists its own pending record before this
 	 * call can be interrupted (`DurableDispatchService.dispatch`), and `dispatch()` is idempotent on
 	 * `dispatchId`, so calling it again after a crash between here and marking `wakeEnqueued` is
-	 * harmless — this is the same fix as job-manager's `announce()` reordering (D7).
+	 * harmless — this is the same fix as jobs/manager's `announce()` reordering (D7).
 	 */
 	private async announce(record: RunRecord, outputText: string, outputSaved: boolean): Promise<void> {
 		// P0-1: a settled notice fires whenever this run actually needs a wake — i.e. whenever the

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateToolNames } from "../src/subagents/discovery.js";
+import { SUBAGENT_TOOL_NAMES } from "../src/tools/contract/names.js";
 import { TOOL_REGISTRY } from "../src/tools/registry.js";
-import { SUBAGENT_TOOL_NAMES } from "../src/tools/subagent-tool-names.js";
 
 describe("sub-agent tool names — single source of truth (batch 3.1)", () => {
 	it("validateToolNames accepts the registered allowlist", () => {

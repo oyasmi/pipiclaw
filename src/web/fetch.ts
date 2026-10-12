@@ -1,7 +1,7 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { PipiclawWebToolsConfig } from "../config/tools.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { createWebHttpClient } from "./client.js";
 import { extractReadableContent } from "./extract.js";
 import { buildFetchedImageContent, buildFetchedTextContent, type FormattedFetchDetails } from "./format.js";

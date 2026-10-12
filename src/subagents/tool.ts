@@ -12,8 +12,8 @@ import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, isRetryableAssistantError, streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { shouldFallback } from "../agent/model-fallback.js";
 import { getChannelDir } from "../channel/channel-paths.js";
+import type { PipiclawWebToolsConfig } from "../config/tools.js";
 import type { ExecOptions, ExecResult, Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -28,6 +28,7 @@ import {
 import { getJournalDir, readJournalDay } from "../memory/journal.js";
 import { renderMemoryBootstrap } from "../memory/render.js";
 import { getChannelMemoryDir, getChannelMemoryIndexPath, listMemoryEntries } from "../memory/store.js";
+import { shouldFallback } from "../models/fallback.js";
 import { formatModelReference } from "../models/utils.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
@@ -35,13 +36,12 @@ import { localDayKey } from "../shared/local-time.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage, extractAssistantText } from "../shared/text-utils.js";
-import { addUsage, createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { sleepUnref } from "../shared/with-timeout.js";
-import { findTaskItem, parseTaskItems } from "../tasks/ledger.js";
+import { findTaskItem, parseTaskItems } from "../tasks/contract.js";
 import { readStoredTask } from "../tasks/store.js";
-import type { PipiclawWebToolsConfig } from "../tools/config.js";
-import { describeToolCall } from "../tools/presentation.js";
+import { describeToolCall } from "../tools/contract/presentation.js";
 import { buildToolSet } from "../tools/registry.js";
+import { addUsage, createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
 import {
 	DEFAULT_THINKING_LEVEL,
 	type ExternalSubAgentConfig,
@@ -161,7 +161,7 @@ const subagentInlineSchema = Type.Object({
 
 /**
  * Fields the `subagent` tool itself constructs. `kind` is not among them: `withToolDetails`
- * stamps it from the registration name when the tool set is built (see `tools/tool-details.ts`).
+ * stamps it from the registration name when the tool set is built (see `tools/contract/details.ts`).
  */
 export interface SubAgentToolFields {
 	agent: string;

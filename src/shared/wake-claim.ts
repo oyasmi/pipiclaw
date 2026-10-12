@@ -1,5 +1,5 @@
 /**
- * The two-phase "claim, then finish" decision shared by `job-manager.ts` and `subagents/runs.ts`
+ * The two-phase "claim, then finish" decision shared by `jobs/manager.ts` and `subagents/runs.ts`
  * for reserving a completion wake exactly once (spec 040, D7/T9). Both managers persist a
  * `RunRecord`/`JobRecord` differently and gate eligibility on a different terminal condition
  * (job: `status !== "running"`; run: `settledAt` set), so only the claim/consume decision on the

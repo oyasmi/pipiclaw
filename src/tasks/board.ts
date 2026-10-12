@@ -1,14 +1,14 @@
 import { formatElapsedZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { truncate } from "../shared/text-utils.js";
-import { parseTaskItems, type TaskItem } from "./ledger.js";
+import { parseTaskItems, type TaskItem } from "./contract.js";
 import {
 	describeSettlement,
 	describeWorkRef,
 	readTaskLog,
 	type TaskDispatchRecord,
 	type TaskSettleRecord,
-} from "./log.js";
+} from "./loop-log.js";
 
 /**
  * The team board (spec 052, D5): what the leader's delegations and jobs are doing right now.

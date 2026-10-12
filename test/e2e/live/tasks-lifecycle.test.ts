@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTaskDriverEvent } from "../../../src/runtime/task-driver.js";
+import { readActiveTasks } from "../../../src/tasks/contract.js";
 import { parseTaskFrontmatter } from "../../../src/tasks/frontmatter.js";
-import { readActiveTasks } from "../../../src/tasks/ledger.js";
 import { createRuntimeHarness, type E2ERuntimeHarness } from "../../support/runtime-harness.js";
 import { canRunE2E, getE2ESkipReason } from "../../support/setup.js";
 

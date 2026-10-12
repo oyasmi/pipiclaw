@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDetachedMaintenanceCache, loadDetachedMaintenanceContext } from "../src/agent/maintenance-context.js";
-import { PipiclawSettingsManager } from "../src/settings.js";
+import { PipiclawSettingsManager } from "../src/config/settings.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-maintenance-context-");

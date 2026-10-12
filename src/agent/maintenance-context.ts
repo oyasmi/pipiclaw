@@ -2,10 +2,10 @@ import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { PipiclawSettingsManager } from "../config/settings.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/utils.js";
-import type { PipiclawSettingsManager } from "../settings.js";
 
 export interface DetachedMaintenanceContextOptions {
 	channelId: string;

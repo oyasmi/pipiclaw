@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { normalizeTaskId } from "./ledger.js";
+import { normalizeTaskId } from "./contract.js";
 
 /**
  * Where a task's own agent session lives (spec 051, D3; one per task since spec 052, D1) —

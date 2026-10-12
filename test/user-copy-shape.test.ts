@@ -21,9 +21,9 @@ import { handleSubagentsCommand, renderRunNotice } from "../src/subagents/comman
 import type { RunRecord, SubAgentRunManager } from "../src/subagents/runs.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { handleTasksCommand } from "../src/tasks/commands.js";
-import type { TaskLedgerEntry } from "../src/tasks/ledger.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import type { TaskLedgerEntry } from "../src/tasks/contract.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
+import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";
 import type { UsageLedger } from "../src/usage/ledger.js";
 import { renderUsageReport } from "../src/usage/render.js";

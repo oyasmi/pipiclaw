@@ -15,7 +15,7 @@ import { listWorkspaceSkills, loadWorkspaceSkillFile } from "../tools/skill.js";
  * loaded catalog: that keeps `/skills` usable while a turn is streaming and for a channel with no
  * active runner, and — the whole reason this exists rather than reusing `/help`'s discovery tail
  * — it is the only place that shows a skill that failed the content scan and was silently dropped
- * from the prompt's skill list (`src/agent/workspace-resources.ts`).
+ * from the prompt's skill list (`src/skills/loader.ts`).
  */
 
 export interface HandleSkillsCommandOptions {

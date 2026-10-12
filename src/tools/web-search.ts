@@ -1,9 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
+import type { PipiclawWebToolsConfig } from "../config/tools.js";
 import type { SecurityConfig } from "../security/types.js";
 import { resolveWebSearchRequest } from "../web/config.js";
 import { runWebSearch } from "../web/search.js";
-import type { PipiclawWebToolsConfig } from "./config.js";
 
 const webSearchSchema = Type.Object({
 	query: Type.String({ description: "Search query" }),

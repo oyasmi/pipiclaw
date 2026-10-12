@@ -1,5 +1,5 @@
 import type { Static } from "typebox";
-import type { ChannelJobManager } from "../../agent/job-manager.js";
+import type { ChannelJobManager } from "../../jobs/manager.js";
 import type { SubAgentRunManager } from "../../subagents/runs.js";
 import type {
 	taskCloseSchema,

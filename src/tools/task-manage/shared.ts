@@ -1,10 +1,10 @@
 import { join } from "node:path";
+import { uncheckedTaskAcceptanceItems } from "../../tasks/contract.js";
 import type { TaskFrontmatter } from "../../tasks/frontmatter.js";
-import { uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
-import { appendTaskLog } from "../../tasks/log.js";
+import { appendTaskLog } from "../../tasks/loop-log.js";
 import { archiveTask, type StoredTaskDocument, writeStoredTask } from "../../tasks/store.js";
 import { describeTicket, type PendingWorkRef, type TicketContext } from "../../tasks/ticket.js";
-import { RecoverableToolError } from "../tool-details.js";
+import { RecoverableToolError } from "../contract/details.js";
 import type { TaskManageToolOptions } from "./types.js";
 
 export function tasksDir(options: TaskManageToolOptions): string {

@@ -3,8 +3,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
+import { scanSkillContent } from "../src/skills/validation.js";
 import { createSkillTool, listWorkspaceSkills } from "../src/tools/skill.js";
-import { scanSkillContent } from "../src/tools/skill-security.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createWorkspace = useTempDirs("pipiclaw-skill-");

@@ -10,7 +10,7 @@ import {
 	renderStandardTaskBody,
 	renderTaskDocument,
 	uncheckedTaskAcceptanceItems,
-} from "../src/tasks/ledger.js";
+} from "../src/tasks/contract.js";
 import type { Ticket } from "../src/tasks/ticket.js";
 
 const NOW = new Date("2026-09-05T10:00:00+08:00");

@@ -8,9 +8,15 @@ import { formatSpanZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { buildTaskBoard, renderTaskBoardForUser } from "./board.js";
+import { normalizeTaskId, readActiveTasks, type TaskLedgerEntry } from "./contract.js";
 import { type TaskBudget, taskStateLabel } from "./frontmatter.js";
-import { normalizeTaskId, readActiveTasks, type TaskLedgerEntry } from "./ledger.js";
-import { readTaskLog, renderTaskLogLineForUser, taskArchiveLogPath, taskLogIsArchived, taskLogPath } from "./log.js";
+import {
+	readTaskLog,
+	renderTaskLogLineForUser,
+	taskArchiveLogPath,
+	taskLogIsArchived,
+	taskLogPath,
+} from "./loop-log.js";
 import { withTaskMutation } from "./mutation-lock.js";
 import { hasTaskSteer, queueTaskSteer } from "./steer.js";
 import {

@@ -11,7 +11,7 @@ import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 import type { SecurityConfig } from "../security/types.js";
 import { splitShellWords } from "../shared/shell-words.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { SUBAGENT_TOOL_NAMES, type SubAgentToolName } from "../tools/subagent-tool-names.js";
+import { SUBAGENT_TOOL_NAMES, type SubAgentToolName } from "../tools/contract/names.js";
 
 /** Re-exported from the leaf source of truth so validation and the tool set never drift. */
 const ALLOWED_SUB_AGENT_TOOLS = SUBAGENT_TOOL_NAMES;

@@ -1,4 +1,4 @@
-import { appendTaskLog, type TaskDispatchRecord, type TaskSettleRecord } from "./log.js";
+import { appendTaskLog, type TaskDispatchRecord, type TaskSettleRecord } from "./loop-log.js";
 import { readStoredTask, updateStoredTask } from "./store.js";
 
 /**

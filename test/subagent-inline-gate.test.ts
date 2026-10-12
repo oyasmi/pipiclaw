@@ -1,8 +1,8 @@
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
-import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { createPipiclawTools } from "../src/tools/index.js";
 import { testManagers } from "./helpers/background-runtime.js";
 

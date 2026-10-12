@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createUsage } from "../src/tasks/budget.js";
 import { handleTasksCommand, parseTasksCommand } from "../src/tasks/commands.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { parkTask, readStoredTask } from "../src/tasks/store.js";
 
 const FUTURE = "2099-01-01T00:00:00+08:00";

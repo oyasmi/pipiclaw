@@ -33,7 +33,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/dingtalk/` | 钉钉 Stream 传输：连接、投递控制器、入站队列 | `bot.ts`（传输）、`delivery.ts`（投递控制器）、`channel-queue.ts`、`inbound-media.ts` |
 | `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts`、`project-scope-store.ts` |
-| `src/agent/` | 单频道 agent 编排：组装 SDK 会话、跑一轮、流式回传 | `channel-runner.ts`（核心编排器）、`session-events.ts`、`prompt/`（system prompt 流水线）、`model-fallback.ts` |
+| `src/agent/` | 单频道 agent 编排：组装 SDK 会话、跑一轮、流式回传 | `channel-runner.ts`（核心编排器）、`session-events.ts`、`prompt/`（system prompt 流水线） |
 | `src/commands/` | 全产品斜杠命令目录、共享回复预算与无状态报告命令的分发 | `catalog.ts`、`reply-limits.ts`、`router.ts` |
 | `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050） | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts` |
 | `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
@@ -140,7 +140,7 @@ sequenceDiagram
 
 - **忙时语义**：任务流式进行中，内建命令（`/help /stop /steer /followup /events /tasks /status /usage /context /subagents`）仍可用；普通消息按 `busyMessageDefault`（默认 `steer`）注入当前轮；`/stop` 会中止当前轮、丢弃排队消息、暂停关联任务并取消 durable-dispatch 租约——但**不再**连带终止已派发的委派 run（spec 040），停止一个 run 需要显式 `/subagents cancel <runId>`；回执会指名被暂停的任务和 `/tasks resume <id>`，避免用户以为只是打断了一轮。`/new` 是例外，会绕过 busy 检查和旧 channel queue，立即提交新会话边界；其他会话命令（`/model` `/compact` `/session`）只在空闲时可用。
 - **未知斜杠命令在分发处拒绝**（`isKnownSlashCommand`），避免 `/modle` 这类笔误消耗一整轮 LLM。
-- **模型 fallback**（`agent/model-fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
+- **模型 fallback**（`models/fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
 - **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到频道目录 `last_prompt.json`。
 
 ### 投递层（ChannelContext）
@@ -368,7 +368,7 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 - **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 完全交给 pi（spec 026 §9）**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill），不设 skills 预算、不产生超限 warning。`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
 - **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/events.ts`），普通对话不再长期携带。TASK_STEP 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。
-- **自动 turn context 单位上限（spec 026 §5.3）**：task agenda（600 units）、workspace 共享背景（500 units）、channel 记忆索引（1,400 units）、当天 journal 尾部（400 units）各有独立 unit 上限，与内置 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`memory/task-digest.ts`、`memory/index-budget.ts`、`memory/render.ts`）。
+- **自动 turn context 单位上限（spec 026 §5.3）**：task agenda（600 units）、workspace 共享背景（500 units）、channel 记忆索引（1,400 units）、当天 journal 尾部（400 units）各有独立 unit 上限，与内置 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`agent/task-digest.ts`、`memory/index-budget.ts`、`memory/render.ts`）。
 - **可观测**：`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地列出各 section 的 units/chars、runtime-authored 合计、SOUL/AGENTS 独立预算、skills 归属和上一轮自动上下文 units；`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录**实际发出的** system prompt 与 manifest。注意 `fingerprint` 只覆盖 Pipiclaw 自有 section（日志据此去重），provider 真正缓存的是含 pi tail 的整串，即 `finalPromptSha256`——date 每日一变会让整块 system prompt 重算。缓存效果结合用量账本里的 cacheRead/cacheWrite 观察。
 
 playbook 正文不进提示词，agent 触发时用 `read` 按需加载。

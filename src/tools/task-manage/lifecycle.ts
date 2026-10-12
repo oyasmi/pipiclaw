@@ -1,9 +1,9 @@
 import { mkdir } from "node:fs/promises";
+import { applyTaskItemsPatch, normalizeTaskId, readActiveTasks } from "../../tasks/contract.js";
 import { normalizeTaskBudget } from "../../tasks/contract-input.js";
-import { applyTaskItemsPatch, normalizeTaskId, readActiveTasks } from "../../tasks/ledger.js";
 import { readStoredTask, writeStoredTask } from "../../tasks/store.js";
 import { describeTicket } from "../../tasks/ticket.js";
-import { RecoverableToolError } from "../tool-details.js";
+import { RecoverableToolError } from "../contract/details.js";
 import { closeTaskDocument, describeTaskState, requiredField, tasksDir } from "./shared.js";
 import type { TaskCloseRequest, TaskManageResult, TaskManageToolOptions, TaskUpdateRequest } from "./types.js";
 

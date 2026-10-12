@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { loadSkillsFromDir, type ResourceDiagnostic, type Skill } from "@earendil-works/pi-coding-agent";
 import { join } from "path";
-import { scanSkillContent } from "../tools/skill-security.js";
+import { scanSkillContent } from "./validation.js";
 
 export interface PipiclawSkillsResult {
 	skills: Skill[];

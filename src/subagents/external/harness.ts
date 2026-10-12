@@ -1,4 +1,4 @@
-import type { UsageTotals } from "../../shared/types.js";
+import type { UsageTotals } from "../../usage/totals.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
 
 /**

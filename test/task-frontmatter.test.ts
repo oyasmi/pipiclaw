@@ -2,14 +2,14 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { renderTaskDocument } from "../src/tasks/contract.js";
 import {
 	normalizeTaskFrontmatter,
 	parseTaskFrontmatter,
 	renderTaskFrontmatter,
 	type TaskFrontmatter,
 } from "../src/tasks/frontmatter.js";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
-import { resetTaskLogAppenders } from "../src/tasks/log.js";
+import { resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { readStoredTask, writeStoredTask } from "../src/tasks/store.js";
 import type { Ticket } from "../src/tasks/ticket.js";
 

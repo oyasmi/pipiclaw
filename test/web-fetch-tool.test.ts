@@ -9,8 +9,8 @@ vi.mock("../src/web/fetch.js", async (importOriginal) => ({
 	runWebFetch: runWebFetchMock,
 }));
 
+import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
-import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { readWebCache, webCacheKey, writeWebCache } from "../src/tools/web-cache.js";
 import { createWebFetchTool } from "../src/tools/web-fetch.js";
 

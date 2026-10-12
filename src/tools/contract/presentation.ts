@@ -1,5 +1,5 @@
-import { clipText } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
+import { clipText } from "../../shared/text-utils.js";
+import { isRecord } from "../../shared/type-guards.js";
 
 /**
  * Runtime-side projection from a tool call's raw arguments to the one-line Chinese progress

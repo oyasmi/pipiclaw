@@ -1,6 +1,6 @@
 import { afterEach } from "vitest";
-import { createJobRuntime } from "../../src/agent/job-manager.js";
 import { createExecutor } from "../../src/executor.js";
+import { createJobRuntime } from "../../src/jobs/manager.js";
 import { createSubAgentRuntime, type RunManagerOptions } from "../../src/subagents/runs.js";
 
 let runs = createSubAgentRuntime();

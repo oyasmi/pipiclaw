@@ -20,7 +20,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const { migrateTasksToV5 } = await import("../src/runtime/task-migration.js");
-const { resetTaskLogAppenders } = await import("../src/tasks/log.js");
+const { resetTaskLogAppenders } = await import("../src/tasks/loop-log.js");
 const { archiveTask, readStoredTask } = await import("../src/tasks/store.js");
 
 const CONTROL = '{"version":3,"verification":{"required":true,"status":"pending"}}';

@@ -6,6 +6,7 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { createUsage } from "./budget.js";
+import { normalizeTaskId, renderTaskDocument, taskBody } from "./contract.js";
 import {
 	normalizeTaskFrontmatter,
 	parseTaskFrontmatter,
@@ -13,8 +14,7 @@ import {
 	type TaskFrontmatter,
 	type TaskPaused,
 } from "./frontmatter.js";
-import { normalizeTaskId, renderTaskDocument, taskBody } from "./ledger.js";
-import { appendTaskLog, taskLogPath } from "./log.js";
+import { appendTaskLog, taskLogPath } from "./loop-log.js";
 import { withTaskMutation } from "./mutation-lock.js";
 import { describeTicket, type Ticket, ticketExpired } from "./ticket.js";
 

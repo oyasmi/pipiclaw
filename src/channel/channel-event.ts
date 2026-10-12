@@ -41,7 +41,7 @@ export interface InboundImage {
  * A message or wake, from any producer: a real inbound DingTalk message, a scheduled event, a
  * task-driver wake, or a job/subagent completion. `conversationId` is the one field genuinely
  * DingTalk-specific (needed to reply into the right conversation); every synthetic producer
- * (job-manager, task-driver, events, subagents/runs) leaves it unset rather than faking a value,
+ * (jobs/manager, task-driver, events, subagents/runs) leaves it unset rather than faking a value,
  * since it has no DingTalk conversation to route into. `conversationType` is not DingTalk-specific
  * in practice — every producer, real or synthetic, can derive "1"/"2" from the channelId prefix —
  * so it stays required.

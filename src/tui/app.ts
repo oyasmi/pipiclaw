@@ -7,7 +7,6 @@
  * preparation shares `prepareAppServices` with the DingTalk path.
  */
 import { userInfo } from "node:os";
-import { createJobRuntime } from "../agent/job-manager.js";
 import { createRunner } from "../agent/runner-factory.js";
 import type { AgentRunner } from "../agent/types.js";
 import {
@@ -26,6 +25,7 @@ import { renderBuiltInHelp } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
 import { finalDeliveryOf, progressStyleOf } from "../dingtalk/bot.js";
 import { createExecutor } from "../executor.js";
+import { createJobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { createSubAgentRuntime } from "../subagents/runs.js";

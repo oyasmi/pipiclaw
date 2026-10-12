@@ -29,8 +29,11 @@ import {
 	renderBuiltInHelp,
 	slashCommandName,
 } from "../commands/catalog.js";
+import { type PipiclawSettingsManager, TASK_DIGEST_SETTINGS } from "../config/settings.js";
+import { loadToolsConfigWithDiagnostics } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
+import type { ChannelJobManager } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { handleMemoryCommand } from "../memory/commands.js";
 import {
@@ -48,8 +51,13 @@ import {
 import { hasMemoryBootstrapBlock, renderMemoryBootstrap } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { listMemoryEntries } from "../memory/store.js";
-import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "../memory/task-digest.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
+import {
+	type FallbackRunDeps,
+	PRIMARY_COOLDOWN_MS,
+	runPromptWithFallback,
+	shouldRestorePrimary,
+} from "../models/fallback.js";
 import {
 	createModelRuntime,
 	defaultModel,
@@ -63,29 +71,21 @@ import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
-import { type PipiclawSettingsManager, TASK_DIGEST_SETTINGS } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { formatLocalTime, localDayKey, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import type { UsageTotals } from "../shared/types.js";
 import { withTimeout } from "../shared/with-timeout.js";
+import { loadPipiclawSkills, type PipiclawSkillsResult, resolvePipiclawSkills } from "../skills/loader.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../tasks/session-path.js";
-import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { formatSize } from "../tools/truncate.js";
 import { getUsageLedger } from "../usage/ledger.js";
+import type { UsageTotals } from "../usage/totals.js";
 import { createCommandExtension } from "./command-extension.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
-import type { ChannelJobManager } from "./job-manager.js";
-import {
-	type FallbackRunDeps,
-	PRIMARY_COOLDOWN_MS,
-	runPromptWithFallback,
-	shouldRestorePrimary,
-} from "./model-fallback.js";
 import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import { buildPipiclawSystemPrompt } from "./prompt/builder.js";
 import { createPromptBoundaryExtension } from "./prompt/extension.js";
@@ -112,6 +112,7 @@ import {
 } from "./session-adapter.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
+import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "./task-digest.js";
 import { renderFallbackSwitch, renderTurnErrorReply } from "./turn-error.js";
 import { assembleTurnPrompt } from "./turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn-recovery.js";
@@ -126,7 +127,6 @@ import {
 	type RunState,
 	type TurnStatus,
 } from "./types.js";
-import { loadPipiclawSkills, type PipiclawSkillsResult, resolvePipiclawSkills } from "./workspace-resources.js";
 
 function isSilentOutcome(outcome: FinalOutcome): outcome is { kind: "silent" } {
 	return outcome.kind === "silent";

@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { PipiclawSettingsManager } from "../src/settings.js";
+import { PipiclawSettingsManager } from "../src/config/settings.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-settings-");

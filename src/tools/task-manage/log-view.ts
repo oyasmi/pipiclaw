@@ -1,5 +1,5 @@
-import { normalizeTaskId } from "../../tasks/ledger.js";
-import { readTaskLog, renderTaskLogLine, taskLogIsArchived } from "../../tasks/log.js";
+import { normalizeTaskId } from "../../tasks/contract.js";
+import { readTaskLog, renderTaskLogLine, taskLogIsArchived } from "../../tasks/loop-log.js";
 import type { TaskLogRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 const DEFAULT_LIMIT = 20;

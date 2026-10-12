@@ -5,9 +5,9 @@ import { PLAYBOOKS_DIR } from "../src/paths.js";
 import { BOARD_REF_LINE_BUDGET, buildTaskBoard, renderTaskBoard, renderTaskBoardForUser } from "../src/tasks/board.js";
 import { buildTaskStepBrief } from "../src/tasks/brief.js";
 import { createUsage } from "../src/tasks/budget.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { appendTaskLog, readTaskLog, renderTaskLogLineForUser, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { appendTaskLog, readTaskLog, renderTaskLogLineForUser, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { archiveTask } from "../src/tasks/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

@@ -9,20 +9,20 @@
 			"to": "src/app/home.ts"
 		},
 		{
+			"from": "src/config/settings.ts",
+			"to": "src/dingtalk/bot.ts"
+		},
+		{
+			"from": "src/config/settings.ts",
+			"to": "src/memory/maintenance-tuning.ts"
+		},
+		{
 			"from": "src/events/events.ts",
 			"to": "src/dingtalk/bot.ts"
 		},
 		{
 			"from": "src/playbooks/catalog.ts",
 			"to": "src/tools/registry.ts"
-		},
-		{
-			"from": "src/settings.ts",
-			"to": "src/dingtalk/bot.ts"
-		},
-		{
-			"from": "src/settings.ts",
-			"to": "src/memory/maintenance-tuning.ts"
 		},
 		{
 			"from": "src/skills/commands.ts",
@@ -59,9 +59,9 @@
 	],
 	"r3": {
 		"src/agent/channel-runner.ts": 1871,
-		"src/agent/job-manager.ts": 1328,
 		"src/dingtalk/bot.ts": 1820,
 		"src/events/events.ts": 1009,
+		"src/jobs/manager.ts": 1328,
 		"src/runtime/bootstrap.ts": 1383,
 		"src/subagents/discovery.ts": 1040,
 		"src/subagents/runs.ts": 1654,

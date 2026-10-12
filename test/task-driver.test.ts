@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelDir } from "../src/channel/channel-paths.js";
+import type { PipiclawTaskDriverSettings } from "../src/config/settings.js";
 import type { DingTalkEvent } from "../src/dingtalk/bot.js";
 import { createTaskDriverEvent, TaskDriver, taskStopReceipt } from "../src/runtime/task-driver.js";
-import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { createUsage } from "../src/tasks/budget.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { parkTask, readStoredTask } from "../src/tasks/store.js";
 
 const NOW = new Date("2026-08-04T12:00:00+08:00");

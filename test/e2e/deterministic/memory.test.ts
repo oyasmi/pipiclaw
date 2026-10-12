@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { getDefaultChannelMemoryQueue } from "../../../src/memory/channel-maintenance-queue.js";
 import { createTaskDriverEvent } from "../../../src/runtime/task-driver.js";
 import { localDayKey } from "../../../src/shared/local-time.js";
-import { readActiveTasks } from "../../../src/tasks/ledger.js";
+import { readActiveTasks } from "../../../src/tasks/contract.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 import { waitForFileContent } from "../helpers/wait.js";
 

@@ -15,8 +15,8 @@ vi.mock("node:dns/promises", () => ({
 	lookup: lookupMock,
 }));
 
+import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
-import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { runWebFetch } from "../src/web/fetch.js";
 
 const context = {

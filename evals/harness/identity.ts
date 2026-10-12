@@ -1,4 +1,4 @@
-import { isRecoverableRejection } from "../../src/tools/tool-details.js";
+import { isRecoverableRejection } from "../../src/tools/contract/details.js";
 import type { TraceEvent } from "./schema.js";
 
 function record(value: unknown): Record<string, unknown> {

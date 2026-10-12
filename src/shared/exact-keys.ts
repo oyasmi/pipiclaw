@@ -3,7 +3,7 @@
  * the result to a `const` typed `true` (then `void` it to satisfy `noUnusedLocals`): if `K` is
  * missing any key of `T`, the check's type becomes `never` and the assignment fails to
  * typecheck. This is what keeps a documentation-coverage test's key list (e.g.
- * `SETTINGS_TOP_LEVEL_KEYS` in `settings.ts`) from silently drifting out of sync with the
+ * `SETTINGS_TOP_LEVEL_KEYS` in `config/settings.ts`) from silently drifting out of sync with the
  * interface it documents when a field is added — `npm run typecheck` catches it, not a human
  * remembering to update two places.
  *

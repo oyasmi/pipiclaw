@@ -1,14 +1,16 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { MediaSender } from "../channel/channel-context.js";
+import type { PipiclawSessionSearchSettings } from "../config/settings.js";
+import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
+import type { ChannelJobManager } from "../jobs/manager.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import type { PipiclawSessionSearchSettings } from "../settings.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createBashTool } from "./bash.js";
-import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "./config.js";
+import { type ToolDetailsKind, withToolDetails } from "./contract/details.js";
+import { SUBAGENT_TOOL_NAMES } from "./contract/names.js";
 import { createEditTool } from "./edit.js";
 import { createEventManageTool } from "./event-manage.js";
 import { createGlobTool } from "./glob.js";
@@ -19,8 +21,6 @@ import { createReadTool } from "./read.js";
 import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillTool } from "./skill.js";
-import { SUBAGENT_TOOL_NAMES } from "./subagent-tool-names.js";
-import type { TaskStepCost } from "./task-manage/types.js";
 import {
 	createTaskCloseTool,
 	createTaskCreateTool,
@@ -28,8 +28,8 @@ import {
 	createTaskLogTool,
 	createTaskStepEndTool,
 	createTaskUpdateTool,
-} from "./task-manage.js";
-import { type ToolDetailsKind, withToolDetails } from "./tool-details.js";
+} from "./task-manage/factory.js";
+import type { TaskStepCost } from "./task-manage/types.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWriteTool } from "./write.js";

@@ -1,9 +1,9 @@
-import { applyTaskItemsPatch, normalizeTaskId } from "../../tasks/ledger.js";
-import { appendTaskLog } from "../../tasks/log.js";
+import { applyTaskItemsPatch, normalizeTaskId } from "../../tasks/contract.js";
+import { appendTaskLog } from "../../tasks/loop-log.js";
 import { queueTaskNotice } from "../../tasks/steer.js";
 import { readStoredTask, writeStoredTask } from "../../tasks/store.js";
 import { describeTicket, resolveTicket } from "../../tasks/ticket.js";
-import { RecoverableToolError } from "../tool-details.js";
+import { RecoverableToolError } from "../contract/details.js";
 import { buildTicketContext, closeTaskDocument, requiredField } from "./shared.js";
 import type { TaskManageResult, TaskManageToolOptions, TaskStepEndRequest } from "./types.js";
 

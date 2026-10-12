@@ -131,7 +131,7 @@ export interface DingTalkConfig {
  * `DingTalkEvent` is kept as the public name (spec 035 D4: `src/index.ts`'s barrel is a
  * compatibility promise, so exported names there stay stable). Internally the type now lives in
  * `channel-event.ts` as `ChannelEvent`: most producers of this shape are not DingTalk at all
- * (job-manager, task-driver, events, subagents/runs all synthesize wakes), so `ChannelEvent` is
+ * (jobs/manager, task-driver, events, subagents/runs all synthesize wakes), so `ChannelEvent` is
  * what the rest of the runtime imports.
  */
 export type DingTalkEvent = ChannelEvent;

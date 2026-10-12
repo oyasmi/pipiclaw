@@ -1,5 +1,5 @@
 import { JSDOM } from "jsdom";
-import type { PipiclawWebSearchConfig, WebSearchProvider as WebSearchProviderName } from "../tools/config.js";
+import type { PipiclawWebSearchConfig, WebSearchProvider as WebSearchProviderName } from "../config/tools.js";
 import type { WebHttpClient } from "./client.js";
 import type { WebSearchResultItem } from "./format.js";
 

@@ -11,19 +11,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { DingTalkEvent } from "../src/dingtalk/bot.js";
+import { createExecutor, type ExecOptions, type ExecResult, type Executor } from "../src/executor.js";
 import {
 	ChannelJobManager,
 	createJobRuntime,
 	FINISHED_JOB_RETENTION_MS,
 	MAX_RUNNING_JOBS,
-} from "../src/agent/job-manager.js";
-import type { DingTalkEvent } from "../src/dingtalk/bot.js";
-import { createExecutor, type ExecOptions, type ExecResult, type Executor } from "../src/executor.js";
+} from "../src/jobs/manager.js";
 import * as log from "../src/log.js";
 import { isProcessAlive } from "../src/shared/host-process.js";
 import { createUsage } from "../src/tasks/budget.js";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
-import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { renderTaskDocument } from "../src/tasks/contract.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**

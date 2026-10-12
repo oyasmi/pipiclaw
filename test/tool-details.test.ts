@@ -4,13 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session-events.js";
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
 import type { ChannelContext } from "../src/channel/channel-context.js";
+import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
-import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
+import { isRecoverableRejection, toolResultDetails, withToolDetails } from "../src/tools/contract/details.js";
 import { buildToolSet, type ToolBuildContext } from "../src/tools/registry.js";
-import { isRecoverableRejection, toolResultDetails, withToolDetails } from "../src/tools/tool-details.js";
 import { testManagers } from "./helpers/background-runtime.js";
 
 function registryContext(): ToolBuildContext {

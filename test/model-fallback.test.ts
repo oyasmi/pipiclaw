@@ -8,7 +8,7 @@ import {
 	shouldFallback,
 	shouldRestorePrimary,
 	takeFailedTurn,
-} from "../src/agent/model-fallback.js";
+} from "../src/models/fallback.js";
 
 const primaryModel = getModel("anthropic", "claude-sonnet-4-5");
 const backupModel = getModel("openai", "gpt-4o-mini");

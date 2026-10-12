@@ -12,9 +12,9 @@ import { buildPipiclawSystemPrompt } from "../src/agent/prompt/builder.js";
 import { createPromptBoundaryExtension } from "../src/agent/prompt/extension.js";
 import { loadWorkspacePromptResources } from "../src/agent/prompt/resources.js";
 import type { PromptBuildContext } from "../src/agent/prompt/types.js";
-import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/agent/workspace-resources.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
+import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/skills/loader.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-loader-");

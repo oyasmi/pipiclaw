@@ -2,8 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { applyMemoryOps, type MemorySource, type MemoryType } from "../../src/memory/store.js";
 import { createUsage } from "../../src/tasks/budget.js";
+import { renderTaskDocument } from "../../src/tasks/contract.js";
 import type { TaskFrontmatter, TaskState } from "../../src/tasks/frontmatter.js";
-import { renderTaskDocument } from "../../src/tasks/ledger.js";
 import type { Ticket } from "../../src/tasks/ticket.js";
 import type { TrialSetup } from "../harness/schema.js";
 

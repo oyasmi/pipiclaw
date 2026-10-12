@@ -34,7 +34,7 @@ export interface AssembledTurnPrompt {
  *
  * `stats` measures the inputs, never the rendered wrapper — it is what `/context` reports as the
  * previous turn's automatic context, and the per-piece unit caps are enforced upstream by the
- * builders themselves (`memory/index-budget.ts`, `memory/task-digest.ts`).
+ * builders themselves (`memory/index-budget.ts`, `agent/task-digest.ts`).
  */
 export function assembleTurnPrompt(parts: TurnPromptParts): AssembledTurnPrompt {
 	const stats: PromptTurnContextStats = {

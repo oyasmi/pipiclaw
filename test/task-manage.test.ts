@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUsage } from "../src/tasks/budget.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { createTask } from "../src/tools/task-manage/create.js";
+import { createTaskStepEndTool } from "../src/tools/task-manage/factory.js";
 import { closeTask, listTasks, updateTask } from "../src/tools/task-manage/lifecycle.js";
 import { endTaskStep } from "../src/tools/task-manage/step-end.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
-import { createTaskStepEndTool } from "../src/tools/task-manage.js";
 import { testManagers } from "./helpers/background-runtime.js";
 
 const CHANNEL_ID = "dm_1";

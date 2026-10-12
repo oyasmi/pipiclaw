@@ -1,5 +1,5 @@
+import type { PipiclawWebSearchConfig, PipiclawWebToolsConfig } from "../config/tools.js";
 import type { SecurityConfig } from "../security/types.js";
-import type { PipiclawWebSearchConfig, PipiclawWebToolsConfig } from "../tools/config.js";
 import { createWebHttpClient } from "./client.js";
 import { formatWebSearchText, type WebSearchResultItem } from "./format.js";
 import { createSearchProvider, WebSearchProviderError } from "./search-providers.js";

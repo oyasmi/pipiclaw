@@ -12,6 +12,7 @@
 
 export { type BootstrapPaths, type BootstrapResult, isBootstrapExitError } from "./app/home.js";
 export type { ChannelContext, FinalDelivery, ProgressStyle } from "./channel/channel-context.js";
+export type { PipiclawSettings } from "./config/settings.js";
 export {
 	DingTalkBot,
 	type DingTalkConfig,
@@ -31,4 +32,3 @@ export {
 	WORKSPACE_DIR,
 } from "./paths.js";
 export { type AppContext, type BootstrapOptions, bootstrap } from "./runtime/bootstrap.js";
-export type { PipiclawSettings } from "./settings.js";

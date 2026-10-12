@@ -5,7 +5,7 @@ import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appende
 import { formatLocalTime } from "../shared/local-time.js";
 import { clipText, truncate } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
-import { normalizeTaskId } from "./ledger.js";
+import { normalizeTaskId } from "./contract.js";
 
 /**
  * The task's append-only loop log (spec 051, D5) — `tasks/<id>.jsonl`.

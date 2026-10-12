@@ -1,6 +1,5 @@
 import { mkdir, writeFile } from "fs/promises";
 import { join, relative } from "path";
-import { createJobRuntime, type JobRuntime } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
@@ -37,6 +36,8 @@ import {
 	slashCommandName,
 } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
+import { PipiclawSettingsManager } from "../config/settings.js";
+import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
 import {
 	type BusyMessageMode,
 	type BusyMessageResult,
@@ -49,13 +50,13 @@ import { createDingTalkContext } from "../dingtalk/delivery.js";
 import { extensionForMimeType } from "../dingtalk/inbound-media.js";
 import { createEventsWatcher } from "../events/events.js";
 import { createExecutor, type Executor } from "../executor.js";
+import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/utils.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
-import { PipiclawSettingsManager } from "../settings.js";
 import { fileStamp } from "../shared/format.js";
 import { localStampForFilename } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -63,10 +64,9 @@ import { sleepUnref } from "../shared/with-timeout.js";
 import { renderRunNotice } from "../subagents/commands.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/runs.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
-import { readActiveTasks } from "../tasks/ledger.js";
+import { readActiveTasks } from "../tasks/contract.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
 import { pauseTask as pauseStoredTask } from "../tasks/store.js";
-import { getToolsConfigPath, loadToolsConfig } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createTaskDriverEvent, parseDriverTaskId, TaskDriver } from "./task-driver.js";

@@ -7,7 +7,7 @@ import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/dingtalk/bot.js";
 import type { Executor } from "../src/executor.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
+import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { createFakeSessionBinding, createFakeTurnState } from "./helpers/fake-turn-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";

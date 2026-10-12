@@ -8,10 +8,16 @@ import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { createUsage } from "../tasks/budget.js";
+import {
+	extractTaskTitle,
+	findTaskSectionBounds,
+	normalizeTaskId,
+	parseTaskItems,
+	taskBody,
+} from "../tasks/contract.js";
 import { validateTaskContractInput } from "../tasks/contract-input.js";
 import type { TaskFrontmatter } from "../tasks/frontmatter.js";
-import { extractTaskTitle, findTaskSectionBounds, normalizeTaskId, parseTaskItems, taskBody } from "../tasks/ledger.js";
-import { appendTaskLog } from "../tasks/log.js";
+import { appendTaskLog } from "../tasks/loop-log.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { ArchiveUndoError, archiveTask, readStoredTask, writeStoredTask } from "../tasks/store.js";
 import { discoverTaskChannels } from "./task-driver.js";

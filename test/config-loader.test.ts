@@ -13,8 +13,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 	loadSkillsFromDir: loadSkillsFromDirMock,
 }));
 
-import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/agent/workspace-resources.js";
 import { getApiKeyForModel } from "../src/models/api-keys.js";
+import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/skills/loader.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");

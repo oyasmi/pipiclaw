@@ -1,9 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { normalizeTaskId } from "../tasks/ledger.js";
-import { withTaskMutation } from "../tasks/mutation-lock.js";
-import { createTask } from "./task-manage/create.js";
-import { closeTask, listTasks, updateTask } from "./task-manage/lifecycle.js";
-import { readTaskLogTool } from "./task-manage/log-view.js";
+import { normalizeTaskId } from "../../tasks/contract.js";
+import { withTaskMutation } from "../../tasks/mutation-lock.js";
+import { createTask } from "./create.js";
+import { closeTask, listTasks, updateTask } from "./lifecycle.js";
+import { readTaskLogTool } from "./log-view.js";
 import {
 	taskCloseSchema,
 	taskCreateSchema,
@@ -11,8 +11,8 @@ import {
 	taskLogSchema,
 	taskStepEndSchema,
 	taskUpdateSchema,
-} from "./task-manage/schema.js";
-import { endTaskStep } from "./task-manage/step-end.js";
+} from "./schema.js";
+import { endTaskStep } from "./step-end.js";
 import type {
 	TaskCloseRequest,
 	TaskCreateRequest,
@@ -20,7 +20,7 @@ import type {
 	TaskManageToolOptions,
 	TaskStepEndRequest,
 	TaskUpdateRequest,
-} from "./task-manage/types.js";
+} from "./types.js";
 
 export type {
 	TaskCloseRequest,
@@ -30,7 +30,7 @@ export type {
 	TaskManageToolOptions,
 	TaskStepEndRequest,
 	TaskUpdateRequest,
-} from "./task-manage/types.js";
+} from "./types.js";
 
 /**
  * One tool per payload shape (spec 046, D3.1). Each factory wires only its own schema and, for

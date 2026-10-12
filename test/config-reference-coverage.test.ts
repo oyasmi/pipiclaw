@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { SETTINGS_TOP_LEVEL_KEYS } from "../src/config/settings.js";
+import { TOOLS_CONFIG_SECTION_KEYS } from "../src/config/tools.js";
 import { SECURITY_CONFIG_TOP_LEVEL_KEYS } from "../src/security/types.js";
-import { SETTINGS_TOP_LEVEL_KEYS } from "../src/settings.js";
-import { TOOLS_CONFIG_SECTION_KEYS } from "../src/tools/config.js";
 
 /**
  * Structural coverage, not text-pinning (AGENTS.md's "no change-detector" rule): this asserts

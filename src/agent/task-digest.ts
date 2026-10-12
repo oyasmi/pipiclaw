@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { parseLocalTime } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
-import { readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
+import { readActiveTasks, type TaskLedgerEntry } from "../tasks/contract.js";
 import { describeTicket } from "../tasks/ticket.js";
 
 /** Automatic-context share for the in-flight task agenda (spec 026 §5.3). */

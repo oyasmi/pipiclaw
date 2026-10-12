@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 import { createSerialQueue } from "../shared/serial-queue.js";
-import { normalizeTaskId } from "./ledger.js";
+import { normalizeTaskId } from "./contract.js";
 
 const mutationQueue = createSerialQueue<string>();
 const heldKeys = new AsyncLocalStorage<ReadonlySet<string>>();

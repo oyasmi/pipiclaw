@@ -1,20 +1,20 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { MediaSender } from "../channel/channel-context.js";
+import type { PipiclawSessionSearchSettings } from "../config/settings.js";
+import type { PipiclawToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
+import type { ChannelJobManager } from "../jobs/manager.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
-import type { PipiclawSessionSearchSettings } from "../settings.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.js";
-import type { PipiclawToolsConfig } from "./config.js";
+import { withToolDetails } from "./contract/details.js";
 import { buildToolSet } from "./registry.js";
 import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
 import type { TaskStepCost } from "./task-manage/types.js";
-import { withToolDetails } from "./tool-details.js";
 
 export interface CreatePipiclawToolsOptions {
 	jobManager: ChannelJobManager;

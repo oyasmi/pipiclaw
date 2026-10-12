@@ -5,17 +5,17 @@ import type { MemoryLifecycle } from "../memory/lifecycle.js";
 import { renderGuardBlockForUser } from "../security/block-message.js";
 import { truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import { addUsage, type UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
-import { describeToolCall } from "../tools/presentation.js";
 import {
 	isArgumentValidationFailure,
 	isRecoverableRejection,
 	type ToolDetails,
 	takeGuardBlock,
 	toolResultDetails,
-} from "../tools/tool-details.js";
+} from "../tools/contract/details.js";
+import { describeToolCall } from "../tools/contract/presentation.js";
 import type { UsageLedger } from "../usage/ledger.js";
+import { addUsage, type UsageTotals } from "../usage/totals.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
 import { renderCompactionFailure } from "./turn-error.js";
 import {

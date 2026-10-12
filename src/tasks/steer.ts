@@ -3,7 +3,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { normalizeTaskId } from "./ledger.js";
+import { normalizeTaskId } from "./contract.js";
 
 /**
  * Out-of-band guidance for a running task loop (spec 051, D11) — `/tasks steer` and `/tasks reply`.

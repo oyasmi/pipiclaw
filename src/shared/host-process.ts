@@ -5,7 +5,7 @@ import { promisify } from "node:util";
  * Stateless host-process operations shared by background jobs and external delegation runs
  * (spec 040, D1): a liveness probe and a process-group kill. Nothing here is job- or run-specific
  * — both callers bring their own persisted pid and decide what "gone" means for their own state
- * machine. `job-manager.ts` still probes through its shell `Executor` (its jobs are shell
+ * machine. `jobs/manager.ts` still probes through its shell `Executor` (its jobs are shell
  * children); this is for callers that spawn argv-direct, detached children of their own (D3/D4).
  */
 

@@ -3,16 +3,16 @@ import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
+import { logTaskDispatch, logTaskSettlement } from "../src/tasks/bound-work.js";
+import { renderTaskDocument } from "../src/tasks/contract.js";
 import {
 	appendTaskLog,
 	readTaskLog,
 	resetTaskLogAppenders,
 	taskArchiveLogPath,
 	taskLogPath,
-} from "../src/tasks/log.js";
+} from "../src/tasks/loop-log.js";
 import { archiveTask } from "../src/tasks/store.js";
-import { logTaskDispatch, logTaskSettlement } from "../src/tasks/work-log.js";
 
 let dir: string;
 

@@ -7,8 +7,8 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 // read-only consumers (see `discoverWorkspaceChannelIds`).
 import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
 import { dedupeChannelIdsByDirectory, isChannelId } from "../channel/channel-paths.js";
+import type { PipiclawMemoryMaintenanceSettings } from "../config/settings.js";
 import * as log from "../log.js";
-import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
 import { getMemoryMaintenanceStateDir, readMemoryMaintenanceState } from "./maintenance-state.js";

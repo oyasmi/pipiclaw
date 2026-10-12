@@ -1,11 +1,11 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
+import type { PipiclawWebToolsConfig } from "../config/tools.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { resolveWebFetchRequest } from "../web/config.js";
 import { runWebFetch } from "../web/fetch.js";
 import { formatFetchedText, UNTRUSTED_WEB_CONTENT_BANNER } from "../web/format.js";
-import type { PipiclawWebToolsConfig } from "./config.js";
 import { clearWebCacheEntry, readWebCache, type WebCacheEntry, webCacheKey, writeWebCache } from "./web-cache.js";
 
 // Large cap used to fetch the full readable body for caching; the displayed window is bounded by the

@@ -1,4 +1,4 @@
-import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
+import type { PipiclawMemoryMaintenanceSettings } from "../config/settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import type { MemoryMaintenanceState } from "./maintenance-state.js";
 

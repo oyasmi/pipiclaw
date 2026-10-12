@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUsage } from "../src/tasks/budget.js";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
-import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { renderTaskDocument } from "../src/tasks/contract.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import {
 	expireTicket,
 	parkTask,

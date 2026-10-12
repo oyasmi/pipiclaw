@@ -1,8 +1,8 @@
+import { PipiclawSettingsManager } from "../config/settings.js";
+import { loadToolsConfigWithDiagnostics } from "../config/tools.js";
 import * as log from "../log.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
-import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
-import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { type BootstrapPaths, DEFAULT_BOOTSTRAP_PATHS } from "./home.js";
 import { installLlmProxy } from "./proxy.js";
 
@@ -15,8 +15,8 @@ import { installLlmProxy } from "./proxy.js";
  * Lives in `app/` rather than in `runtime/` on purpose: `app/auth-command.ts` needs it
  * before a runner or channel exists, and `runtime/bootstrap.ts` separately depends on `models/`
  * (for the default model reference) — parking this function inside `bootstrap.ts` made `models`
- * and `runtime` depend on each other. Everything this function touches (`settings.ts`,
- * `tools/config.ts`, `security/config.ts`, `app/home.ts`, `app/proxy.ts`) has no
+ * and `runtime` depend on each other. Everything this function touches (`config/settings.ts`,
+ * `config/tools.ts`, `security/config.ts`, `app/home.ts`, `app/proxy.ts`) has no
  * import back to `models/`, so this file doesn't reintroduce the cycle it was extracted to break.
  */
 export function prepareAppServices(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): {

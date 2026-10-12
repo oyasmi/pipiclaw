@@ -3,14 +3,14 @@ import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import { type DiscoverOptions, discoverWorkspaceChannelIds } from "../channel/channel-index.js";
 import { dedupeChannelIdsByDirectory, getChannelDir, isChannelId } from "../channel/channel-paths.js";
+import { type PipiclawTaskDriverSettings, TASK_DRIVER_SETTINGS } from "../config/settings.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
-import { type PipiclawTaskDriverSettings, TASK_DRIVER_SETTINGS } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type BudgetBreach, checkBudget, IDLE_STEP_LIMIT } from "../tasks/budget.js";
+import { readActiveTasks, type TaskLedgerEntry } from "../tasks/contract.js";
 import { taskStateLabel } from "../tasks/frontmatter.js";
-import { readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
-import { readTaskLog } from "../tasks/log.js";
+import { readTaskLog } from "../tasks/loop-log.js";
 import { expireTicket, pauseTask, redeemTicket } from "../tasks/store.js";
 
 export interface TaskDriverOptions {

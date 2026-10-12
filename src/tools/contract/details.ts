@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { type GuardBlock, GuardBlockedError } from "../security/block-message.js";
-import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { isRecord } from "../shared/type-guards.js";
+import { type GuardBlock, GuardBlockedError } from "../../security/block-message.js";
+import { RecoverableToolError } from "../../shared/recoverable-error.js";
+import { isRecord } from "../../shared/type-guards.js";
 
 /**
  * The `details` contract for tool results, and the recoverable-rejection mechanism
@@ -18,7 +18,7 @@ import { isRecord } from "../shared/type-guards.js";
  * tool is registered under.
  */
 
-export { RecoverableToolError } from "../shared/recoverable-error.js";
+export { RecoverableToolError } from "../../shared/recoverable-error.js";
 
 /**
  * Every tool that can appear in a tool set. Equal to the registry's tool names plus

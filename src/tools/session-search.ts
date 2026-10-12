@@ -1,8 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import type { PipiclawSessionSearchSettings } from "../config/settings.js";
 import { searchChannelSessions } from "../memory/session-search.js";
-import type { PipiclawSessionSearchSettings } from "../settings.js";
 
 const sessionSearchSchema = Type.Object({
 	query: Type.Optional(

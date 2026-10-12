@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { PipiclawSettingsManager } from "../settings.js";
+import type { PipiclawSettingsManager } from "../config/settings.js";
 
 // Default model - will be overridden by ModelRegistry if custom models are configured
 export const defaultModel = getModel("anthropic", "claude-sonnet-4-5");

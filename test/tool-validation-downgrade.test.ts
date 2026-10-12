@@ -1,7 +1,7 @@
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { isArgumentValidationFailure } from "../src/tools/tool-details.js";
+import { isArgumentValidationFailure } from "../src/tools/contract/details.js";
 
 /**
  * Spec 047, D4.2: a schema-validation failure is produced by the SDK *before* `execute`, so it

@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
 import type { SpawnTaskRequest, SpawnTaskResult } from "../events/events.js";
 import * as log from "../log.js";
+import { readActiveTasks } from "../tasks/contract.js";
 import { createTaskDocument, instanceStamp } from "../tasks/create.js";
 import { taskStateLabel } from "../tasks/frontmatter.js";
-import { readActiveTasks } from "../tasks/ledger.js";
 import { archivedTaskPath, taskPath, tasksDir } from "../tasks/store.js";
 
 export interface TaskSpawnerOptions {

@@ -11,7 +11,7 @@ import {
 } from "../src/runtime/durable-dispatch.js";
 import { createTaskDriverEvent } from "../src/runtime/task-driver.js";
 import { claimVerifiedWake } from "../src/runtime/task-wake.js";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
+import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";

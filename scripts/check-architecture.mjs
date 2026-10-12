@@ -30,17 +30,6 @@ const MODULES = [
 	["src/tools/contract/", "tools-contract"],
 	// Legacy entries: files that have not been moved yet are registered under their target
 	// module so a move never changes module membership. Delete the line when the file moves.
-	["src/settings.ts", "config"],
-	["src/tools/config.ts", "config"],
-	["src/agent/job-manager.ts", "jobs"],
-	["src/agent/workspace-resources.ts", "skills"],
-	["src/tools/skill-security.ts", "skills"],
-	["src/agent/model-fallback.ts", "models"],
-	["src/memory/task-digest.ts", "agent"],
-	["src/shared/types.ts", "usage"],
-	["src/tools/tool-details.ts", "tools-contract"],
-	["src/tools/presentation.ts", "tools-contract"],
-	["src/tools/subagent-tool-names.ts", "tools-contract"],
 ];
 
 // --- D1: allowed dependencies (a DAG; same-module imports are always fine) --------------

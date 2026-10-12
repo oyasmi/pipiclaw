@@ -3,8 +3,8 @@ import type { InboundImage } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import type { RunnerBuiltInCommand } from "../commands/catalog.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
-import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
 
 export interface RunnerStatusSnapshot {
 	model: string;
