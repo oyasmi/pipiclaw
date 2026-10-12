@@ -23,7 +23,7 @@ import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { bold, dim } from "./colors.js";
 import { type DispatchDeps, dispatch } from "./commands.js";
-import type { Frontend } from "./renderer.js";
+import type { Frontend } from "./frontend.js";
 import { createTerminalContext, type DeliveryTraits, type TurnInput } from "./terminal-context.js";
 
 const SHUTDOWN_ABORT_WAIT_MS = 5000;

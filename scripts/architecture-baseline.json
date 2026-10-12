@@ -1,12 +1,6 @@
 {
 	"r1": [],
-	"r2": [
-		[
-			"src/tui/pitui-frontend.ts",
-			"src/tui/plain-frontend.ts",
-			"src/tui/renderer.ts"
-		]
-	],
+	"r2": [],
 	"r3": {
 		"src/agent/channel-runner.ts": 1870,
 		"src/dingtalk/bot.ts": 1758,

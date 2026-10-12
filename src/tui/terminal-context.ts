@@ -11,7 +11,7 @@
  */
 import type { ChannelContext, FinalDelivery, ProgressStyle } from "../channel/channel-context.js";
 import type { ChannelStore } from "../channel/store.js";
-import type { TranscriptRenderer } from "./renderer.js";
+import type { TranscriptRenderer } from "./frontend.js";
 
 /** The minimal per-turn input the terminal context needs (no DingTalk types). */
 export interface TurnInput {

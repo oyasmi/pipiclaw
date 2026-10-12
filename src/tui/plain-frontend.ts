@@ -9,7 +9,7 @@
  */
 import { createInterface, type Interface } from "node:readline";
 import { dim, gray } from "./colors.js";
-import type { Frontend, FrontendCallbacks } from "./renderer.js";
+import type { Frontend, FrontendCallbacks } from "./frontend.js";
 
 export interface PlainFrontendOptions {
 	/** Suppress progress/notice output on stderr; only the final answer is printed. */

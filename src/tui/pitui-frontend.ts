@@ -26,7 +26,7 @@ import {
 	TuiMainScreen,
 } from "@earendil-works/pi-tui";
 import { bold, cyan, dim, gray, italic, red, strikethrough, underline, yellow } from "./colors.js";
-import type { Frontend, FrontendCallbacks } from "./renderer.js";
+import type { Frontend, FrontendCallbacks } from "./frontend.js";
 
 const MARKDOWN_THEME: MarkdownTheme = {
 	heading: (t) => bold(cyan(t)),
