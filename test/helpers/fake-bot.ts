@@ -1,5 +1,11 @@
-import type { FinalDelivery, ProgressStyle } from "../../src/channel/channel-context.js";
-import { type DingTalkEvent, finalDeliveryOf, progressStyleOf, type ResponseMode } from "../../src/dingtalk/bot.js";
+import {
+	type FinalDelivery,
+	finalDeliveryOf,
+	type ProgressStyle,
+	progressStyleOf,
+	type ResponseMode,
+} from "../../src/channel/channel-context.js";
+import type { DingTalkEvent } from "../../src/dingtalk/bot.js";
 
 export class FakeDingTalkBot {
 	getCardGeneration = () => Symbol("test-card-turn");

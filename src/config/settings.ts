@@ -3,7 +3,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
-import type { ResponseMode } from "../dingtalk/bot.js";
+import type { ResponseMode } from "../channel/channel-context.js";
 import * as log from "../log.js";
 import { getMemoryMaintenanceTuning, type MemoryMaintenanceTuning } from "../memory/maintenance-tuning.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
@@ -309,8 +309,8 @@ function findRetiredSettingsKeys(parsed: unknown): string[] {
  * means an unrecognized value is dropped so the documented default applies, and the operator is
  * told which key was ignored.
  *
- * The value lists are literal rather than imported: `ResponseMode` lives in the DingTalk
- * transport, and a value import would tie settings loading to that module's import graph. The
+ * The value lists are literal rather than imported: `config` may depend on `channel` for types
+ * only (a value import would tie settings loading to the channel module's runtime graph). The
  * `satisfies` clauses keep them honest against the unions they mirror.
  */
 const ENUM_SETTINGS: readonly { path: string; values: readonly string[] }[] = [
@@ -321,7 +321,7 @@ const ENUM_SETTINGS: readonly { path: string; values: readonly string[] }[] = [
 			"full_progress_then_plain_final",
 			"rolling_progress_then_plain_final",
 			"final_card_only",
-		] satisfies ResponseMode[],
+		] satisfies readonly ResponseMode[],
 	},
 	{ path: "delegation.notices", values: ["off", "settled", "live"] satisfies PipiclawDelegationSettings["notices"][] },
 ];

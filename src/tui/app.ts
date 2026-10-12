@@ -19,11 +19,11 @@ import {
 	readCliVersion,
 } from "../app/home.js";
 import { prepareAppServices } from "../app/services.js";
+import { finalDeliveryOf, progressStyleOf } from "../channel/channel-context.js";
 import { ensureChannelDir } from "../channel/channel-paths.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
-import { finalDeliveryOf, progressStyleOf } from "../dingtalk/bot.js";
 import { createExecutor } from "../executor.js";
 import { createJobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";

@@ -6,13 +6,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../agent/prompt/workspace-templates.js";
-import {
-	type DingTalkConfig,
-	isBusyMessageDefaultConfig,
-	isResponseModeConfig,
-	normalizeBusyMessageDefault,
-	normalizeResponseMode,
-} from "../dingtalk/bot.js";
+import { isResponseModeConfig, normalizeResponseMode } from "../channel/channel-context.js";
+import { type DingTalkConfig, isBusyMessageDefaultConfig, normalizeBusyMessageDefault } from "../dingtalk/bot.js";
 import * as log from "../log.js";
 import {
 	APP_HOME_DIR,

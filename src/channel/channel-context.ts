@@ -29,6 +29,45 @@ export type ProgressStyle = "full" | "rolling" | "none";
 export type FinalDelivery = "plain" | "card";
 
 /**
+ * User-facing delivery preset (`channel.json` `responseMode`, `settings.json` `tui.responseMode`).
+ * Transport-neutral on purpose: the DingTalk bot and the TUI both map it onto
+ * `ProgressStyle` / `FinalDelivery` and nothing else should branch on the raw strings.
+ */
+export type ResponseMode = "full_progress_then_plain_final" | "rolling_progress_then_plain_final" | "final_card_only";
+
+const RESPONSE_MODE_VALUES: ResponseMode[] = [
+	"full_progress_then_plain_final",
+	"rolling_progress_then_plain_final",
+	"final_card_only",
+];
+
+export function progressStyleOf(mode: ResponseMode): ProgressStyle {
+	if (mode === "final_card_only") return "none";
+	if (mode === "rolling_progress_then_plain_final") return "rolling";
+	return "full";
+}
+
+export function finalDeliveryOf(mode: ResponseMode): FinalDelivery {
+	return mode === "final_card_only" ? "card" : "plain";
+}
+
+export function isResponseModeConfig(value: unknown): value is ResponseMode {
+	return typeof value === "string" && (RESPONSE_MODE_VALUES as string[]).includes(value);
+}
+
+export function normalizeResponseMode(value: unknown): ResponseMode {
+	if (value === undefined) {
+		return "full_progress_then_plain_final";
+	}
+	if (isResponseModeConfig(value)) {
+		return value;
+	}
+	throw new Error(
+		'Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
+	);
+}
+
+/**
  * A file the agent wants to push to a channel as a native attachment (image or
  * downloadable file), as opposed to text/markdown in the transcript.
  *

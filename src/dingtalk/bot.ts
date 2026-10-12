@@ -11,15 +11,18 @@ import axios from "axios";
 import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
-// The delivery contract (`ChannelContext`) and its traits are transport-neutral
-// and live in channel-context.ts. Only the traits are used here, to map the
-// DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
-import type {
-	FinalDelivery,
-	MediaSender,
-	MediaSendResult,
-	OutboundMedia,
-	ProgressStyle,
+// The delivery contract (`ChannelContext`), its traits and the `ResponseMode` vocabulary are
+// transport-neutral and live in channel-context.ts.
+import {
+	type FinalDelivery,
+	finalDeliveryOf,
+	type MediaSender,
+	type MediaSendResult,
+	normalizeResponseMode,
+	type OutboundMedia,
+	type ProgressStyle,
+	progressStyleOf,
+	type ResponseMode,
 } from "../channel/channel-context.js";
 import type { ChannelEvent, ChannelEventSink, InboundImage } from "../channel/channel-event.js";
 import type { ChannelObservation } from "../channel/channel-index.js";
@@ -56,30 +59,9 @@ import {
 
 export type BusyMessageMode = "steer" | "followUp";
 export type BusyMessageDefaultConfig = BusyMessageMode | "followup";
-export type ResponseMode = "full_progress_then_plain_final" | "rolling_progress_then_plain_final" | "final_card_only";
-
-const RESPONSE_MODE_VALUES: ResponseMode[] = [
-	"full_progress_then_plain_final",
-	"rolling_progress_then_plain_final",
-	"final_card_only",
-];
-
-export function progressStyleOf(mode: ResponseMode): ProgressStyle {
-	if (mode === "final_card_only") return "none";
-	if (mode === "rolling_progress_then_plain_final") return "rolling";
-	return "full";
-}
-
-export function finalDeliveryOf(mode: ResponseMode): FinalDelivery {
-	return mode === "final_card_only" ? "card" : "plain";
-}
 
 export function isBusyMessageDefaultConfig(value: unknown): value is BusyMessageDefaultConfig {
 	return value === "steer" || value === "followUp" || value === "followup";
-}
-
-export function isResponseModeConfig(value: unknown): value is ResponseMode {
-	return typeof value === "string" && (RESPONSE_MODE_VALUES as string[]).includes(value);
 }
 
 export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
@@ -93,18 +75,6 @@ export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
 		return "followUp";
 	}
 	throw new Error('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
-}
-
-export function normalizeResponseMode(value: unknown): ResponseMode {
-	if (value === undefined) {
-		return "full_progress_then_plain_final";
-	}
-	if (isResponseModeConfig(value)) {
-		return value;
-	}
-	throw new Error(
-		'Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
-	);
 }
 
 /** Lowercased extension without the dot ("Report.PDF" → "pdf"); "" when none. */
