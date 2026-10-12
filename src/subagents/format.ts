@@ -1,5 +1,5 @@
 import { formatDuration } from "../shared/format.js";
-import type { RunRecord } from "./runs.js";
+import type { RunRecord } from "./run-record.js";
 
 /**
  * Shared display primitives for delegation runs (spec 041), used by both the model-facing

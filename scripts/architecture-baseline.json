@@ -10,11 +10,6 @@
 			"src/events/validation.ts"
 		],
 		[
-			"src/subagents/external/progress-tail.ts",
-			"src/subagents/external/settlement.ts",
-			"src/subagents/runs.ts"
-		],
-		[
 			"src/tui/pitui-frontend.ts",
 			"src/tui/plain-frontend.ts",
 			"src/tui/renderer.ts"
@@ -27,7 +22,7 @@
 		"src/jobs/manager.ts": 1328,
 		"src/runtime/bootstrap.ts": 1376,
 		"src/subagents/discovery.ts": 1040,
-		"src/subagents/runs.ts": 1654,
+		"src/subagents/runs.ts": 1464,
 		"src/subagents/tool.ts": 1692
 	}
 }

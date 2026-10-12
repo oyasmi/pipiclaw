@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RunHarness, RunMutates, SettleInput } from "../runs.js";
+import type { RunHarness, RunMutates, SettleInput } from "../run-record.js";
 import { resolveVerificationVerdict } from "../verification-outcome.js";
 import { changedPathsSummary, type WorkspaceBaseline } from "../workspace-summary.js";
 import { classifyExternalOutcome, type ExternalOutcome } from "./harness.js";

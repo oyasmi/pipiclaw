@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
 import type { DingTalkEvent } from "../src/dingtalk/bot.js";
+import type { SettleInput } from "../src/subagents/run-record.js";
 import {
 	createSubAgentRuntime,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
-	type SettleInput,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";

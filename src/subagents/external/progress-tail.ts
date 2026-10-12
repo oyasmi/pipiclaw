@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { RunHarness } from "../runs.js";
+import type { RunHarness } from "../run-record.js";
 import { getExternalHarness } from "./registry.js";
 
 /**

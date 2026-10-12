@@ -18,7 +18,8 @@ import { createTaskDriverEvent, taskStopReceipt } from "../src/runtime/task-driv
 import { renderGuardBlockForUser } from "../src/security/block-message.js";
 import { handleSkillsCommand } from "../src/skills/commands.js";
 import { handleSubagentsCommand, renderRunNotice } from "../src/subagents/commands.js";
-import type { RunRecord, SubAgentRunManager } from "../src/subagents/runs.js";
+import type { RunRecord } from "../src/subagents/run-record.js";
+import type { SubAgentRunManager } from "../src/subagents/runs.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { handleTasksCommand } from "../src/tasks/commands.js";
 import type { TaskLedgerEntry } from "../src/tasks/contract.js";

@@ -9,7 +9,8 @@ import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgent
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
-import type { RunRecord, SubAgentRunManager } from "../subagents/runs.js";
+import type { RunRecord } from "../subagents/run-record.js";
+import type { SubAgentRunManager } from "../subagents/runs.js";
 import {
 	assertVerifyAdmissible,
 	assertWithinProjectBoundary,
