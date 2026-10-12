@@ -44,6 +44,7 @@ import { formatSize } from "../tools/truncate.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
 // this transport only consumes it.
 import { ChannelQueue } from "./channel-queue.js";
+import { type BusyMessageMode, type DingTalkConfig, normalizeBusyMessageDefault } from "./config.js";
 import {
 	MAX_INBOUND_IMAGE_BYTES,
 	MAX_INBOUND_IMAGES_PER_MESSAGE,
@@ -57,44 +58,11 @@ import {
 // Types
 // ============================================================================
 
-export type BusyMessageMode = "steer" | "followUp";
-export type BusyMessageDefaultConfig = BusyMessageMode | "followup";
-
-export function isBusyMessageDefaultConfig(value: unknown): value is BusyMessageDefaultConfig {
-	return value === "steer" || value === "followUp" || value === "followup";
-}
-
-export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
-	if (value === undefined) {
-		return "steer";
-	}
-	if (value === "steer") {
-		return "steer";
-	}
-	if (value === "followUp" || value === "followup") {
-		return "followUp";
-	}
-	throw new Error('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
-}
-
 /** Lowercased extension without the dot ("Report.PDF" → "pdf"); "" when none. */
 function extractFileExtension(fileName: string): string {
 	const dot = fileName.lastIndexOf(".");
 	if (dot < 0 || dot === fileName.length - 1) return "";
 	return fileName.slice(dot + 1).toLowerCase();
-}
-
-export interface DingTalkConfig {
-	clientId: string;
-	clientSecret: string;
-	robotCode?: string;
-	cardTemplateId?: string;
-	cardTemplateKey?: string;
-	allowFrom?: string[];
-	stateDir?: string;
-	busyMessageDefault?: BusyMessageDefaultConfig;
-	responseMode?: ResponseMode;
-	cardAutoLayout?: boolean;
 }
 
 /**

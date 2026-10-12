@@ -3,7 +3,8 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import { getActiveSessionRefPath } from "../src/channel/active-session-store.js";
-import type { DingTalkBot, DingTalkConfig, DingTalkHandler } from "../src/dingtalk/bot.js";
+import type { DingTalkBot, DingTalkHandler } from "../src/dingtalk/bot.js";
+import type { DingTalkConfig } from "../src/dingtalk/config.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

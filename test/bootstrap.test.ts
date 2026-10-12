@@ -7,12 +7,12 @@ import {
 	type BootstrapIO,
 	type BootstrapPaths,
 	bootstrapAppHome,
-	loadConfig,
 	parseArgs,
 } from "../src/app/home.js";
 import { prepareAppServices } from "../src/app/services.js";
 import { ChannelStore } from "../src/channel/store.js";
 import type { DingTalkEvent } from "../src/dingtalk/bot.js";
+import { loadConfig } from "../src/dingtalk/config.js";
 import { bootstrap } from "../src/runtime/bootstrap.js";
 import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import { useTempDirs } from "./helpers/fixtures.js";

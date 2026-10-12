@@ -10,7 +10,6 @@ import {
 	type BootstrapPaths,
 	bootstrapAppHome,
 	DEFAULT_BOOTSTRAP_PATHS,
-	loadConfig,
 	parseArgs,
 	printBootstrapSummary,
 	printFirstRunGuide,
@@ -38,14 +37,8 @@ import {
 import { runReportCommand } from "../commands/router.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
-import {
-	type BusyMessageMode,
-	type BusyMessageResult,
-	DingTalkBot,
-	type DingTalkConfig,
-	type DingTalkHandler,
-	type StopOutcome,
-} from "../dingtalk/bot.js";
+import { type BusyMessageResult, DingTalkBot, type DingTalkHandler, type StopOutcome } from "../dingtalk/bot.js";
+import { type BusyMessageMode, type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import { createDingTalkContext } from "../dingtalk/delivery.js";
 import { extensionForMimeType } from "../dingtalk/inbound-media.js";
 import { createEventsWatcher } from "../events/events.js";

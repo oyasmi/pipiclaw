@@ -1,10 +1,6 @@
 {
 	"r1": [
 		{
-			"from": "src/app/home.ts",
-			"to": "src/dingtalk/bot.ts"
-		},
-		{
 			"from": "src/commands/router.ts",
 			"to": "src/app/home.ts"
 		},
@@ -43,10 +39,10 @@
 	],
 	"r3": {
 		"src/agent/channel-runner.ts": 1871,
-		"src/dingtalk/bot.ts": 1790,
+		"src/dingtalk/bot.ts": 1758,
 		"src/events/events.ts": 1003,
 		"src/jobs/manager.ts": 1328,
-		"src/runtime/bootstrap.ts": 1383,
+		"src/runtime/bootstrap.ts": 1376,
 		"src/subagents/discovery.ts": 1040,
 		"src/subagents/runs.ts": 1654,
 		"src/subagents/tool.ts": 1692

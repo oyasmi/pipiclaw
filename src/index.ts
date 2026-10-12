@@ -15,10 +15,10 @@ export type { ChannelContext, FinalDelivery, ProgressStyle, ResponseMode } from 
 export type { PipiclawSettings } from "./config/settings.js";
 export {
 	DingTalkBot,
-	type DingTalkConfig,
 	type DingTalkEvent,
 	type DingTalkHandler,
 } from "./dingtalk/bot.js";
+export type { DingTalkConfig } from "./dingtalk/config.js";
 export {
 	APP_HOME_DIR,
 	APP_NAME,
