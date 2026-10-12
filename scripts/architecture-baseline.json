@@ -1,16 +1,8 @@
 {
 	"r1": [
 		{
-			"from": "src/commands/router.ts",
-			"to": "src/app/home.ts"
-		},
-		{
 			"from": "src/playbooks/catalog.ts",
 			"to": "src/tools/registry.ts"
-		},
-		{
-			"from": "src/skills/commands.ts",
-			"to": "src/tools/skill.ts"
 		},
 		{
 			"from": "src/subagents/tool.ts",

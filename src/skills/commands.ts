@@ -4,7 +4,7 @@ import { GuardBlockedError, renderGuardBlockForUser } from "../security/block-me
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { listWorkspaceSkills, loadWorkspaceSkillFile } from "../tools/skill.js";
+import { listWorkspaceSkills, loadWorkspaceSkillFile } from "./workspace.js";
 
 /**
  * `/skills` — the human control path for a workspace's skill catalog (spec 045's read-only

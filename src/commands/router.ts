@@ -1,6 +1,5 @@
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
-import type { BootstrapPaths } from "../app/home.js";
 import { getChannelDir } from "../channel/channel-paths.js";
 import { handleProjectCommand } from "../channel/commands.js";
 import { handleEventsCommand } from "../events/commands.js";
@@ -20,12 +19,18 @@ import type { RuntimeCommandName } from "./catalog.js";
  * transport supplies only what is genuinely its own (how to find its runner, how to rebuild one
  * after `/project`, whether a task can be woken immediately).
  */
+/** The path fields the reports read; structurally satisfied by the app's `BootstrapPaths`. */
+export interface ReportCommandPaths {
+	workspaceDir: string;
+	appHomeDir: string;
+	eventHistoryPath: string;
+	authConfigPath: string;
+	modelsConfigPath: string;
+}
+
 export interface ReportCommandContext {
 	channelId: string;
-	paths: Pick<
-		BootstrapPaths,
-		"workspaceDir" | "appHomeDir" | "eventHistoryPath" | "authConfigPath" | "modelsConfigPath"
-	>;
+	paths: ReportCommandPaths;
 	actor: "dingtalk-command" | "tui-command";
 	version: string;
 	startedAt: number;
