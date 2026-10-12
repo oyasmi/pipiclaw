@@ -7,18 +7,12 @@ import { docsUrl } from "../paths.js";
 import { formatSpanZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { buildTaskBoard, renderTaskBoardForUser } from "../tasks/board.js";
-import { type TaskBudget, taskStateLabel } from "../tasks/frontmatter.js";
-import { normalizeTaskId, readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
-import {
-	readTaskLog,
-	renderTaskLogLineForUser,
-	taskArchiveLogPath,
-	taskLogIsArchived,
-	taskLogPath,
-} from "../tasks/log.js";
-import { withTaskMutation } from "../tasks/mutation-lock.js";
-import { hasTaskSteer, queueTaskSteer } from "../tasks/steer.js";
+import { buildTaskBoard, renderTaskBoardForUser } from "./board.js";
+import { type TaskBudget, taskStateLabel } from "./frontmatter.js";
+import { normalizeTaskId, readActiveTasks, type TaskLedgerEntry } from "./ledger.js";
+import { readTaskLog, renderTaskLogLineForUser, taskArchiveLogPath, taskLogIsArchived, taskLogPath } from "./log.js";
+import { withTaskMutation } from "./mutation-lock.js";
+import { hasTaskSteer, queueTaskSteer } from "./steer.js";
 import {
 	archivedTaskPath,
 	pauseTask as pauseTaskDocument,
@@ -27,8 +21,8 @@ import {
 	resumeTask as resumeTaskDocument,
 	taskPath,
 	updateStoredTask,
-} from "../tasks/store.js";
-import { describeTicketForUser } from "../tasks/ticket.js";
+} from "./store.js";
+import { describeTicketForUser } from "./ticket.js";
 
 export interface HandleTasksCommandOptions {
 	args: string;

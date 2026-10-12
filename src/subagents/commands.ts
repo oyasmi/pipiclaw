@@ -4,14 +4,14 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage, truncate } from "../shared/text-utils.js";
-import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
-import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
-import { elapsedMs, formatCost, harnessLabel } from "../subagents/format.js";
-import type { RunNotice, RunRecord, RunResolution, SubAgentRunManager } from "../subagents/runs.js";
+import type { SubAgentConfig, SubAgentDiscoveryResult } from "./discovery.js";
+import { readLastOutputAt, STALL_THRESHOLD_MS } from "./external/progress-tail.js";
+import { elapsedMs, formatCost, harnessLabel } from "./format.js";
+import type { RunNotice, RunRecord, RunResolution, SubAgentRunManager } from "./runs.js";
 
 /**
  * `/subagents` — the human control path that does not depend on the model (spec 040 D6, polished
- * by spec 041). Mirrors `task-commands.ts`'s shape: pure functions returning markdown, no
+ * by spec 041). Mirrors `tasks/commands.ts`'s shape: pure functions returning markdown, no
  * bot/event coupling.
  */
 

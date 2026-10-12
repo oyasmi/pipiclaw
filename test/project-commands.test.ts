@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { handleProjectCommand } from "../src/channel/commands.js";
 import { readProjectSelection } from "../src/channel/project-scope-store.js";
-import { handleProjectCommand } from "../src/runtime/project-commands.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-project-commands-");

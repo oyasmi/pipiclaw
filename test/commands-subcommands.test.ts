@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { parseProjectCommand } from "../src/channel/commands.js";
 import { BUILT_IN_COMMANDS, type CommandSubSpec, formatBusyHint, SESSION_COMMANDS } from "../src/commands/catalog.js";
-import { parseEventsCommand } from "../src/events/event-commands.js";
+import { parseEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
 import { applyMemoryOps, listMemoryEntries } from "../src/memory/store.js";
-import { parseProjectCommand } from "../src/runtime/project-commands.js";
-import { parseSkillsCommand } from "../src/runtime/skill-commands.js";
-import { parseSubagentsCommand } from "../src/runtime/subagent-commands.js";
-import { parseTasksCommand } from "../src/runtime/task-commands.js";
 import { localDayKey } from "../src/shared/local-time.js";
+import { parseSkillsCommand } from "../src/skills/commands.js";
+import { parseSubagentsCommand } from "../src/subagents/commands.js";
+import { parseTasksCommand } from "../src/tasks/commands.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**

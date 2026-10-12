@@ -1,4 +1,3 @@
-import { commitProjectSelection, readProjectSelection } from "../channel/project-scope-store.js";
 import { renderSubcommandUsage } from "../commands/catalog.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import {
@@ -8,10 +7,11 @@ import {
 	resolveProjectAccessPolicy,
 } from "../security/project-scope.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { commitProjectSelection, readProjectSelection } from "./project-scope-store.js";
 
 /**
  * `/project` — the human control path for a channel's project scope (spec 043, D7). Mirrors
- * `task-commands.ts`/`subagent-commands.ts`'s shape: pure-ish functions returning markdown, no
+ * `tasks/commands.ts`/`subagents/commands.ts`'s shape: pure-ish functions returning markdown, no
  * bot/event coupling. Mutations never reach the model.
  */
 

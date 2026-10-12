@@ -8,7 +8,7 @@ import { listWorkspaceSkills, loadWorkspaceSkillFile } from "../tools/skill.js";
 
 /**
  * `/skills` — the human control path for a workspace's skill catalog (spec 045's read-only
- * `skill` tool has no channel-command counterpart until now). Mirrors `project-commands.ts`'s
+ * `skill` tool has no channel-command counterpart until now). Mirrors `channel/commands.ts`'s
  * shape: pure-ish functions returning markdown, no bot/event coupling.
  *
  * Deliberately a disk scan via `listWorkspaceSkills`, not the live `ChannelRunner`'s already-

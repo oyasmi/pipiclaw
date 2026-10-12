@@ -69,7 +69,7 @@ interface SubAgentRunArgs {
 
 /** Spec 042 D9: cap on `op=list`'s output — see the call site for why running runs are exempt. */
 const LIST_CAP = 50;
-/** Matches `/subagents show`'s own cap (`runtime/subagent-commands.ts`) — enough to diagnose a
+/** Matches `/subagents show`'s own cap (`subagents/commands.ts`) — enough to diagnose a
  *  failure without dumping an unbounded log into the model's context. */
 const STDERR_TAIL_CHARS = 2_000;
 
@@ -86,7 +86,7 @@ function formatRunLine(record: RunRecord): string {
 }
 
 /**
- * The machine-readable subset of `/subagents show` (`runtime/subagent-commands.ts`'s `showRun`):
+ * The machine-readable subset of `/subagents show` (`subagents/commands.ts`'s `showRun`):
  * argv, dispatch-time warnings, and the adapter/CLI version pair the model previously had no way
  * to see at all — it could only guess at a failed external run's cause or re-dispatch blindly
  * (review 2026-08-23 §3.4).

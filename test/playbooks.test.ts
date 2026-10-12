@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateScheduledEvent } from "../src/events/event-validation.js";
 import { parseScheduledEventContent } from "../src/events/events.js";
+import { validateScheduledEvent } from "../src/events/validation.js";
 import { PLAYBOOKS_DIR } from "../src/paths.js";
 import {
 	loadRuntimePlaybookCatalog,

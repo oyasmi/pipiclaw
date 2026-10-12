@@ -417,8 +417,8 @@ export function formatBusyHint(): string {
 }
 
 /**
- * Renders a command's subcommand table as its `usage()` text — the single source `task-commands.ts`,
- * `event-commands.ts`, `subagent-commands.ts`, `project-commands.ts`, and `memory/commands.ts` call
+ * Renders a command's subcommand table as its `usage()` text — the single source `tasks/commands.ts`,
+ * `events/commands.ts`, `subagents/commands.ts`, `channel/commands.ts`, and `memory/commands.ts` call
  * on a parse error, replacing five hand-written `usage()` bodies (review 2026-08-24 §3.1).
  */
 export function renderSubcommandUsage(name: string): string {

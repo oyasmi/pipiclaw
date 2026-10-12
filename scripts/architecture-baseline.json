@@ -17,16 +17,16 @@
 			"to": "src/tools/registry.ts"
 		},
 		{
-			"from": "src/runtime/skill-commands.ts",
-			"to": "src/tools/skill.ts"
-		},
-		{
 			"from": "src/settings.ts",
 			"to": "src/dingtalk/bot.ts"
 		},
 		{
 			"from": "src/settings.ts",
 			"to": "src/memory/maintenance-tuning.ts"
+		},
+		{
+			"from": "src/skills/commands.ts",
+			"to": "src/tools/skill.ts"
 		},
 		{
 			"from": "src/subagents/tool.ts",
@@ -43,8 +43,8 @@
 			"src/agent/runner-factory.ts"
 		],
 		[
-			"src/events/event-validation.ts",
-			"src/events/events.ts"
+			"src/events/events.ts",
+			"src/events/validation.ts"
 		],
 		[
 			"src/subagents/external/progress-tail.ts",

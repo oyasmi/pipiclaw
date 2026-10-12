@@ -130,7 +130,7 @@ export interface WorkspaceSkillFile {
 /**
  * Load one skill's `SKILL.md` bytes through the same path-guard every other file read goes
  * through. Shared by the `skill` tool's `read` action and the `/skills show` runtime command
- * (`src/runtime/skill-commands.ts`) — a `SKILL.md` that is itself a symlink pointing outside
+ * (`src/skills/commands.ts`) — a `SKILL.md` that is itself a symlink pointing outside
  * `workspace/skills/` (planted via `bash ln -s`, not via `name` -- `resolveSkillPath` already
  * confines that) is caught here in both callers instead of being read verbatim.
  */

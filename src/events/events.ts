@@ -24,12 +24,7 @@ import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { type TaskCreateInput, validateTaskContractInput } from "../tasks/contract-input.js";
-import {
-	EventDefinitionError,
-	MAX_EVENT_FILES,
-	MAX_ONE_SHOT_DELAY_MS,
-	validateScheduledEvent,
-} from "./event-validation.js";
+import { EventDefinitionError, MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./validation.js";
 
 // ============================================================================
 // Event Types

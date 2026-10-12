@@ -3,9 +3,9 @@ import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import { resolveEventPath } from "../events/event-commands.js";
-import { EventValidationError, MAX_EVENT_FILES, validateScheduledEvent } from "../events/event-validation.js";
+import { resolveEventPath } from "../events/commands.js";
 import { describeEventPayload, parseScheduledEventContent, type ScheduledEvent } from "../events/events.js";
+import { EventValidationError, MAX_EVENT_FILES, validateScheduledEvent } from "../events/validation.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -169,7 +169,7 @@ async function listOwnedEvents(options: EventManageToolOptions): Promise<EventMa
  * preActions, and cross-channel channelIds. The returned event is what gets persisted, so
  * the file on disk is exactly what was validated.
  *
- * The scheduling rules themselves live in `runtime/event-validation.ts` and are re-applied by
+ * The scheduling rules themselves live in `events/validation.ts` and are re-applied by
  * the watcher (spec 031, D4); this layer only adds tool-specific framing (channel ownership,
  * and turning validation failures into recoverable tool errors the model can retry).
  */

@@ -32,10 +32,6 @@ const MODULES = [
 	// module so a move never changes module membership. Delete the line when the file moves.
 	["src/settings.ts", "config"],
 	["src/tools/config.ts", "config"],
-	["src/runtime/task-commands.ts", "tasks"],
-	["src/runtime/subagent-commands.ts", "subagents"],
-	["src/runtime/project-commands.ts", "channel"],
-	["src/runtime/skill-commands.ts", "skills"],
 	["src/agent/job-manager.ts", "jobs"],
 	["src/agent/workspace-resources.ts", "skills"],
 	["src/tools/skill-security.ts", "skills"],

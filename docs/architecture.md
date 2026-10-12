@@ -40,7 +40,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
 | `src/subagents/` | 子代理发现、run 生命周期（内置+外部统一）、workspace 写锁、外部 harness 适配器 | `discovery.ts`、`tool.ts`、`runs.ts`、`workspace-lease.ts`、`external/`（`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
 | `src/tasks/` | 持久任务的契约、等待票、预算与循环日志 | `frontmatter.ts`、`ticket.ts`、`budget.ts`、`store.ts` |
-| `src/events/` | 定时/传感器事件定义、校验和命令 | `events.ts`、`event-validation.ts`、`event-commands.ts` |
+| `src/events/` | 定时/传感器事件定义、校验和命令 | `events.ts`、`validation.ts`、`commands.ts` |
 | `src/tui/` | 终端前端（第二个 `ChannelContext` 实现） | `cli.ts`、`app.ts`、`turn-controller.ts` |
 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts` |
 | `src/usage/` | 用量/成本账本（JSONL） | `ledger.ts`、`render.ts` |
