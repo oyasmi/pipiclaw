@@ -28,6 +28,7 @@
 		"playbooks:measure": "node --experimental-strip-types scripts/measure-playbooks.mjs",
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"arch": "node scripts/check-architecture.mjs",
 		"deadcode": "knip",
 		"test": "vitest --run",
 		"test:e2e": "vitest --run --config vitest.config.e2e.ts test/e2e/deterministic",
@@ -43,7 +44,7 @@
 		"eval:promote": "npm run eval:build && node dist-evals/evals/harness/promote.js",
 		"eval:prune": "node scripts/prune-eval-results.mjs",
 		"test:coverage": "vitest --run --coverage",
-		"check": "npm run lint && npm run typecheck && npm run deadcode && npm run test",
+		"check": "npm run lint && npm run typecheck && npm run arch && npm run deadcode && npm run test",
 		"prepublishOnly": "npm run clean && npm run build && npm run check",
 		"test:evals": "vitest --run --config vitest.config.evals.ts"
 	},
