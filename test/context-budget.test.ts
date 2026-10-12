@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "../src/agent/context-budget.js";
+import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "../src/agent/turn/context-budget.js";
 
 describe("preventive compaction budget", () => {
 	it("compacts before a large Chinese message pushes the context over the threshold", () => {

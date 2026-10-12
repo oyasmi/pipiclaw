@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session-events.js";
+import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session/session-events.js";
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
 import type { ChannelContext } from "../src/channel/channel-context.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";

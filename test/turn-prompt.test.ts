@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assembleTurnPrompt, type TurnPromptParts } from "../src/agent/turn-prompt.js";
+import { assembleTurnPrompt, type TurnPromptParts } from "../src/agent/turn/turn-prompt.js";
 
 function parts(overrides: Partial<TurnPromptParts> = {}): TurnPromptParts {
 	return {

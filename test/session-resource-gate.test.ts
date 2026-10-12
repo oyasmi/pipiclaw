@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionResourceGate } from "../src/agent/session-resource-gate.js";
+import { SessionResourceGate } from "../src/agent/session/session-resource-gate.js";
 
 function createDeferred(): {
 	promise: Promise<void>;

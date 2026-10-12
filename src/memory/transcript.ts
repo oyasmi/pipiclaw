@@ -6,7 +6,7 @@ import { redactSecrets } from "./secret-redaction.js";
 
 // The channel runner prepends the memory bootstrap, the task agenda and the channel
 // capsule to the raw user input, then wraps the input itself in <user_message>
-// (`agent/turn-prompt.ts`). If that combined text flows back into consolidation /
+// (`agent/turn/turn-prompt.ts`). If that combined text flows back into consolidation /
 // session refresh / signal scans, previously recalled memory gets re-summarized into
 // MEMORY.md — a self-reinforcing echo. Strip the injected wrappers before any memory
 // job reads the transcript.

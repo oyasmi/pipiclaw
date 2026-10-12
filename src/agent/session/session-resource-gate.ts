@@ -1,5 +1,5 @@
-import * as log from "../log.js";
-import { errorMessage } from "../shared/text-utils.js";
+import * as log from "../../log.js";
+import { errorMessage } from "../../shared/text-utils.js";
 
 /**
  * Serializes session-resource reloads against prompts.

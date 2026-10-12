@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { TurnStateMachine } from "../src/agent/turn-state.js";
+import { TurnStateMachine } from "../src/agent/turn/turn-state.js";
 
 describe("TurnStateMachine", () => {
 	it("reports busy from begin until end, and carries the turn's task text", () => {

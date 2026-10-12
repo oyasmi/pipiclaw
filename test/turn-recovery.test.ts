@@ -6,7 +6,7 @@ import {
 	planTurnRecovery,
 	recoverInterruptedTurn,
 	scanWorkspaceForInterruptedTurns,
-} from "../src/agent/turn-recovery.js";
+} from "../src/agent/turn/turn-recovery.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-turn-recovery-");

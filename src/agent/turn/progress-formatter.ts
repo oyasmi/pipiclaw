@@ -1,4 +1,4 @@
-import type { ProgressEntryKind } from "./types.js";
+import type { ProgressEntryKind } from "../types.js";
 
 function sanitizeProgressText(text: string): string {
 	return text

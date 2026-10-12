@@ -77,9 +77,6 @@ import { createPipiclawTools } from "../tools/index.js";
 import { formatSize } from "../tools/truncate.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import type { UsageTotals } from "../usage/totals.js";
-import { createCommandExtension } from "./command-extension.js";
-import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
-import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import { buildPipiclawSystemPrompt } from "./prompt/builder.js";
 import { createPromptBoundaryExtension } from "./prompt/extension.js";
 import {
@@ -92,7 +89,8 @@ import {
 } from "./prompt/manifest.js";
 import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
 import type { PromptBuildResult } from "./prompt/types.js";
-import { createRunQueue } from "./run-queue.js";
+import { createCommandExtension } from "./session/command-extension.js";
+import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./session/event-guards.js";
 import {
 	asSdkSettingsManager,
 	cycleThinkingLevelWithConditionalPersist,
@@ -101,15 +99,17 @@ import {
 	setModelWithThinkingPreservation,
 	setSessionBaseToolsOverride,
 	setThinkingLevelWithConditionalPersist,
-} from "./session-adapter.js";
-import { handleSessionEvent } from "./session-events.js";
-import { SessionResourceGate } from "./session-resource-gate.js";
-import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "./task-digest.js";
-import { renderFallbackSwitch, renderTurnErrorReply } from "./turn-error.js";
-import { assembleTurnPrompt } from "./turn-prompt.js";
-import { recoverInterruptedTurn } from "./turn-recovery.js";
-import { type TurnHandle, TurnStateMachine } from "./turn-state.js";
-import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./type-guards.js";
+} from "./session/session-adapter.js";
+import { handleSessionEvent } from "./session/session-events.js";
+import { SessionResourceGate } from "./session/session-resource-gate.js";
+import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./turn/context-budget.js";
+import { clipUserInput, formatProgressEntry } from "./turn/progress-formatter.js";
+import { createRunQueue } from "./turn/run-queue.js";
+import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "./turn/task-digest.js";
+import { renderFallbackSwitch, renderTurnErrorReply } from "./turn/turn-error.js";
+import { assembleTurnPrompt } from "./turn/turn-prompt.js";
+import { recoverInterruptedTurn } from "./turn/turn-recovery.js";
+import { type TurnHandle, TurnStateMachine } from "./turn/turn-state.js";
 import type { RunnerDeps, RunnerFactoryPaths } from "./types.js";
 import {
 	type AgentRunner,

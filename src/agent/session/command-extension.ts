@@ -8,11 +8,11 @@ import type {
 	SessionStats,
 } from "@earendil-works/pi-coding-agent";
 import { basename } from "path";
-import { formatNewSessionReply, sessionCommandDescription } from "../commands/catalog.js";
-import { capReply } from "../commands/reply-limits.js";
-import { findModelReferenceMatch, formatModelList, formatModelReference } from "../models/reference.js";
-import { estimateTokens } from "../shared/format.js";
-import { truncate } from "../shared/text-utils.js";
+import { formatNewSessionReply, sessionCommandDescription } from "../../commands/catalog.js";
+import { capReply } from "../../commands/reply-limits.js";
+import { findModelReferenceMatch, formatModelList, formatModelReference } from "../../models/reference.js";
+import { estimateTokens } from "../../shared/format.js";
+import { truncate } from "../../shared/text-utils.js";
 
 export const COMMAND_RESULT_CUSTOM_TYPE = "pipiclaw.command_result";
 

@@ -3,7 +3,7 @@ import { isRecord } from "../../shared/type-guards.js";
 
 /**
  * Runtime-side projection from a tool call's raw arguments to the one-line Chinese progress
- * string shown while it runs (`src/agent/session-events.ts`). Replaces the old model-authored,
+ * string shown while it runs (`src/agent/session/session-events.ts`). Replaces the old model-authored,
  * per-tool-required `label` argument (spec 045): the model no longer pays schema tokens or output
  * tokens for a UI string on every single call, and the wording is deterministic instead of
  * whatever the model happened to write.

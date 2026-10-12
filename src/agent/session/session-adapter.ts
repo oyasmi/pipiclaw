@@ -6,8 +6,8 @@ import {
 	SettingsManager as SDKSettingsManager,
 	type SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import type { PipiclawSettingsManager } from "../config/settings.js";
-import * as log from "../log.js";
+import type { PipiclawSettingsManager } from "../../config/settings.js";
+import * as log from "../../log.js";
 
 export function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsManager {
 	// The upstream session needs its broad interactive SettingsManager surface, while

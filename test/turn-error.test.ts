@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTurnError, renderTurnErrorReply } from "../src/agent/turn-error.js";
+import { classifyTurnError, renderTurnErrorReply } from "../src/agent/turn/turn-error.js";
 
 // Spec 053 D5.1: every turn failure used to read "_抱歉，出错了。_" plus the raw provider text, with
 // no hint that `/compact`, `/model` or a server-side login would fix it. The class decides the next

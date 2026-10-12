@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRunQueue } from "../src/agent/run-queue.js";
+import { createRunQueue } from "../src/agent/turn/run-queue.js";
 import * as log from "../src/log.js";
 
 describe("createRunQueue", () => {

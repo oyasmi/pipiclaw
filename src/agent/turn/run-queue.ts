@@ -1,7 +1,7 @@
-import * as log from "../log.js";
-import { errorMessage } from "../shared/text-utils.js";
-import { withTimeout } from "../shared/with-timeout.js";
-import type { RunQueue } from "./types.js";
+import * as log from "../../log.js";
+import { errorMessage } from "../../shared/text-utils.js";
+import { withTimeout } from "../../shared/with-timeout.js";
+import type { RunQueue } from "../types.js";
 
 /**
  * Ceiling on how long `drain()` blocks the caller. The queue carries outbound

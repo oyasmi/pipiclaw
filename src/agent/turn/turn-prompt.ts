@@ -1,5 +1,5 @@
-import { countPromptUnits } from "../shared/prompt-units.js";
-import type { PromptTurnContextStats } from "./prompt/manifest.js";
+import { countPromptUnits } from "../../shared/prompt-units.js";
+import type { PromptTurnContextStats } from "../prompt/manifest.js";
 
 export interface TurnPromptParts {
 	/** The user's message, already clipped to `MAX_USER_MESSAGE_CHARS`. Measured, not rendered. */
@@ -34,7 +34,7 @@ export interface AssembledTurnPrompt {
  *
  * `stats` measures the inputs, never the rendered wrapper — it is what `/context` reports as the
  * previous turn's automatic context, and the per-piece unit caps are enforced upstream by the
- * builders themselves (`memory/index-budget.ts`, `agent/task-digest.ts`).
+ * builders themselves (`memory/index-budget.ts`, `agent/turn/task-digest.ts`).
  */
 export function assembleTurnPrompt(parts: TurnPromptParts): AssembledTurnPrompt {
 	const stats: PromptTurnContextStats = {

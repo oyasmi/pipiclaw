@@ -1,7 +1,7 @@
 import { join } from "path";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
-import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
+import { scanWorkspaceForInterruptedTurns } from "../agent/turn/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
 import {
 	BootstrapExitError,

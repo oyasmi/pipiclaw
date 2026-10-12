@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildPipiclawSystemPrompt } from "../src/agent/prompt/builder.js";
 import { renderContextReport } from "../src/agent/prompt/manifest.js";
 import { renderStatus } from "../src/agent/status-render.js";
-import { renderTurnErrorReply } from "../src/agent/turn-error.js";
+import { renderTurnErrorReply } from "../src/agent/turn/turn-error.js";
 import type { AgentRunner } from "../src/agent/types.js";
 import { handleProjectCommand } from "../src/channel/commands.js";
 import { BUILT_IN_COMMANDS, formatBusyHint, renderBuiltInHelp, SESSION_COMMANDS } from "../src/commands/catalog.js";

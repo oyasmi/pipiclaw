@@ -1,4 +1,4 @@
-import type { TurnPhase, TurnStatus } from "./types.js";
+import type { TurnPhase, TurnStatus } from "../types.js";
 
 /**
  * One turn's mutable state. `current()` hands it out so the owning `run()` can address *its own*

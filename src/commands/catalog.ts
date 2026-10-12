@@ -7,7 +7,7 @@
  * `/skills`), the agent session (`/model`, `/compact`, `/new`) and memory (`/memory`) — and is read
  * by all of them plus the TUI. Only the catalog and the reply shape are shared: each *handler*
  * still lives in the layer that owns the state it touches (`runtime/*-commands.ts`,
- * `memory/commands.ts`, `agent/command-extension.ts`). This file has no imports at all, so nothing
+ * `memory/commands.ts`, `agent/session/command-extension.ts`). This file has no imports at all, so nothing
  * here can drag a layer into another one.
  *
  * The user-facing copy conventions these commands follow are recorded in AGENTS.md; `reply-limits.ts`

@@ -1,23 +1,24 @@
-import type { ChannelContext } from "../channel/channel-context.js";
-import type { ChannelStore } from "../channel/store.js";
-import * as log from "../log.js";
-import type { MemoryLifecycle } from "../memory/lifecycle.js";
-import { renderGuardBlockForUser } from "../security/block-message.js";
-import { truncate } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
+import type { ChannelContext } from "../../channel/channel-context.js";
+import type { ChannelStore } from "../../channel/store.js";
+import * as log from "../../log.js";
+import type { MemoryLifecycle } from "../../memory/lifecycle.js";
+import { renderGuardBlockForUser } from "../../security/block-message.js";
+import { truncate } from "../../shared/text-utils.js";
+import { isRecord } from "../../shared/type-guards.js";
 import {
 	isArgumentValidationFailure,
 	isRecoverableRejection,
 	type ToolDetails,
 	takeGuardBlock,
 	toolResultDetails,
-} from "../tools/contract/details.js";
-import { describeToolCall } from "../tools/contract/presentation.js";
-import type { SubAgentToolDetails } from "../tools/subagent.js";
-import type { UsageLedger } from "../usage/ledger.js";
-import { addUsage, type UsageTotals } from "../usage/totals.js";
-import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
-import { renderCompactionFailure } from "./turn-error.js";
+} from "../../tools/contract/details.js";
+import { describeToolCall } from "../../tools/contract/presentation.js";
+import type { SubAgentToolDetails } from "../../tools/subagent.js";
+import type { UsageLedger } from "../../usage/ledger.js";
+import { addUsage, type UsageTotals } from "../../usage/totals.js";
+import { extractToolResultText, formatProgressEntry } from "../turn/progress-formatter.js";
+import { renderCompactionFailure } from "../turn/turn-error.js";
+import type { AssistantUsage, PendingTool, RunLogContext, RunQueue, RunState } from "../types.js";
 import {
 	extractCustomCommandResultText,
 	isAssistantEventMessage,
@@ -33,8 +34,7 @@ import {
 	isToolExecutionStartEvent,
 	isToolExecutionUpdateEvent,
 	isTurnEndEvent,
-} from "./type-guards.js";
-import type { AssistantUsage, PendingTool, RunLogContext, RunQueue, RunState } from "./types.js";
+} from "./event-guards.js";
 
 export interface SessionEventHandlerContext {
 	ctx: ChannelContext;

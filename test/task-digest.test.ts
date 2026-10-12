@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildTaskDigest } from "../src/agent/task-digest.js";
+import { buildTaskDigest } from "../src/agent/turn/task-digest.js";
 
 const NOW = Date.parse("2026-07-08T12:00:00+08:00");
 const FUTURE = "2026-07-08T18:00:00+08:00";
