@@ -1,34 +1,18 @@
-import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
-import {
-	AgentSession,
-	AgentSessionRuntime,
-	type AgentSessionServices,
-	convertToLlm,
-	DefaultResourceLoader,
-	type ModelRegistry,
-	type ModelRuntime,
-	type ResourceLoader,
-	type SettingsManager as SDKSettingsManager,
-	SessionManager,
-	type SessionStartEvent,
-} from "@earendil-works/pi-coding-agent";
+import type { Agent } from "@earendil-works/pi-agent-core";
+import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdir, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
-import { commitActiveSessionRef, resolveActiveSessionFile } from "../channel/active-session-store.js";
+import { resolveActiveSessionFile } from "../channel/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
 import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import { isKnownCommandName, type RunnerBuiltInCommand, slashCommandName } from "../commands/catalog.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
-import { loadToolsConfigWithDiagnostics } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import type { ChannelJobManager } from "../jobs/manager.js";
 import * as log from "../log.js";
-import { handleMemoryCommand } from "../memory/commands.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
 	createMemoryActivityRecorder,
@@ -36,51 +20,31 @@ import {
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
 import { getMemoryMaintenanceTuning } from "../memory/maintenance-tuning.js";
-import { hasMemoryBootstrapBlock } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { type FallbackRunDeps, runPromptWithFallback } from "../models/fallback.js";
-import { findExactModelReferenceMatch, formatModelReference, hasKnownModelPricing } from "../models/reference.js";
-import { createModelRuntime, defaultModel, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
+import { formatModelReference } from "../models/reference.js";
+import { defaultModel } from "../models/runtime.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
-import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
-import { withTimeout } from "../shared/with-timeout.js";
-import { loadPipiclawSkills, type PipiclawSkillsResult, resolvePipiclawSkills } from "../skills/loader.js";
-import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { loadPipiclawSkills } from "../skills/loader.js";
+import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
-import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../tasks/session-path.js";
-import { createPipiclawTools } from "../tools/index.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import type { UsageTotals } from "../usage/totals.js";
 import { handleBuiltinCommand, requireQueuedMessage } from "./builtin-commands.js";
-import { buildPipiclawSystemPrompt } from "./prompt/builder.js";
-import { createPromptBoundaryExtension } from "./prompt/extension.js";
 import {
 	buildPromptManifest,
 	measureToolSchemas,
 	type PromptTurnContextStats,
 	renderContextReport,
-	TOOL_SCHEMA_TARGET_UNITS,
-	toolSchemaBudgetWarning,
 } from "./prompt/manifest.js";
-import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
-import type { PromptBuildResult } from "./prompt/types.js";
-import { createCommandExtension } from "./session/command-extension.js";
-import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./session/event-guards.js";
+import { getLastAssistantUsage } from "./session/event-guards.js";
 import { ModelSelection } from "./session/model-selection.js";
-import {
-	asSdkSettingsManager,
-	DEFAULT_MAIN_THINKING_LEVEL,
-	initializeThinkingLevelCompat,
-	setSessionBaseToolsOverride,
-} from "./session/session-adapter.js";
-import { handleSessionEvent } from "./session/session-events.js";
-import { SessionResourceGate } from "./session/session-resource-gate.js";
+import { reportSettingsDiagnostics, SessionHost } from "./session/session-host.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./turn/context-budget.js";
 import { clipUserInput, formatProgressEntry } from "./turn/progress-formatter.js";
 import { createRunQueue } from "./turn/run-queue.js";
@@ -122,30 +86,6 @@ function getFinalOutcomeText(outcome: FinalOutcome): string | null {
 	return isFinalOutcome(outcome) ? outcome.text : null;
 }
 
-/**
- * Ceilings for the two awaited steps of a session-resource reload. Both reach
- * the network (model/auth re-resolution; the SDK session's own reload) and
- * neither carries a timeout of its own, so a stalled provider used to freeze a
- * reload — and, before the gate detached it, the turn that triggered it. On
- * timeout the reload keeps the resources it already had and logs.
- */
-const MODEL_REGISTRY_REFRESH_TIMEOUT_MS = 15_000;
-const SESSION_RELOAD_TIMEOUT_MS = 30_000;
-
-/** The text of a message's `content`, whether it is a bare string or a multimodal part array. */
-function plainTextOf(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) => (isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : ""))
-		.join("\n");
-}
-
-/** Task sessions live under `<channelDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
-function isTaskSessionPath(sessionFile: string | undefined): boolean {
-	return sessionFile?.replace(/\\/g, "/").includes(`/${TASK_SESSIONS_DIRNAME}/`) === true;
-}
-
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
@@ -169,58 +109,14 @@ export class ChannelRunner implements AgentRunner {
 	private readonly projectScope: ProjectScope;
 	/** Re-read per use, not captured once: an edited security.json takes effect without a restart. */
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
-	private session!: AgentSession;
-	/** Settings manager owned by the currently bound AgentSession. */
-	private sessionSettingsManager!: SDKSettingsManager;
-	private get agent(): Agent {
-		return this.session.agent;
-	}
-	private get sessionManager(): SessionManager {
-		return this.session.sessionManager;
-	}
 	private readonly settingsManager: PipiclawSettingsManager;
-	// modelRuntime is the canonical async model/auth facade (pi 0.80.8+); modelRegistry
-	// is the synchronous read shell wrapped over it. Both are assigned in initializeSession
-	// because ModelRuntime.create is async, so a placeholder model is used until then.
-	private modelRuntime!: ModelRuntime;
-	private modelRegistry!: ModelRegistry;
+	private readonly host: SessionHost;
 	private readonly memoryLifecycle: MemoryLifecycle;
 	private readonly ledger = getUsageLedger();
 	private readonly memoryActivityRecorder: MemoryActivityRecorder;
-	private readonly sessionResourceGate: SessionResourceGate;
-	private readonly sessionReady: Promise<void>;
-	/**
-	 * Flips true only once `initializeSession` has fully assigned `this.session`
-	 * and loaded its resources. Synchronous dispatch-path callers (`isKnownSlashCommand`)
-	 * must not touch `this.session` before this — the model runtime takes hundreds
-	 * of ms to build and the first message can arrive first (spec 048 F2).
-	 */
-	private sessionInitialized = false;
-	private sessionRuntime!: AgentSessionRuntime;
-	private sessionUnsubscribe?: () => void;
-	private subAgentDiscovery!: SubAgentDiscoveryResult;
-
 	// --- Mutable across runs ---
 	private readonly models: ModelSelection;
-	private currentSkills: PipiclawSkillsResult;
-	/** Last built system prompt (spec 025): feeds the boundary footer, /context and the debug manifest. */
-	private lastPromptBuild?: PromptBuildResult;
-	/** SOUL/AGENTS as resolved for the last build, for the `/context` independent-budget lines. */
-	private lastWorkspaceResources?: WorkspacePromptResources;
-	/** The exact system prompt the provider last received (our prompt + pi's tail + footer). */
-	private lastFinalPrompt?: string;
 	private lastTurnContextStats?: PromptTurnContextStats;
-	private currentTools: AgentTool<any>[] = [];
-	private firstTurnMemoryBootstrapPending = true;
-	/** Mirror of `tools.tasks.enabled` from the last tools-config load (see buildRuntimeTools). */
-	private tasksEnabled = true;
-	/**
-	 * Set while this runner is bound to a task's own session (spec 051, D3). Turns are serialized
-	 * per channel, so one runner can carry both surfaces by swapping which session file it is
-	 * bound to between turns — which keeps busy state, `/stop`, steering and turn recovery with
-	 * their existing single owner instead of splitting them across two runner instances.
-	 */
-	private taskLoop?: { taskId: string };
 	/** Single owner of turn state; see TurnPhase in types.ts and TurnStateMachine in turn-state.ts. */
 	private readonly turnState = new TurnStateMachine((message, detail) =>
 		log.logWarn("agent.session.warning", message, { channelId: this.channelId, reason: detail }),
@@ -263,7 +159,6 @@ export class ChannelRunner implements AgentRunner {
 
 		// Initial skill summaries
 		const initialSkills = loadPipiclawSkills(channelDir);
-		this.currentSkills = initialSkills;
 
 		// Create session manager, opening whichever session this channel's active-session ref
 		// (or the context.jsonl default, for a channel that has never run a topology op) names
@@ -298,7 +193,7 @@ export class ChannelRunner implements AgentRunner {
 			});
 		}
 		this.settingsManager = paths.settingsManager;
-		this.reportSettingsDiagnostics();
+		reportSettingsDiagnostics(this.settingsManager, this.channelId, this.appHomeDir);
 		this.memoryActivityRecorder = createMemoryActivityRecorder({
 			appHomeDir: this.appHomeDir,
 			onError: (channelId, error) =>
@@ -312,8 +207,8 @@ export class ChannelRunner implements AgentRunner {
 			channelId: this.channelId,
 			settingsManager: this.settingsManager,
 			getSession: () => this.session,
-			getSessionSettingsManager: () => this.sessionSettingsManager,
-			getModelRegistry: () => this.modelRegistry,
+			getSessionSettingsManager: () => this.host.sessionSettingsManager,
+			getModelRegistry: () => this.host.modelRegistry,
 		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
@@ -324,15 +219,46 @@ export class ChannelRunner implements AgentRunner {
 			getMessages: () => this.session.messages,
 			getSessionEntries: () => this.sessionManager.getBranch(),
 			getModel: () => this.session.model ?? this.models.activeModel,
-			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+			resolveApiKey: async (model) => getApiKeyForModel(this.host.modelRegistry, model),
 			recordMemoryActivity: (event) => this.recordMemoryActivity(event),
 		});
 
-		this.sessionResourceGate = new SessionResourceGate(async () => {
-			await this.reloadSessionResources();
+		this.host = new SessionHost({
+			channelId,
+			channelDir,
+			workspaceDir: this.workspaceDir,
+			appHomeDir: this.appHomeDir,
+			authConfigPath: this.authConfigPath,
+			modelsConfigPath: this.modelsConfigPath,
+			onSessionEvent: this.onSessionEvent,
+			mediaSender: this.mediaSender,
+			projectScope: this.projectScope,
+			settingsManager: this.settingsManager,
+			loadSecurityConfig: this.loadSecurityConfig,
+			executor: this.executor,
+			fileStore: this.fileStore,
+			jobManager: this.jobManager,
+			runManager: this.runManager,
+			memoryLifecycle: this.memoryLifecycle,
+			models: this.models,
+			ledger: this.ledger,
+			initialSkills,
+			getRunState: () => this.runState,
+			markStreaming: () => this.turnState.markStreaming(),
 		});
+		this.host.start(sessionManager);
+	}
 
-		this.sessionReady = this.initializeSession(sessionManager);
+	private get session(): AgentSession {
+		return this.host.session;
+	}
+
+	private get agent(): Agent {
+		return this.host.agent;
+	}
+
+	private get sessionManager(): SessionManager {
+		return this.host.sessionManager;
 	}
 
 	// === Public API ===
@@ -398,7 +324,7 @@ export class ChannelRunner implements AgentRunner {
 		let bootstrapPrepared = false;
 
 		try {
-			await this.ensureSessionReady();
+			await this.host.ensureSessionReady();
 			await this.models.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
 			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
@@ -431,7 +357,9 @@ export class ChannelRunner implements AgentRunner {
 				// fails the turn exactly as it did when this ran inline. A task step gets none: its brief
 				// already carries its own task, and the channel's other tasks are noise there.
 				const taskDigestPromise = (
-					this.tasksEnabled && !this.taskLoop ? buildTaskDigestForTurn(this.channelDir) : Promise.resolve("")
+					this.host.tasksEnabled && !this.host.taskLoop
+						? buildTaskDigestForTurn(this.channelDir)
+						: Promise.resolve("")
 				).then(
 					(text) => ({ text }) as { text: string; error?: never },
 					(error: unknown) => ({ error }) as { text?: never; error: unknown },
@@ -440,7 +368,7 @@ export class ChannelRunner implements AgentRunner {
 				// Spec 050, D1: the memory index is injected in full on the first turn of a session
 				// (and the first turn after compaction — see `subscribeToSessionEvents`), never per
 				// turn. Mid-session, the model uses `memory_search` to look things up.
-				if (this.firstTurnMemoryBootstrapPending) {
+				if (this.host.firstTurnMemoryBootstrapPending) {
 					durableMemoryBootstrapText = await buildFirstTurnMemoryBootstrap(this.channelDir, this.workspaceDir);
 					bootstrapPrepared = true;
 				}
@@ -487,13 +415,13 @@ export class ChannelRunner implements AgentRunner {
 			const fallbackDeps: FallbackRunDeps = {
 				prompt: async (text) => {
 					try {
-						await this.sessionResourceGate.runPrompt(async () => {
+						await this.host.runPrompt(async () => {
 							await this.session.prompt(
 								text,
 								preparedImages.images.length > 0 ? { images: preparedImages.images } : undefined,
 							);
 							promptSubmitted = true;
-							if (bootstrapPrepared) this.firstTurnMemoryBootstrapPending = false;
+							if (bootstrapPrepared) this.host.firstTurnMemoryBootstrapPending = false;
 						});
 					} catch (err) {
 						this.runState.stopReason = "error";
@@ -612,9 +540,9 @@ export class ChannelRunner implements AgentRunner {
 		// footer the prompt extension appends at before_agent_start.
 		if (process.env.PIPICLAW_DEBUG) {
 			const debugContext = {
-				systemPrompt: this.lastFinalPrompt ?? this.agent.state.systemPrompt,
-				promptManifest: this.lastPromptBuild
-					? buildPromptManifest(this.lastPromptBuild, this.lastFinalPrompt)
+				systemPrompt: this.host.lastFinalPrompt ?? this.agent.state.systemPrompt,
+				promptManifest: this.host.lastPromptBuild
+					? buildPromptManifest(this.host.lastPromptBuild, this.host.lastFinalPrompt)
 					: undefined,
 				messages: this.session.messages,
 				durableMemoryBootstrap: input.durableMemoryBootstrapText || undefined,
@@ -765,7 +693,7 @@ export class ChannelRunner implements AgentRunner {
 		await handleBuiltinCommand(
 			{
 				channelId: this.channelId,
-				ensureSessionReady: () => this.ensureSessionReady(),
+				ensureSessionReady: () => this.host.ensureSessionReady(),
 				promptTemplates: () => this.session.promptTemplates,
 				renderContextReport: (args) => this.renderContextReport(args),
 			},
@@ -789,7 +717,7 @@ export class ChannelRunner implements AgentRunner {
 		if (
 			isKnownCommandName(
 				name,
-				this.currentSkills.skills.map((skill) => skill.name.toLowerCase()),
+				this.host.currentSkills.skills.map((skill) => skill.name.toLowerCase()),
 			)
 		) {
 			return true;
@@ -798,7 +726,7 @@ export class ChannelRunner implements AgentRunner {
 		// fall back to the static catalog + skills only. Misclassifying a prompt template
 		// as "unknown" for the first few hundred ms after a runner is created is far
 		// cheaper than throwing on the dispatch main path (spec 048 F2/D7).
-		if (!this.sessionInitialized) {
+		if (!this.host.sessionInitialized) {
 			return false;
 		}
 		return this.session.promptTemplates.some((template) => template.name.toLowerCase() === name);
@@ -823,23 +751,11 @@ export class ChannelRunner implements AgentRunner {
 			});
 			return;
 		}
-		// Guards a dispose() racing construction: initializeSession assigns `this.session`
-		// asynchronously, so a runner disposed the instant after creation may not have one yet.
-		await this.sessionReady;
-		this.sessionUnsubscribe?.();
-		this.sessionUnsubscribe = undefined;
-		try {
-			this.session.dispose();
-		} catch (error) {
-			log.logWarn("agent.session.dispose_failed", "Session dispose failed", {
-				channelId: this.channelId,
-				reason: errorMessage(error),
-			});
-		}
+		await this.host.disposeSession();
 	}
 
 	async getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext> {
-		await this.ensureSessionReady();
+		await this.host.ensureSessionReady();
 		this.settingsManager.reload();
 		return {
 			channelId: this.channelId,
@@ -850,7 +766,7 @@ export class ChannelRunner implements AgentRunner {
 			messages: () => [...this.session.messages],
 			sessionEntries: () => [...this.sessionManager.getBranch()],
 			model: this.session.model ?? this.models.activeModel,
-			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+			resolveApiKey: async (model) => getApiKeyForModel(this.host.modelRegistry, model),
 			settings: { memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings() },
 		};
 	}
@@ -892,17 +808,13 @@ export class ChannelRunner implements AgentRunner {
 		void this.runState.ctx?.close().catch(() => undefined);
 		this.forceEndTurn("superseded by /new");
 
-		const retireLiveSession = (): void => {
-			this.sessionUnsubscribe?.();
-			this.sessionUnsubscribe = undefined;
-			this.session.dispose();
-		};
+		const retireLiveSession = (): void => this.host.retireLiveSession();
 		if (this.session) {
 			retireLiveSession();
 		} else {
 			// A second message can issue `/new` while this generation is still initializing.
 			// Let construction settle in the background, then immediately tear it down.
-			void this.sessionReady.then(retireLiveSession, () => undefined);
+			void this.host.sessionReady.then(retireLiveSession, () => undefined);
 		}
 	}
 
@@ -912,15 +824,15 @@ export class ChannelRunner implements AgentRunner {
 	 * often the larger half), and the last turn's dynamic context.
 	 */
 	renderContextReport(args = ""): string {
-		const build = this.lastPromptBuild ?? this.buildSystemPrompt();
+		const build = this.host.lastPromptBuild ?? this.host.buildSystemPrompt();
 		return renderContextReport({
 			build,
-			skills: this.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
-			finalPrompt: this.lastFinalPrompt,
-			toolNames: this.currentTools.map((tool) => tool.name),
-			toolSchemas: measureToolSchemas(this.currentTools),
-			soul: this.lastWorkspaceResources?.soul,
-			agents: this.lastWorkspaceResources?.agents,
+			skills: this.host.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+			finalPrompt: this.host.lastFinalPrompt,
+			toolNames: this.host.currentTools.map((tool) => tool.name),
+			toolSchemas: measureToolSchemas(this.host.currentTools),
+			soul: this.host.lastWorkspaceResources?.soul,
+			agents: this.host.lastWorkspaceResources?.agents,
 			lastTurn: this.lastTurnContextStats,
 			detail: args.trim().toLowerCase() === "detail",
 		});
@@ -928,7 +840,26 @@ export class ChannelRunner implements AgentRunner {
 
 	/** `/subagents list`'s role-directory health tail — whatever this runner already discovered. */
 	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult {
-		return this.subAgentDiscovery;
+		return this.host.subAgentDiscovery;
+	}
+
+	/**
+	 * Bind this runner to a task cycle's own session (spec 051, D3/INV-5): task work must not
+	 * accumulate in the channel's chat transcript, so each task turn runs in its own bounded session
+	 * while turn state, `/stop` and delivery stay exactly where they already are.
+	 */
+	bindTaskSession(taskId: string): Promise<void> {
+		return this.host.bindTaskSession(taskId);
+	}
+
+	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
+	bindChatSession(): Promise<void> {
+		return this.host.bindChatSession();
+	}
+
+	/** Which task loop this runner is currently bound to, if any. */
+	getTaskLoop(): { taskId: string } | undefined {
+		return this.host.taskLoop;
 	}
 
 	// === Private helpers ===
@@ -980,7 +911,7 @@ export class ChannelRunner implements AgentRunner {
 	private async queueBusyMessage(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
 		this.assertBusyWindowOpen();
 
-		await this.ensureSessionReady();
+		await this.host.ensureSessionReady();
 
 		const oversized = text.replace(/\r/g, "").trim().length > MAX_USER_MESSAGE_CHARS;
 		const oversizedPath = oversized ? await persistOversizedInput(this.channelDir, this.channelId, text) : undefined;
@@ -1005,7 +936,7 @@ export class ChannelRunner implements AgentRunner {
 			await this.session.steer(queuedMessage, preparedImages.images.length > 0 ? preparedImages.images : undefined);
 		};
 
-		await this.sessionResourceGate.runPrompt(queueMessage);
+		await this.host.runPrompt(queueMessage);
 	}
 
 	private resetRunState(ctx: ChannelContext, store: ChannelStore): void {
@@ -1017,121 +948,6 @@ export class ChannelRunner implements AgentRunner {
 			channelName: ctx.channelName,
 		};
 		this.runState.store = store;
-	}
-
-	private async refreshSessionResources(): Promise<void> {
-		await this.ensureSessionReady();
-		await this.sessionResourceGate.requestRefresh();
-	}
-
-	private async initializeSession(sessionManager: SessionManager): Promise<void> {
-		// Build the canonical async model/auth runtime and its synchronous read shell.
-		this.modelRuntime = await createModelRuntime({
-			authConfigPath: this.authConfigPath,
-			modelsConfigPath: this.modelsConfigPath,
-		});
-		this.modelRegistry = wrapModelRegistry(this.modelRuntime);
-
-		// Resolve model: prefer saved global default, fall back to first available model.
-		this.models.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
-		log.logInfo(
-			`Using model: ${this.models.activeModel.provider}/${this.models.activeModel.id} (${this.models.activeModel.name})`,
-		);
-		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
-
-		const initial = await this.createSessionRuntime(sessionManager);
-		this.session = initial.session;
-		this.sessionRuntime = new AgentSessionRuntime(
-			this.session,
-			this.createAgentSessionServices(initial.resourceLoader),
-			async ({ sessionManager, sessionStartEvent }) => {
-				// `/new`, fork, and switch already wrote the target session's durable header by
-				// this point (the SDK does it synchronously before invoking this callback); commit
-				// the pointer before we rebuild and rebind to it, so a crash between "SDK created
-				// session" and "we finished rebinding" leaves the old ref (and old session)
-				// authoritative rather than an orphaned new file (spec 043, D1.3).
-				// A task session is not the channel's chat session: never repoint the active-session
-				// ref at it, or `/new` and restart recovery would adopt a task's transcript as the
-				// conversation (spec 051, D3).
-				if (!isTaskSessionPath(sessionManager.getSessionFile())) {
-					await commitActiveSessionRef(this.channelDir, sessionManager);
-				}
-				const next = await this.createSessionRuntime(sessionManager, sessionStartEvent);
-				return {
-					session: next.session,
-					extensionsResult: next.resourceLoader.getExtensions(),
-					services: this.createAgentSessionServices(next.resourceLoader),
-					diagnostics: [],
-				};
-			},
-		);
-		this.sessionRuntime.setRebindSession(async (session) => {
-			this.session = session;
-			await this.bindSessionExtensions();
-			this.subscribeToSessionEvents();
-		});
-
-		// Subscribe to session events
-		this.subscribeToSessionEvents();
-
-		await this.bindSessionExtensions();
-		// A restart resumes an existing transcript: if that session was already handed its
-		// bootstrap before the daemon went down, the first turn after recovery must not inject a
-		// second copy just because a process-local field starts out `true`.
-		this.syncMemoryBootstrapPendingFromSession();
-		this.sessionInitialized = true;
-	}
-
-	private async reloadSessionResources(): Promise<void> {
-		this.settingsManager.reload();
-		this.reportSettingsDiagnostics();
-		const skills = loadPipiclawSkills(this.channelDir);
-		this.currentSkills = skills;
-		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
-		this.rebuildSessionTools();
-		try {
-			await withTimeout(`[${this.channelId}] session reload`, SESSION_RELOAD_TIMEOUT_MS, () =>
-				this.session.reload(),
-			);
-		} catch (error) {
-			log.logWarn("agent.session.reload_unsettled", "Session reload did not settle", {
-				channelId: this.channelId,
-				reason: errorMessage(error),
-			});
-		}
-	}
-
-	private async bindSessionExtensions(): Promise<void> {
-		await this.session.bindExtensions({
-			commandContextActions: {
-				waitForIdle: () => this.session.agent.waitForIdle(),
-				newSession: async (options) => {
-					return await this.sessionRuntime.newSession(options);
-				},
-				fork: async (entryId, options) => {
-					const result = await this.sessionRuntime.fork(entryId, options);
-					this.syncMemoryBootstrapPendingFromSession();
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, options) => {
-					const result = await this.session.navigateTree(targetId, options);
-					this.syncMemoryBootstrapPendingFromSession();
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async (sessionPath, options) => {
-					const result = await this.sessionRuntime.switchSession(sessionPath, options);
-					this.syncMemoryBootstrapPendingFromSession();
-					return result;
-				},
-				reload: async () => {
-					await this.refreshSessionResources();
-				},
-			},
-		});
-	}
-
-	private async ensureSessionReady(): Promise<void> {
-		await this.sessionReady;
 	}
 
 	private async maybeRunPreventiveCompactionForIncomingText(
@@ -1164,408 +980,5 @@ export class ChannelRunner implements AgentRunner {
 				reason: message,
 			});
 		}
-	}
-
-	private async refreshSubAgentDiscovery(): Promise<SubAgentDiscoveryResult> {
-		// Re-resolves models.json *and* every provider's auth, which for an OAuth
-		// provider is a network call. Failing open keeps the last known model
-		// snapshot — stale availability is a far smaller problem than a reload
-		// (and, through it, a `/new` turn) that never returns.
-		try {
-			await withTimeout(`[${this.channelId}] model registry refresh`, MODEL_REGISTRY_REFRESH_TIMEOUT_MS, () =>
-				this.modelRegistry.refresh(),
-			);
-		} catch (error) {
-			log.logWarn(
-				"agent.models.refresh_unsettled",
-				"Model registry refresh did not settle; using the previous snapshot",
-				{ channelId: this.channelId, reason: errorMessage(error) },
-			);
-		}
-		const discovery = discoverSubAgents(this.workspaceDir, this.modelRegistry.getAvailable());
-		for (const warning of discovery.warnings) {
-			log.logWarn("config.subagents.warning", "Sub-agent config warning", {
-				channelId: this.channelId,
-				reason: warning,
-			});
-		}
-		return discovery;
-	}
-
-	private reportSettingsDiagnostics(): void {
-		for (const { scope, error } of this.settingsManager.drainErrors()) {
-			log.logWarn("config.settings.load_failed", "Settings load failed", {
-				channelId: this.channelId,
-				reason: error.message,
-				fields: { scope, path: join(this.appHomeDir, "settings.json") },
-			});
-		}
-	}
-
-	private reportConfigDiagnostics(diagnostics: ConfigDiagnostic[]): void {
-		for (const diagnostic of diagnostics) {
-			log.logWarn("config.diagnostic", formatConfigDiagnostic(diagnostic), {
-				channelId: this.channelId,
-				fields: { path: diagnostic.path },
-			});
-		}
-	}
-
-	/**
-	 * Build the Pipiclaw-owned system prompt (spec 025). This replaces pi's default
-	 * base prompt entirely: identity, execution contract, hard invariants, the tool
-	 * catalog and the workspace files are ours. pi still appends its tail (skills,
-	 * date, cwd), and the boundary footer is appended after that by the prompt
-	 * extension.
-	 *
-	 * Nothing channel-specific enters this text — that is what lets two channels in
-	 * one workspace share a cached prompt prefix. Channel facts ride the turn.
-	 */
-	private buildSystemPrompt(): PromptBuildResult {
-		const toolNames = this.currentTools.map((tool) => tool.name);
-		const resources = loadWorkspacePromptResources(this.workspaceDir);
-		this.lastWorkspaceResources = resources;
-		const build = buildPipiclawSystemPrompt({
-			tools: this.currentTools.map((tool) => ({
-				name: tool.name,
-				description: tool.description,
-			})),
-			soul: resources.soul,
-			agents: resources.agents,
-			playbooks: loadPlaybooks(toolNames),
-			subAgents: this.subAgentDiscovery.agents.map((agent) => ({
-				name: agent.name,
-				description: agent.description,
-				runtime: agent.runtime,
-				harness: agent.harness,
-				workload: agent.workload ?? (agent.runtime === "external" ? "heavy" : "light"),
-				mutates: agent.mutates,
-				unavailable: agent.unavailable,
-			})),
-		});
-
-		for (const diagnostic of [...resources.diagnostics, ...build.diagnostics]) {
-			if (diagnostic.level === "info") continue;
-			log.logWarn("agent.prompt.diagnostic", "Prompt section diagnostic", {
-				channelId: this.channelId,
-				reason: diagnostic.message,
-				fields: { level: diagnostic.level, section: diagnostic.sectionId },
-			});
-		}
-		// Only a real change is worth a line: a reload that produced the same bytes is noise.
-		if (this.lastPromptBuild?.fingerprint !== build.fingerprint) {
-			log.logInfo(
-				`[${this.channelId}] System prompt rebuilt: ${build.totalChars} chars, ~${build.estimatedTokens} tokens, sha256:${build.fingerprint.slice(0, 12)} (was ${this.lastPromptBuild ? `sha256:${this.lastPromptBuild.fingerprint.slice(0, 12)}` : "none"})`,
-			);
-		}
-		this.lastPromptBuild = build;
-		return build;
-	}
-
-	private createResourceLoader(): ResourceLoader {
-		return new DefaultResourceLoader({
-			cwd: this.projectScope.projectRoot,
-			agentDir: this.appHomeDir,
-			settingsManager: asSdkSettingsManager(this.settingsManager),
-			extensionFactories: [
-				this.memoryLifecycle.createExtensionFactory(),
-				createPromptBoundaryExtension({
-					getFooter: () => this.lastPromptBuild?.footer ?? "",
-					onFinalPrompt: (systemPrompt) => {
-						this.lastFinalPrompt = systemPrompt;
-					},
-				}),
-				createCommandExtension({
-					getCurrentModel: () => this.session.model ?? this.models.activeModel,
-					getAvailableModels: async () => {
-						await this.modelRegistry.refresh();
-						return this.modelRegistry.getAvailable();
-					},
-					getSessionStats: () => this.session.getSessionStats(),
-					getThinkingLevel: () => this.session.thinkingLevel,
-					getAvailableThinkingLevels: () => this.session.getAvailableThinkingLevels(),
-					setThinkingLevel: (level) => this.models.setThinkingLevelCompat(level),
-					cycleThinkingLevel: () => this.models.cycleThinkingLevelCompat(),
-					getLastResponseModel: () => getLastAssistantUsage(this.session.messages)?.responseModel,
-					switchModel: async (model) => {
-						await this.models.setModelWithThinkingPreservation(model);
-						this.models.activeModel = model;
-						// Manual /model switch redefines the preferred model and clears fallback state.
-						this.models.clearFallbackState();
-					},
-					refreshSessionResources: async () => {
-						await this.refreshSessionResources();
-					},
-					runMemoryCommand: async (args) =>
-						handleMemoryCommand({
-							channelId: this.channelId,
-							channelDir: this.channelDir,
-							appHomeDir: this.appHomeDir,
-							args,
-						}),
-				}),
-			],
-			// Pipiclaw owns the base prompt: with a custom prompt present, pi emits no
-			// default identity, no pi docs index and no `Available tools: (none)` block.
-			systemPromptOverride: () => this.buildSystemPrompt().text,
-			// Nothing may slip in behind the section pipeline — not pi's app-level
-			// APPEND_SYSTEM.md, not a base append. SOUL/AGENTS are rendered as sections.
-			appendSystemPromptOverride: () => [],
-			agentsFilesOverride: () => ({ agentsFiles: [] }),
-			// Skills stay in the ResourceLoader: they drive `/skill:name` and pi's
-			// `<available_skills>` index together. Only the merge policy is ours.
-			skillsOverride: (base) => {
-				const merged = resolvePipiclawSkills(base, this.currentSkills);
-				for (const diagnostic of merged.diagnostics) {
-					log.logWarn("agent.skills.diagnostic", "Skill diagnostic", {
-						channelId: this.channelId,
-						reason: diagnostic.message,
-						fields: { type: diagnostic.type, path: diagnostic.path },
-					});
-				}
-				return merged;
-			},
-		});
-	}
-
-	private createAgentSessionServices(resourceLoader: ResourceLoader): AgentSessionServices {
-		return {
-			cwd: this.projectScope.projectRoot,
-			agentDir: this.appHomeDir,
-			settingsManager: asSdkSettingsManager(this.settingsManager),
-			modelRuntime: this.modelRuntime,
-			resourceLoader,
-			diagnostics: [],
-		};
-	}
-
-	/**
-	 * Load a freshly constructed ResourceLoader before an `AgentSession` is built on top of it.
-	 *
-	 * `AgentSession` reads `resourceLoader.getExtensions()` in its constructor, and a loader that
-	 * has never been loaded answers with an *empty* set. Skipping this leaves a replacement session
-	 * with no extensions at all — no command extension (so `/model`, `/thinking`, `/session`,
-	 * `/compact` and `/memory` fall through to the model as plain text), no memory lifecycle, no
-	 * prompt-boundary footer, and no prompt templates. Tolerated on failure the same way
-	 * `reloadSessionResources` tolerates a stuck reload: a degraded session still answers chat.
-	 */
-	private async loadSessionResources(resourceLoader: ResourceLoader): Promise<void> {
-		try {
-			await withTimeout(`[${this.channelId}] session resource load`, SESSION_RELOAD_TIMEOUT_MS, () =>
-				resourceLoader.reload(),
-			);
-		} catch (error) {
-			log.logWarn("agent.session.resources_failed", "Session resources did not load", {
-				channelId: this.channelId,
-				reason: errorMessage(error),
-			});
-		}
-	}
-
-	/**
-	 * Resolve the initial thinking level using the same precedence as pi's SDK:
-	 * session history, configured default, then medium. The effective value is
-	 * clamped to the selected model before the session starts.
-	 */
-	private initializeThinkingLevel(agent: Agent, model: Model<Api>, sessionManager: SessionManager): void {
-		initializeThinkingLevelCompat(agent, model, sessionManager, this.settingsManager.getDefaultThinkingLevel());
-	}
-
-	private async createSessionRuntime(
-		sessionManager: SessionManager,
-		sessionStartEvent?: SessionStartEvent,
-	): Promise<{ session: AgentSession; resourceLoader: ResourceLoader }> {
-		const tools = this.buildRuntimeTools();
-		const agent = new Agent({
-			initialState: {
-				systemPrompt: "",
-				model: this.models.activeModel,
-				thinkingLevel: DEFAULT_MAIN_THINKING_LEVEL,
-				tools,
-			},
-			convertToLlm,
-			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.models.activeModel),
-			streamFn: streamSimple,
-		});
-		this.initializeThinkingLevel(agent, this.models.activeModel, sessionManager);
-		const resourceLoader = this.createResourceLoader();
-		// Must precede `new AgentSession`: the session snapshots the loader's extensions in its
-		// constructor (see `loadSessionResources`).
-		await this.loadSessionResources(resourceLoader);
-		const sessionSettingsManager = asSdkSettingsManager(this.settingsManager);
-		const session = new AgentSession({
-			agent,
-			sessionManager,
-			settingsManager: sessionSettingsManager,
-			cwd: this.projectScope.projectRoot,
-			modelRuntime: this.modelRuntime,
-			resourceLoader,
-			baseToolsOverride: Object.fromEntries(tools.map((tool) => [tool.name, tool])),
-			sessionStartEvent,
-		});
-		this.sessionSettingsManager = sessionSettingsManager;
-		return { session, resourceLoader };
-	}
-
-	/**
-	 * Bind this runner to a task cycle's own session (spec 051, D3/INV-5).
-	 *
-	 * Task work must not accumulate in the channel's chat transcript: the one real channel on the
-	 * author's machine had grown to 7.4 MB and been compacted six times because chat and two daily
-	 * tasks shared it, so every compaction damaged all three at once. Swapping the bound session
-	 * per turn gives each task its own bounded context while leaving turn state, `/stop`, and
-	 * delivery exactly where they already are.
-	 */
-	async bindTaskSession(taskId: string): Promise<void> {
-		await this.sessionReady;
-		const path = taskSessionPath(this.channelDir, taskId);
-		await mkdir(dirname(path), { recursive: true });
-		this.taskLoop = { taskId };
-		await this.sessionRuntime.switchSession(path);
-		this.syncMemoryBootstrapPendingFromSession();
-	}
-
-	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
-	async bindChatSession(): Promise<void> {
-		if (!this.taskLoop) return;
-		this.taskLoop = undefined;
-		await this.sessionRuntime.switchSession(join(this.channelDir, resolveActiveSessionFile(this.channelDir)));
-		this.syncMemoryBootstrapPendingFromSession();
-	}
-
-	/**
-	 * Re-derive "does this session still owe a memory bootstrap" from the session now bound.
-	 *
-	 * The pending flag used to be set to `true` on every bind, which is right for a fresh task
-	 * session and wrong for the return trip: a chat session that already carries the block would
-	 * be handed a second copy on its next turn, and one interleaved task step could therefore cost
-	 * the whole index again. It was also wrong across a restart, where the field simply starts
-	 * `true` and the resumed session's own history says otherwise.
-	 *
-	 * So the answer comes from the transcript that will actually be sent, not from a boolean that
-	 * has to be kept in step with every binding. The `/new` and post-compaction resets in
-	 * `subscribeToSessionEvents` stay as they are: those are the SDK telling us the context
-	 * generation changed, which is a fact about the session that its message list alone —
-	 * compaction having rewritten it into a summary — cannot be scanned for reliably.
-	 */
-	private syncMemoryBootstrapPendingFromSession(): void {
-		// `session.messages` is empty until the session actually runs a turn, so the answer comes
-		// from the persisted branch — which is also what makes this correct across a restart.
-		const injected = this.sessionManager.getBranch().some((entry) => {
-			if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) return false;
-			return entry.message.role === "user" && hasMemoryBootstrapBlock(plainTextOf(entry.message.content));
-		});
-		this.firstTurnMemoryBootstrapPending = !injected;
-	}
-
-	/** Which task loop this runner is currently bound to, if any. */
-	getTaskLoop(): { taskId: string } | undefined {
-		return this.taskLoop;
-	}
-
-	private buildRuntimeTools(): AgentTool<any>[] {
-		const securityLoad = this.loadSecurityConfig();
-		const toolsLoad = loadToolsConfigWithDiagnostics(this.appHomeDir);
-		this.reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics]);
-		this.tasksEnabled = toolsLoad.config.tools.tasks.enabled;
-
-		const tools = createPipiclawTools({
-			jobManager: this.jobManager,
-			runManager: this.runManager,
-			executor: this.executor,
-			fileStore: this.fileStore,
-			getCurrentModel: () => this.models.activeModel,
-			getAvailableModels: () => this.modelRegistry.getAvailable(),
-			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
-			workspaceDir: this.workspaceDir,
-			projectScope: this.projectScope,
-			channelDir: this.channelDir,
-			channelId: this.channelId,
-			getSubAgentDiscovery: () => this.subAgentDiscovery,
-			getSubAgentModelReference: () => this.settingsManager.getSubAgentModelReference(),
-			resolveFallbackModel: () => this.models.resolveFallbackModel(),
-			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),
-			securityConfig: securityLoad.config,
-			toolsConfig: toolsLoad.config,
-			mediaSender: this.mediaSender,
-			taskLoop: this.taskLoop,
-			getToolsUsed: () => this.runState.toolsUsed,
-			// Assistant usage only: an internal sub-agent's cost is also in `totalUsage`, and a bound
-			// one is already credited to the task when it settles.
-			getStepCost: () => ({ usd: this.runState.assistantUsage.cost.total, estimated: !this.runState.costKnown }),
-		});
-		this.currentTools = tools;
-		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.
-		// Warn where the prompt's own budget diagnostics are reported, once per tool rebuild.
-		const schemas = measureToolSchemas(tools);
-		if (schemas.units > TOOL_SCHEMA_TARGET_UNITS) {
-			log.logWarn("agent.tools.schema_over_budget", "Tool schemas over budget", {
-				channelId: this.channelId,
-				reason: toolSchemaBudgetWarning(schemas),
-			});
-		}
-		return tools;
-	}
-
-	private rebuildSessionTools(): void {
-		const tools = this.buildRuntimeTools();
-		setSessionBaseToolsOverride(this.session, tools, this.channelId);
-		this.agent.state.tools = tools;
-		this.session.setActiveToolsByName(tools.map((tool) => tool.name));
-	}
-
-	// === Session event subscription ===
-
-	private subscribeToSessionEvents(): void {
-		this.sessionUnsubscribe?.();
-		this.sessionUnsubscribe = this.session.subscribe((event: unknown) => {
-			// Observation is deliberately before our consumer and must never alter a turn.
-			try {
-				this.onSessionEvent?.(event, this.channelId);
-			} catch (err) {
-				log.logWarn("agent.session.observer_failed", "Session observer failed", {
-					channelId: this.channelId,
-					reason: errorMessage(err),
-				});
-			}
-			if (isRecord(event) && event.type === "message_start") {
-				this.turnState.markStreaming();
-			}
-			if (isRecord(event) && "reason" in event && event.reason === "new") {
-				this.firstTurnMemoryBootstrapPending = true;
-			}
-			// Spec 050, D1: compaction rewrites the first-turn bootstrap into a summary; re-inject
-			// the authoritative index on the next turn so memory does not decay with the transcript.
-			if (isAutoCompactionEndEvent(event) && !event.aborted && !event.errorMessage) {
-				this.firstTurnMemoryBootstrapPending = true;
-			}
-			if (!this.runState.ctx || !this.runState.logCtx || !this.runState.queue) return;
-			// The SDK listener signature is `(event) => void`, so the promise below is fire-and-forget.
-			// Without this catch, a rejection inside handleSessionEvent becomes an unhandled rejection
-			// that terminates the daemon under Node's default policy.
-			handleSessionEvent(event, {
-				ctx: this.runState.ctx,
-				logCtx: this.runState.logCtx,
-				queue: this.runState.queue,
-				pendingTools: this.runState.pendingTools,
-				store: this.runState.store,
-				runState: this.runState,
-				memoryLifecycle: this.memoryLifecycle,
-				ledger: this.ledger,
-				isModelCostKnown: (reference) => {
-					const model = findExactModelReferenceMatch(reference, this.modelRegistry.getAvailable()).match;
-					return model ? hasKnownModelPricing(model) : false;
-				},
-				refreshSessionResources: async () => {
-					await this.refreshSessionResources();
-				},
-				skillsDir: join(this.workspaceDir, "skills"),
-			}).catch((err) => {
-				log.logWarn("agent.session.handler_failed", "Session event handler failed", {
-					channelId: this.channelId,
-					reason: errorMessage(err),
-				});
-			});
-		});
 	}
 }
