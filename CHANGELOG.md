@@ -2,7 +2,7 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
-## [Unreleased]
+## [0.9.4-beta.2] - 2026-10-13
 
 ### Fixed
 
