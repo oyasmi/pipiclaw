@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createRunQueue } from "../src/agent/run-queue.js";
 import { SessionResourceGate } from "../src/agent/session-resource-gate.js";
 import * as log from "../src/log.js";
-import { forceEndStuckTurnAfterStop } from "../src/runtime/bootstrap.js";
+import { forceEndStuckTurnAfterStop } from "../src/runtime/stop-watchdog.js";
 import { createFakeTurnState } from "./helpers/fake-turn-state.js";
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
