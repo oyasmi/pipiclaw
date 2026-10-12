@@ -3,7 +3,7 @@
  * `MAX_IMAGE_BYTES` mirrors the *send* limit); this instead mirrors `tools/truncate.ts`'s
  * `MAX_INLINE_BINARY_BYTES` — the same ceiling `read` already applies to an on-disk image — so
  * "a picture the user sent" and "a picture `read` loads from disk" behave identically for the
- * model. Lives here, not in the DingTalk-specific `runtime/inbound-media.ts`, because both the
+ * model. Lives here, not in the DingTalk-specific `dingtalk/inbound-media.ts`, because both the
  * transport (rejecting an oversized download) and `agent/channel-runner.ts` (skipping an
  * oversized file before base64-encoding it) need the same number, and `agent/` never imports
  * from `runtime/` (spec 049).

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MediaSendResult, OutboundMedia } from "../../src/channel/channel-context.js";
-import type { DingTalkBot, DingTalkEvent, DingTalkHandler } from "../../src/runtime/dingtalk.js";
+import type { DingTalkBot, DingTalkEvent, DingTalkHandler } from "../../src/dingtalk/bot.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/tasks/ledger.js";
 import { createE2ETestHome } from "../../test/support/setup.js";

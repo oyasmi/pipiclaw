@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
+import { runAuth } from "./app/auth-command.js";
+import { formatCliCommandsHelp, isBootstrapExitError } from "./app/home.js";
 import * as log from "./log.js";
-import { runAuth } from "./models/auth-cli.js";
-import { formatCliCommandsHelp, isBootstrapExitError } from "./runtime/app-home.js";
 import { bootstrap } from "./runtime/bootstrap.js";
 import { errorMessage } from "./shared/text-utils.js";
 import { runTui } from "./tui/cli.js";

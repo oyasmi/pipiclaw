@@ -1,7 +1,7 @@
 /**
  * Terminal implementation of the `ChannelContext` delivery contract.
  *
- * The DingTalk delivery controller (`runtime/delivery.ts`) drives AI Card
+ * The DingTalk delivery controller (`dingtalk/delivery.ts`) drives AI Card
  * streaming; the terminal has none of that protocol, so this controller is a
  * thin mapping from the contract onto a `TranscriptRenderer`. Archiving
  * semantics mirror `delivery.ts` so a channel produces the same conversation log

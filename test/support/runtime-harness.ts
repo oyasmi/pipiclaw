@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
-import type { DingTalkBot, DingTalkEvent } from "../../src/runtime/dingtalk.js";
+import type { DingTalkBot, DingTalkEvent } from "../../src/dingtalk/bot.js";
 import { waitFor } from "../e2e/helpers/wait.js";
 import { type CapturedDelivery, E2EFakeDingTalkBot } from "./fake-bot.js";
 import { HarnessDingTalkBot } from "./harness-bot.js";
@@ -267,7 +267,7 @@ export async function createDeterministicHarness(options?: {
 			createEventsWatcher: () => ({ start() {}, stop() {} }),
 			createBot: (handler) => {
 				bot = new HarnessDingTalkBot(handler, dingtalkConfig as never, deliveries);
-				return bot as unknown as import("../../src/runtime/dingtalk.js").DingTalkBot;
+				return bot as unknown as import("../../src/dingtalk/bot.js").DingTalkBot;
 			},
 		});
 	}

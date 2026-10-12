@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
-import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
+import type { DingTalkEvent } from "../src/dingtalk/bot.js";
 import {
 	createSubAgentRuntime,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,

@@ -13,9 +13,9 @@ import {
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import type { ChannelEvent } from "../channel/channel-event.js";
+import type { DingTalkBot } from "../dingtalk/bot.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
-import type { DingTalkBot } from "../runtime/dingtalk.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";

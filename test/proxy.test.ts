@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installLlmProxy } from "../src/runtime/proxy.js";
+import { installLlmProxy } from "../src/app/proxy.js";
 
 const ENV_KEYS = [
 	"PIPICLAW_PROXY",

@@ -1,17 +1,17 @@
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
+import type { BootstrapPaths } from "../app/home.js";
 import { getChannelDir } from "../channel/channel-paths.js";
-import type { RuntimeCommandName } from "../commands/catalog.js";
 import { handleEventsCommand } from "../events/event-commands.js";
+import { handleProjectCommand } from "../runtime/project-commands.js";
+import { handleSkillsCommand } from "../runtime/skill-commands.js";
+import { handleSubagentsCommand } from "../runtime/subagent-commands.js";
+import { handleTasksCommand } from "../runtime/task-commands.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
-import type { BootstrapPaths } from "./app-home.js";
-import { handleProjectCommand } from "./project-commands.js";
-import { handleSkillsCommand } from "./skill-commands.js";
-import { handleSubagentsCommand } from "./subagent-commands.js";
-import { handleTasksCommand } from "./task-commands.js";
+import type { RuntimeCommandName } from "./catalog.js";
 
 /**
  * The stateless report commands (`/events /tasks /status /usage /context /subagents /project

@@ -10,7 +10,15 @@
  * because `src/index.ts` is a knip entry point.
  */
 
+export { type BootstrapPaths, type BootstrapResult, isBootstrapExitError } from "./app/home.js";
 export type { ChannelContext, FinalDelivery, ProgressStyle } from "./channel/channel-context.js";
+export {
+	DingTalkBot,
+	type DingTalkConfig,
+	type DingTalkEvent,
+	type DingTalkHandler,
+	type ResponseMode,
+} from "./dingtalk/bot.js";
 export {
 	APP_HOME_DIR,
 	APP_NAME,
@@ -22,13 +30,5 @@ export {
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "./paths.js";
-export { type BootstrapPaths, type BootstrapResult, isBootstrapExitError } from "./runtime/app-home.js";
 export { type AppContext, type BootstrapOptions, bootstrap } from "./runtime/bootstrap.js";
-export {
-	DingTalkBot,
-	type DingTalkConfig,
-	type DingTalkEvent,
-	type DingTalkHandler,
-	type ResponseMode,
-} from "./runtime/dingtalk.js";
 export type { PipiclawSettings } from "./settings.js";

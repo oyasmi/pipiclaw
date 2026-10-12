@@ -1,5 +1,5 @@
-import type { DingTalkHandler } from "../../src/runtime/dingtalk.js";
-import { DingTalkBot, type DingTalkConfig } from "../../src/runtime/dingtalk.js";
+import type { DingTalkHandler } from "../../src/dingtalk/bot.js";
+import { DingTalkBot, type DingTalkConfig } from "../../src/dingtalk/bot.js";
 import type { CapturedDelivery } from "./fake-bot.js";
 
 /**

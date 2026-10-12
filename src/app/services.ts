@@ -1,10 +1,10 @@
-import * as log from "./log.js";
-import { type BootstrapPaths, DEFAULT_BOOTSTRAP_PATHS } from "./runtime/app-home.js";
-import { installLlmProxy } from "./runtime/proxy.js";
-import { loadSecurityConfigWithDiagnostics } from "./security/config.js";
-import { PipiclawSettingsManager } from "./settings.js";
-import { formatConfigDiagnostic } from "./shared/config-diagnostic.js";
-import { loadToolsConfigWithDiagnostics } from "./tools/config.js";
+import * as log from "../log.js";
+import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import { PipiclawSettingsManager } from "../settings.js";
+import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
+import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
+import { type BootstrapPaths, DEFAULT_BOOTSTRAP_PATHS } from "./home.js";
+import { installLlmProxy } from "./proxy.js";
 
 /**
  * Transport-neutral app services shared by the DingTalk runtime, the terminal TUI, and the
@@ -12,11 +12,11 @@ import { loadToolsConfigWithDiagnostics } from "./tools/config.js";
  * diagnostics. Does NOT touch DingTalk config, so non-DingTalk entrypoints can call it without
  * any DingTalk credentials.
  *
- * Lives at the package root rather than in `runtime/` on purpose: `models/auth-cli.ts` needs it
+ * Lives in `app/` rather than in `runtime/` on purpose: `app/auth-command.ts` needs it
  * before a runner or channel exists, and `runtime/bootstrap.ts` separately depends on `models/`
  * (for the default model reference) — parking this function inside `bootstrap.ts` made `models`
  * and `runtime` depend on each other. Everything this function touches (`settings.ts`,
- * `tools/config.ts`, `security/config.ts`, `runtime/app-home.ts`, `runtime/proxy.ts`) has no
+ * `tools/config.ts`, `security/config.ts`, `app/home.ts`, `app/proxy.ts`) has no
  * import back to `models/`, so this file doesn't reintroduce the cycle it was extracted to break.
  */
 export function prepareAppServices(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): {

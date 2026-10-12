@@ -3,12 +3,12 @@
  *
  * `ChannelContext` is the surface a `ChannelRunner` turn writes to: progress
  * updates, the final answer, side notices, and lifecycle hooks. The DingTalk
- * transport implements it via AI Card streaming (`runtime/delivery.ts`); the
+ * transport implements it via AI Card streaming (`dingtalk/delivery.ts`); the
  * terminal TUI implements it by rendering to the console (`tui/`). The runner
  * and `session-events` depend only on this interface, never on a concrete
  * transport.
  *
- * These declarations previously lived in `runtime/dingtalk.ts` under the name
+ * These declarations previously lived in `dingtalk/bot.ts` under the name
  * `DingTalkContext`; they were lifted out (and renamed) so a second transport
  * can implement the contract without importing anything DingTalk-specific. They
  * live in `src/channel/` rather than `src/runtime/` because a port belongs with

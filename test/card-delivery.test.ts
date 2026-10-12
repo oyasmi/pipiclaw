@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const http = vi.hoisted(() => ({ post: vi.fn(), put: vi.fn(), defaults: {} }));
 vi.mock("axios", () => ({ default: { ...http, create: () => http, isAxiosError: () => false } }));
 
-import { createDingTalkContext } from "../src/runtime/delivery.js";
-import { DingTalkBot, type DingTalkHandler } from "../src/runtime/dingtalk.js";
+import { DingTalkBot, type DingTalkHandler } from "../src/dingtalk/bot.js";
+import { createDingTalkContext } from "../src/dingtalk/delivery.js";
 import { FakeChannelStore } from "./helpers/fake-store.js";
 import { createFakeEvent, useTempDirs } from "./helpers/fixtures.js";
 

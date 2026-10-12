@@ -10,12 +10,6 @@ import { userInfo } from "node:os";
 import { createJobRuntime } from "../agent/job-manager.js";
 import { createRunner } from "../agent/runner-factory.js";
 import type { AgentRunner } from "../agent/types.js";
-import { prepareAppServices } from "../app-services.js";
-import { ensureChannelDir } from "../channel/channel-paths.js";
-import { ChannelStore } from "../channel/store.js";
-import { renderBuiltInHelp } from "../commands/catalog.js";
-import { createExecutor } from "../executor.js";
-import * as log from "../log.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -24,9 +18,15 @@ import {
 	DEFAULT_BOOTSTRAP_PATHS,
 	printBootstrapSummary,
 	readCliVersion,
-} from "../runtime/app-home.js";
-import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
-import { runReportCommand } from "../runtime/report-commands.js";
+} from "../app/home.js";
+import { prepareAppServices } from "../app/services.js";
+import { ensureChannelDir } from "../channel/channel-paths.js";
+import { ChannelStore } from "../channel/store.js";
+import { renderBuiltInHelp } from "../commands/catalog.js";
+import { runReportCommand } from "../commands/router.js";
+import { finalDeliveryOf, progressStyleOf } from "../dingtalk/bot.js";
+import { createExecutor } from "../executor.js";
+import * as log from "../log.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { createSubAgentRuntime } from "../subagents/runs.js";
 import { getUsageLedger } from "../usage/ledger.js";

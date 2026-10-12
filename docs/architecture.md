@@ -29,10 +29,12 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 
 | 目录 | 职责 | 关键文件 |
 |---|---|---|
-| `src/runtime/` | 钉钉传输、后台服务与装配根 | `bootstrap.ts`（装配根）、`dingtalk.ts`（传输）、`delivery.ts`（投递控制器）、`task-driver.ts`、`durable-dispatch.ts` |
+| `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`task-driver.ts`、`durable-dispatch.ts` |
+| `src/dingtalk/` | 钉钉 Stream 传输：连接、投递控制器、入站队列 | `bot.ts`（传输）、`delivery.ts`（投递控制器）、`channel-queue.ts`、`inbound-media.ts` |
+| `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts`、`project-scope-store.ts` |
 | `src/agent/` | 单频道 agent 编排：组装 SDK 会话、跑一轮、流式回传 | `channel-runner.ts`（核心编排器）、`session-events.ts`、`prompt/`（system prompt 流水线）、`model-fallback.ts` |
-| `src/commands/` | 全产品斜杠命令目录与共享回复预算；零 import，命令处理器仍留在各自的状态所有者层 | `catalog.ts`、`reply-limits.ts` |
+| `src/commands/` | 全产品斜杠命令目录、共享回复预算与无状态报告命令的分发 | `catalog.ts`、`reply-limits.ts`、`router.ts` |
 | `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050） | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts` |
 | `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
@@ -46,7 +48,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/shared/` | 串行队列、原子写、JSONL appender 等基础件 | `serial-queue.ts`、`atomic-file.ts` |
 | `src/paths.ts` | 所有磁盘路径的集中定义 | — |
 | `src/main.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理 | — |
-| `src/models/` | 模型/凭据运行时封装 + `pipiclaw auth` CLI | `utils.ts`（`createModelRuntime`）、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面）、`auth-cli.ts` |
+| `src/models/` | 模型/凭据运行时封装 | `utils.ts`（`createModelRuntime`）、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
 
 ## 3. 运行时拓扑
 
@@ -57,14 +59,14 @@ flowchart TB
     DT[DingTalk 云端<br/>Stream WebSocket]
 
     subgraph daemon [pipiclaw daemon 进程]
-        BOT["DingTalkBot<br/>(runtime/dingtalk.ts)<br/>连接/重连/去重/allowFrom"]
+        BOT["DingTalkBot<br/>(dingtalk/bot.ts)<br/>连接/重连/去重/allowFrom"]
         CQ["ChannelQueue ×N<br/>每频道消息串行队列"]
         HANDLER["DingTalkHandler<br/>(bootstrap.ts 内)<br/>命令分发 / 频道状态"]
         RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每频道一个，bootstrap 缓存"]
         SESSION["SDK AgentSession + Agent<br/>(pi-coding-agent)"]
         TOOLS["工具集<br/>(tools/registry.ts)"]
         SEC["security/ 护栏<br/>command / path / network"]
-        DELIVERY["ChannelDeliveryController<br/>(runtime/delivery.ts)<br/>AI Card 流式 / 纯文本"]
+        DELIVERY["ChannelDeliveryController<br/>(dingtalk/delivery.ts)<br/>AI Card 流式 / 纯文本"]
 
         subgraph bg [后台定时服务]
             EW["EventsWatcher<br/>workspace/events/*.json"]
@@ -161,7 +163,7 @@ sequenceDiagram
 
 | 队列 | 位置 | 串行化对象 | 粒度 |
 |---|---|---|---|
-| `ChannelQueue` | `runtime/channel-queue.ts`（由 dingtalk 传输消费） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
+| `ChannelQueue` | `dingtalk/channel-queue.ts`（由 dingtalk 传输消费） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
 | `RunQueue`（`createRunQueue`） | `agent/run-queue.ts` | **一轮之内的出站投递调用**：进度/通知按序发往钉钉 API，错误只记日志不打断轮次 | 每轮 |
 | `ChannelMemoryQueue` | `memory/channel-maintenance-queue.ts` | **同一频道的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`/memory` 命令共用**进程级单例**，绝不能各自内联，否则几条路径会争写同一批记忆文件 | 每频道（跨子系统共享） |
 | `ChannelStore.writeQueue` | `channel/store.ts` | `log.jsonl` 追加与轮转 | 每频道 |
@@ -384,7 +386,7 @@ flowchart LR
 
 关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
 
-**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/models/auth-cli.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `docs/archive/specs/039-provider-login-cli/design.md`。
+**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/app/auth-command.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `docs/archive/specs/039-provider-login-cli/design.md`。
 
 ## 12.1 公共 API 面（`src/index.ts`，spec 035）
 

@@ -1,5 +1,5 @@
+import type { BootstrapIO } from "../app/home.js";
 import type { MediaSender, MediaSendResult, OutboundMedia } from "../channel/channel-context.js";
-import type { BootstrapIO } from "../runtime/app-home.js";
 
 /**
  * Terminal implementation of the `MediaSender` port. There is no chat surface to

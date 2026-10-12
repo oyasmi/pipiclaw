@@ -6,8 +6,8 @@ import { renderContextReport, TOOL_SCHEMA_TARGET_UNITS } from "../src/agent/prom
 import { AGENTS_BUDGET_UNITS, loadWorkspacePromptResources, SOUL_BUDGET_UNITS } from "../src/agent/prompt/resources.js";
 import { MAIN_PROMPT_SECTIONS } from "../src/agent/prompt/sections.js";
 import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from "../src/agent/prompt/types.js";
+import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../src/agent/prompt/workspace-templates.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
-import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../src/runtime/workspace-templates.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";

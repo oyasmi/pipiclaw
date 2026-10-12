@@ -4,7 +4,7 @@ import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { DingTalkBot } from "./dingtalk.js";
+import type { DingTalkBot } from "./bot.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;
 const ROLLING_WINDOW_SIZE = 3;

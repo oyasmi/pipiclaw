@@ -8,8 +8,18 @@
 import { createInterface } from "node:readline/promises";
 import type { AuthType } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { prepareAppServices } from "../app-services.js";
 import * as log from "../log.js";
+import { ReadlineLoginUi } from "../models/login-ui.js";
+import {
+	LoginCancelledError,
+	type LoginUi,
+	listProviderLoginOptions,
+	loginProvider,
+	logoutProvider,
+	type ProviderLoginOption,
+	renderAuthStatus,
+} from "../models/provider-login.js";
+import { createModelRuntime, formatModelReference } from "../models/utils.js";
 import { docsUrl } from "../paths.js";
 import {
 	BootstrapExitError,
@@ -19,18 +29,8 @@ import {
 	DEFAULT_BOOTSTRAP_PATHS,
 	printBootstrapSummary,
 	readCliVersion,
-} from "../runtime/app-home.js";
-import { ReadlineLoginUi } from "./login-ui.js";
-import {
-	LoginCancelledError,
-	type LoginUi,
-	listProviderLoginOptions,
-	loginProvider,
-	logoutProvider,
-	type ProviderLoginOption,
-	renderAuthStatus,
-} from "./provider-login.js";
-import { createModelRuntime, formatModelReference } from "./utils.js";
+} from "./home.js";
+import { prepareAppServices } from "./services.js";
 
 export type ParsedAuth =
 	| { kind: "status" }

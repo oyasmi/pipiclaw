@@ -17,9 +17,9 @@ import {
 	FINISHED_JOB_RETENTION_MS,
 	MAX_RUNNING_JOBS,
 } from "../src/agent/job-manager.js";
+import type { DingTalkEvent } from "../src/dingtalk/bot.js";
 import { createExecutor, type ExecOptions, type ExecResult, type Executor } from "../src/executor.js";
 import * as log from "../src/log.js";
-import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { isProcessAlive } from "../src/shared/host-process.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";

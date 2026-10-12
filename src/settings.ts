@@ -3,9 +3,9 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
+import type { ResponseMode } from "./dingtalk/bot.js";
 import * as log from "./log.js";
 import { getMemoryMaintenanceTuning, type MemoryMaintenanceTuning } from "./memory/maintenance-tuning.js";
-import type { ResponseMode } from "./runtime/dingtalk.js";
 import { writeFileAtomicallySync } from "./shared/atomic-file.js";
 import type { ConfigDiagnostic } from "./shared/config-diagnostic.js";
 import type { AssertNoMissingKeys } from "./shared/exact-keys.js";

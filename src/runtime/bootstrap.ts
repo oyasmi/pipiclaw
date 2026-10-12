@@ -5,7 +5,19 @@ import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js"
 import { createRunner } from "../agent/runner-factory.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
-import { prepareAppServices } from "../app-services.js";
+import {
+	BootstrapExitError,
+	type BootstrapIO,
+	type BootstrapPaths,
+	bootstrapAppHome,
+	DEFAULT_BOOTSTRAP_PATHS,
+	loadConfig,
+	parseArgs,
+	printBootstrapSummary,
+	printFirstRunGuide,
+	readCliVersion,
+} from "../app/home.js";
+import { prepareAppServices } from "../app/services.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
 import { type ChannelContext, muteChannelContext } from "../channel/channel-context.js";
 import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
@@ -24,6 +36,17 @@ import {
 	type RuntimeCommandName,
 	slashCommandName,
 } from "../commands/catalog.js";
+import { runReportCommand } from "../commands/router.js";
+import {
+	type BusyMessageMode,
+	type BusyMessageResult,
+	DingTalkBot,
+	type DingTalkConfig,
+	type DingTalkHandler,
+	type StopOutcome,
+} from "../dingtalk/bot.js";
+import { createDingTalkContext } from "../dingtalk/delivery.js";
+import { extensionForMimeType } from "../dingtalk/inbound-media.js";
 import { createEventsWatcher } from "../events/events.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
@@ -44,30 +67,7 @@ import { consumeTaskNotice } from "../tasks/steer.js";
 import { pauseTask as pauseStoredTask } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
-import {
-	BootstrapExitError,
-	type BootstrapIO,
-	type BootstrapPaths,
-	bootstrapAppHome,
-	DEFAULT_BOOTSTRAP_PATHS,
-	loadConfig,
-	parseArgs,
-	printBootstrapSummary,
-	printFirstRunGuide,
-	readCliVersion,
-} from "./app-home.js";
-import { createDingTalkContext } from "./delivery.js";
-import {
-	type BusyMessageMode,
-	type BusyMessageResult,
-	DingTalkBot,
-	type DingTalkConfig,
-	type DingTalkHandler,
-	type StopOutcome,
-} from "./dingtalk.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
-import { extensionForMimeType } from "./inbound-media.js";
-import { runReportCommand } from "./report-commands.js";
 import { renderRunNotice } from "./subagent-commands.js";
 import { createTaskDriverEvent, parseDriverTaskId, TaskDriver } from "./task-driver.js";
 import { migrateTasksToV5 } from "./task-migration.js";

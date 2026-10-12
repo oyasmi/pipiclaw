@@ -1,11 +1,11 @@
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DingTalkBot, DingTalkEvent } from "../src/dingtalk/bot.js";
 import type { EventAction, EventsWatcherOptions } from "../src/events/events.js";
 import { EventsWatcher } from "../src/events/events.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import * as log from "../src/log.js";
-import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

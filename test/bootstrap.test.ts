@@ -2,8 +2,6 @@ import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "fs
 import { join } from "path";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { prepareAppServices } from "../src/app-services.js";
-import { ChannelStore } from "../src/channel/store.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -11,9 +9,11 @@ import {
 	bootstrapAppHome,
 	loadConfig,
 	parseArgs,
-} from "../src/runtime/app-home.js";
+} from "../src/app/home.js";
+import { prepareAppServices } from "../src/app/services.js";
+import { ChannelStore } from "../src/channel/store.js";
+import type { DingTalkEvent } from "../src/dingtalk/bot.js";
 import { bootstrap } from "../src/runtime/bootstrap.js";
-import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

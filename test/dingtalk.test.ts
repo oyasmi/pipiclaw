@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent, DingTalkHandler } from "../src/runtime/dingtalk.js";
+import type { DingTalkEvent, DingTalkHandler } from "../src/dingtalk/bot.js";
 
 const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
@@ -89,7 +89,7 @@ vi.mock("dingtalk-stream", () => ({
 	TOPIC_ROBOT: "TOPIC_ROBOT",
 }));
 
-import { DingTalkBot } from "../src/runtime/dingtalk.js";
+import { DingTalkBot } from "../src/dingtalk/bot.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-dingtalk-");

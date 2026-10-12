@@ -5,6 +5,14 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
+import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../agent/prompt/workspace-templates.js";
+import {
+	type DingTalkConfig,
+	isBusyMessageDefaultConfig,
+	isResponseModeConfig,
+	normalizeBusyMessageDefault,
+	normalizeResponseMode,
+} from "../dingtalk/bot.js";
 import * as log from "../log.js";
 import {
 	APP_HOME_DIR,
@@ -20,14 +28,6 @@ import {
 	WORKSPACE_DIR,
 } from "../paths.js";
 import { errorMessage } from "../shared/text-utils.js";
-import {
-	type DingTalkConfig,
-	isBusyMessageDefaultConfig,
-	isResponseModeConfig,
-	normalizeBusyMessageDefault,
-	normalizeResponseMode,
-} from "./dingtalk.js";
-import { DEFAULT_AGENTS, DEFAULT_SOUL } from "./workspace-templates.js";
 
 export interface BootstrapPaths {
 	appName: string;

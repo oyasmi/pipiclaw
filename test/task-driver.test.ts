@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelDir } from "../src/channel/channel-paths.js";
-import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
+import type { DingTalkEvent } from "../src/dingtalk/bot.js";
 import { createTaskDriverEvent, TaskDriver, taskStopReceipt } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { createUsage } from "../src/tasks/budget.js";

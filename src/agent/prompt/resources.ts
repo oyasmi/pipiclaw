@@ -15,9 +15,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as log from "../../log.js";
-import { DEFAULT_AGENTS, DEFAULT_SOUL, isDefaultWorkspaceTemplate } from "../../runtime/workspace-templates.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../../shared/prompt-units.js";
 import type { LoadedPromptResource, PromptDiagnostic } from "./types.js";
+import { DEFAULT_AGENTS, DEFAULT_SOUL, isDefaultWorkspaceTemplate } from "./workspace-templates.js";
 
 /** SOUL.md is identity and voice: normally short, so a tight independent budget (spec 026 §5.2). */
 export const SOUL_BUDGET_UNITS = 3_000;
