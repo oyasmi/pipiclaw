@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
-import { waitFor } from "../helpers/wait.js";
 
 describe("E2E deterministic: /steer & /followup", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
@@ -27,7 +25,7 @@ describe("E2E deterministic: /steer & /followup", () => {
 		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn && r.lastUserText.includes("ORIGINAL_TASK") });
 
 		await harness.sendUserMessageNoWait("开始 ORIGINAL_TASK");
-		await waitFor("turn 1 running", () => harness.mainTurnRequests().length >= 1, { intervalMs: 20 });
+		await gate.arrived;
 
 		await harness.sendUserMessageNoWait("/steer 补充要求 STEER_MARKER");
 		await harness.sendUserMessageNoWait("/followup 之后再看 FOLLOWUP_MARKER");

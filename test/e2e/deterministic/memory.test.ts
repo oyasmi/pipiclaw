@@ -12,7 +12,6 @@ describe("E2E deterministic: memory (spec 050)", () => {
 	let harness: DeterministicHarness;
 	const taskId = "e2e-det-memory-task";
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 

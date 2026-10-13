@@ -4,7 +4,6 @@ import { createDeterministicHarness, type DeterministicHarness, reply } from "..
 describe("E2E deterministic: background job chain", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
@@ -29,8 +28,16 @@ describe("E2E deterministic: background job chain", () => {
 			repeat: true,
 		});
 
+		const gate = harness.model.script.hold({
+			when: (r) => r.isMainTurn && r.lastUserText.includes("JOB_OUTPUT_MARKER_7799"),
+		});
 		await harness.sendUserMessage("RUN_JOB 跑个后台命令");
-		await harness.waitForDelivery((d) => (d.text ?? "").includes("作业完成"));
+		try {
+			await gate.arrived;
+		} finally {
+			gate.release();
+		}
+		await harness.waitForIdle();
 
 		// The completion wake turn's request carried the job's captured output inline.
 		const wakeReq = harness.model.requests.find((r) => r.matchedRoute === "saw-job");

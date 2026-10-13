@@ -148,7 +148,7 @@ export interface DeterministicHarness {
 	waitForIdle(): Promise<void>;
 	/** Wait for a captured delivery matching `predicate`. */
 	waitForDelivery(predicate: (d: CapturedDelivery) => boolean): Promise<CapturedDelivery>;
-	/** Restart the runtime against the same home + mock (daemon restart / re-adoption). */
+	/** Gracefully reinitialize the runtime in this process; does not prove process/crash recovery. */
 	restart(): Promise<void>;
 	/** Count of chat-completions requests the provider has received so far. */
 	modelRequestCount(): number;
@@ -156,7 +156,7 @@ export interface DeterministicHarness {
 	mainTurnRequests(): CapturedRequest[];
 	/** The most recent main-turn request body the provider received. */
 	lastMainTurnRequest(): CapturedRequest | undefined;
-	/** Throws if the provider saw a request no route matched. Call in `afterEach`. */
+	/** Throws if the provider saw an unmatched request. Also checked after shutdown maintenance. */
 	assertNoUnmatchedRequests(): void;
 	/** When `projectAccess` was requested: two real dirs registered as allowed project roots. */
 	projectRootA?: string;
@@ -183,6 +183,8 @@ export async function createDeterministicHarness(options?: {
 	web?: boolean;
 	/** Start background services (durable dispatch, task driver, job sweep) — A16/A17. */
 	services?: boolean;
+	/** Use the production event watcher as well as the real driver/outbox. */
+	events?: boolean;
 	/** Shorten the sub-agent sync grace window so the detached-settlement + wake path is
 	 *  reachable without a multi-minute wait (A14/A15 trusted half/A16 notice). */
 	subagentSyncGraceMs?: number;
@@ -257,6 +259,14 @@ export async function createDeterministicHarness(options?: {
 		process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS = String(options.subagentSyncGraceMs);
 	}
 
+	// SessionHost and detached maintenance create their registries lazily, after boot. Keep
+	// catalog refresh offline for this fixture's whole lifetime, then restore the host setting.
+	const previousOffline = process.env.PI_OFFLINE;
+	process.env.PI_OFFLINE = "1";
+	const restoreOffline = () => {
+		if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+		else process.env.PI_OFFLINE = previousOffline;
+	};
 	async function boot(): Promise<void> {
 		process.env.PIPICLAW_HOME = home.homeDir;
 		runtime = await createRuntimeContext({
@@ -265,14 +275,21 @@ export async function createDeterministicHarness(options?: {
 			registerSignalHandlers: false,
 			startServices: options?.services ?? false,
 			jobSweepIntervalMs: options?.services ? 150 : undefined,
-			createEventsWatcher: () => ({ start() {}, stop() {} }),
+			createEventsWatcher: options?.events ? undefined : () => ({ start() {}, stop() {} }),
 			createBot: (handler) => {
 				bot = new HarnessDingTalkBot(handler, dingtalkConfig as never, deliveries);
 				return bot as unknown as import("../../src/dingtalk/bot.js").DingTalkBot;
 			},
 		});
 	}
-	await boot();
+	try {
+		await boot();
+	} catch (error) {
+		restoreOffline();
+		await model.close();
+		cleanupE2ETestHome(home.homeDir);
+		throw error;
+	}
 
 	function buildEvent(text: string, overrides?: Partial<DingTalkEvent>): DingTalkEvent {
 		return {
@@ -293,6 +310,16 @@ export async function createDeterministicHarness(options?: {
 			timeoutMs: 30_000,
 			intervalMs: 25,
 		});
+	}
+
+	function assertNoUnmatchedRequests(): void {
+		const bad = model.unmatched();
+		if (bad.length > 0) {
+			const lines = bad
+				.map((r) => `  - ${r.isMainTurn ? "main" : "sidecar"}: ${(r.lastUserText || r.systemPrompt).slice(0, 200)}`)
+				.join("\n");
+			throw new Error(`mock provider received ${bad.length} unmatched request(s):\n${lines}`);
+		}
 	}
 
 	return {
@@ -327,8 +354,7 @@ export async function createDeterministicHarness(options?: {
 			return runtime.handler.runRuntimeCommand(buildEvent(`/${name} ${args}`) as never, name as never, args);
 		},
 		waitForIdle,
-		waitForDelivery: (predicate) =>
-			waitFor("delivery", () => deliveries.find(predicate) ?? null, { timeoutMs: 30_000, intervalMs: 25 }),
+		waitForDelivery: (predicate) => bot.whenDelivered(predicate),
 		async restart(): Promise<void> {
 			await runtime.shutdown("manual");
 			await boot();
@@ -342,23 +368,18 @@ export async function createDeterministicHarness(options?: {
 			const path = join(home.workspaceDir, ".pipiclaw", "security.log");
 			return existsSync(path) ? readFileSync(path, "utf-8") : "";
 		},
-		assertNoUnmatchedRequests(): void {
-			const bad = model.unmatched();
-			if (bad.length > 0) {
-				const lines = bad
-					.map(
-						(r) =>
-							`  - ${r.isMainTurn ? "main" : "sidecar"}: ${(r.lastUserText || r.systemPrompt).slice(0, 200)}`,
-					)
-					.join("\n");
-				throw new Error(`mock provider received ${bad.length} unmatched request(s):\n${lines}`);
-			}
-		},
+		assertNoUnmatchedRequests,
 		async shutdown(): Promise<void> {
-			await runtime.shutdown("manual");
-			await model.close();
-			delete process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS;
-			cleanupE2ETestHome(home.homeDir);
+			try {
+				await runtime.shutdown("manual");
+				// Include requests issued by the final reflect pass, not just those seen by afterEach.
+				assertNoUnmatchedRequests();
+			} finally {
+				await model.close();
+				delete process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS;
+				restoreOffline();
+				cleanupE2ETestHome(home.homeDir);
+			}
 		},
 	};
 }

@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { InboundImage } from "../../../src/channel/channel-event.js";
 import { MAX_INBOUND_IMAGE_BYTES } from "../../../src/channel/channel-event.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
-import { waitFor } from "../helpers/wait.js";
 
 // Real JPEG magic bytes — enough for `prepareInboundImages` to read and base64-encode; the
 // downstream mock model never actually decodes the picture.
@@ -36,7 +35,6 @@ function requestCarriesImage(raw: Record<string, unknown>): boolean {
 describe("E2E deterministic: inbound image attachments", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
@@ -55,8 +53,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 		expect(request).toBeDefined();
 		expect(request?.lastUserText).toContain("[图片1]");
 		expect(requestCarriesImage(request!.raw)).toBe(true);
-		// Mutation check: drop the D7 capability gate to "always pass images through" and this
-		// still passes — the case that actually distinguishes the gate is the next test.
+		// Catches runner/provider serialization discarding a supported attachment's image part.
 	});
 
 	it("a text-only model never receives the image, and the user is told where it went instead", async () => {
@@ -77,22 +74,19 @@ describe("E2E deterministic: inbound image attachments", () => {
 		// Mutation check: remove the D7 capability check in `prepareInboundImages` and this
 		// flips to true — the exact silent-drop failure mode the spec exists to fix.
 		expect(requestCarriesImage(request!.raw)).toBe(false);
-		expect(
-			harness.deliveries.some(
-				(d) => (d.text ?? "").includes("不支持图片输入") && (d.text ?? "").includes(image.path),
-			),
-		).toBe(true);
+		expect(harness.deliveries.some((d) => d.method === "sendPlain" && (d.text ?? "").includes(image.path))).toBe(
+			true,
+		);
 	});
 
-	it("an oversized image is excluded with a notice naming the size, without ever being read", async () => {
+	it("an image with oversized declared bytes is excluded and its saved path is reported", async () => {
 		harness = await createDeterministicHarness({ visionModels: ["mock-main"] });
 		harness.model.script.route({
 			name: "oversized-turn",
 			when: (r) => r.isMainTurn,
 			respond: [reply.text("ok")],
 		});
-		// The declared byteSize alone drives the size gate — a small file on disk with a lying
-		// byteSize proves the check runs before any read, not after a slow decode.
+		// Catches accepting oversized declared metadata because the actual file happens to be small.
 		const image = writeTestImage(harness.channelDir, "huge.jpg");
 		image.byteSize = MAX_INBOUND_IMAGE_BYTES + 1;
 
@@ -100,7 +94,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 
 		const request = harness.lastMainTurnRequest();
 		expect(requestCarriesImage(request!.raw)).toBe(false);
-		expect(harness.deliveries.some((d) => (d.text ?? "").includes("超过") && (d.text ?? "").includes("上限"))).toBe(
+		expect(harness.deliveries.some((d) => d.method === "sendPlain" && (d.text ?? "").includes(image.path))).toBe(
 			true,
 		);
 	});
@@ -116,7 +110,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn && r.lastUserText.includes("ORIGINAL") });
 
 		await harness.sendUserMessageNoWait("开始 ORIGINAL 任务");
-		await waitFor("turn 1 running", () => harness.mainTurnRequests().length >= 1, { intervalMs: 20 });
+		await gate.arrived;
 
 		const image = writeTestImage(harness.channelDir, "steer.jpg");
 		await harness.sendUserMessageNoWait("这张图 STEER_IMG [图片1]", { images: [image] });
@@ -126,7 +120,6 @@ describe("E2E deterministic: inbound image attachments", () => {
 
 		// Mutation check: revert `handleBusyMessage`'s steer branch to drop `event.images` and the
 		// second assertion below fails — the request lands but with no image_url part.
-		expect(harness.deliveries.some((d) => (d.text ?? "").includes("没能排进"))).toBe(false);
 		const steerRequest = harness.mainTurnRequests().find((r) => r.lastUserText.includes("STEER_IMG"));
 		expect(steerRequest).toBeDefined();
 		expect(requestCarriesImage(steerRequest!.raw)).toBe(true);

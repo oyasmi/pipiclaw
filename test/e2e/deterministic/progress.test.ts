@@ -7,7 +7,6 @@ const hasContent = (method: string) =>
 describe("E2E deterministic: progress & silent turns", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 

@@ -1,13 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import { getDefaultChannelMemoryQueue } from "../../../src/memory/channel-maintenance-queue.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
-import { waitFor } from "../helpers/wait.js";
 
 describe("E2E deterministic: restart & persistence", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
@@ -39,10 +38,9 @@ describe("E2E deterministic: restart & persistence", () => {
 		expect(after.slice(before.length)[0].parentId).toBe(lastPreRestartId);
 	});
 
-	it("A11: a conversation secret never reaches a durable memory file", async () => {
-		// secret-redaction (src/memory/secret-redaction.ts + store.ts guard). Mutation check:
-		// drop redactSecrets() from sanitizeMessagesForMemory and the key lands in memory/
-		// (the reflect route below actively tries to store it).
+	it("A11: a conversation secret is redacted before reflection and rejected by durable memory", async () => {
+		// Catches secrets leaking in the reflect provider request, even when the store separately
+		// rejects the returned secret. Mutation: bypass transcript redaction; provider assertion fails.
 		const secret = "sk-live-AKQJ8f31PPqZ0mDeadBeef99";
 		harness = await createDeterministicHarness();
 		harness.model.script.route({
@@ -73,17 +71,20 @@ describe("E2E deterministic: restart & persistence", () => {
 			repeat: true,
 		});
 
+		const gate = harness.model.script.hold({
+			when: (r) => !r.isMainTurn && r.systemPrompt.includes("memory reflection worker"),
+		});
 		await harness.sendUserMessage(`记一下部署密钥：${secret}`);
 		await harness.sendUserMessage("好的谢谢");
-		await harness.sendUserMessage("/new"); // triggers the boundary reflect pass, which runs in the background
-
-		// The /new-triggered reflect runs detached in the background (spec 050, D7); it is not
-		// awaited by sendUserMessage, so wait for the mock provider to actually see the call.
-		await waitFor(
-			"the boundary reflect pass to reach the mock provider",
-			() => harness.model.requests.some((r) => r.matchedRoute === "reflect-secret"),
-			{ timeoutMs: 10_000, intervalMs: 200 },
-		);
+		await harness.sendUserMessage("/new");
+		try {
+			const request = await gate.arrived;
+			expect(JSON.stringify(request.messages)).not.toContain(secret);
+		} finally {
+			gate.release();
+		}
+		// Drain the actual channel maintenance queue: provider arrival alone precedes persistence.
+		await getDefaultChannelMemoryQueue().run(harness.channelId, async () => {});
 
 		expect(readFileSync(join(harness.channelDir, "MEMORY.md"), "utf-8")).not.toContain(secret);
 		const memoryDir = join(harness.channelDir, "memory");

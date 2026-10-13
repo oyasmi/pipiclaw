@@ -12,7 +12,6 @@ import { waitFor } from "../helpers/wait.js";
 describe("E2E deterministic: completion-wake coalescing", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 

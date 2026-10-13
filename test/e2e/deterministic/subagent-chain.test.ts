@@ -6,7 +6,6 @@ import { createDeterministicHarness, type DeterministicHarness, reply } from "..
 describe("E2E deterministic: internal sub-agent chain", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 

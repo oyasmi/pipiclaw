@@ -7,7 +7,6 @@ describe("E2E deterministic: cancellation during internal backup-model resolutio
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		if (harness) {
-			harness.assertNoUnmatchedRequests();
 			await harness.shutdown();
 		}
 		harness = undefined;

@@ -8,11 +8,12 @@ import { createDeterministicHarness, type DeterministicHarness, reply } from "..
 describe("E2E deterministic: system prompt", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
 	it("sends the Pipiclaw prompt with pi's default base prompt gone, boundary last", async () => {
+		// Catches SDK/session assembly restoring pi's base prompt or appending resource text
+		// after the runtime boundary. These assertions inspect provider input, not model quality.
 		harness = await createDeterministicHarness();
 		harness.model.script.route({ name: "t", when: (r) => r.isMainTurn, respond: [reply.text("ok")] });
 		await harness.sendUserMessage("你好");

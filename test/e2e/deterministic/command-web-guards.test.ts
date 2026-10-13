@@ -11,7 +11,6 @@ import {
 describe("E2E deterministic: command & network guards", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 

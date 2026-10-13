@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
-import { waitFor } from "../helpers/wait.js";
 
 describe("E2E deterministic: /stop", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
@@ -19,18 +17,21 @@ describe("E2E deterministic: /stop", () => {
 			respond: [reply.text("held then stopped")],
 			repeat: true, // an aborted request may be retried by the client
 		});
-		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn });
+		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn && !r.lastUserText.includes("STILL_ALIVE") });
 
 		await harness.sendUserMessageNoWait("开始一个长任务");
-		await waitFor("turn running", () => harness.mainTurnRequests().length >= 1, { intervalMs: 20 });
+		await gate.arrived;
 
 		const before = harness.deliveries.length;
 		await harness.sendUserMessageNoWait("/stop");
-		gate.release();
-		await harness.waitForIdle();
-
-		const stopReplies = harness.deliveries.slice(before);
-		expect(stopReplies.some((d) => (d.text ?? "").includes("已停止"))).toBe(true);
+		try {
+			// The provider is still held: finishing normally cannot masquerade as cancellation.
+			await harness.waitForIdle();
+			expect(harness.deliveries.slice(before).filter((d) => d.method === "sendPlain")).toHaveLength(1);
+			expect(harness.deliveries.some((d) => (d.text ?? "").includes("held then stopped"))).toBe(false);
+		} finally {
+			gate.release();
+		}
 		// Channel is idle again and can take a fresh turn.
 		harness.model.script.route({
 			name: "next",
@@ -38,6 +39,6 @@ describe("E2E deterministic: /stop", () => {
 			respond: [reply.text("yes, still here")],
 		});
 		await harness.sendUserMessage("STILL_ALIVE?");
-		expect(harness.deliveries.some((d) => (d.text ?? "").includes("still here"))).toBe(true);
+		expect(harness.lastMainTurnRequest()?.matchedRoute).toBe("next");
 	});
 });

@@ -1,69 +1,136 @@
-import { readdirSync, readFileSync } from "fs";
-import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-	createDeterministicHarness,
-	type DeterministicHarness,
-	reply,
-	writeWorkspaceFile,
-} from "../../support/runtime-harness.js";
+import { type ChildProcess, fork } from "node:child_process";
+import { once } from "node:events";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type Socket } from "node:net";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { isProcessAlive, killProcessGroup } from "../../../src/shared/host-process.js";
+import type { RunRecord } from "../../../src/subagents/run-record.js";
+import { startMockProvider } from "../../support/mock-provider/server.js";
+import { reply, writeWorkspaceFile } from "../../support/runtime-harness.js";
+import { cleanupE2ETestHome, createDeterministicHome } from "../../support/setup.js";
 import { waitFor } from "../helpers/wait.js";
 
-describe("E2E deterministic: external (exec) run", () => {
-	let harness: DeterministicHarness;
-	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
-		await harness.shutdown();
+async function startDaemon(homeDir: string) {
+	const child = fork(fileURLToPath(new URL("../../support/daemon-worker.mjs", import.meta.url)), [homeDir], {
+		env: { ...process.env, PIPICLAW_HOME: homeDir, PI_OFFLINE: "1" },
+		stdio: ["ignore", "ignore", "pipe", "ipc"],
 	});
-
-	function runRecords(): string[] {
-		const dir = join(harness.homeDir, "state", "subagent-runs", harness.channelId);
+	let stderr = "";
+	child.stderr!.on("data", (data) => {
+		stderr += String(data);
+	});
+	async function receive(): Promise<{ ready?: boolean; value?: unknown; error?: string }> {
 		try {
-			return readdirSync(dir).filter((f) => f.endsWith(".json"));
-		} catch {
-			return [];
+			return (await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0];
+		} catch (error) {
+			throw new Error(`daemon IPC failed: ${stderr}`, { cause: error });
 		}
 	}
+	try {
+		if (!(await receive()).ready) throw new Error(`daemon did not become ready: ${stderr}`);
+	} catch (error) {
+		await crash(child);
+		throw error;
+	}
+	return {
+		child,
+		// This fixture deliberately has one request in flight; no general RPC layer is needed.
+		async call(action: string, fields: Record<string, string> = {}): Promise<unknown> {
+			const response = receive();
+			child.send({ action, ...fields });
+			const result = await response;
+			if (result.error) throw new Error(result.error);
+			return result.value;
+		},
+	};
+}
 
-	it("A18: an `exec` harness run is detached, persisted, and survives a daemon restart", async () => {
-		// Covers the daemon-only recovery path (restoreAllSubAgentRuns) with no claude/codex
-		// install. Mutation check: make restoreAllSubAgentRuns a no-op and the record check
-		// after restart finds a run stuck in a non-terminal state.
-		harness = await createDeterministicHarness({ services: true });
-		writeWorkspaceFile(
-			harness,
-			"sub-agents/echo-runner.md",
-			"---\nname: echo-runner\nruntime: external\nharness: exec\nmutates: read\ndescription: e2e exec fixture\ncommand: echo A18_EXTERNAL_RAN\n---\n\nRun the command.\n",
-		);
+async function crash(child: ChildProcess): Promise<void> {
+	if (child.exitCode !== null || child.signalCode !== null) return;
+	const exited = once(child, "exit");
+	child.kill("SIGKILL");
+	await exited;
+}
 
-		harness.model.script.route({
-			name: "parent",
-			when: (r) => r.isMainTurn && r.systemPrompt.includes("## Pipiclaw") && r.lastUserText.includes("RUN_EXEC"),
-			respond: [
-				reply.toolCall("subagent", { agent: "echo-runner", task: "run the echo command" }),
-				reply.text("外部执行已派发。"),
-			],
-			repeat: true,
+describe("E2E deterministic: external process recovery", () => {
+	it("A18: a live detached exec run survives daemon SIGKILL and is re-adopted before admission; /stop preserves it", async () => {
+		// Catches missing startup run restoration. The old `echo` fixture often finished before
+		// restart, and graceful same-process restart retained its live callbacks. Mutation: omit
+		// `await runs.restore()` in bootstrap; the new process cannot look up the persisted run.
+		const model = await startMockProvider();
+		const home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
+		const channelId = "dm_e2e_user";
+		let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
+		let externalPid: number | undefined;
+		let socket: Socket | undefined;
+		const server = createServer((connected) => {
+			socket = connected;
 		});
-		// Post-restart reconciliation can dispatch a completion-wake turn; answer any other turn.
-		harness.model.script.route({
-			name: "any",
-			when: (r) => r.isMainTurn && !r.lastUserText.includes("RUN_EXEC"),
-			respond: [reply.text("[SILENT]")],
-			repeat: true,
-		});
-
-		await harness.sendUserMessage("RUN_EXEC 跑一个外部命令");
-		await waitFor("run record on disk", () => runRecords().length > 0, { intervalMs: 50 });
-
-		const dir = join(harness.homeDir, "state", "subagent-runs", harness.channelId);
-		const before = JSON.parse(readFileSync(join(dir, runRecords()[0]), "utf-8"));
-		expect(before.runtime).toBe("external");
-
-		await harness.restart();
-		// restoreAllSubAgentRuns ran on boot; the record is still there and reconciled to terminal.
-		const after = JSON.parse(readFileSync(join(dir, runRecords()[0]), "utf-8"));
-		expect(after.runId).toBe(before.runId);
-		expect(["completed", "failed", "cancelled", "lost"]).toContain(after.status);
+		server.listen(0, "127.0.0.1");
+		await once(server, "listening");
+		const port = (server.address() as { port: number }).port;
+		const connected = once(server, "connection");
+		try {
+			const executable = join(home.homeDir, "held-exec.mjs");
+			writeFileSync(
+				executable,
+				`import { connect } from "node:net";\nconst socket = connect(${port}, "127.0.0.1");\nsocket.on("connect", () => console.log("EXTERNAL_HELD"));\nsocket.on("end", () => process.exit(0));\n`,
+			);
+			writeWorkspaceFile(
+				home,
+				"sub-agents/held-runner.md",
+				`---\nname: held-runner\nruntime: external\nharness: exec\nmutates: read\ndescription: held recovery fixture\ncommand: ${process.execPath} ${executable}\n---\n\nRun the command.\n`,
+			);
+			model.script.route({
+				name: "parent",
+				when: (r) => r.isMainTurn && r.lastUserText.includes("RUN_EXEC"),
+				respond: [
+					reply.toolCall("subagent", { agent: "held-runner", task: "hold until the test finishes" }),
+					reply.text("[SILENT]"),
+				],
+			});
+			daemon = await startDaemon(home.homeDir);
+			await daemon.call("send", { channelId, text: "RUN_EXEC" });
+			await connected;
+			const dir = join(home.homeDir, "state", "subagent-runs", channelId);
+			const record = await waitFor(
+				"durable external launch",
+				() => {
+					const file = readdirSync(dir).find((name) => name.endsWith(".json"));
+					if (!file) return false;
+					const value = JSON.parse(readFileSync(join(dir, file), "utf8")) as RunRecord;
+					return value.pid && value.pidStartedAt ? value : false;
+				},
+				{ intervalMs: 25 },
+			);
+			externalPid = record.pid;
+			expect(record).toMatchObject({ runtime: "external", status: "running" });
+			await crash(daemon.child);
+			expect(isProcessAlive(externalPid!)).toBe(true);
+			daemon = await startDaemon(home.homeDir);
+			expect(await daemon.call("record", { channelId, runId: record.runId })).toMatchObject({
+				runId: record.runId,
+				status: "running",
+				pid: externalPid,
+			});
+			const requestsBefore = model.requests.length;
+			await daemon.call("send", { channelId, text: "/stop" });
+			expect(await daemon.call("record", { channelId, runId: record.runId })).toMatchObject({
+				status: "running",
+				pid: externalPid,
+			});
+			expect(isProcessAlive(externalPid!)).toBe(true);
+			expect(model.requests).toHaveLength(requestsBefore);
+			expect(model.unmatched()).toEqual([]);
+		} finally {
+			if (daemon) await crash(daemon.child);
+			if (externalPid) await killProcessGroup(externalPid, 0);
+			socket?.destroy();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await model.close();
+			cleanupE2ETestHome(home.homeDir);
+		}
 	});
 });

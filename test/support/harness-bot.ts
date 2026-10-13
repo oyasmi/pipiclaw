@@ -12,6 +12,10 @@ import type { CapturedDelivery } from "./fake-bot.js";
  * concurrency and interruption end to end without a live transport.
  */
 export class HarnessDingTalkBot extends DingTalkBot {
+	private readonly deliveryWaiters = new Set<{
+		predicate: (delivery: CapturedDelivery) => boolean;
+		resolve: (delivery: CapturedDelivery) => void;
+	}>();
 	constructor(
 		handler: DingTalkHandler,
 		config: DingTalkConfig,
@@ -21,7 +25,33 @@ export class HarnessDingTalkBot extends DingTalkBot {
 	}
 
 	private capture(method: CapturedDelivery["method"], channelId: string, text?: string): void {
-		this.deliveries.push({ method, channelId, text, ts: Date.now() });
+		const delivery = { method, channelId, text, ts: Date.now() };
+		this.deliveries.push(delivery);
+		for (const waiter of this.deliveryWaiters) {
+			if (!waiter.predicate(delivery)) continue;
+			this.deliveryWaiters.delete(waiter);
+			waiter.resolve(delivery);
+		}
+	}
+
+	whenDelivered(predicate: (delivery: CapturedDelivery) => boolean): Promise<CapturedDelivery> {
+		const existing = this.deliveries.find(predicate);
+		if (existing) return Promise.resolve(existing);
+		return new Promise((resolve, reject) => {
+			const waiter = {
+				predicate,
+				resolve: (delivery: CapturedDelivery) => {
+					clearTimeout(timer);
+					resolve(delivery);
+				},
+			};
+			const timer = setTimeout(() => {
+				this.deliveryWaiters.delete(waiter);
+				reject(new Error("Timed out waiting for captured delivery"));
+			}, 30_000);
+			timer.unref();
+			this.deliveryWaiters.add(waiter);
+		});
 	}
 
 	/** No socket in the deterministic harness. */

@@ -1,22 +1,27 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, renameSync, utimesSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { EventHistoryAction, EventHistoryRecord } from "../../../src/events/types.js";
 import { PLAYBOOKS_DIR } from "../../../src/paths.js";
 import { createTaskDriverEvent } from "../../../src/runtime/task-driver.js";
-import { createTaskSpawner } from "../../../src/runtime/task-spawn.js";
+
 import { readActiveTasks } from "../../../src/tasks/contract.js";
 import { parseTaskFrontmatter } from "../../../src/tasks/frontmatter.js";
 import { readTaskLog } from "../../../src/tasks/loop-log.js";
 import { expireTicket, parkTask } from "../../../src/tasks/store.js";
 import { resolveTicket } from "../../../src/tasks/ticket.js";
-import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
-import { waitFor } from "../helpers/wait.js";
+import {
+	createDeterministicHarness,
+	type DeterministicHarness,
+	reply,
+	writeWorkspaceFile,
+} from "../../support/runtime-harness.js";
+import { waitForFileContent } from "../helpers/wait.js";
 
 describe("E2E deterministic: task lifecycle", () => {
 	let harness: DeterministicHarness;
 	const taskId = "e2e-det-task";
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
@@ -141,6 +146,8 @@ describe("E2E deterministic: task lifecycle", () => {
 		// per step. The replacement session must come up with the command extension loaded, or
 		// every session command silently degrades into a plain LLM turn. Mutation check: drop the
 		// `loadSessionResources` call in `createSessionRuntime` and `/model` reaches the model.
+		// Mutation check (2026-10-13): skip switchModel while returning confirmation; NEXT_MODEL
+		// still requests mock-main and fails the provider-model assertion.
 		harness = await createDeterministicHarness();
 
 		harness.model.script.route({
@@ -175,11 +182,15 @@ describe("E2E deterministic: task lifecycle", () => {
 		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
 
 		const requestsBefore = harness.modelRequestCount();
-		const deliveriesBefore = harness.deliveries.length;
-		await harness.sendUserMessage("/model");
+		await harness.sendUserMessage("/model e2e-mock/mock-fallback");
 		expect(harness.modelRequestCount()).toBe(requestsBefore);
-		const replies = harness.deliveries.slice(deliveriesBefore).map((d) => d.text ?? "");
-		expect(replies.some((text) => text.includes("当前模型"))).toBe(true);
+		harness.model.script.route({
+			name: "after-model-switch",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("NEXT_MODEL"),
+			respond: [reply.text("ok")],
+		});
+		await harness.sendUserMessage("NEXT_MODEL");
+		expect(harness.lastMainTurnRequest()?.model).toBe("mock-fallback");
 	});
 
 	it("A17: a delegation made from a task step binds to the task and Work Item, and its result outlives the step", async () => {
@@ -242,52 +253,82 @@ describe("E2E deterministic: task lifecycle", () => {
 		expect(readFileSync(archivedPath(), "utf-8")).toContain("- [x] W1 助手实现");
 	});
 
-	it("A18: a template event's occurrence spawns one instance that runs in its own task session, and a second occurrence is skipped with a receipt", async () => {
-		// Spec 052, D2/INV-7. The spawner is wired exactly as bootstrap wires it; the events watcher
-		// itself is stubbed out by the harness, so the occurrence is delivered by calling it.
-		harness = await createDeterministicHarness();
-		const sent: string[] = [];
-		const spawn = createTaskSpawner({
-			getChannelDir: () => harness.channelDir,
-			nudge: () => {},
-			notify: async (_channelId, text) => void sent.push(text),
-		});
-		const template = { title: "周报", goal: "写周报", dod: "- [x] 已写", items: [{ text: "整理" }] };
-		const request = (at: string) => ({
-			eventName: "weekly",
-			channelId: harness.channelId,
-			template,
-			occurrence: new Date(at),
-		});
-
-		const first = await spawn(request("2026-10-05T09:00:00+08:00"));
-		expect(first).toEqual({ outcome: "spawned", id: "weekly-20261005-0900" });
-		// A replay of the same occurrence is an idempotent no-op — and must not look like a skip.
-		expect(await spawn(request("2026-10-05T09:00:00+08:00"))).toEqual({
-			outcome: "exists",
-			id: "weekly-20261005-0900",
-		});
-		expect(sent).toEqual([]);
-		// The next occurrence finds the first instance still running: skipped, and the user is told.
-		const second = await spawn(request("2026-10-12T09:00:00+08:00"));
-		expect(second).toEqual({ outcome: "skipped", id: "weekly-20261005-0900" });
-		expect(sent).toHaveLength(1);
-		expect(sent[0]).toContain("/tasks show weekly-20261005-0900");
-
+	it("A18: the real event watcher spawns, drives and archives a task; replay and overlap stay idempotent", async () => {
+		// Catches bootstrap disconnecting watcher → spawner → driver. A direct spawner call
+		// could not catch that wiring fault. Mutation: omit spawnTask in bootstrap; no step arrives.
+		harness = await createDeterministicHarness({ services: true, events: true });
+		const id = "weekly-20200106-0900";
+		const historyPath = join(harness.homeDir, "state", "events", "history.jsonl");
+		const event = (at: string) =>
+			JSON.stringify({
+				type: "one-shot",
+				channelId: harness.channelId,
+				at,
+				task: { title: "周报", goal: "写周报", dod: "- [x] 已写", items: [{ text: "整理" }] },
+			});
+		const writeOccurrence = (at: string) => {
+			// Publish an overdue persisted definition atomically, preserving its pre-boot mtime.
+			const pending = writeWorkspaceFile(harness, "events/weekly.pending", event(at));
+			utimesSync(pending, new Date(at), new Date(at));
+			renameSync(pending, join(harness.workspaceDir, "events", "weekly.json"));
+		};
+		const recorded = (action: EventHistoryAction, count: number) =>
+			waitForFileContent(
+				historyPath,
+				(content) =>
+					content
+						.trim()
+						.split("\n")
+						.filter(Boolean)
+						.map((line) => JSON.parse(line) as EventHistoryRecord)
+						.filter(
+							(record) => record.eventName === "weekly" && record.action === action && record.result === "ok",
+						).length === count,
+				{ timeoutMs: 5_000, intervalMs: 25 },
+			);
 		harness.model.script.route({
 			name: "instance-step",
-			when: (r) => r.isMainTurn && r.lastUserText.includes("[TASK_STEP:weekly-20261005-0900]"),
-			respond: [reply.toolCall("task_step_end", { outcome: "done", note: "周报已写" }), reply.text("ok")],
+			when: (r) => r.isMainTurn && r.lastUserText.includes("[TASK_STEP:weekly-"),
+			respond: [reply.toolCall("task_step_end", { outcome: "done", note: "周报已写" })],
+			repeat: true,
 		});
-		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === "weekly-20261005-0900");
-		expect(entry?.fields.origin).toBe("weekly");
-		await harness.sendWake(createTaskDriverEvent(harness.channelId, entry!, Date.now()).text, {
-			user: "TASK_DRIVER",
-			userName: "TASK_DRIVER",
-		});
-		expect(existsSync(join(tasksDir(), "archive", "weekly-20261005-0900.md"))).toBe(true);
-		// Finished, so the following occurrence is free to run.
-		expect((await spawn(request("2026-10-19T09:00:00+08:00"))).outcome).toBe("spawned");
+		const gate = harness.model.script.hold({ when: (r) => r.lastUserText.includes(`[TASK_STEP:${id}]`) });
+		try {
+			writeOccurrence("2020-01-06T09:00:00+08:00");
+			const request = await gate.arrived;
+			expect(request.tools).toContain("task_step_end");
+			const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === id);
+			expect(entry?.fields.origin).toBe("weekly");
+			await recorded("enqueued", 1);
+			writeOccurrence("2020-01-06T09:00:00+08:00");
+			await recorded("skipped", 1);
+			writeOccurrence("2020-01-13T09:00:00+08:00");
+			await harness.waitForDelivery((d) => d.method === "sendPlain" && (d.text ?? "").includes(`/tasks show ${id}`));
+			await recorded("skipped", 2);
+			expect((await readActiveTasks(tasksDir())).map((e) => e.id)).toEqual([id]);
+		} finally {
+			gate.release();
+		}
+		await harness.waitForIdle();
+		expect(existsSync(join(tasksDir(), "archive", `${id}.md`))).toBe(true);
+		expect((await readTaskLog(harness.channelDir, id, { kinds: ["close"] })).map((r) => r.kind)).toEqual(["close"]);
+		writeOccurrence("2020-01-06T09:00:00+08:00");
+		await recorded("skipped", 3); // An archived instance also suppresses its own replay.
+		const nextId = "weekly-20200113-0900";
+		const nextGate = harness.model.script.hold({ when: (r) => r.lastUserText.includes(`[TASK_STEP:${nextId}]`) });
+		try {
+			writeOccurrence("2020-01-13T09:00:00+08:00"); // Completed predecessor no longer blocks it.
+			await nextGate.arrived;
+			await recorded("enqueued", 2);
+		} finally {
+			nextGate.release();
+		}
+		await harness.waitForIdle();
+		expect(existsSync(join(tasksDir(), "archive", `${nextId}.md`))).toBe(true);
+		const count = harness.mainTurnRequests().length;
+		await harness.restart();
+		expect(harness.mainTurnRequests()).toHaveLength(count);
+		expect(harness.mainTurnRequests().filter((r) => r.matchedRoute === "instance-step")).toHaveLength(2);
 	});
 
 	it("A19: a chat message sent during a task step runs as its own chat turn, not as a steer into the task session", async () => {
@@ -329,9 +370,7 @@ describe("E2E deterministic: task lifecycle", () => {
 			user: "TASK_DRIVER",
 			userName: "TASK_DRIVER",
 		});
-		await waitFor("task step running", () =>
-			harness.mainTurnRequests().some((r) => r.lastUserText.includes(`[TASK_STEP:${taskId}]`)),
-		);
+		await gate.arrived;
 		await harness.sendUserMessageNoWait("顺便问个别的 CHAT_MARKER");
 		gate.release();
 		await harness.waitForIdle();

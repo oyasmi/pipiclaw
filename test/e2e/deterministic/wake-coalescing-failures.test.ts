@@ -21,7 +21,6 @@ describe("E2E deterministic: completion-wake failure boundaries", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		if (harness) {
-			harness.assertNoUnmatchedRequests();
 			await harness.shutdown();
 		}
 		harness = undefined;

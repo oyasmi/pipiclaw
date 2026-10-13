@@ -4,7 +4,6 @@ import { createDeterministicHarness, type DeterministicHarness, reply } from "..
 describe("E2E deterministic: model fallback", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 

@@ -3,12 +3,10 @@ import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readProjectSelection } from "../../../src/channel/project-scope-store.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
-import { waitFor } from "../helpers/wait.js";
 
 describe("E2E deterministic: path guard & /project", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
@@ -46,8 +44,8 @@ describe("E2E deterministic: path guard & /project", () => {
 		expect(delivered).not.toMatch(/Path blocked|Resolved path/);
 
 		// Move the root to B, then the same write is inside the boundary.
-		const setReply = await harness.runCommand("project", `set ${rootB}`);
-		expect(setReply).not.toContain("无法");
+		await harness.runCommand("project", `set ${rootB}`);
+		expect(readProjectSelection(harness.channelDir)?.projectRoot).toBe(rootB);
 		await harness.sendUserMessage("WRITE_B 再试一次");
 		expect(existsSync(targetInB)).toBe(true);
 		expect(readFileSync(targetInB, "utf-8")).toContain("hello from the agent");
@@ -59,7 +57,7 @@ describe("E2E deterministic: path guard & /project", () => {
 		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn && r.lastUserText.includes("LONG") });
 
 		await harness.sendUserMessageNoWait("LONG 任务开始");
-		await waitFor("turn running", () => harness.mainTurnRequests().length >= 1, { intervalMs: 20 });
+		await gate.arrived;
 
 		// Mechanism, not wording (AGENTS.md e2e rule #2): the busy-turn guard must actually block
 		// the change, not just word a warning around one that went through anyway — assert the

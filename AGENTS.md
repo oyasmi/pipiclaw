@@ -86,10 +86,12 @@ e2e hard rules:
 
 1. **Mechanism only.** No assertion on whether the model answered *well* — that is an evals concern. To prove a path never reached the model, assert the model request count is 0.
 2. **Assert side effects, not rendered text.** Pinning a literal help/status/reply string makes the test a change-detector; an intentional copy edit then turns the suite red and hides real failures (this is exactly how spec 048 happened).
-3. **Timing is test-controlled.** Use the mock provider's `hold`/`release` to build deterministic concurrency windows. No `sleep`, no polling for an event you can control precisely.
+3. **Timing is test-controlled.** Use the mock provider's `hold`/`arrived`/`release` to build deterministic concurrency windows. No `sleep`, no polling for an event you can control precisely.
 4. **Every case names the failure it catches** in a comment — which commit or class of regression. A case that cannot name one is not accepted.
 5. **Cheap enough to run every time.** The deterministic layer must pass offline with no credentials; a case that needs the network is in the wrong layer.
 6. **Mutation check on the way in.** Before a new deterministic case merges, break the code it guards once, confirm the case goes red, and record that in the case's comment. A case that stays green when its target is broken is not a safety net.
+
+**E2E admission and size control.** Existing features default to no net growth in deterministic cases too: replace a weaker scenario or extend the relevant chain first. Any growth must name a cross-module failure that existing unit/e2e cases cannot catch, explain its impact, report the case-count delta, and include a mutation check. A direct domain call with fake wake/notify proves domain behavior, not bootstrap wiring; test the real producer → runtime → consumer path for that claim. Same-process `restart()` proves graceful runtime reinitialization; a process/crash claim requires a separate daemon whose old callbacks are gone. Wait for persistence/settlement completion, not just provider arrival or a state value that was already true before the action. Keep deterministic fixtures offline for their whole lifetime, including lazily created registries and shutdown maintenance. `npm run test:e2e` builds first so the process fixture runs current code. [E2E review](docs/reviews/2026-10-13-e2e-test-review.md) records the 55-case audit.
 
 ## Engineering Rules
 

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
@@ -12,11 +12,12 @@ import { createDeterministicHarness, type DeterministicHarness, reply } from "..
 describe("E2E deterministic: event_manage guards", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
-		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
 	});
 
 	it("rejects an immediate event with an actionable error and writes nothing", async () => {
+		// Catches tool/SDK wiring that persists a self-trigger or bubbles a recoverable refusal
+		// to the user instead of returning it to the model. Domain-only validation cannot prove it.
 		harness = await createDeterministicHarness();
 		const eventsDir = join(harness.workspaceDir, "events");
 
@@ -35,9 +36,19 @@ describe("E2E deterministic: event_manage guards", () => {
 
 		await harness.sendUserMessage("用 event_manage 建一个 immediate 事件");
 
-		// The tool result fed back to the model on the 2nd request carries the guard message.
+		// The SDK must feed a recoverable tool error back to the model, not stop the turn.
 		const followup = harness.mainTurnRequests().at(-1);
-		expect(JSON.stringify(followup?.messages)).toContain("self-triggering loop guard");
+		const toolResult = (followup?.raw.messages as Array<{ role: string; content: string }>).find(
+			(message) => message.role === "tool",
+		);
+		expect(toolResult?.content.length).toBeGreaterThan(0);
+		const stored = readFileSync(join(harness.channelDir, "context.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line))
+			.find((entry) => entry.message?.role === "toolResult" && entry.message?.toolName === "event_manage");
+		expect(stored?.message).toMatchObject({ isError: false, details: { kind: "event_manage", recoverable: true } });
+		expect(harness.deliveries.filter((d) => d.method === "sendPlain")).toHaveLength(1);
 
 		// Nothing on disk.
 		const files = existsSync(eventsDir) ? readdirSync(eventsDir) : [];

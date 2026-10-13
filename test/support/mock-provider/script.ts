@@ -50,9 +50,12 @@ interface Hold {
 	when: Matcher;
 	released: boolean;
 	waiters: Array<() => void>;
+	arrive: (request: RequestView) => void;
 }
 
 export interface HoldHandle {
+	/** Resolves when a request is suspended by this hold; no polling or clock guess. */
+	arrived: Promise<RequestView>;
 	release(): void;
 }
 
@@ -124,10 +127,29 @@ export class Script {
 		});
 	}
 
-	hold(def: { when: Matcher }): HoldHandle {
-		const h: Hold = { when: def.when, released: false, waiters: [] };
+	hold(def: { when: Matcher; timeoutMs?: number }): HoldHandle {
+		let arrive!: (request: RequestView) => void;
+		const arrived = new Promise<RequestView>((resolve) => {
+			arrive = resolve;
+		});
+		const h: Hold = { when: def.when, released: false, waiters: [], arrive };
 		this.holds.push(h);
 		return {
+			get arrived() {
+				// Start the watchdog only when arrival is observed. Existing callers may create
+				// a hold they never await; those must not produce an unhandled rejection later.
+				return new Promise<RequestView>((resolve, reject) => {
+					const timer = setTimeout(
+						() => reject(new Error("Timed out waiting for held provider request")),
+						def.timeoutMs ?? 10_000,
+					);
+					timer.unref();
+					void arrived.then((request) => {
+						clearTimeout(timer);
+						resolve(request);
+					});
+				});
+			},
 			release: () => {
 				h.released = true;
 				for (const w of h.waiters.splice(0)) w();
@@ -148,6 +170,7 @@ export class Script {
 	/** Internal: block until every matching hold has been released. */
 	async waitForHolds(req: RequestView): Promise<void> {
 		const pending = this.holds.filter((h) => !h.released && h.when(req));
+		for (const hold of pending) hold.arrive(req);
 		await Promise.all(
 			pending.map(
 				(h) =>
