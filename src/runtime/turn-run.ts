@@ -163,6 +163,8 @@ export function createEventTurnRunner(
 		structuredWakeFinalized: boolean;
 		/** Other completion wakes folded into this turn; finished together with this one. */
 		absorbedDispatchIds: string[];
+		/** Only an agent run that returns without aborting or erroring can acknowledge merged notifications. */
+		mergedWakesHandled: boolean;
 	}
 
 	/**
@@ -172,6 +174,8 @@ export function createEventTurnRunner(
 	const admitTurn = async (inboundEvent: ChannelEvent, runner: AgentRunner): Promise<TurnState | undefined> => {
 		let event = inboundEvent;
 		const durable = getDurableDispatch();
+		// Sampled synchronously, before any await: `/stop` after this point cleared the queued closures.
+		const stopEpoch = durable?.stopEpoch(inboundEvent.channelId) ?? 0;
 		if (durable && !(await durable.markStarted(event.dispatchId))) {
 			// A stale delivery of a wake an earlier turn already absorbed and handled.
 			runner.endTurn();
@@ -181,7 +185,7 @@ export function createEventTurnRunner(
 		let absorbedDispatchIds: string[] = [];
 		if (durable && event.dispatchId && isCoalescableWake(event)) {
 			const absorbed = await durable
-				.absorbPending(event.channelId, event.dispatchId, isCoalescableWake, MAX_COALESCED_WAKES - 1)
+				.absorbPending(event.channelId, event.dispatchId, isCoalescableWake, MAX_COALESCED_WAKES - 1, stopEpoch)
 				.catch((error: unknown) => {
 					log.logWarn("dispatch.wake.absorb_failed", "Wake coalescing failed", {
 						channelId: event.channelId,
@@ -200,7 +204,7 @@ export function createEventTurnRunner(
 				});
 			}
 		}
-		return { event, baseCtx: undefined, structuredWakeFinalized, absorbedDispatchIds };
+		return { event, baseCtx: undefined, structuredWakeFinalized, absorbedDispatchIds, mergedWakesHandled: false };
 	};
 
 	/** A built-in slash command typed on an idle channel: stateless reports here, session commands on the runner. */
@@ -351,6 +355,7 @@ export function createEventTurnRunner(
 		}
 		if (!backgroundOnly && !taskStep) ctx.primeCard(1500);
 		const result = await runner.run(ctx, store);
+		turn.mergedWakesHandled = result.stopReason !== "aborted" && result.stopReason !== "error";
 		if (taskStep) await finishTaskStep(turn.event.channelId, taskStep.taskId, bot);
 
 		if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
@@ -369,9 +374,13 @@ export function createEventTurnRunner(
 		});
 		if (turn.structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
 		else await getDurableDispatch()?.markRetryable(event.dispatchId);
-		// Absorbed wakes are chat-level only (no structured claim), so the turn finishing is
-		// what finalizes them — exactly as it would have for each on its own.
-		for (const absorbedId of turn.absorbedDispatchIds) await getDurableDispatch()?.markCompleted(absorbedId);
+		// A stopped turn has not finished handling its merged notifications. Release their
+		// claims even if /stop's asynchronous cancelChannel reset raced admission or failed.
+		const stopped = !turn.mergedWakesHandled || runner.getTurnStatus().stopRequested;
+		for (const absorbedId of turn.absorbedDispatchIds) {
+			if (stopped) await getDurableDispatch()?.markRetryable(absorbedId);
+			else await getDurableDispatch()?.markCompleted(absorbedId);
+		}
 		runner.endTurn();
 		// A finished turn may have written task files; rescan now so `outcome: continue`
 		// queues the next step immediately instead of waiting out the current sleep.

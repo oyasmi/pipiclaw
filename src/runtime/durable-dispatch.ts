@@ -188,7 +188,9 @@ export class DurableDispatchService {
 	 * own closure waiting in the channel queue; `markStarted` turns that stale delivery away instead
 	 * of running the same wake a second time.
 	 */
-	private readonly absorbed = new Set<string>();
+	private readonly absorbed = new Map<string, string>();
+	/** Bumped by `discardQueuedClaims`; lets an in-flight `absorbPending` notice that its closures were dropped. */
+	private readonly discardEpoch = new Map<string, number>();
 	constructor(private readonly options: DurableDispatchOptions) {
 		this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
 	}
@@ -273,6 +275,23 @@ export class DurableDispatchService {
 	}
 
 	/**
+	 * `/stop` just cleared the channel's queued closures, synchronously and before any await, so
+	 * no queued delivery of an absorbed wake survives to consume its stale-delivery mark. Dropping
+	 * the marks here records that fact at the moment it is true, independent of when (or whether)
+	 * `cancelChannel` and the turn's own finish run. Not for non-stop failures: there the closures
+	 * are alive and the marks are what prevents a duplicate run.
+	 */
+	/** Opaque `/stop` counter; sample it synchronously at admission entry and hand it to `absorbPending`. */
+	stopEpoch(channelId: string): number {
+		return this.discardEpoch.get(channelId) ?? 0;
+	}
+
+	discardQueuedClaims(channelId: string): void {
+		this.discardEpoch.set(channelId, (this.discardEpoch.get(channelId) ?? 0) + 1);
+		for (const [id, owner] of this.absorbed) if (owner === channelId) this.absorbed.delete(id);
+	}
+
+	/**
 	 * Claim a dispatch for the turn about to run it. Returns false — run nothing — for a stale
 	 * delivery of a record another turn already absorbed (see `absorbPending`).
 	 */
@@ -303,6 +322,8 @@ export class DurableDispatchService {
 		primaryId: string,
 		accept: (event: ChannelEvent) => boolean,
 		limit: number,
+		/** `stopEpoch` sampled when the caller's admission began; a later `/stop` suppresses the stale-delivery marks. */
+		epoch = this.stopEpoch(channelId),
 	): Promise<ChannelEvent[]> {
 		if (limit <= 0) return [];
 		let filenames: string[];
@@ -323,19 +344,34 @@ export class DurableDispatchService {
 
 		const events: ChannelEvent[] = [];
 		for (const { id } of candidates.slice(0, limit)) {
-			await this.queue.run(id, async () => {
-				// Re-checked under the record's own lock: a drain or its own delivery may have moved it.
-				const record = await this.read(id);
-				if (!record || this.running.has(id) || !this.isAbsorbable(record, channelId, accept)) return;
-				if (record.status === "queued") this.absorbed.add(id);
-				else record.deliveries++;
-				record.status = "running";
-				record.leaseExpiresAt = new Date(Date.now() + this.leaseMs).toISOString();
-				record.nextAttemptAt = undefined;
-				this.running.add(id);
-				await this.write(record);
-				events.push(withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries));
-			});
+			try {
+				await this.queue.run(id, async () => {
+					// Re-checked under the record's own lock: a drain or its own delivery may have moved it.
+					const record = await this.read(id);
+					if (!record || this.running.has(id) || !this.isAbsorbable(record, channelId, accept)) return;
+					const wasQueued = record.status === "queued";
+					if (!wasQueued) record.deliveries++;
+					record.status = "running";
+					record.leaseExpiresAt = new Date(Date.now() + this.leaseMs).toISOString();
+					record.nextAttemptAt = undefined;
+					await this.write(record);
+					// Publish in-process claims only after persistence succeeds. A failed write
+					// must leave the original queued delivery / pending drain eligible to run.
+					// Unless /stop dropped the closure meanwhile: then there is nothing left to turn away.
+					if (wasQueued && this.stopEpoch(channelId) === epoch) this.absorbed.set(id, channelId);
+					this.running.add(id);
+					events.push(withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries));
+				});
+			} catch (error) {
+				log.logWarn("dispatch.wake.absorb_failed", "Wake coalescing failed", {
+					channelId,
+					reason: errorMessage(error),
+					fields: { dispatchId: id },
+				});
+				// Earlier claims still belong to this turn: return them for processing and
+				// settlement instead of losing their ids through the caller's catch(() => []).
+				break;
+			}
 		}
 		return events;
 	}

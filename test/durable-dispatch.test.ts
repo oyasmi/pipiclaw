@@ -11,6 +11,7 @@ import {
 } from "../src/runtime/durable-dispatch.js";
 import { createTaskDriverEvent } from "../src/runtime/task-driver.js";
 import { claimVerifiedWake } from "../src/runtime/task-wake.js";
+import * as atomicFile from "../src/shared/atomic-file.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "./helpers/background-runtime.js";
@@ -20,6 +21,7 @@ const tempDir = useTempDirs("pipiclaw-dispatch-");
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
 function event(): DingTalkEvent {
@@ -588,6 +590,50 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 	}
 
 	const isWake = (candidate: DingTalkEvent) => candidate.user === "SUBAGENT";
+
+	it.each([true, false])(
+		"preserves earlier claims and leaves a failed claim deliverable (queued=%s)",
+		async (queued) => {
+			const stateDir = join(tempDir(), "state", "dispatch");
+			let accept = true;
+			const { service, delivered } = capturingService(stateDir, () => accept);
+			await service.dispatch(wake("dm_1", "run_a"));
+			accept = queued;
+			for (const [index, runId] of ["run_b", "run_c"].entries()) {
+				await service.dispatch(wake("dm_1", runId));
+				const path = join(stateDir, `${encodeURIComponent(`subagent:dm_1:${runId}:done`)}.json`);
+				const record = JSON.parse(readFileSync(path, "utf-8"));
+				record.createdAt = new Date(index).toISOString();
+				await writeFile(path, JSON.stringify(record));
+			}
+			const failedId = "subagent:dm_1:run_c:done";
+			const write = atomicFile.writeFileAtomically;
+			const fault = vi
+				.spyOn(atomicFile, "writeFileAtomically")
+				.mockImplementation(async (path, content, options) => {
+					if (
+						path.endsWith(`${encodeURIComponent(failedId)}.json`) &&
+						JSON.parse(String(content)).status === "running"
+					) {
+						throw new Error("injected ENOSPC");
+					}
+					await write(path, content, options);
+				});
+			await service.markStarted(delivered[0]?.dispatchId);
+			const claimed = await service.absorbPending("dm_1", delivered[0]!.dispatchId!, isWake, 5);
+			expect(claimed.map((item) => item.dispatchId)).toEqual(["subagent:dm_1:run_b:done"]);
+			const failed = JSON.parse(readFileSync(join(stateDir, `${encodeURIComponent(failedId)}.json`), "utf-8"));
+			expect(failed.status).toBe(queued ? "queued" : "pending");
+			expect(failed.deliveries).toBe(queued ? 1 : 0);
+			fault.mockRestore();
+			for (const item of claimed) await service.markCompleted(item.dispatchId);
+			await service.markCompleted(delivered[0]?.dispatchId);
+			accept = true;
+			await service.drainOnce(Date.now() + 20 * 60_000);
+			expect(delivered.at(-1)?.dispatchId).toBe(failedId);
+			expect(await service.markStarted(failedId)).toBe(true);
+		},
+	);
 
 	it("folds this channel's waiting wakes into the starting turn and turns their stale deliveries away", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");

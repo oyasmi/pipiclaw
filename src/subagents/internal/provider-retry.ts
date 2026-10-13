@@ -58,6 +58,7 @@ export async function recoverFromProviderErrors(input: {
 		} else {
 			if (switched || !options.resolveFallbackModel) return;
 			const candidate = await options.resolveFallbackModel().catch(() => null);
+			if (state.budgetExceeded || state.externallyCancelled) return;
 			if (!candidate || formatModelReference(candidate) === formatModelReference(state.activeModel)) return;
 			let candidateKey: string;
 			try {
@@ -65,6 +66,7 @@ export async function recoverFromProviderErrors(input: {
 			} catch {
 				return;
 			}
+			if (state.budgetExceeded || state.externallyCancelled) return;
 			switched = true;
 			retries = 0;
 			const fromRef = formatModelReference(state.activeModel);

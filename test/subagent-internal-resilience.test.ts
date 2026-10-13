@@ -26,6 +26,14 @@ const fakeExecutor: Executor = {
 	},
 };
 
+function barrier() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
+
 function assistant(text: string, options: { error?: string } = {}): AssistantMessage {
 	return {
 		role: "assistant",
@@ -95,6 +103,54 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
 }
 
 describe("internal sub-agent: provider error recovery", () => {
+	it.each(["model", "credentials"])(
+		"does not resume after explicit cancellation while awaiting backup %s",
+		async (waitingFor) => {
+			const seen = { continues: 0, models: [] as string[] };
+			const entered = barrier();
+			const release = barrier();
+			const keysFor: string[] = [];
+			const tool = makeTool({
+				resolveFallbackModel: async () => {
+					if (waitingFor === "model") {
+						entered.resolve();
+						await release.promise;
+					}
+					return backupModel;
+				},
+				resolveApiKey: async (requested) => {
+					keysFor.push(requested.id);
+					if (requested.id === backupModel.id && waitingFor === "credentials") {
+						entered.resolve();
+						await release.promise;
+					}
+					return "test-key";
+				},
+				createWorker: () =>
+					scriptedWorker([assistant("", { error: "400 unsupported parameter" }), assistant("Done.")], seen),
+			});
+			const execution = tool.execute("call-cancel-fallback", { task: "Find it.", systemPrompt: "Look." });
+			const outcome = execution.then(
+				() => null,
+				(error: unknown) => error,
+			);
+			await entered.promise;
+			const manager = getSubAgentRunManager("dm_123");
+			const run = manager.list().find((record) => record.status === "running")!;
+			await manager.cancel(run.runId);
+			// A second cancel must keep the same live handle until normal settlement owns cleanup.
+			await manager.cancel(run.runId);
+			release.resolve();
+			const error = await outcome;
+			expect(seen.continues).toBe(0);
+			expect(error).toMatchObject({ name: "RecoverableToolError" });
+			expect(seen.models).toEqual([model.id]);
+			expect(manager.get(run.runId)?.status).toBe("cancelled");
+			expect(manager.get(run.runId)?.model).toBe(`${model.provider}/${model.id}`);
+			if (waitingFor === "model") expect(keysFor).toEqual([model.id]);
+		},
+	);
+
 	it("retries a transient provider error in place and returns the recovered result", async () => {
 		const seen = { continues: 0, models: [] as string[] };
 		const tool = makeTool({

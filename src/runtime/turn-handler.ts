@@ -143,6 +143,8 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 				// Drop queued-but-not-started messages so a burst does not keep
 				// running after the user asked to halt; abort the in-flight one.
 				const dropped = _bot.clearPendingMessages(channelId);
+				// Same tick as the clear: record that absorbed wakes' queued closures are gone.
+				getDurableDispatch()?.discardQueuedClaims(channelId);
 				if (dropped > 0) {
 					log.logInfoEvent("agent.turn.queue_dropped", "Queued messages dropped on /stop", {
 						channelId: channelId,
