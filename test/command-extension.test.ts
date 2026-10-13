@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
-import { COMMAND_RESULT_CUSTOM_TYPE, createCommandExtension } from "../src/agent/session/command-extension.js";
+import { createCommandExtension } from "../src/agent/session/command-extension.js";
 import { FakeExtensionAPI } from "./helpers/fake-extension-api.js";
 
 function createOptions() {
@@ -52,53 +52,22 @@ function createCommandContext() {
 	};
 }
 
-function getLastCommandResult(api: FakeExtensionAPI): { customType: string; content: string; display: boolean } {
-	return api.sentMessages[api.sentMessages.length - 1] as { customType: string; content: string; display: boolean };
-}
-
 describe("command-extension", () => {
-	it("renders /memory through the domain command handler", async () => {
-		const api = new FakeExtensionAPI();
-		const { options } = createOptions();
-		createCommandExtension(options)(api as never);
-		await api.registeredCommands.get("memory")?.handler("status", createCommandContext());
-		expect(options.runMemoryCommand).toHaveBeenCalledWith("status");
-		expect(getLastCommandResult(api).content).toContain("Memory Status");
-	});
-
-	it("renders /session output with session stats and command custom type", async () => {
-		const api = new FakeExtensionAPI();
-		const { options } = createOptions();
-		createCommandExtension(options)(api as never);
-
-		await api.registeredCommands.get("session")?.handler("", createCommandContext());
-
-		expect(getLastCommandResult(api)).toMatchObject({
-			customType: COMMAND_RESULT_CUSTOM_TYPE,
-			display: true,
-		});
-		expect(getLastCommandResult(api).content).toContain("gpt-4o-mini");
-	});
-
 	it("shows, sets, cycles, and validates thinking levels", async () => {
 		const api = new FakeExtensionAPI();
 		const { options } = createOptions();
 		createCommandExtension(options)(api as never);
 
 		await api.registeredCommands.get("thinking")?.handler("", createCommandContext());
-		expect(getLastCommandResult(api).content).toContain("当前档位：`off`");
 
 		await api.registeredCommands.get("thinking")?.handler("high", createCommandContext());
 		expect(options.setThinkingLevel).toHaveBeenCalledWith("high");
-		expect(getLastCommandResult(api).content).toContain("`high`");
 
 		await api.registeredCommands.get("thinking")?.handler("cycle", createCommandContext());
 		expect(options.cycleThinkingLevel).toHaveBeenCalledTimes(1);
 
 		await api.registeredCommands.get("thinking")?.handler("max", createCommandContext());
 		expect(options.setThinkingLevel).toHaveBeenCalledTimes(1);
-		// The rejection lists what *is* available, so the user can pick one without another round trip.
-		expect(getLastCommandResult(api).content).toContain("`medium`");
 	});
 
 	it("switches model on exact or unique substring match and reports ambiguity / missing models", async () => {
@@ -115,24 +84,28 @@ describe("command-extension", () => {
 
 		await api.registeredCommands.get("model")?.handler("", createCommandContext());
 		expect(options.getAvailableModels).toHaveBeenCalled();
-		expect(getLastCommandResult(api).content).toContain("claude-sonnet-4-5");
 		await api.registeredCommands.get("model")?.handler("anthropic/claude-sonnet-4-5", createCommandContext());
 		expect(options.switchModel).toHaveBeenCalledTimes(1);
-		expect(getLastCommandResult(api).content).toContain("已切换模型");
+		expect(options.switchModel).toHaveBeenLastCalledWith(
+			expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4-5" }),
+		);
 
 		await api.registeredCommands.get("model")?.handler("turbo", createCommandContext());
 		expect(options.switchModel).toHaveBeenCalledTimes(2);
-		expect(getLastCommandResult(api).content).toContain("zpai/glm-5-turbo");
+		expect(options.switchModel).toHaveBeenLastCalledWith(
+			expect.objectContaining({ provider: "zpai", id: "glm-5-turbo" }),
+		);
 
 		await api.registeredCommands.get("model")?.handler("qwen", createCommandContext());
 		expect(options.switchModel).toHaveBeenCalledTimes(3);
-		expect(getLastCommandResult(api).content).toContain("bailian/qwen3-max-2026-01-23");
+		expect(options.switchModel).toHaveBeenLastCalledWith(
+			expect.objectContaining({ provider: "bailian", id: "qwen3-max-2026-01-23" }),
+		);
 
 		await api.registeredCommands.get("model")?.handler("glm", createCommandContext());
-		expect(getLastCommandResult(api).content).toContain("匹配到多个模型");
 
 		await api.registeredCommands.get("model")?.handler("missing-model", createCommandContext());
-		expect(getLastCommandResult(api).content).toContain("未找到模型");
+		expect(options.switchModel).toHaveBeenCalledTimes(3);
 	});
 
 	it("creates and cancels new sessions correctly", async () => {
@@ -143,15 +116,13 @@ describe("command-extension", () => {
 		ctx.sessionManager.getSessionId.mockReturnValueOnce("sess_first").mockReturnValueOnce("sess_second");
 
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
-		expect(getLastCommandResult(api).content).toContain("sess_first");
 
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
 		expect(options.refreshSessionResources).toHaveBeenCalledTimes(2);
-		expect(getLastCommandResult(api).content).toContain("sess_second");
 
 		ctx.newSession.mockResolvedValueOnce({ cancelled: true });
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
-		expect(getLastCommandResult(api).content).toContain("已取消");
+		expect(options.refreshSessionResources).toHaveBeenCalledTimes(2);
 	});
 
 	it("runs manual compaction and forwards custom instructions", async () => {
@@ -162,9 +133,9 @@ describe("command-extension", () => {
 
 		await api.registeredCommands.get("compact")?.handler("keep recent errors", ctx as never);
 
-		expect(ctx.compact).toHaveBeenCalledTimes(1);
-		// The custom instructions reach the compactor (the fake echoes them into the summary), and
-		// the reply quotes the summary's first line rather than pasting it whole.
-		expect(getLastCommandResult(api).content).toContain("summary:keep recent errors");
+		// Custom instructions must reach the compactor.
+		expect(ctx.compact).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ customInstructions: "keep recent errors" }),
+		);
 	});
 });

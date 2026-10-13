@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,6 @@ import {
 	parseArgs,
 } from "../src/app/home.js";
 import { prepareAppServices } from "../src/app/services.js";
-import { ChannelStore } from "../src/channel/store.js";
 import { loadConfig } from "../src/dingtalk/config.js";
 import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import { bootstrap } from "../src/runtime/bootstrap.js";
@@ -105,17 +104,6 @@ describe("bootstrap", () => {
 		expect(existsSync(join(paths.workspaceDir, "AGENTS.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "MEMORY.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "ENVIRONMENT.md"))).toBe(true);
-		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"enable": false');
-		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"provider": "brave"');
-		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"maxResults": 5');
-		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"proxy": "http://127.0.0.1:7890"');
-		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"apiKey": "BSA..."');
-		expect(readFileSync(paths.securityConfigPath, "utf-8")).toContain('"enabled": false');
-		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"busyMessageDefault": "steer"');
-		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain(
-			'"responseMode": "full_progress_then_plain_final"',
-		);
-		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"cardAutoLayout": true');
 
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);
@@ -194,37 +182,6 @@ describe("bootstrap", () => {
 		expect(io.error).toHaveBeenCalledWith(
 			'  - Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".',
 		);
-	});
-
-	it("bootstraps without starting services when requested", async () => {
-		const paths = createBootstrapPaths();
-		bootstrapAppHome(paths);
-		writeFileSync(
-			paths.channelConfigPath,
-			JSON.stringify(
-				{
-					clientId: "client-id",
-					clientSecret: "secret",
-					robotCode: "",
-					cardTemplateId: "",
-					cardTemplateKey: "content",
-					allowFrom: [],
-				},
-				null,
-				2,
-			),
-		);
-		const app = await bootstrap(["node", "main"], {
-			paths,
-			registerSignalHandlers: false,
-			startServices: false,
-			env: { ...process.env },
-		});
-
-		expect(app.store).toBeInstanceOf(ChannelStore);
-		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"clientId": "client-id"');
-
-		await expect(app.shutdown()).resolves.toBeUndefined();
 	});
 });
 

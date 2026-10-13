@@ -68,8 +68,7 @@ export interface LoadedToolsConfig {
 }
 
 /**
- * Every `tools.<key>` section in `tools.json`, read by `test/config-reference-coverage.test.ts`
- * to check that `docs/configuration-reference.md` still mentions each one. Kept in sync with
+ * Every `tools.<key>` section in `tools.json`. Kept in sync with
  * `PipiclawToolsConfig["tools"]` by `satisfies` (rejects an extra/misspelled entry) and
  * `AssertNoMissingKeys` (rejects a section with no entry here) — both at `npm run typecheck`.
  */

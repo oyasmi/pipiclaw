@@ -2,7 +2,6 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_HARD_UNITS } from "../src/agent/prompt/builder.js";
-import { renderContextReport, TOOL_SCHEMA_TARGET_UNITS } from "../src/agent/prompt/manifest.js";
 import { AGENTS_BUDGET_UNITS, loadWorkspacePromptResources, SOUL_BUDGET_UNITS } from "../src/agent/prompt/resources.js";
 import { MAIN_PROMPT_SECTIONS } from "../src/agent/prompt/sections.js";
 import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from "../src/agent/prompt/types.js";
@@ -57,15 +56,6 @@ describe("system prompt structure", () => {
 
 		const ids = build.sections.map((section) => section.id);
 		expect(new Set(ids).size).toBe(ids.length);
-		expect(ids).toEqual([
-			"runtime.identity",
-			"runtime.execution",
-			"runtime.invariants",
-			"runtime.tasks",
-			"playbooks",
-			"subagents",
-			"runtime.boundary",
-		]);
 		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(800);
 		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(RUNTIME_PROMPT_HARD_UNITS);
 		expect(build.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
@@ -76,12 +66,10 @@ describe("system prompt structure", () => {
 	});
 
 	it("drops a mechanism's whole surface when its tool is off", () => {
-		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_save` / `memory_forget`");
-
 		const build = buildPipiclawSystemPrompt(context({ tools: tools(["read", "bash", "grep"]) }));
 
-		expect(build.text).not.toContain("## Persistent Work");
-		expect(build.text).not.toContain("## Configured Sub-Agents");
+		expect(build.sections.some((section) => section.id === "runtime.tasks")).toBe(false);
+		expect(build.sections.some((section) => section.id === "subagents")).toBe(false);
 		expect(build.text).not.toContain("task-driving.md");
 		expect(build.text).not.toContain("memory-and-learning.md");
 		// The memory invariant is gated on the tool being registered, like the rest.
@@ -90,113 +78,22 @@ describe("system prompt structure", () => {
 	});
 });
 
-describe("tool schema budget", () => {
-	function report(toolSchemas: { chars: number; units: number }): string {
-		return renderContextReport({
-			build: buildPipiclawSystemPrompt(context()),
-			skills: [],
-			toolNames: FULL_TOOL_NAMES,
-			toolSchemas,
-			detail: false,
-		});
-	}
-
-	it("reports the schemas against their target — quiet under it, a warning once over", () => {
-		const under = report({ chars: 20_000, units: TOOL_SCHEMA_TARGET_UNITS });
-
-		expect(under).toContain(TOOL_SCHEMA_TARGET_UNITS.toLocaleString("en-US"));
-		expect(under).not.toContain("⚠️");
-
-		const over = report({ chars: 40_000, units: TOOL_SCHEMA_TARGET_UNITS + 1 });
-		// One warning line, and it says what to do about it (the detail view lists the tools).
-		expect(over.split("\n").filter((line) => line.includes("⚠️"))).toHaveLength(1);
-		expect(over).toContain("/context detail");
-	});
-});
-
-describe("configured sub-agents section", () => {
-	it("renders inline guidance when no sub-agent is defined, and the configured catalog once one exists", () => {
-		const empty = buildPipiclawSystemPrompt(context({ subAgents: [] }));
-		expect(empty.text).not.toContain("## Configured Sub-Agents");
-		expect(empty.text).toContain("## Sub-Agents");
-		expect(empty.text).toContain("subagent_inline");
-		expect(empty.sections.find((section) => section.id === "subagents")).toBeDefined();
-
-		const populated = buildPipiclawSystemPrompt(
-			context({
-				subAgents: [
-					{
-						name: "reviewer",
-						description: "Reviews a diff",
-						runtime: "internal",
-						workload: "light",
-						mutates: "read",
-					},
-				],
-			}),
-		);
-		expect(populated.text).toContain("## Configured Sub-Agents");
-		expect(populated.text).toContain("- reviewer — Reviews a diff");
-	});
-
-	it("groups the catalog by runtime · workload · mutates, external-heavy first, and marks unavailable roles (spec 040, D11)", () => {
-		const build = buildPipiclawSystemPrompt(
-			context({
-				subAgents: [
-					{
-						name: "explorer",
-						description: "Quick lookups",
-						runtime: "internal",
-						workload: "light",
-						mutates: "read",
-					},
-					{
-						name: "builder",
-						description: "Heavy external builder",
-						runtime: "external",
-						harness: "claude-code",
-						workload: "heavy",
-						mutates: "write",
-					},
-					{
-						name: "reviewer",
-						description: "Heavy external reviewer",
-						runtime: "external",
-						harness: "codex-cli",
-						workload: "heavy",
-						mutates: "read",
-					},
-					{
-						name: "flaky",
-						description: "Missing binary",
-						runtime: "external",
-						harness: "exec",
-						workload: "heavy",
-						mutates: "read",
-						unavailable: 'executable "flaky-bin" was not found on PATH',
-					},
-				],
-			}),
-		);
-
-		const text = build.text;
-		// external groups appear before the internal group.
-		const builderGroupIndex = text.indexOf("external · heavy · write · async");
-		const reviewerGroupIndex = text.indexOf("external · heavy · read · async");
-		const explorerGroupIndex = text.indexOf("internal · light · read · sync (auto-async past 120s)");
-		expect(builderGroupIndex).toBeGreaterThan(-1);
-		expect(reviewerGroupIndex).toBeGreaterThan(builderGroupIndex);
-		expect(explorerGroupIndex).toBeGreaterThan(reviewerGroupIndex);
-
-		// reviewer and flaky share the same group (external · heavy · read) and are listed together.
-		expect(text).toContain("- reviewer — Heavy external reviewer");
-		expect(text).toContain('- flaky — Missing binary (unavailable: executable "flaky-bin" was not found on PATH)');
-		// Unavailable roles are listed, never dropped, and the error text never suggests internal fallback.
-		expect(text).not.toContain("use an internal role instead");
-	});
-});
-
 describe("workspace resources in the prompt", () => {
+	it("rebuilds byte-identically until a workspace file actually changes", () => {
+		const workspaceDir = makeTempDir();
+		writeFileSync(join(workspaceDir, "SOUL.md"), "Answer in Chinese.");
+		const build = () => buildPipiclawSystemPrompt(context(loadWorkspacePromptResources(workspaceDir)));
+		const first = build();
+		const unchanged = build();
+		expect(unchanged.text).toBe(first.text);
+		expect(unchanged.fingerprint).toBe(first.fingerprint);
+
+		writeFileSync(join(workspaceDir, "SOUL.md"), "Answer in English.");
+		const changed = build();
+		expect(changed.fingerprint).not.toBe(first.fingerprint);
+		expect(changed.text).toContain("Answer in English.");
+	});
+
 	it("skips the untouched bootstrap templates and injects real content", () => {
 		const workspaceDir = makeTempDir();
 		writeFileSync(join(workspaceDir, "SOUL.md"), DEFAULT_SOUL);
@@ -216,7 +113,6 @@ describe("workspace resources in the prompt", () => {
 		expect(build.text).toContain(`<workspace_identity path="${workspaceDir}/SOUL.md">`);
 		expect(build.text).toContain("Answer in Chinese. Be direct.");
 		expect(build.text).toContain("Always run the tests.");
-		expect(build.text).toContain("they do not override the runtime facts and hard invariants above");
 		expect(build.text.match(/<workspace_identity/g)).toHaveLength(1);
 		expect(build.text.match(/<workspace_instructions/g)).toHaveLength(1);
 	});

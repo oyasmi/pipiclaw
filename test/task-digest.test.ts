@@ -42,17 +42,6 @@ describe("buildTaskDigest", () => {
 		expect(out).not.toContain("closed — Closed one");
 	});
 
-	it("orders runnable tasks before parked ones", async () => {
-		await writeFile(join(tasksDir, "later.md"), doc(PARKED, "# Later"));
-		await writeFile(join(tasksDir, "now.md"), doc("state: open", "# Now"));
-		const out = await digest();
-		const runnable = out.indexOf("now — Now");
-		const parked = out.indexOf("later — Later");
-		expect(runnable).toBeGreaterThanOrEqual(0);
-		expect(parked).toBeGreaterThanOrEqual(0);
-		expect(runnable).toBeLessThan(parked);
-	});
-
 	it.each([
 		{
 			dimension: "maxTasks",

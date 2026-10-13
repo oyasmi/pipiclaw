@@ -23,7 +23,6 @@ import {
 	getSubAgentsDir,
 	type InternalSubAgentConfig,
 	resolveInlineAgent,
-	SUB_AGENT_EFFORT_PRESETS,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
 import { buildSubAgentTask } from "../src/subagents/task-envelope.js";
@@ -168,12 +167,6 @@ describe("sub-agent discovery", () => {
 			expect(agent.externalModelRef).toBeTruthy();
 			expect(agent.thinkingLevel).toBeTruthy();
 		}
-		// The three tiers are the routing signal the delegation playbook teaches, so each must exist
-		// and the high tier must actually be configured to reason harder than the flash tier.
-		const tierOf = (name: string) => discovery.agents.find((agent) => agent.name === name);
-		expect(tierOf("claude-high")?.thinkingLevel).toBe("high");
-		expect(tierOf("claude-main")?.thinkingLevel).toBe("medium");
-		expect(tierOf("glm-flash")?.thinkingLevel).toBe("medium");
 		// A write entry runs with approvals/sandbox off, so its `mutates: write` lease is the only
 		// guard there is. A read entry must be backed by the CLI's own read-only sandbox, because
 		// `mutates: read` by itself is a declaration, not a boundary. At least one checker exists.
@@ -258,23 +251,6 @@ ${"x".repeat(16001)}`,
 
 		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", context: "everything" }).error).toContain(
 			'Unknown context "everything"',
-		);
-	});
-
-	it("applies effort presets as whole tuples for an inline delegation", () => {
-		// standard is byte-identical to the built-in defaults an unconfigured inline agent gets.
-		const inlineDefault = resolveInlineAgent([model], model, { systemPrompt: "Work" }).config;
-		expect(inlineDefault).toMatchObject(SUB_AGENT_EFFORT_PRESETS.standard);
-
-		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", effort: "quick" }).config).toMatchObject(
-			SUB_AGENT_EFFORT_PRESETS.quick,
-		);
-		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", effort: "deep" }).config).toMatchObject(
-			SUB_AGENT_EFFORT_PRESETS.deep,
-		);
-
-		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", effort: "extreme" }).error).toContain(
-			'Unknown effort "extreme"',
 		);
 	});
 

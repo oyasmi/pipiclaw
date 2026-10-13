@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extensionForMimeType, parseInboundMessage, sniffImageMimeType } from "../src/dingtalk/inbound-media.js";
+import { parseInboundMessage, sniffImageMimeType } from "../src/dingtalk/inbound-media.js";
 
 /**
  * spec 049: the 2026-08-30 incident's root cause lived entirely in the message-shape branching
@@ -86,17 +86,9 @@ describe("sniffImageMimeType", () => {
 	});
 });
 
-describe("extensionForMimeType", () => {
+describe("short image signatures", () => {
 	it("does not misidentify a short buffer as a match", () => {
 		expect(sniffImageMimeType(Buffer.from([0xff, 0xd8]))).toBeNull();
 		expect(sniffImageMimeType(Buffer.from("GIF8"))).toBeNull();
-	});
-	it("maps recognized types to their extension and falls back to .bin", () => {
-		expect(extensionForMimeType("image/jpeg")).toBe("jpg");
-		expect(extensionForMimeType("image/png")).toBe("png");
-		expect(extensionForMimeType("image/gif")).toBe("gif");
-		expect(extensionForMimeType("image/webp")).toBe("webp");
-		expect(extensionForMimeType(null)).toBe("bin");
-		expect(extensionForMimeType("application/octet-stream")).toBe("bin");
 	});
 });

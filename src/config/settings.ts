@@ -129,9 +129,8 @@ export interface PipiclawSettings {
 }
 
 /**
- * Every top-level `settings.json` key, read by `test/config-reference-coverage.test.ts` to check
- * that `docs/configuration-reference.md` still mentions each one. The two lines below keep this
- * list from drifting out of sync with `PipiclawSettings` itself: `satisfies` rejects an extra or
+ * Every top-level `settings.json` key. The two lines below keep this list from drifting out of
+ * sync with `PipiclawSettings` itself: `satisfies` rejects an extra or
  * misspelled entry, and the `AssertNoMissingKeys` check rejects an interface field with no entry
  * here — both at `npm run typecheck`, not by trusting a human to update two places together.
  */

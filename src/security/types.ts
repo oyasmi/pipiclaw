@@ -40,8 +40,7 @@ export interface SecurityConfig {
 }
 
 /**
- * Every top-level `security.json` key, read by `test/config-reference-coverage.test.ts` to check
- * that `docs/security.md` still mentions each one. Kept in sync with `SecurityConfig` by
+ * Every top-level `security.json` key. Kept in sync with `SecurityConfig` by
  * `satisfies` (rejects an extra/misspelled entry) and `AssertNoMissingKeys` (rejects a field with
  * no entry here) — both at `npm run typecheck`.
  */

@@ -1,11 +1,10 @@
-import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import { getActiveSessionRefPath } from "../src/channel/active-session-store.js";
 import type { DingTalkBot } from "../src/dingtalk/bot.js";
 import type { DingTalkConfig } from "../src/dingtalk/config.js";
-import type { DingTalkHandler } from "../src/dingtalk/handler.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -116,45 +115,6 @@ describe("createRuntimeContext", () => {
 		await runtime.shutdown();
 	});
 
-	it("creates a reusable handler with a real store and processes built-in commands", async () => {
-		const paths = createBootstrapPaths();
-		bootstrapAppHome(paths);
-		const bot = new FakeTestBot();
-		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
-		const taskDriver = { start: vi.fn(), stop: vi.fn() };
-
-		const runtime = await createRuntimeContext({
-			paths,
-			dingtalkConfig: {
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				robotCode: "client-id",
-				cardTemplateKey: "content",
-				stateDir: paths.workspaceDir,
-			} satisfies DingTalkConfig,
-			registerSignalHandlers: false,
-			startServices: false,
-			createBot: (handler: DingTalkHandler, _config: DingTalkConfig) => {
-				expect(typeof handler.handleEvent).toBe("function");
-				return bot as unknown as DingTalkBot;
-			},
-			createEventsWatcher: () => eventsWatcher,
-			createTaskDriver: () => taskDriver,
-		});
-
-		await runtime.handler.handleEvent(createDmEvent("/help", "1000"), bot as unknown as DingTalkBot);
-		await runtime.store.flush();
-
-		const channelDir = join(paths.workspaceDir, "dm_tester");
-		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"/help"');
-		expect(bot.sendPlain).toHaveBeenCalled();
-
-		await runtime.shutdown();
-		expect(bot.stop).toHaveBeenCalled();
-		expect(eventsWatcher.stop).toHaveBeenCalled();
-		expect(taskDriver.stop).toHaveBeenCalled();
-	});
-
 	it("starts the native task driver with the other runtime services", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
@@ -213,49 +173,6 @@ describe("createRuntimeContext", () => {
 		await runtime.handler.handleEvent({ ...event, ts: "1001" }, bot as unknown as DingTalkBot);
 
 		expect(bot.sendPlain).toHaveBeenCalledTimes(2);
-		await runtime.shutdown();
-	});
-
-	it("handles event administration commands in the runtime layer", async () => {
-		const paths = createBootstrapPaths();
-		bootstrapAppHome(paths);
-		const bot = new FakeTestBot();
-		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
-		const eventsDir = join(paths.workspaceDir, "events");
-		mkdirSync(eventsDir, { recursive: true });
-		writeFileSync(
-			join(eventsDir, "weekly-review.json"),
-			JSON.stringify({
-				type: "periodic",
-				channelId: "dm_tester",
-				text: "Review memory.",
-				schedule: "0 9 * * 1",
-				timezone: "Asia/Shanghai",
-			}),
-		);
-
-		const runtime = await createRuntimeContext({
-			paths,
-			dingtalkConfig: {
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				robotCode: "client-id",
-				cardTemplateKey: "content",
-				stateDir: paths.workspaceDir,
-			} satisfies DingTalkConfig,
-			registerSignalHandlers: false,
-			startServices: false,
-			createBot: () => bot as unknown as DingTalkBot,
-			createEventsWatcher: () => eventsWatcher,
-		});
-
-		await runtime.handler.handleEvent(createDmEvent("/events list", "1000"), bot as unknown as DingTalkBot);
-
-		expect(bot.sendPlain).toHaveBeenCalledWith(
-			"dm_tester",
-			expect.stringContaining("weekly-review"),
-			expect.objectContaining({ title: "/events" }),
-		);
 		await runtime.shutdown();
 	});
 });

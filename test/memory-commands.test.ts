@@ -1,9 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
-import { updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
 import { applyMemoryOps, listMemoryEntries } from "../src/memory/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -13,60 +10,7 @@ async function run(channelDir: string, args: string, appHomeDir?: string) {
 	return handleMemoryCommand({ channelId: "dm_1", channelDir, appHomeDir, args });
 }
 
-describe("/memory status", () => {
-	it("counts by type, probation, malformed files, and last reflect", async () => {
-		const channelDir = createTempDir();
-		const appHomeDir = createTempDir();
-		await applyMemoryOps(channelDir, [
-			{ op: "add", name: "u1", type: "user", description: "user fact", source: "user" },
-			{ op: "add", name: "p1", type: "project", description: "durable fact", source: "agent" },
-			{
-				op: "add",
-				name: "prob1",
-				type: "project",
-				description: "probationary fact",
-				source: "agent",
-				expires: "2026-10-04",
-			},
-		]);
-		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
-			...state,
-			lastReflectAt: "2026-09-04T00:00:00.000+08:00",
-			lastReflectedEntryId: "entry-7",
-		}));
-
-		const cleanStatus = await run(channelDir, "status", appHomeDir);
-		expect(cleanStatus).toContain("频道条目：`3`");
-		expect(cleanStatus).toContain("project 2");
-		await writeFile(join(channelDir, "memory", "broken.md"), "not frontmatter\n", "utf-8");
-		const text = await run(channelDir, "status", appHomeDir);
-		expect(text).toContain("`1`（broken）");
-		expect(text).toContain("broken");
-		expect(await run(channelDir, "list")).toContain("`u1`");
-		expect(text).toContain("频道条目：`4`");
-		expect(text).toContain("user 1");
-		expect(text).toContain("project 3");
-		expect(text).toContain("`2026-10-04`");
-		expect(text).toContain("2026-09-04T00:00:00.000+08:00");
-		// The reflect cursor is an internal id, not something a user can act on (spec 053, D4).
-		expect(text).not.toContain("entry-7");
-	});
-});
-
 describe("/memory list", () => {
-	it("lists entries and marks ones with a body", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [
-			{ op: "add", name: "short", description: "one liner", source: "agent" },
-			{ op: "add", name: "long", description: "has detail", source: "agent", details: "more text" },
-		]);
-		const text = await run(channelDir, "list");
-		expect(text).toContain("`short`");
-		expect(text).toContain("`long`");
-		expect(text).toMatch(/`long`.*（有正文）/);
-		expect(text).not.toMatch(/`short`.*（有正文）/);
-	});
-
 	it("filters by type and rejects an unknown type", async () => {
 		const channelDir = createTempDir();
 		await applyMemoryOps(channelDir, [

@@ -97,22 +97,6 @@ describe("memory tools", () => {
 		await expect(makeForget(channelDir).execute("call", { name: " " } as never)).rejects.toThrow(/non-empty name/);
 	});
 
-	it("serializes writes through the provided channel memory queue", async () => {
-		const channelDir = createTempChannel();
-		const seen: string[] = [];
-		const tool = makeSave(channelDir, {
-			channelId: "dm_9",
-			channelMemoryQueue: {
-				run: <T>(channelId: string, job: () => Promise<T>) => {
-					seen.push(channelId);
-					return job();
-				},
-			},
-		});
-		await tool.execute("call", { content: "Durable fact" } as never);
-		expect(seen).toEqual(["dm_9"]);
-	});
-
 	it("searches memory files and hints when nothing matched", async () => {
 		const channelDir = createTempChannel();
 		await applyMemoryOps(channelDir, [

@@ -1,8 +1,9 @@
-import { symlinkSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
+import { loadPipiclawSkills } from "../src/skills/loader.js";
 import { scanSkillContent } from "../src/skills/validation.js";
 import { listWorkspaceSkills } from "../src/skills/workspace.js";
 import { createSkillTool } from "../src/tools/skill.js";
@@ -35,6 +36,21 @@ function makeTool(workspaceDir: string) {
 }
 
 describe("skill tool", () => {
+	it("returns diagnostics for malformed skills and ignores reference Markdown", async () => {
+		const workspaceDir = createWorkspace();
+		const channelDir = join(workspaceDir, "dm_1");
+		mkdirSync(channelDir);
+		await writeSkill(workspaceDir, "release-notes");
+		writeFileSync(join(workspaceDir, "skills", "README.md"), "Reference notes without frontmatter\n");
+		const brokenDir = join(workspaceDir, "skills", "broken");
+		mkdirSync(brokenDir);
+		writeFileSync(join(brokenDir, "SKILL.md"), "---\nname: [broken\ndescription: invalid\n---\n");
+
+		const result = loadPipiclawSkills(channelDir);
+		expect(result.skills.map((skill) => skill.name)).toEqual(["release-notes"]);
+		expect(result.diagnostics.some((diagnostic) => diagnostic.path?.endsWith("broken/SKILL.md"))).toBe(true);
+	});
+
 	it("lists workspace skills", async () => {
 		const workspaceDir = createWorkspace();
 		await writeSkill(workspaceDir, "release-checklist");

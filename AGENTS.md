@@ -72,6 +72,16 @@ Three layers, each with a distinct job. Putting an assertion in the wrong layer 
 | e2e (deterministic) | full-stack **mechanism**: cross-module timing, persisted side effects, process/restart, delivery sequencing, guard wiring | observable side effects — disk state, the request body sent to the provider, delivery count/order, audit records, run state. Never the model's wording. | `npm run test:e2e` |
 | evals | real-model **behaviour quality** | grader / baseline / gate | `npm run eval` (not a gate) |
 
+### Unit-test admission and size control
+
+Test count and fixture code are maintenance costs, not quality targets. **Default to no net growth in unit-test cases for an existing feature.** First extend the closest valuable scenario or replace a weaker case; do not merge unrelated failure modes merely to lower the reported count. A new failure mode may justify growth, but the change description must name the risk, explain why existing unit/e2e coverage cannot catch it, and report the case-count delta. Do not chase line or branch coverage percentages.
+
+Before adding a case, identify a plausible incorrect implementation that would make it fail and the resulting project impact. If the only failure is an intentional wording, template value, field order, private helper, or file-layout change, omit the case. For a pure move, split, rename, or dependency-injection refactor such as spec 054, update existing imports/fixtures and run the architecture/e2e gates; do not add one test per extracted collaborator.
+
+Do not test a constant against a copied constant, a getter/setter with no domain decision, a forwarding adapter against an echoing mock, or third-party behavior recreated by a test-owned setup. Do not mirror the same input/output matrix at the domain, adapter, and runtime layers. Keep the matrix in its owning domain; use only distinct wiring/guard tests above it, with full-stack mechanism in deterministic e2e. Exact text is warranted for machine-consumed protocols, persisted data, escaping, and actionable identifiers — ordinary copy is covered structurally by the shared user-copy suite.
+
+Keep concurrency, recovery, persistence integrity, accounting/idempotency, security boundaries, and meaningful parser/budget edge cases even when they are small or expensive. Pruning removes low-value cases and unused fixtures rather than skipping tests, reducing discovery scope, increasing timeouts, or weakening required checks. The [2026-10-13 audit](docs/reviews/2026-10-13-unit-test-pruning.md) records this cleanup and its retained coverage.
+
 e2e hard rules:
 
 1. **Mechanism only.** No assertion on whether the model answered *well* — that is an evals concern. To prove a path never reached the model, assert the model request count is 0.

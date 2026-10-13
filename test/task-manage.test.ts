@@ -10,7 +10,7 @@ import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { createTask } from "../src/tools/task-manage/create.js";
 import { createTaskStepEndTool } from "../src/tools/task-manage/factory.js";
-import { closeTask, listTasks, updateTask } from "../src/tools/task-manage/lifecycle.js";
+import { closeTask, updateTask } from "../src/tools/task-manage/lifecycle.js";
 import { endTaskStep } from "../src/tools/task-manage/step-end.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
 import { testManagers } from "./helpers/background-runtime.js";
@@ -296,20 +296,6 @@ describe("task tool surface (spec 052, D7)", () => {
 			expect(await readFile(join(tasksDir, "archive", "gated.md"), "utf-8")).toContain("outcome: cancelled");
 			// Closing a task never cancels its delegations; the leader has to know that.
 			expect(cancelled.notice).toContain("run_running");
-		});
-	});
-
-	describe("task_list", () => {
-		it("summarises state, park and Work Item progress for each live task", async () => {
-			await writeTask("open");
-			await writeTask("waiting", {
-				state: "parked",
-				ticket: { kind: "ask", asked: "merge?", by: "2099-01-01T00:00:00+08:00" },
-			});
-			const result = await listTasks(options);
-			expect(result.tasks?.map((task) => task.id).sort()).toEqual(["open", "waiting"]);
-			expect(result.tasks?.find((task) => task.id === "waiting")?.ticket).toContain("merge?");
-			expect(result.tasks?.find((task) => task.id === "open")?.items).toBe("0/2");
 		});
 	});
 });

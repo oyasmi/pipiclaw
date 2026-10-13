@@ -4,13 +4,10 @@ import { SUBAGENT_TOOL_NAMES } from "../src/tools/contract/names.js";
 import { TOOL_REGISTRY } from "../src/tools/registry.js";
 
 describe("sub-agent tool names — single source of truth (batch 3.1)", () => {
-	it("validateToolNames accepts the registered allowlist", () => {
+	it("accepts implemented allowlist entries and rejects unknown tools", () => {
 		expect(SUBAGENT_TOOL_NAMES.every((name) => TOOL_REGISTRY.some((r) => r.name === name))).toBe(true);
 		expect(validateToolNames([...SUBAGENT_TOOL_NAMES]).error).toBeUndefined();
 		expect(validateToolNames([...SUBAGENT_TOOL_NAMES]).tools).toEqual(SUBAGENT_TOOL_NAMES);
-	});
-
-	it("validateToolNames still rejects an unknown tool", () => {
-		expect(validateToolNames(["read", "not_a_tool"]).error).toMatch(/Unknown tool/);
+		expect(validateToolNames(["read", "not_a_tool"]).error).toBeDefined();
 	});
 });

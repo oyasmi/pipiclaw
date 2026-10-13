@@ -30,20 +30,6 @@ describe("countPromptUnits", () => {
 });
 
 describe("clipTextByPromptUnits", () => {
-	it("returns text within both budgets unchanged, deterministically", () => {
-		const result = clipTextByPromptUnits("hello world", 10);
-		expect(result.truncated).toBe(false);
-		expect(result.text).toBe("hello world");
-		expect(result.rawUnits).toBe(2);
-		expect(result.injectedUnits).toBe(2);
-
-		const text = "字".repeat(400);
-		const a = clipTextByPromptUnits(text, 120);
-		const b = clipTextByPromptUnits(text, 120);
-		expect(a.text).toBe(b.text);
-		expect(a.injectedUnits).toBe(b.injectedUnits);
-	});
-
 	it("clips to the unit ceiling with head, tail, and marker preserved, and also respects a maxChars ceiling", () => {
 		const words = Array.from({ length: 200 }, (_, index) => `w${index}`).join(" ");
 		const result = clipTextByPromptUnits(words, 40, { marker: " [...] " });

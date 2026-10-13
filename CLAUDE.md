@@ -22,6 +22,8 @@ Node `>= 22.19.0`.
 
 ## Tests
 
+- Follow `AGENTS.md`'s **Unit-test admission and size control** rules. Existing features default to no net increase in unit cases: extend a valuable scenario or replace a weaker one first. Justify any increase with a distinct failure mode, its impact, why existing unit/e2e coverage is insufficient, and the count delta. A spec 054-style move/split/rename changes imports and fixtures, not the number of tests.
+- Omit tests that mirror private structure, pin template values/field order/copy, check an echoing forwarding mock, or recreate third-party setup just to assert the setup worked. Keep a boundary matrix in its owning domain and use deterministic e2e for full-stack wiring. Do not disguise growth or pruning by combining unrelated cases, skipping tests, or narrowing discovery.
 - Every test must earn its place by covering something that can actually break: branching logic, edge cases, boundaries, concurrency, contracts, security guards, regressions. Do **not** add obvious low-value tests — asserting the literal substrings of a rendered help/status/label string, `new X() instanceof X` smoke checks, echoing a constant back, or re-testing a one-line pure formatter with no branches. If a change to the code under test could only ever break the test by also being an intentional edit to that same text, the test is a change-detector, not a safety net.
 - When touching runtime, memory, or DingTalk behavior, cover the behavior change — but with a test that would fail on a real regression, not one that pins cosmetic output.
 

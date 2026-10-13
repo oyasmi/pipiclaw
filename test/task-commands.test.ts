@@ -7,7 +7,7 @@ import { createUsage } from "../src/tasks/budget.js";
 import { handleTasksCommand, parseTasksCommand } from "../src/tasks/commands.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
-import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import { resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { parkTask, readStoredTask } from "../src/tasks/store.js";
 
 const FUTURE = "2099-01-01T00:00:00+08:00";
@@ -77,7 +77,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 
 	it("steer queues guidance for the next step without changing task state", async () => {
 		await writeTask("weekly");
-		await expect(run("steer weekly 先跑一遍 npm run check")).resolves.toContain("下一步");
+		await run("steer weekly 先跑一遍 npm run check");
 		expect(await readFile(join(tasksDir, ".steer", "weekly.md"), "utf-8")).toContain("npm run check");
 		expect((await readStoredTask(channelDir, "weekly"))?.fields.state).toBe("open");
 	});
@@ -86,54 +86,14 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		await writeTask("asked");
 		await parkTask(channelDir, "asked", { kind: "ask", asked: "merge?", by: FUTURE });
 		const dispatchTask = vi.fn(async () => true);
-		await expect(run("reply asked 合并吧", dispatchTask)).resolves.toContain("会继续推进");
+		await run("reply asked 合并吧", dispatchTask);
 		expect((await readStoredTask(channelDir, "asked"))?.fields.state).toBe("open");
 		expect(dispatchTask).toHaveBeenCalledWith("asked");
 
 		await writeTask("busy");
-		await expect(run("reply busy 顺便看看这个")).resolves.toContain("并没有在等你的回答");
+		await run("reply busy 顺便看看这个");
 		// The user's words are never dropped just because the timing was off.
 		expect(await readFile(join(tasksDir, ".steer", "busy.md"), "utf-8")).toContain("顺便看看这个");
-	});
-
-	it("list shows the park, its backstop, work item progress and the spend", async () => {
-		await writeTask("weekly", {
-			state: "parked",
-			ticket: { kind: "ask", asked: "merge?", by: FUTURE },
-			usage: { ...createUsage(), steps: 4, usd: 1.5 },
-			origin: "weekly-event",
-		});
-		const list = await run("");
-		expect(list).toContain("等待中");
-		expect(list).toContain("merge?");
-		expect(list).toContain("4 步");
-		expect(list).toContain("来自 weekly-event");
-	});
-
-	it("show renders the work items, the log and the contract instead of the whole file", async () => {
-		await writeTask("weekly");
-		await appendTaskLog(channelDir, "weekly", { kind: "dispatch", ref: "run_a", agent: "builder" });
-		await appendTaskLog(channelDir, "weekly", { kind: "settle", ref: "run_a", status: "completed" });
-		const shown = await run("show weekly");
-		expect(shown).toContain("run_a");
-		expect(shown).toContain("/tasks log weekly");
-		// The contract is markdown with `#` headings; the chat reply must not carry them through.
-		expect(shown).not.toMatch(/^#/m);
-	});
-
-	it("log reads the whole loop log, dispatches and settlements included", async () => {
-		await writeTask("weekly");
-		await appendTaskLog(channelDir, "weekly", {
-			kind: "step",
-			seq: 1,
-			outcome: "continue",
-			note: "第一步",
-			tools: [],
-		});
-		await appendTaskLog(channelDir, "weekly", { kind: "dispatch", ref: "run_a" });
-		const log = await run("log weekly");
-		expect(log).toContain("第一步");
-		expect(log).toContain("run_a");
 	});
 
 	it("doctor only reports what a hand edit can still produce", async () => {

@@ -7,23 +7,6 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempDir = useTempDirs("pipiclaw-context-");
 
 describe("PipiclawSettingsManager", () => {
-	it("returns defaults when no settings file exists", () => {
-		const manager = new PipiclawSettingsManager(createTempDir());
-
-		expect(manager.getCompactionSettings()).toEqual({
-			enabled: true,
-			reserveTokens: 16384,
-			keepRecentTokens: 20000,
-		});
-		expect(manager.getRetrySettings()).toEqual({
-			enabled: true,
-			maxRetries: 3,
-			baseDelayMs: 2000,
-		});
-		expect(manager.getMemoryMaintenanceSettings()).toEqual({ enabled: true });
-		expect(manager.getDefaultThinkingLevel()).toBeUndefined();
-	});
-
 	it("persists updated settings to settings.json", () => {
 		const baseDir = createTempDir();
 		const manager = new PipiclawSettingsManager(baseDir);

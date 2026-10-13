@@ -1,3 +1,5 @@
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
 	createDeterministicHarness,
@@ -32,14 +34,29 @@ describe("E2E deterministic: command plane", () => {
 		expect(harness.modelRequestCount()).toBe(0);
 	});
 
-	it("A2: /tasks, /status, /memory status each reply with zero model requests", async () => {
-		for (const command of ["/tasks", "/status", "/memory status"]) {
+	it("A2: report commands reply and event deletion persists with zero model requests", async () => {
+		// Catches a missing command route, including the events wiring formerly checked by a
+		// separate runtime-context unit test. Mutation check (2026-10-13): replacing the router's
+		// events handler with an empty reply leaves this file present and makes A2 fail.
+		for (const command of ["/tasks", "/status", "/memory status", "/session"]) {
 			const before = harness.deliveries.length;
 			await harness.sendUserMessage(command);
 			const replies = harness.deliveries.slice(before);
 			expect(replies.length, `${command} should reply`).toBeGreaterThan(0);
 			expect(replies.every((d) => !(d.text ?? "").includes("命令执行失败"))).toBe(true);
 		}
+		const eventPath = join(harness.workspaceDir, "events", "command-plane-probe.json");
+		writeFileSync(
+			eventPath,
+			JSON.stringify({
+				type: "periodic",
+				channelId: harness.channelId,
+				text: "probe",
+				schedule: "0 9 * * 1",
+			}),
+		);
+		await harness.sendUserMessage("/events delete command-plane-probe");
+		expect(existsSync(eventPath)).toBe(false);
 		expect(harness.modelRequestCount()).toBe(0);
 	});
 
