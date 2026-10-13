@@ -85,7 +85,7 @@ function makeDeps(
 	}>,
 ): FallbackRunDeps {
 	let call = 0;
-	return {
+	const deps: FallbackRunDeps = {
 		prompt: async (text) => {
 			state.promptCalls.push(text);
 			const outcome = promptOutcomes[call++] ?? { stopReason: "stop" };
@@ -105,11 +105,20 @@ function makeDeps(
 			state.stopReason = "stop";
 			state.errorMessage = undefined;
 		},
-		getMessages: () => state.messages,
-		setMessages: (messages) => {
-			state.messages = messages;
+		canRetry: () => true,
+		prepareRetry: () => {
+			const truncated = state.promptSubmitted ? takeFailedTurn(state.messages) : null;
+			if (state.promptSubmitted && !truncated) return null;
+			return {
+				kind: state.promptSubmitted ? "failed-turn" : "unsubmitted",
+				run: async (text, ready) => {
+					if (truncated) state.messages = truncated;
+					ready();
+					await deps.prompt(text);
+					return "attempted";
+				},
+			};
 		},
-		promptWasSubmitted: () => state.promptSubmitted,
 		getCurrentModelRef: () => `${state.currentModel.provider}/${state.currentModel.id}`,
 		resolveFallbackModel: async () => backup,
 		setModel: async (model) => {
@@ -123,6 +132,7 @@ function makeDeps(
 			state.primaryFailedAt = 12345;
 		},
 	};
+	return deps;
 }
 
 function freshState(): FakeState {

@@ -345,6 +345,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │           ├── .v3/                # 转换前的原件（含移走的任务专属事件）
 │           └── archive/            # 已关闭契约与日志
 └── state/
+    ├── auth/identity.json         # OpenAI OAuth 安装身份（首次登录创建）
     ├── dispatch/                  # durable-dispatch 外发箱
     ├── events/history.jsonl       # 事件审计
     ├── jobs/<channelId>/          # 后台作业状态与输出索引
@@ -353,6 +354,17 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
     ├── logs/runtime.jsonl         # 结构化运行日志
     └── usage/                     # 用量账本
 ```
+
+pi 1.2.0 的 SessionManager 投影是 provider、上下文预览和压缩的权威来源。
+Agent 初始工具为空，AgentSession 通过 Pipiclaw 的 baseToolsOverride 和
+initialActiveToolNames 持久化提示/工具声明。资源重载更新当前工具实例与活动名称。
+备用重试在同一资源保护窗口内按本次 raw entry ID 检查副作用、追加 branch-local
+context_edit，再 refresh 并提交一次；停止、旧 turn/runner、会话/分支变动使计划失效。
+
+raw branch 保留原始失败消息、工具证据和 usage：恢复判定、反思/source window、
+session_search 和结算不能把投影省略误认为事实消失。任意重试上下文写入或 refresh
+失败都会隔离该 SDK 实例；后续 prompt 拒绝，资源重载失败仍保持隔离，只有磁盘重建
+或新的 runtime 才可恢复。/new 与只读报告保持可用，不自动重放失败备用请求。
 
 ## 11.1 System prompt 流水线（spec 025 + 026 瘦身）
 

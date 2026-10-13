@@ -2,6 +2,14 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## Unreleased
+
+### Changed
+
+- Pin all four pi dependencies to 1.2.0 (spec 055). AgentSession owns persisted prompt/tool context; backup retries omit only the current failed attempt by entry ID, preserve raw evidence/usage, respect stop and session ownership, and quarantine a context-write failure until reconstruction.
+- OpenAI ChatGPT OAuth receives a stable installation identity under the explicit Pipiclaw app home. Existing API keys and other OAuth do not require migration. Real OAuth/provider/DingTalk/TUI acceptance remains a release gate.
+- Old built-in Azure provider references require field-specific migration to `azure`; the API id and `AZURE_OPENAI_*` variables keep their names. Back up complete application/project state before upgrading; rollback after external effects requires reconciliation.
+
 ## [0.9.4-beta.2] - 2026-10-13
 
 ### Fixed

@@ -222,6 +222,7 @@ async function runLogin(
 	parsed: Extract<ParsedAuth, { kind: "login" }>,
 	io: BootstrapIO,
 	signal: AbortSignal,
+	paths: BootstrapPaths,
 ): Promise<void> {
 	const ui = new ReadlineLoginUi({
 		signal,
@@ -241,7 +242,9 @@ async function runLogin(
 
 		let result: Awaited<ReturnType<typeof loginProvider>>;
 		try {
-			result = await loginProvider(runtime, target.providerId, target.authType, ui);
+			result = await loginProvider(runtime, target.providerId, target.authType, ui, {
+				appHomeDir: paths.appHomeDir,
+			});
 		} catch (error) {
 			auditAuthEvent("login", target.providerId, target.authType, false);
 			throw error;
@@ -406,7 +409,7 @@ export async function runAuth(
 	process.once("SIGINT", onSigint);
 	try {
 		if (parsed.kind === "login") {
-			await runLogin(runtime, parsed, io, controller.signal);
+			await runLogin(runtime, parsed, io, controller.signal, paths);
 		} else {
 			await runLogout(runtime, parsed, io, controller.signal);
 		}

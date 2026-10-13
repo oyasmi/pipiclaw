@@ -325,3 +325,18 @@ export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
 - Workspace skills：[skills.md](./skills.md)
 - 安全策略：[security.md](./security.md)
 - 部署运维：[deployment-and-operations.md](./deployment-and-operations.md)
+
+## pi 1.2.0 升级：安装身份与 Azure
+
+现有 API key 和其它 OAuth 不要求重新登录。选择 OpenAI 的 ChatGPT OAuth 时，
+`pipiclaw auth login openai --oauth` 在已解析的应用目录首次创建
+`state/auth/identity.json`（版本 1、安装 UUID），再启动授权。该文件不属于 settings，
+不写入 `~/.pi`；status/logout、API key 和普通启动不会创建它。
+新建目录权限为 `0700`，新建文件为 `0600`；已有文件损坏或无法访问时明确失败，
+部署者应检查存储并从备份恢复，不能删除后随意换身份。迁移同一安装时保留此文件；
+独立安装和 smoke 测试使用独立应用目录，各自生成身份。真实 OAuth 登录、重登、
+重启流式调用和取消仍须在发布前验收，离线测试不代表供应商已接受认证。
+
+仅使用旧内置 Azure 身份的部署需要迁移，先停机备份，再按
+[配置参考的字段清单](./configuration-reference.md#pi-120-azure-字段迁移)处理。
+无 Azure 配置无需改数据；不要全局替换 `azure-openai-responses`。

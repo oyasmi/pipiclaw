@@ -5,16 +5,18 @@ import type { InboundImage } from "../../../src/channel/channel-event.js";
 import { MAX_INBOUND_IMAGE_BYTES } from "../../../src/channel/channel-event.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
-// Real JPEG magic bytes — enough for `prepareInboundImages` to read and base64-encode; the
-// downstream mock model never actually decodes the picture.
-const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+// Valid 1x1 PNG: the SDK now decodes attachments before sending them.
+const PNG_BYTES = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+	"base64",
+);
 
-function writeTestImage(channelDir: string, name: string, bytes: Buffer = JPEG_BYTES): InboundImage {
+function writeTestImage(channelDir: string, name: string, bytes: Buffer = PNG_BYTES): InboundImage {
 	const dir = join(channelDir, "inbox");
 	mkdirSync(dir, { recursive: true });
 	const path = join(dir, name);
 	writeFileSync(path, bytes);
-	return { path, mimeType: "image/jpeg", byteSize: bytes.byteLength };
+	return { path, mimeType: "image/png", byteSize: bytes.byteLength };
 }
 
 /** True if the request's last user message carries an OpenAI-completions `image_url` content part. */
@@ -45,7 +47,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			when: (r) => r.isMainTurn,
 			respond: [reply.text("图里是一只猫。")],
 		});
-		const image = writeTestImage(harness.channelDir, "photo.jpg");
+		const image = writeTestImage(harness.channelDir, "photo.png");
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
 
@@ -65,7 +67,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			when: (r) => r.isMainTurn,
 			respond: [reply.text("师兄，这条消息里我没有收到图片。")],
 		});
-		const image = writeTestImage(harness.channelDir, "photo.jpg");
+		const image = writeTestImage(harness.channelDir, "photo.png");
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
 
@@ -87,7 +89,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			respond: [reply.text("ok")],
 		});
 		// Catches accepting oversized declared metadata because the actual file happens to be small.
-		const image = writeTestImage(harness.channelDir, "huge.jpg");
+		const image = writeTestImage(harness.channelDir, "huge.png");
 		image.byteSize = MAX_INBOUND_IMAGE_BYTES + 1;
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
@@ -112,7 +114,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 		await harness.sendUserMessageNoWait("开始 ORIGINAL 任务");
 		await gate.arrived;
 
-		const image = writeTestImage(harness.channelDir, "steer.jpg");
+		const image = writeTestImage(harness.channelDir, "steer.png");
 		await harness.sendUserMessageNoWait("这张图 STEER_IMG [图片1]", { images: [image] });
 
 		gate.release();

@@ -71,13 +71,20 @@ describe("auth.json path guardrails (spec 039 §4.2)", () => {
 		});
 
 		const controller = new AbortController();
-		await loginProvider(runtime, "anthropic", "api_key", {
-			signal: controller.signal,
-			ask: async () => "sk-test-key",
-			notify: () => {},
-		});
+		await loginProvider(
+			runtime,
+			"anthropic",
+			"api_key",
+			{
+				signal: controller.signal,
+				ask: async () => "sk-test-key",
+				notify: () => {},
+			},
+			{ appHomeDir: home },
+		);
 
 		expect(existsSync(paths.AUTH_CONFIG_PATH)).toBe(true);
+		expect(existsSync(join(home, "state", "auth", "identity.json"))).toBe(false);
 		const written = JSON.parse(readFileSync(paths.AUTH_CONFIG_PATH, "utf-8"));
 		expect(written.anthropic).toMatchObject({ type: "api_key", key: "sk-test-key" });
 	});

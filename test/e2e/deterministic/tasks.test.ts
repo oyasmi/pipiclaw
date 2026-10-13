@@ -14,6 +14,7 @@ import {
 	createDeterministicHarness,
 	type DeterministicHarness,
 	reply,
+	seedLegacySession,
 	writeWorkspaceFile,
 } from "../../support/runtime-harness.js";
 import { waitForFileContent } from "../helpers/wait.js";
@@ -63,6 +64,9 @@ describe("E2E deterministic: task lifecycle", () => {
 			{ kind: "time", at: "+1m" },
 			{ now: new Date(Date.now() - 2 * 24 * 60 * 60_000), pendingWork: () => [] },
 		);
+		// Upgrade compatibility: bind an old independent task session with a completed tool.
+		const taskSession = join(tasksDir(), ".sessions", `${taskId}.jsonl`);
+		seedLegacySession("task", taskSession, harness.projectRootA!);
 		await parkTask(harness.channelDir, taskId, ticket);
 		await expireTicket(harness.channelDir, taskId);
 		const entry = (await readActiveTasks(tasksDir())).find((task) => task.id === taskId)!;
@@ -72,6 +76,9 @@ describe("E2E deterministic: task lifecycle", () => {
 		});
 		const request = harness.lastMainTurnRequest();
 		expect(request?.tools).toContain("task_step_end");
+		expect(JSON.stringify(request?.messages)).toContain("TASK_TOOL_RESULT");
+		expect(readFileSync(taskSession, "utf8")).toContain("TASK_HISTORY");
+		expect(readFileSync(join(harness.channelDir, "context.jsonl"), "utf8")).not.toContain("TASK_HISTORY");
 		for (const unavailable of ["task_create", "event_manage", "memory_save"]) {
 			expect(request?.tools).not.toContain(unavailable);
 		}

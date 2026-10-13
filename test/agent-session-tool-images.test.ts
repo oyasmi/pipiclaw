@@ -120,7 +120,7 @@ describe("AgentSession tool-result image normalization", () => {
 			args: {},
 			result: { content, details: undefined },
 			isError: false,
-			context: { systemPrompt: "", messages: [] },
+			context: { messages: [] },
 		});
 		const normalized = result?.content ?? [];
 		expect(normalized.map((part) => part.type)).toEqual(["text", "image", "text", "image", "text", "text"]);

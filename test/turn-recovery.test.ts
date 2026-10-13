@@ -24,7 +24,10 @@ function appendUser(manager: SessionManager, text = "hi"): void {
 
 function appendAssistant(
 	manager: SessionManager,
-	content: Array<{ type: "text"; text: string } | { type: "toolCall"; id: string; name: string; arguments: object }>,
+	content: Array<
+		| { type: "text"; text: string }
+		| { type: "toolCall"; id: string; name: string; arguments: import("@earendil-works/pi-ai").JsonObject }
+	>,
 	stopReason: "stop" | "toolUse" = "stop",
 ): void {
 	manager.appendMessage({
