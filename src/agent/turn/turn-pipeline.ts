@@ -4,7 +4,6 @@
  * fallback drives, and queueing a steer into a running turn. Stateless apart from the per-turn
  * `TurnProgress` it fills in; `ChannelRunner.run()` calls these in order.
  */
-import type { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ChannelContext } from "../../channel/channel-context.js";
 import type { InboundImage } from "../../channel/channel-event.js";
@@ -13,6 +12,7 @@ import type { FallbackRunDeps } from "../../models/fallback.js";
 import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import type { ModelSelection } from "../session/model-selection.js";
+import { SessionRetryAttempt } from "../session/session-adapter.js";
 import type { SessionHost } from "../session/session-host.js";
 import { MAX_USER_MESSAGE_CHARS, type RunState } from "../types.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
@@ -27,7 +27,7 @@ import {
 	prepareInboundImages,
 	shouldPreserveRawInput,
 } from "./turn-input.js";
-import type { TurnStateMachine } from "./turn-state.js";
+import type { TurnHandle, TurnStateMachine } from "./turn-state.js";
 
 /** What `run()` accumulates across its steps; the epilogue reports it as the turn was actually sent. */
 export interface TurnProgress {
@@ -61,6 +61,7 @@ export interface TurnPipelineDeps {
 	host: SessionHost;
 	models: ModelSelection;
 	turnState: TurnStateMachine;
+	isRetired: () => boolean;
 	/** The live run state: `ChannelRunner` replaces it at the start of every run. */
 	getRunState: () => RunState;
 }
@@ -88,10 +89,6 @@ export class TurnPipeline {
 
 	private get session(): AgentSession {
 		return this.host.session;
-	}
-
-	private get agent(): Agent {
-		return this.host.agent;
 	}
 
 	/** Oversized input is spilled to disk and clipped; the user is told. Slash commands pass through raw. */
@@ -170,17 +167,26 @@ export class TurnPipeline {
 		ctx: ChannelContext,
 		runQueue: ReturnType<typeof createRunQueue>,
 		turn: TurnProgress,
+		ownTurn: TurnHandle,
 	): FallbackRunDeps {
+		let attempt: SessionRetryAttempt | undefined;
+		const canRetry = () =>
+			!this.deps.isRetired() &&
+			this.turnState.current() === ownTurn &&
+			!ownTurn.stopRequested &&
+			(!attempt || this.host.session === attempt.session);
+		const submit = async (session: AgentSession, text: string) => {
+			await session.prompt(text, turn.images.images.length > 0 ? { images: turn.images.images } : undefined);
+			turn.promptSubmitted = true;
+			if (turn.bootstrapPrepared) this.host.firstTurnMemoryBootstrapPending = false;
+		};
 		return {
 			prompt: async (text) => {
 				try {
 					await this.host.runPrompt(async () => {
-						await this.session.prompt(
-							text,
-							turn.images.images.length > 0 ? { images: turn.images.images } : undefined,
-						);
-						turn.promptSubmitted = true;
-						if (turn.bootstrapPrepared) this.host.firstTurnMemoryBootstrapPending = false;
+						if (!canRetry()) return;
+						attempt = new SessionRetryAttempt(this.session);
+						await submit(attempt.session, text);
 					});
 				} catch (err) {
 					this.runState.stopReason = "error";
@@ -201,15 +207,33 @@ export class TurnPipeline {
 				this.runState.finalOutcome = { kind: "none" };
 				this.runState.lastCompactionError = undefined;
 			},
-			getMessages: () => this.agent.state.messages,
-			setMessages: (messages) => {
-				this.agent.state.messages = messages as typeof this.agent.state.messages;
+			canRetry,
+			prepareRetry: () => {
+				const captured = attempt;
+				const classified = captured?.prepare();
+				if (!captured || !classified || !canRetry()) return null;
+				return {
+					kind: classified.kind,
+					run: (text, onReady) =>
+						this.host.runPrompt(async () => {
+							if (!canRetry()) return "stale";
+							try {
+								if (!captured.omitFailedContext()) return "stale";
+							} catch (error) {
+								throw this.host.markContextFault(captured.session, error);
+							}
+							if (!canRetry()) return "stale";
+							onReady();
+							await submit(captured.session, text);
+							return "attempted";
+						}),
+				};
 			},
-			promptWasSubmitted: () => turn.promptSubmitted,
 			getCurrentModelRef: () => formatModelReference(this.session.model ?? this.models.activeModel),
 			resolveFallbackModel: () => this.models.resolveFallbackModel(),
 			setModel: async (model) => {
 				await this.models.setModelWithThinkingPreservation(model);
+				if (!canRetry()) return;
 				// The fallback model's vision support can differ from the one this turn started
 				// on; re-resolve against it rather than resend whatever was prepared for the
 				// model that just failed.

@@ -76,6 +76,7 @@ export function caseHash(item: EvalCase, root = process.cwd()): string {
 			parameters: grader.parameters,
 			role: item.invariants?.some((invariant) => invariant === grader) ? "invariant" : "acceptance",
 			rubric: grader.kind === "model" ? grader.rubric : undefined,
+			advisory: grader.kind === "model" ? grader.advisory : undefined,
 			implementation: grader.kind === "model" ? String(grader.artifacts) : String(grader.grade),
 		})),
 		setup: String(item.setup),

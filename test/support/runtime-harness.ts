@@ -191,6 +191,8 @@ export async function createDeterministicHarness(options?: {
 	/** Gives the named default model(s) `input: ["text", "image"]` (spec 049's inbound-image
 	 *  tests need at least one model declaring vision support). */
 	visionModels?: Array<"mock-main" | "mock-fallback">;
+	/** Seed historical state before the first runtime is constructed. */
+	seed?: (paths: { homeDir: string; channelDir: string }) => void | Promise<void>;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
@@ -228,6 +230,7 @@ export async function createDeterministicHarness(options?: {
 	});
 	const channelId = options?.channelId ?? "dm_e2e_user";
 	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
+	await options?.seed?.({ homeDir: home.homeDir, channelDir });
 	const deliveries: CapturedDelivery[] = [];
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
@@ -416,4 +419,15 @@ export function getChannelFile(harness: Pick<E2ERuntimeHarness, "channelDir">, f
 
 export function channelFileExists(harness: Pick<E2ERuntimeHarness, "channelDir">, filename: string): boolean {
 	return existsSync(getChannelFile(harness, filename));
+}
+
+/** Relocate the old writer's fixed cwd when installing a portable session fixture. */
+export function seedLegacySession(name: string, destination: string, cwd: string): void {
+	const lines = readFileSync(new URL(`../fixtures/pi-0.84.3/${name}.jsonl`, import.meta.url), "utf8")
+		.trim()
+		.split("\n");
+	const header = JSON.parse(lines[0]!);
+	lines[0] = JSON.stringify({ ...header, cwd });
+	mkdirSync(dirname(destination), { recursive: true });
+	writeFileSync(destination, `${lines.join("\n")}\n`);
 }

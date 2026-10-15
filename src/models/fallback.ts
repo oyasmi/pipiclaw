@@ -1,6 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai";
-import * as log from "../log.js";
 import { isRecord } from "../shared/type-guards.js";
 import { formatModelReference } from "./reference.js";
 
@@ -95,6 +94,11 @@ export function summarizeFallbackError(errorMessage: string | undefined): string
 	return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
+export interface FallbackRetryPlan {
+	kind: "unsubmitted" | "failed-turn";
+	run(text: string, onReady: () => void): Promise<"attempted" | "stale">;
+}
+
 export interface FallbackRunDeps {
 	/** Submit a prompt. Must catch transport/prompt errors and record them into run error state. */
 	prompt(text: string): Promise<void>;
@@ -102,12 +106,8 @@ export interface FallbackRunDeps {
 	getRunError(): { stopReason: string; errorMessage?: string };
 	/** Clear stopReason/errorMessage/finalOutcome so the re-run starts clean. */
 	resetRunError(): void;
-	/** Live `agent.state.messages` reference for surgery. */
-	getMessages(): readonly unknown[];
-	/** Assign the truncated transcript back (SDK setter copies the array). */
-	setMessages(messages: unknown[]): void;
-	/** Whether the first prompt actually enqueued its user message (false = pre-flight throw, e.g. no API key). */
-	promptWasSubmitted(): boolean;
+	prepareRetry(): FallbackRetryPlan | null;
+	canRetry(): boolean;
 	getCurrentModelRef(): string;
 	/** Resolve the configured backup model, or null (unset / unresolvable / no API key). */
 	resolveFallbackModel(): Promise<Model<Api> | null>;
@@ -131,43 +131,21 @@ export async function runPromptWithFallback(promptText: string, deps: FallbackRu
 		return false;
 	}
 
+	if (!deps.canRetry()) return false;
+	const plan = deps.prepareRetry();
+	if (!plan) return false;
 	const candidate = await deps.resolveFallbackModel();
-	if (!candidate) {
-		return false;
-	}
-
+	if (!candidate || !deps.canRetry()) return false;
 	const fromRef = deps.getCurrentModelRef();
 	const toRef = formatModelReference(candidate);
-	if (fromRef === toRef) {
-		return false;
-	}
-
-	// Pre-compute the truncated transcript, but do not commit it until setModel
-	// succeeds. Surgery only when the failed turn was actually enqueued: a pre-flight
-	// throw (no API key on the primary) submits nothing, so there is nothing to
-	// remove — switch straight to the backup, which covers a mis-configured primary key.
-	let truncated: unknown[] | null = null;
-	if (deps.promptWasSubmitted()) {
-		truncated = takeFailedTurn(deps.getMessages());
-		if (!truncated) {
-			log.logWarn(
-				"agent.model.fallback_skipped",
-				"Fallback skipped: transcript tail is not [user, assistant(error)]",
-			);
-			return false;
-		}
-	}
-
-	// Switch the model first: if setModel throws it propagates with the transcript
-	// still intact, so the failed turn's context is not silently lost.
-	deps.markPrimaryFailed();
+	if (fromRef === toRef) return false;
 	await deps.setModel(candidate);
-	if (truncated) {
-		deps.setMessages(truncated);
-	}
-	deps.notifySwitch(fromRef, toRef, summarizeFallbackError(firstError.errorMessage));
-	deps.resetRunError();
-
-	await deps.prompt(promptText);
-	return true;
+	if (!deps.canRetry()) return false;
+	return (
+		(await plan.run(promptText, () => {
+			deps.resetRunError();
+			deps.markPrimaryFailed();
+			deps.notifySwitch(fromRef, toRef, summarizeFallbackError(firstError.errorMessage));
+		})) === "attempted"
+	);
 }

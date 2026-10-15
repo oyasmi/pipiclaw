@@ -227,6 +227,7 @@ export class ChannelRunner implements AgentRunner {
 			host: this.host,
 			models: this.models,
 			turnState: this.turnState,
+			isRetired: () => this.retired,
 			getRunState: () => this.runState,
 		});
 		this.turnFinisher = new TurnFinisher({
@@ -307,6 +308,7 @@ export class ChannelRunner implements AgentRunner {
 
 		try {
 			await this.host.ensureSessionReady();
+			this.host.assertContextHealthy();
 			await this.models.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
 			const input = await this.pipeline.prepareUserInput(ctx);
@@ -343,7 +345,7 @@ export class ChannelRunner implements AgentRunner {
 
 			turn.fallbackAttempted = await runPromptWithFallback(
 				turn.promptText,
-				this.pipeline.buildFallbackDeps(ctx, runQueue, turn),
+				this.pipeline.buildFallbackDeps(ctx, runQueue, turn, ownTurn),
 			);
 		} catch (err) {
 			this.runState.stopReason = "error";

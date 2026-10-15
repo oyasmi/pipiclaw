@@ -1208,3 +1208,35 @@ web 工具的代理顺序是：
 - 更复杂的 provider extension
 
 建议直接阅读上游文档和示例代码。
+
+## OpenAI OAuth 安装身份
+
+`<PIPICLAW_HOME>/state/auth/identity.json` 的格式为
+`{"version":1,"installationId":"UUID v4"}`。仅 OpenAI OAuth 登录首次创建；
+SDK 接收同步 `getDeviceId` 和 `agentName: "pipiclaw"`，凭据仍写入应用目录的
+`auth.json`。创建用同目录独占临时文件、fsync 和不可覆盖的 hard link 发布；
+并发登录使用赢家 UUID。不支持 hard link/目录同步的文件系统会明确失败。
+取消若发生在发布之后，身份保留供下次复用，不开始 OAuth 网络流程。
+
+新建目录 `0700`、文件 `0600`；已有身份只校验，不自动 chmod 或重置。
+部署时检查既有权限并随完整应用状态备份。同一安装搬迁保留身份；独立新安装
+单独生成身份，不把生产 credentials/identity 复制到并行测试实例。该文件无配置开关，
+logout 不删除它，UUID 不进入状态报告或日志。
+
+## pi 1.2.0 Azure 字段迁移
+
+仅旧**内置** provider 身份 `azure-openai-responses` 改为 `azure`：
+
+| 位置 | 迁移 |
+|---|---|
+| `auth.json` provider key | 把原内置 credential 移到 `azure`；已有 `azure` 时人工判断，不能覆盖 |
+| `models.json.providers` key | 先确认内置/自定义语义，按需改成 `azure` |
+| `settings.json.defaultProvider` | 原内置身份改为 `azure`，`defaultModel` 不变 |
+| `settings.json.fallbackModel`、`subAgentModel` | 只改 `provider/model` 中的 provider 部分，保留具体 model id |
+| `workspace/sub-agents/` model 引用 | 检查角色默认、覆盖及备用选择，按原内置语义迁移 |
+| 历史 session `model_change` | 原样保留，以当前显式设置恢复目标模型，并核对实际 provider/model |
+
+API 标识 `azure-openai-responses` 和 `AZURE_OPENAI_*` 环境变量保持原名。
+同名自定义 provider 不自动改名；新旧 key 冲突须由部署者核对后处理。
+无 Azure 配置无需迁移，不提供永久运行时别名。离线样本证明旧 metadata 与显式
+新 provider 配置可共存，真实 Azure endpoint/认证须由使用 Azure 的部署验收。

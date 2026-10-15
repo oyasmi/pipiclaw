@@ -13,6 +13,7 @@ import {
 	ModelsError,
 } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getLoginInstallationId } from "./login-identity.js";
 
 export class LoginCancelledError extends Error {
 	constructor(message = "登录已取消") {
@@ -119,16 +120,28 @@ export async function loginProvider(
 	providerId: string,
 	authType: AuthType,
 	ui: LoginUi,
+	context: { appHomeDir: string },
 ): Promise<ProviderLoginResult> {
+	ui.signal.throwIfAborted();
+	const installationId =
+		providerId === "openai" && authType === "oauth"
+			? await getLoginInstallationId(context.appHomeDir, ui.signal)
+			: undefined;
+	ui.signal.throwIfAborted();
 	const before = runtime.getAvailableSnapshot();
 
 	let credential: Awaited<ReturnType<ModelRuntime["login"]>>;
 	try {
-		credential = await runtime.login(providerId, authType, {
-			signal: ui.signal,
-			prompt: (prompt) => ui.ask(prompt),
-			notify: (event) => ui.notify(event),
-		});
+		credential = await runtime.login(
+			providerId,
+			authType,
+			{
+				signal: ui.signal,
+				prompt: (prompt) => ui.ask(prompt),
+				notify: (event) => ui.notify(event),
+			},
+			installationId ? { getDeviceId: () => installationId, agentName: "pipiclaw" } : undefined,
+		);
 	} catch (error) {
 		throw humanizeLoginError(providerId, error);
 	}

@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as apiKeys from "../../../src/models/api-keys.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 describe("E2E deterministic: /stop", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		await harness.shutdown();
 	});
 
@@ -32,6 +34,36 @@ describe("E2E deterministic: /stop", () => {
 		} finally {
 			gate.release();
 		}
+		// Also stop during backup credential resolution; an abort between requests must not revive the turn.
+		// Spec 055 mutation (executed 2026-10-13; restored green): remove canRetry stop checks; backup provider count becomes 1.
+		let entered!: () => void;
+		const waiting = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let release!: () => void;
+		const keyGate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const getKey = apiKeys.getApiKeyForModel;
+		vi.spyOn(apiKeys, "getApiKeyForModel").mockImplementation(async (registry, model) => {
+			if (model.id === "mock-fallback") {
+				entered();
+				await keyGate;
+			}
+			return getKey(registry, model);
+		});
+		harness.model.script.failNext({ status: 429 });
+		await harness.sendUserMessageNoWait("FAIL_THEN_STOP");
+		await waiting;
+		try {
+			await harness.sendUserMessageNoWait("/stop");
+		} finally {
+			release();
+		}
+		await harness.waitForIdle();
+		expect(harness.model.requests.filter((request) => request.model === "mock-fallback")).toHaveLength(0);
+		vi.restoreAllMocks();
+
 		// Channel is idle again and can take a fresh turn.
 		harness.model.script.route({
 			name: "next",

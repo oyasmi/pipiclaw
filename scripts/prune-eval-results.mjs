@@ -27,7 +27,7 @@ function parseArgs(argv) {
 /** Run directories are named `<ISO timestamp>-<random>`, so lexical sort is chronological. */
 function listRunDirs(dir) {
 	try {
-		return readdirSync(dir).filter((name) => statSync(join(dir, name)).isDirectory());
+		return readdirSync(dir).filter((name) => name !== "references" && statSync(join(dir, name)).isDirectory());
 	} catch (error) {
 		if (error.code === "ENOENT") return [];
 		throw error;
@@ -73,3 +73,7 @@ pruneDir(
 	new Set(activeBaseline ? [activeBaseline] : []),
 	args.yes,
 );
+
+const referencesDir = join(resultsDir, "references");
+const activeReference = readActiveBaseline(referencesDir);
+pruneDir("evals/results/references", referencesDir, args.baselinesKeep, new Set(activeReference ? [activeReference] : []), args.yes);

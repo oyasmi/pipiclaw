@@ -54,6 +54,7 @@ export async function gradeTrial(
 	context: TrialContext,
 	execution: TrialResult["execution"],
 	judge: (grader: Extract<EvalCase["graders"][number], { kind: "model" }>) => Promise<GradeResult>,
+	policy: { advisory?: boolean; judgeEnabled?: boolean } = {},
 ): Promise<GradeResult[]> {
 	const grades: GradeResult[] = [];
 	// Always evaluate invariants first, even when execution was interrupted.
@@ -66,7 +67,7 @@ export async function gradeTrial(
 		const severity = invariants.has(grader) ? "hard-invariant" : (grader.severity ?? "quality");
 		try {
 			const grade =
-				grader.kind === "model" && execution !== "completed"
+				grader.kind === "model" && (execution !== "completed" || policy.judgeEnabled === false)
 					? {
 							schemaVersion: 1 as const,
 							graderId: grader.graderId,
@@ -74,18 +75,27 @@ export async function gradeTrial(
 							status: "skipped" as const,
 							severity,
 							evidence: [],
-							rationale: "Execution interrupted; inspect captured evidence before regrading.",
+							rationale:
+								execution !== "completed"
+									? "Execution interrupted; captured evidence is retained."
+									: "Advisory model judging is disabled; objective code oracles determine acceptance.",
 						}
 					: grader.kind === "model"
 						? await judge(grader)
 						: await grader.grade(context);
-			grades.push({ ...grade, severity, graderKind: grader.kind ?? "code" });
+			grades.push({
+				...grade,
+				severity,
+				graderKind: grader.kind ?? "code",
+				authority: grader.kind === "model" && (policy.advisory || grader.advisory) ? "advisory" : "acceptance",
+			});
 		} catch (error) {
 			grades.push({
 				schemaVersion: 1,
 				graderId: grader.graderId,
 				graderVersion: grader.graderVersion,
 				graderKind: grader.kind ?? "code",
+				authority: grader.kind === "model" && (policy.advisory || grader.advisory) ? "advisory" : "acceptance",
 				status: "error",
 				severity,
 				evidence: [],
@@ -102,23 +112,28 @@ export function assessTrial(
 	evidenceComplete: boolean,
 	stopReason?: TrialResult["stopReason"],
 ): TrialResult {
-	const invariant = grades.filter((grade) => grade.severity === "hard-invariant");
-	const acceptance = grades.filter((grade) => grade.severity !== "hard-invariant");
+	const authoritative = grades.filter((grade) => grade.authority !== "advisory");
+	const invariant = authoritative.filter((grade) => grade.severity === "hard-invariant");
+	const acceptance = authoritative.filter((grade) => grade.severity !== "hard-invariant");
 	const incomplete = (grade: GradeResult) => grade.status === "error" || grade.status === "skipped";
 	return {
 		execution,
 		acceptance:
-			execution === "agent-limit" || acceptance.some((grade) => grade.status === "fail")
+			execution === "agent-limit"
 				? "fail"
-				: execution !== "completed" || !acceptance.length || acceptance.some(incomplete)
+				: execution !== "completed"
 					? "unknown"
-					: "pass",
+					: acceptance.some((grade) => grade.status === "fail")
+						? "fail"
+						: !acceptance.length || acceptance.some(incomplete)
+							? "unknown"
+							: "pass",
 		invariants: invariant.some((grade) => grade.status === "fail")
 			? "violated"
 			: !evidenceComplete || invariant.some(incomplete)
 				? "unknown"
 				: "intact",
-		grading: grades.some(incomplete) ? (grades.every(incomplete) ? "error" : "partial") : "complete",
+		grading: authoritative.some(incomplete) ? (authoritative.every(incomplete) ? "error" : "partial") : "complete",
 		evidenceComplete,
 		stopReason,
 	};
@@ -185,6 +200,14 @@ export function evaluateSummary(cases: CaseSummary[], plan: ScoringPlan): { code
 	const fail = (code: 1 | 2, reason: string) => ({ code, reason });
 	if (cases.some((item) => (item.invariantViolations ?? 0) > 0))
 		return fail(1, "Hard invariant violated; inspect its evidence before another run.");
+	if (
+		plan.judgePolicy === "advisory" &&
+		Object.keys(plan.plannedTrials).some((id) => plan.oracleChecks?.[id]?.status !== "qualified")
+	)
+		return fail(
+			2,
+			"Oracle coverage is incomplete; exploratory results cannot establish quality. Add executable controls for the uncovered cases.",
+		);
 	if (!Object.keys(plan.plannedTrials).length) return fail(2, "Empty plan; select cases and run again.");
 	for (const [id, count] of Object.entries(plan.plannedTrials)) {
 		const item = cases.find((candidate) => candidate.caseId === id);
@@ -198,6 +221,7 @@ export function evaluateSummary(cases: CaseSummary[], plan: ScoringPlan): { code
 			item.invariantUnknown === undefined
 		)
 			return fail(2, `Incomplete plan for ${id}; finish the planned trials.`);
+		if (plan.mode === "smoke") continue;
 		const rule = plan.gates[id];
 		if (rule?.gate !== "required") continue;
 		const ratio = rule.minPass ? parseRatio(rule.minPass) : { passed: 1, total: 1 };
@@ -213,6 +237,15 @@ export function evaluateSummary(cases: CaseSummary[], plan: ScoringPlan): { code
 			return fail(1, `Run misses required gate ${id}; inspect failed trials before promotion.`);
 		if (item.invariantUnknown)
 			return fail(2, `Unknown invariant evidence for ${id}; inspect captured evidence before promotion.`);
+	}
+	if (plan.mode === "smoke") {
+		if (cases.some((item) => item.budgetExceeded))
+			return fail(1, "Smoke exceeded an agent budget; inspect the trial evidence.");
+		if (cases.some((item) => item.invalid || item.invariantUnknown || item.unknown))
+			return fail(2, "Smoke is inconclusive; inspect execution and grading evidence.");
+		if (cases.some((item) => item.passed !== item.started))
+			return fail(1, "Smoke found a behavioral failure; inspect the trial evidence.");
+		return { code: 0, reason: "Smoke passed; repeat under core/candidate for a baseline decision." };
 	}
 	const total = cases.reduce((sum, item) => sum + (item.started ?? 0), 0);
 	if (!total || cases.reduce((sum, item) => sum + item.invalid, 0) / total > plan.maxInvalidShare)

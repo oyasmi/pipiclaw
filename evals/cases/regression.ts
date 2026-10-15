@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { localDayKey } from "../../src/shared/local-time.js";
+import { toolObservations } from "../graders/observations.js";
 import {
 	codeGrader,
 	deliveryMatches,
@@ -65,6 +66,7 @@ export const regressionCases: EvalCase[] = [
 			),
 			{
 				kind: "model",
+				advisory: true,
 				graderId: "three-wake-loyalty",
 				graderVersion: "1",
 				rubric:
@@ -134,7 +136,7 @@ export const regressionCases: EvalCase[] = [
 		graders: [
 			tracePredicate(
 				"tool-was-actually-used",
-				(ctx) => ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "read"),
+				(ctx) => toolObservations(ctx, "read").some(({ result }) => result.ok === true),
 				"the window must contain a real toolResult for this probe to mean anything",
 			),
 			toolCallCount("no-explicit-save", "memory_save", 0),

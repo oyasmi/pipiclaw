@@ -38,8 +38,8 @@
 | [架构](./architecture.md) | 当前实现的源码地图、运行时拓扑、消息生命周期、并发表和磁盘布局 |
 | [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
-| [行为评测使用指南](./evals.md) | `npm run eval` 系列命令：case/family 目录、profile、计划与执行 |
-| [历史设计记录](./specs/README.md) | 保留的 spec 050、051 及当前行为的判断顺序 |
+| [行为评测使用指南](./evals.md) | 无人参与的 `cycle`、评分器校验、短报告、证据重放与兼容参照 |
+| [设计记录](./specs/README.md) | 保留的 spec 050–057（055 离线实施完成，真实发布验收待执行）及当前行为的判断顺序 |
 | [历史文档归档](./archive/README.md) | 编号 050 之前的完整 spec，以及已完成的实施清单、review 和快照 |
 | [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
 

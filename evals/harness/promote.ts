@@ -16,6 +16,7 @@ function readJson<T>(path: string): T {
 }
 
 export function assertPromotableSummary(summary: FrozenSummary, plan: ScoringPlan): void {
+	if (plan.mode === "smoke") throw new Error("Smoke runs cannot establish a baseline; run core or candidate.");
 	if (summary.schemaVersion !== 2)
 		throw new Error("Legacy scoring cannot establish a baseline; run the current evaluator first.");
 	for (const [id, rule] of Object.entries(plan.gates)) {
@@ -26,23 +27,15 @@ export function assertPromotableSummary(summary: FrozenSummary, plan: ScoringPla
 	if (decision.code !== 0) throw new Error(decision.reason);
 }
 
-export function promoteRun(root: string, run: string): string {
-	if (!/^[a-zA-Z0-9_-]+$/.test(run)) throw new Error("Invalid run id; use the id printed by eval.");
-	const source = join(root, "evals/results", run);
-	if (!existsSync(source)) throw new Error(`Run ${run} not found; run eval first.`);
-	for (const required of [
-		"manifest.json",
-		"cases.json",
-		"summary.json",
-		"report.md",
-		"scoring-plan.json",
-		"plan.json",
-	]) {
-		if (!existsSync(join(source, required))) throw new Error(`Run ${run} is incomplete: ${required} is missing.`);
+/** Revalidate immutable evidence on both capture and later automatic reference selection. */
+export function validateBaselineEvidence(source: string, run: string): { slots: Set<string>; records: TrialRecord[] } {
+	if (existsSync(join(source, "execution-state.json"))) {
+		const state = readJson<{ expected: string; observed?: string; status: string }>(
+			join(source, "execution-state.json"),
+		);
+		if (state.status !== "stable" || state.expected !== state.observed)
+			throw new Error("Execution inputs changed or never settled; start a new cycle in an isolated checkout.");
 	}
-	if (containsCredential(source))
-		throw new Error(`Run ${run} contains credential-like material; redact and rerun before promotion.`);
-	const gatesPath = join(root, "evals/gates.json");
 	const plan = readJson<RunPlan>(join(source, "plan.json"));
 	const scoring = readJson<ScoringPlan>(join(source, "scoring-plan.json"));
 	if (plan.schemaVersion !== 1 || canonicalJson(plan.scoring) !== canonicalJson(scoring))
@@ -82,8 +75,30 @@ export function promoteRun(root: string, run: string): string {
 	assertPromotableSummary({ schemaVersion: 2, cases: recomputed }, scoring);
 	if (canonicalJson(recomputed) !== canonicalJson(readJson<FrozenSummary>(join(source, "summary.json")).cases))
 		throw new Error("Summary differs from trial evidence; regenerate the report before promotion.");
+	return { slots, records };
+}
+
+export function promoteRun(root: string, run: string, options: { automatic?: boolean } = {}): string {
+	if (!/^[a-zA-Z0-9_-]+$/.test(run)) throw new Error("Invalid run id; use the id printed by eval.");
+	const source = join(root, "evals/results", run);
+	if (!existsSync(source)) throw new Error(`Run ${run} not found; run eval first.`);
+	for (const required of [
+		"manifest.json",
+		"cases.json",
+		"summary.json",
+		"report.md",
+		"scoring-plan.json",
+		"plan.json",
+	]) {
+		if (!existsSync(join(source, required))) throw new Error(`Run ${run} is incomplete: ${required} is missing.`);
+	}
+	if (containsCredential(source))
+		throw new Error(`Run ${run} contains credential-like material; redact and rerun before promotion.`);
+	const gatesPath = join(root, "evals/gates.json");
+	const { slots } = validateBaselineEvidence(source, run);
 	const gatesBefore = hashFile(gatesPath);
-	const target = join(root, "evals/baselines", run);
+	const baselinesDir = options.automatic ? join(root, "evals/results/references") : join(root, "evals/baselines");
+	const target = join(baselinesDir, run);
 	if (existsSync(target)) throw new Error(`Baseline ${run} already exists; baselines are immutable.`);
 	const staging = `${target}.pending`;
 	if (existsSync(staging))
@@ -95,13 +110,22 @@ export function promoteRun(root: string, run: string): string {
 			"cases.json",
 			"summary.json",
 			"report.md",
+			"details.md",
 			"scoring-plan.json",
 			"plan.json",
 			"trials.jsonl",
+			"cycle.json",
+			"execution-state.json",
+			"source-state.tar.gz",
+			"cycle.md",
+			"replay.json",
+			"diagnostics.md",
 			"human-review.jsonl",
 			"human-review-sample.json",
 		])
 			if (existsSync(join(source, file))) copyFileSync(join(source, file), join(staging, file));
+		if (existsSync(join(source, "oracle-checks")))
+			cpSync(join(source, "oracle-checks"), join(staging, "oracle-checks"), { recursive: true });
 		for (const slot of slots)
 			cpSync(join(source, "trials", slot), join(staging, "trials", slot), { recursive: true });
 		for (const slot of slots) verifyArtifacts(join(staging, "trials", slot));
@@ -114,10 +138,7 @@ export function promoteRun(root: string, run: string): string {
 		rmSync(staging, { recursive: true, force: true });
 		throw error;
 	}
-	writeFileSync(
-		join(root, "evals/baselines", "latest.json"),
-		`${JSON.stringify({ schemaVersion: 1, runId: run }, null, 2)}\n`,
-	);
+	writeFileSync(join(baselinesDir, "latest.json"), `${JSON.stringify({ schemaVersion: 1, runId: run }, null, 2)}\n`);
 	if (hashFile(gatesPath) !== gatesBefore)
 		throw new Error("Baseline promotion changed gates.json; restore it immediately.");
 	return target;

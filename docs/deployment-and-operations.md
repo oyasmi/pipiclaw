@@ -404,3 +404,34 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 - 事件、任务台账与 `/tasks` 命令：[events-and-tasks.md](./events-and-tasks.md)
 - 并发模型与容量边界：[scaling-and-concurrency.md](./scaling-and-concurrency.md)
 - 智能体委派、产物与安全边界：[sub-agents.md](./sub-agents.md)
+
+## pi 1.2.0 升级与回退（spec 055）
+
+离线合并门禁是 `npm ci`、四个 pi 包的统一版本图、`npm run check`、
+`npm run test:e2e`、`npm run eval:typecheck`、`npm run build`，并在 Node 22.19.0
+和部署 Node 上检查。真实供应商、OpenAI ChatGPT OAuth、钉钉 AI Card 与 TUI 的
+登录/流/工具/停止/最终投递验收是另外的发布门禁；未验收时不要发布。
+
+上线前暂停新入站及事件/任务驱动，等待 turn、reflect、jobs、外部委派、结算和
+投递排空并记录未完成工作。`/stop` 不取消已派发外部运行。正常关闭 daemon/TUI
+及其它写者后，保存完整一致的 app home 和受影响项目目录快照：包含配置、凭据、
+安装身份、state、workspace、聊天/任务 sessions、等待条件、运行结果、usage、
+memory 游标与投递幂等状态。核对备份权限、校验和、时间和恢复路径。
+
+备份后才做 Azure 字段迁移，再安装固定发布包和匹配 lock。单实例灰度检查首次
+工具、备用请求中输入一次、聊天/任务恢复、正常停止、重启、usage/委派幂等和
+AI Card 完成。通过后逐步恢复入口与调度，始终保持一个 app home 只有一个写者。
+不要把生产快照启动成第二个在线 daemon；旧历史验证和 smoke 使用离线消费者
+或独立测试 home/项目，隔离传输、调度、恢复、投递及项目写目标。
+
+出现首次请求无工具、重复输入/执行/投递/计费、停止后仍发备用请求、断写后故障
+实例仍请求、身份漂移或模型选择错误时立即停止灰度并保存现场：
+
+| 时点 | 回退操作 |
+|---|---|
+| 新版未产生外部副作用 | 关闭全部写者，保存失败现场，恢复升级前完整快照及匹配旧包/lock；需要时恢复项目，再离线核对旧状态后启动 |
+| 已执行工具、委派、任务或投递 | 冻结并保存最新状态，核对项目、结果、receipt、ledger 和幂等标记，选择前向修复或人工恢复方案；不能盲目覆盖旧快照 |
+
+不能只 npm 降级、删 context_edit 或批量手改 session。旧幂等标记可能让已完成的
+工作再次执行或投递；有不可回退的外部效果时优先修复新版。发布版本号及 lock
+顶层版本在发布阶段同步；实施验收与真实发布分别记录。

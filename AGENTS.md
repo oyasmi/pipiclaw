@@ -55,6 +55,8 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 - `npm run arch` — module dependency, cycle, file-size and path-reference checks (see Core Structure)
 - `npm run test`
 - `npm run test:coverage`
+- `npm run test:evals` — offline eval-tooling checks, including the actual worker with a mock provider
+- `npm run eval` — read-only daily evaluation plan; `npm run eval -- cycle` executes autonomous real-model probes
 - `npm run test:e2e` — deterministic full-stack layer (scripted mock provider, no network, no API cost; runs in well under 90s)
 - `npm run test:e2e:live` — the 5-ish real-model smoke cases (follows `~/.pipiclaw/settings.json`; manual / nightly)
 - `npm run build`
@@ -70,7 +72,13 @@ Three layers, each with a distinct job. Putting an assertion in the wrong layer 
 |---|---|---|---|
 | unit | one module's branches, edges, contracts | anything fakeable belongs here | `npm run check` |
 | e2e (deterministic) | full-stack **mechanism**: cross-module timing, persisted side effects, process/restart, delivery sequencing, guard wiring | observable side effects — disk state, the request body sent to the provider, delivery count/order, audit records, run state. Never the model's wording. | `npm run test:e2e` |
-| evals | real-model **behaviour quality** | grader / baseline / gate | `npm run eval` (not a gate) |
+| evals | real-model **behaviour quality** | grader / baseline / gate | `npm run eval -- run` (not a gate) |
+
+### Behavior-eval iteration
+
+When changing model-facing prompts/playbooks, tool guidance, memory recall strategy, or task/delegation decisions, plan the affected behavior probes (`npm run eval -- plan --changed-since <ref>`) and run the relevant dev cases with the configured local model when credentials are available. Record the run id, failures and their attribution; unavailable credentials or execution are not a quality pass. A pure code move does not require paid probes. Changes to `evals/` require `npm run test:evals`.
+
+Use the six-case dev set for daily feedback, core for periodic/release regression, and paired candidate runs for model or major prompt decisions. Smoke is not a baseline. Preserve failed evidence and distinguish product failures from fixture/oracle/provider problems; correcting an oracle creates a separate assessment or run, never overwrites the failure. Every paid run first checks executable positive, negative and equivalence controls; failed controls stop before model calls and uncovered cases remain inconclusive. Use `cycle` for automatic diagnostics, sealed-evidence replay and compatible immutable references. Model judges are optional advisory opinions, off by default; human labels or approval are never prerequisites. New automatic references live in ignored `evals/results/references/` so they cannot alter the checkout fingerprint. See [the evaluation guide](docs/evals.md) for commands and limits.
 
 ### Unit-test admission and size control
 

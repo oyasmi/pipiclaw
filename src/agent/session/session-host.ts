@@ -69,6 +69,7 @@ import { SessionResourceGate } from "./session-resource-gate.js";
 
 const MODEL_REGISTRY_REFRESH_TIMEOUT_MS = 15_000;
 const SESSION_RELOAD_TIMEOUT_MS = 30_000;
+const CONTEXT_FAULT_MESSAGE = "会话上下文保存失败。请让部署者检查服务器存储后发送 /new 重新开启会话。";
 
 /** The text of a message's `content`, whether it is a bare string or a multimodal part array. */
 function plainTextOf(content: unknown): string {
@@ -234,9 +235,28 @@ export class SessionHost {
 		this.sessionReady = this.initializeSession(sessionManager);
 	}
 
-	/** Run a prompt (or a steer) so that a session-resource reload cannot interleave with it. */
-	runPrompt(fn: () => Promise<void>): Promise<void> {
-		return this.sessionResourceGate.runPrompt(fn);
+	private readonly contextFaults = new WeakSet<AgentSession>();
+
+	markContextFault(session: AgentSession, error: unknown): Error {
+		this.contextFaults.add(session);
+		log.logWarn("agent.session.context_failed", "Session context persistence failed", {
+			channelId: this.channelId,
+			reason: errorMessage(error),
+			fields: { sessionId: session.sessionManager.getSessionId(), stage: "fallback-context-edit" },
+		});
+		return new Error(CONTEXT_FAULT_MESSAGE, { cause: error });
+	}
+
+	assertContextHealthy(): void {
+		if (this.contextFaults.has(this.session)) throw new Error(CONTEXT_FAULT_MESSAGE);
+	}
+
+	/** Run a prompt (or steer) with the resource gate and the context-fault guard. */
+	runPrompt<T>(fn: () => Promise<T>): Promise<T> {
+		return this.sessionResourceGate.runPrompt(async () => {
+			this.assertContextHealthy();
+			return fn();
+		});
 	}
 
 	/** Stop listening to the live session and dispose it (no-op error handling is the caller's). */
@@ -589,7 +609,8 @@ export class SessionHost {
 				systemPrompt: "",
 				model: this.models.activeModel,
 				thinkingLevel: DEFAULT_MAIN_THINKING_LEVEL,
-				tools,
+				tools: [],
+				messages: sessionManager.buildSessionContext().messages,
 			},
 			convertToLlm,
 			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.models.activeModel),
@@ -609,6 +630,7 @@ export class SessionHost {
 			modelRuntime: this.modelRuntime,
 			resourceLoader,
 			baseToolsOverride: Object.fromEntries(tools.map((tool) => [tool.name, tool])),
+			initialActiveToolNames: tools.map((tool) => tool.name),
 			sessionStartEvent,
 		});
 		this.sessionSettingsManager = sessionSettingsManager;
@@ -641,27 +663,15 @@ export class SessionHost {
 		this.syncMemoryBootstrapPendingFromSession();
 	}
 
-	/**
-	 * Re-derive "does this session still owe a memory bootstrap" from the session now bound.
-	 *
-	 * The pending flag used to be set to `true` on every bind, which is right for a fresh task
-	 * session and wrong for the return trip: a chat session that already carries the block would
-	 * be handed a second copy on its next turn, and one interleaved task step could therefore cost
-	 * the whole index again. It was also wrong across a restart, where the field simply starts
-	 * `true` and the resumed session's own history says otherwise.
-	 *
-	 * So the answer comes from the transcript that will actually be sent, not from a boolean that
-	 * has to be kept in step with every binding. The `/new` and post-compaction resets in
-	 * `subscribeToSessionEvents` stay as they are: those are the SDK telling us the context
-	 * generation changed, which is a fact about the session that its message list alone —
-	 * compaction having rewritten it into a summary — cannot be scanned for reliably.
+	/** Bootstrap presence follows canonical context, including omissions and compaction.
+	 * Returning from a task or restarting must neither duplicate a visible bootstrap nor
+	 * mistake an omitted failed input for one. Raw messages remain available to memory/recovery.
 	 */
 	private syncMemoryBootstrapPendingFromSession(): void {
-		// `session.messages` is empty until the session actually runs a turn, so the answer comes
-		// from the persisted branch — which is also what makes this correct across a restart.
-		const injected = this.sessionManager.getBranch().some((entry) => {
-			if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) return false;
-			return entry.message.role === "user" && hasMemoryBootstrapBlock(plainTextOf(entry.message.content));
+		const injected = this.sessionManager.buildSessionContext().messages.some((value) => {
+			const message: unknown = value;
+			if (!isRecord(message)) return false;
+			return message.role === "user" && hasMemoryBootstrapBlock(plainTextOf(message.content));
 		});
 		this.firstTurnMemoryBootstrapPending = !injected;
 	}

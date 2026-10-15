@@ -578,3 +578,39 @@ export function noDeliveriesAfterStep(graderId: string, stepKind: string, severi
 	grader.parameters = { stepKind };
 	return grader;
 }
+
+/** Parse the public tool contract: JSON key order is not behavior. */
+export function isWorkParkCall(event: import("./schema.js").TraceEvent): boolean {
+	if (event.kind !== "tool-call" || event.tool !== "task_step_end") return false;
+	try {
+		const args = JSON.parse(event.fields?.argsJson ?? "null") as {
+			outcome?: string;
+			ticket?: { kind?: string };
+		} | null;
+		return args?.outcome === "park" && args.ticket?.kind === "work";
+	} catch {
+		return false;
+	}
+}
+
+/** A rejected proposal is not evidence of a task having parked. */
+export function parkedOnWork(graderId: string): CodeGrader {
+	return tracePredicate(
+		graderId,
+		(ctx) =>
+			ctx.trace.some(
+				(call) =>
+					isWorkParkCall(call) &&
+					Boolean(call.correlationId) &&
+					ctx.trace.some(
+						(reply) =>
+							reply.kind === "tool-result" &&
+							reply.tool === "task_step_end" &&
+							reply.correlationId === call.correlationId &&
+							reply.seq > call.seq &&
+							reply.ok === true,
+					),
+			),
+		"task successfully parked on its bound work",
+	);
+}

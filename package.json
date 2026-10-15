@@ -47,13 +47,14 @@
 		"test:coverage": "vitest --run --coverage",
 		"check": "npm run lint && npm run typecheck && npm run arch && npm run deadcode && npm run test",
 		"prepublishOnly": "npm run clean && npm run build && npm run check",
+		"pretest:evals": "npm run eval:build",
 		"test:evals": "vitest --run --config vitest.config.evals.ts"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "0.84.3",
-		"@earendil-works/pi-ai": "0.84.3",
-		"@earendil-works/pi-coding-agent": "0.84.3",
-		"@earendil-works/pi-tui": "0.84.3",
+		"@earendil-works/pi-agent-core": "1.2.0",
+		"@earendil-works/pi-ai": "1.2.0",
+		"@earendil-works/pi-coding-agent": "1.2.0",
+		"@earendil-works/pi-tui": "1.2.0",
 		"@mozilla/readability": "^0.6.0",
 		"axios": "^1.7.0",
 		"croner": "^9.1.0",
