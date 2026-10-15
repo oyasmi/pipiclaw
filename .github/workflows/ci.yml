@@ -25,5 +25,4 @@ jobs:
       - name: Validate evaluation tooling (offline)
         run: |
           npm run eval:typecheck
-          npm run eval:build
           npm run test:evals

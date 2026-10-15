@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,18 +7,17 @@ import { seedChannelMemory } from "../../evals/cases/helpers.js";
 import { allCases } from "../../evals/cases/index.js";
 import { captureArtifacts, sealArtifactIndex, verifyArtifacts } from "../../evals/harness/artifacts.js";
 import { caseHash, validateCases } from "../../evals/harness/cases.js";
+import { selectReference } from "../../evals/harness/cycle.js";
 import { renderDiff } from "../../evals/harness/diff.js";
 import { lastDeliveryMatches, noDeliveriesAfterStep, recallQuiz } from "../../evals/harness/graders.js";
 import { assertPromotableSummary, promoteRun } from "../../evals/harness/promote.js";
 import { rerenderReport } from "../../evals/harness/report.js";
 import {
-	exceededBudgetReason,
-	gitDirtyFingerprint,
-	humanReviewCalibration,
-	renderReport,
-	runWorkerSegment,
-	segmentScript,
-} from "../../evals/harness/run.js";
+	renderDetailedReport as renderReport,
+	renderReport as renderSummary,
+} from "../../evals/harness/report-render.js";
+import { humanReviewCalibration } from "../../evals/harness/review-history.js";
+import { exceededBudgetReason, gitDirtyFingerprint, runWorkerSegment, segmentScript } from "../../evals/harness/run.js";
 import type {
 	CaseSummary,
 	EvalCase,
@@ -329,6 +328,13 @@ describe("behavior eval process and gate semantics", () => {
 		const short = summarize([record("pass")], [evalCase()], gate, { "T-test-01": 1 });
 		expect(evaluateSummary(short, { ...plan, plannedTrials: { "T-test-01": 1 } }).code).toBe(2);
 		expect(evaluateSummary([], plan).code).toBe(2);
+		const smoke: ScoringPlan = { ...plan, mode: "smoke", plannedTrials: { "T-test-01": 1 } };
+		expect(evaluateSummary(short, smoke).code).toBe(0);
+		expect(() => assertPromotableSummary({ schemaVersion: 2, cases: short }, smoke)).toThrow(/Smoke/);
+		expect(evaluateSummary(summarize([record("fail")], [evalCase()], gate, smoke.plannedTrials), smoke).code).toBe(1);
+		expect(evaluateSummary(summarize([record("invalid")], [evalCase()], gate, smoke.plannedTrials), smoke).code).toBe(
+			2,
+		);
 	});
 
 	it("keeps v4 budget failures scorable and unknown invariant evidence inconclusive", () => {
@@ -352,6 +358,13 @@ describe("behavior eval process and gate semantics", () => {
 	});
 
 	it("keeps unavailable samples and their resource usage visible", () => {
+		// A provider/fixture failure can make every output oracle fail. Those derivative failures
+		// must remain unavailable evidence, not become a measured behavioral regression.
+		for (const execution of ["provider-error", "fixture-error", "harness-error", "cancelled"] as const) {
+			const result = assessTrial([{ ...passingGrade, status: "fail" }], execution, false);
+			expect(result.acceptance).toBe("unknown");
+			expect(resultOutcome(result)).toBe("invalid");
+		}
 		const unavailable = record("invalid");
 		unavailable.metrics.costUsd = 4;
 		unavailable.metrics.wallMs = 900;
@@ -422,6 +435,44 @@ describe("behavior eval process and gate semantics", () => {
 				true,
 			).acceptance,
 		).toBe("fail");
+		const objective = evalCase({
+			graders: [
+				{ graderId: "objective", graderVersion: "1", grade: () => passingGrade },
+				{
+					kind: "model",
+					graderId: "opinion",
+					graderVersion: "1",
+					rubric: "subjective style",
+					artifacts: () => "data",
+				},
+			],
+		});
+		let calls = 0;
+		const advisory = await gradeTrial(
+			objective,
+			trialContext(),
+			"completed",
+			async () => {
+				calls++;
+				return { ...passingGrade, status: "fail" };
+			},
+			{ advisory: true, judgeEnabled: true },
+		);
+		expect(calls).toBe(1);
+		expect(assessTrial(advisory, "completed", true)).toMatchObject({ acceptance: "pass", grading: "complete" });
+		calls = 0;
+		const disabled = await gradeTrial(
+			objective,
+			trialContext(),
+			"completed",
+			async () => {
+				calls++;
+				return passingGrade;
+			},
+			{ advisory: true, judgeEnabled: false },
+		);
+		expect(calls).toBe(0);
+		expect(assessTrial(disabled, "completed", true).acceptance).toBe("pass");
 	});
 
 	it("does not accept an empty or skipped acceptance oracle", () => {
@@ -615,7 +666,7 @@ describe("behavior eval artifacts", () => {
 		expect(() => verifyArtifacts(target)).toThrow(/incomplete/);
 	});
 
-	it("re-renders an archived report so late human-review verdicts reach calibration", () => {
+	it("re-renders objective reports and preserves optional historical annotations without a manual queue", () => {
 		const root = temp();
 		const dir = join(root, "evals/results/run-1");
 		mkdirSync(dir, { recursive: true });
@@ -644,10 +695,10 @@ describe("behavior eval artifacts", () => {
 		);
 		writeFileSync(join(dir, "trials.jsonl"), `${JSON.stringify(judged)}\n`);
 		writeFileSync(join(dir, "report.md"), "# stale\n");
-		// The run's own report is written before any verdict can exist, so without this command
-		// model-grader calibration stays "pending" forever and nobody can promote a model grader.
+		// Legacy annotations remain readable, but no active workflow waits for human labels.
 		expect(rerenderReport(root, "run-1").reviews).toBe(0);
-		expect(readFileSync(join(dir, "report.md"), "utf8")).toMatch(/calibration: pending/);
+		expect(existsSync(join(dir, "human-review-sample.json"))).toBe(false);
+		expect(readFileSync(join(dir, "details.md"), "utf8")).not.toMatch(/pending|human-review-sample/);
 		writeFileSync(
 			join(dir, "human-review.jsonl"),
 			`${JSON.stringify({
@@ -662,7 +713,25 @@ describe("behavior eval artifacts", () => {
 			})}\n`,
 		);
 		expect(rerenderReport(root, "run-1").reviews).toBe(1);
-		expect(readFileSync(join(dir, "report.md"), "utf8")).toMatch(/calibration: 1\/1 \(100%\)/);
+		const compact = readFileSync(join(dir, "report.md"), "utf8");
+		expect(compact).toContain("HISTORICAL");
+		expect(compact).toContain("details.md");
+		expect(compact.length).toBeLessThan(readFileSync(join(dir, "details.md"), "utf8").length);
+		const providerFailure = {
+			...judged,
+			outcome: "fail" as const,
+			result: assessTrial([{ ...passingGrade, status: "fail" }], "provider-error", false, {
+				source: "model-call",
+				code: "error",
+				evidenceId: "trace.jsonl#1",
+			}),
+		};
+		const interrupted = renderSummary(manifest, [], [providerFailure]);
+		expect(interrupted).toContain("INCONCLUSIVE");
+		expect(interrupted).toContain("1 unavailable");
+		expect(interrupted).toContain("model-call/error");
+
+		expect(readFileSync(join(dir, "details.md"), "utf8")).toMatch(/calibration: 1\/1 \(100%\)/);
 	});
 
 	it("prices token usage when the provider omits amounts, and labels the basis", () => {
@@ -699,7 +768,7 @@ describe("behavior eval artifacts", () => {
 			plannedTrials: { "T-test-01": 1 },
 			maxInvalidShare: 0.1,
 		};
-		const item = { id: "T-test-01", suite: "regression" as const, caseHash: "hash" };
+		const item = { schemaVersion: 2, id: "T-test-01", suite: "regression" as const, caseHash: "hash" };
 		const trial: TrialRecord = {
 			...record("pass"),
 			schemaVersion: 5,
@@ -747,6 +816,69 @@ describe("behavior eval artifacts", () => {
 		);
 		expect(verifyArtifacts(join(target, "trials/T-test-01-1")).complete).toBe(true);
 		expect(() => promoteRun(root, "run-1")).toThrow(/immutable/);
+		// Autonomous references must use frozen conditions AND sealed evidence, and their
+		// generated files live outside the checkout fingerprint. Extend the same promotion chain.
+		const profile = {
+			source: "local",
+			agent: { requested: "provider/model", resolved: "provider/model", endpoint: "fixture" },
+			judge: { requested: "provider/model", resolved: "provider/model", endpoint: "fixture", thinking: "off" },
+			thinking: "off",
+			modelsHash: "models",
+			fallback: null,
+		};
+		const environment = { node: "v22", platform: "linux", arch: "x64", concurrency: 1 };
+		const measured = {
+			...manifest,
+			schemaVersion: 2,
+			runId: "run-1",
+			gitDirtyDiffHash: "dirty",
+			profile,
+			environment,
+			thinkingLevel: "off",
+			providerEndpoint: "fixture",
+			trialConfigHashes: { "T-test-01:1": ["a", "b", "c"] },
+		};
+		scoring.judgePolicy = "advisory";
+		scoring.judgeEnabled = false;
+		scoring.oracleChecks = {
+			"T-test-01": { status: "qualified", fingerprint: "controls", positive: 1, negative: 1, passed: 2, total: 2 },
+		};
+		const frozen = {
+			schemaVersion: 1,
+			runId: "run-1",
+			scoring,
+			cases: [item],
+			profile,
+			environment,
+			gitSha: measured.gitSha,
+			gitDirtyDiffHash: measured.gitDirtyDiffHash,
+			lockfileHash: measured.lockfileHash,
+			fixtureSeeds: { "T-test-01:1": "seed" },
+			budgets: { "T-test-01": { maxWallMs: 100, maxCostUsd: 1, maxTurns: 1, maxSteps: 1 } },
+		};
+		writeFileSync(join(source, "manifest.json"), JSON.stringify(measured));
+		writeFileSync(join(source, "plan.json"), JSON.stringify(frozen));
+		writeFileSync(join(source, "scoring-plan.json"), JSON.stringify(scoring));
+		writeFileSync(
+			join(source, "cycle.json"),
+			JSON.stringify({ exitCode: 0, replay: { matched: 1, total: 1, errors: [] } }),
+		);
+		writeFileSync(
+			join(source, "execution-state.json"),
+			JSON.stringify({ schemaVersion: 1, status: "stable", expected: "compiled", observed: "compiled" }),
+		);
+		const automatic = promoteRun(root, "run-1", { automatic: true });
+		expect(automatic).toBe(join(root, "evals/results/references/run-1"));
+		expect(selectReference(root, source, "none").runId).toBe("run-1");
+		scoring.oracleChecks["T-test-01"]!.fingerprint = "changed";
+		writeFileSync(join(source, "plan.json"), JSON.stringify(frozen));
+		expect(selectReference(root, source, "none").runId).toBeUndefined();
+		scoring.oracleChecks["T-test-01"]!.fingerprint = "controls";
+		writeFileSync(join(source, "plan.json"), JSON.stringify(frozen));
+		writeFileSync(join(automatic, "trials/T-test-01-1/outcome.json"), "tampered");
+		const rejected = selectReference(root, source, "none");
+		expect(rejected.runId).toBeUndefined();
+		expect(rejected.rejected[0]?.reasons.join(" ")).toMatch(/missing or changed/);
 	});
 
 	it("renders quarantine, invariant failures, condition comparability, and deltas", () => {

@@ -1,3 +1,4 @@
+import { noteObservedEvidence } from "../graders/task-notes.js";
 import { deliveryMatches, driverDispatchCount, readTaskLoopLog, taskFrontmatter, taskLog } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { writeTask } from "./helpers.js";
@@ -64,14 +65,10 @@ export const taskLoopQualityCases: EvalCase[] = [
 		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
 		graders: [
 			driverDispatchCount("tl-note-01-dispatch", 1),
-			taskLog(
-				"note-carries-evidence",
-				"evidence-note",
-				(log) => /EVIDENCE-42/.test(log),
-				"the step note must quote what it actually observed, not merely claim success",
-			),
+			noteObservedEvidence(),
 			{
 				kind: "model",
+				advisory: true,
 				graderId: "note-quality",
 				graderVersion: "1",
 				rubric:

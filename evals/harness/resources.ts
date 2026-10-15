@@ -9,6 +9,8 @@ export interface ResourceAccount {
 	knownCostUsd: number;
 	unknownCostEntries: number;
 	unknownTokenEntries: number;
+	/** Components were known but the SDK omitted its total; raw ledger rows stay unchanged. */
+	reconstructedTokenTotals?: number;
 	standardizedCostUnits: number;
 }
 export interface ResourceUsage {
@@ -74,9 +76,13 @@ export function summarizeResources(entries: UsageLedgerEntry[], complete = true)
 		const bucket = byKind[entry.kind];
 		bucket.entries++;
 		if (entry.usageKnown === false) bucket.unknownTokenEntries++;
-		else
+		else {
+			const components = entry.usage.input + entry.usage.output + entry.usage.cacheRead + entry.usage.cacheWrite;
+			const derivedTotal = entry.usage.total === 0 && components > 0;
 			for (const key of Object.keys(bucket.tokens) as Array<keyof UsageTokens>)
-				bucket.tokens[key] += entry.usage[key] ?? 0;
+				bucket.tokens[key] += key === "total" && derivedTotal ? components : (entry.usage[key] ?? 0);
+			if (derivedTotal) bucket.reconstructedTokenTotals = (bucket.reconstructedTokenTotals ?? 0) + 1;
+		}
 		if (entry.costKnown === false || (entry.costKnown !== true && entry.cost.total === 0))
 			bucket.unknownCostEntries++;
 		else bucket.knownCostUsd += entry.cost.total;

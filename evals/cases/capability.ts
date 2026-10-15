@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { toolObservations } from "../graders/observations.js";
+import { researchDecision } from "../graders/research.js";
 import {
 	codeGrader,
 	deliveryMatches,
@@ -45,6 +47,7 @@ export const capabilityCases: EvalCase[] = [
 			taskFrontmatter("release-still-open", "resume-ten", (frontmatter) => frontmatter.fields.outcome === undefined),
 			{
 				kind: "model",
+				advisory: true,
 				graderId: "ten-wake-loyalty",
 				graderVersion: "1",
 				rubric:
@@ -121,38 +124,43 @@ export const capabilityCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: "Read every file under research/. Write a concise operator brief that distinguishes current behavior from superseded behavior and answers the incident's dispatch question. Use only those files; call out conflicts instead of silently blending them.",
+				text: "Read every file under {{CHANNEL_DIR}}/research/. Write a concise operator brief to {{CHANNEL_DIR}}/operator-brief.md distinguishing current and superseded behavior and answering the incident dispatch question. Use only those files. Also save {{CHANNEL_DIR}}/operator-decision.json with keys currentSource, supersededSource, primaryTransport, memoryLayers (choose from daily-journal, durable-facts, flat-transcript), and incident {id, dispatch:boolean, blockers:string[] (choose from attempt-budget, deadline)}. Determine the values from the documents; do not blend superseded claims into current behavior.",
 			},
 		],
 		graders: [
 			tracePredicate(
 				"all-research-sources-read",
 				(ctx) => {
-					const paths = ctx.trace
-						.filter((event) => event.kind === "tool-call" && event.tool === "read")
-						.map((event) => event.fields?.path ?? event.fields?.file_path ?? "");
+					const read = toolObservations(ctx).filter(({ result }) => result.ok === true);
 					return ["incident.md", "legacy.md", "runtime.md"].every((name) =>
-						paths.some((path) => path.endsWith(`/research/${name}`)),
+						read.some(
+							({ call, result }) =>
+								(call.tool === "read" &&
+									(call.fields?.path ?? call.fields?.file_path ?? "").endsWith(`/research/${name}`)) ||
+								(call.tool === "bash" &&
+									(call.fields?.command ?? "").includes("research/") &&
+									(result.fields?.detail ?? "").includes(name)),
+						),
 					);
 				},
-				"the brief must be based on all three declared research sources",
+				"all three source documents must be successfully observed",
 			),
-			deliveryMatches("current-memory-layers", /journal[\s\S]*memory|memory[\s\S]*journal/i),
-			deliveryMatches(
-				"incident-stopped-before-model",
-				/RC-17[\s\S]{0,500}(?:pause|stop|must not|not be sent)[\s\S]{0,200}(?:model|模型)|(?:pause|stop)[\s\S]{0,200}RC-17/i,
-			),
+			researchDecision(),
+			fileContains("operator-brief-written", "operator-brief.md", /\S/),
 			{
 				kind: "model",
+				advisory: true,
 				graderId: "research-faithfulness",
-				graderVersion: "2",
+				graderVersion: "3",
 				rubric:
 					"Pass only if the answer (1) identifies runtime.md as current and legacy.md as superseded, (2) says DingTalk is the current primary transport, (3) distinguishes the journal (day-by-day working record) from durable memory, and (4) concludes that incident task RC-17 must be paused before model work because its attempt budget is exhausted (the expired deadline independently blocks it). Fail if Slack, flat transcript memory, or direct-to-model dispatch is presented as current, if current and legacy claims are blended without provenance, or if the task is said to run. Score from 0 to 1.",
-				artifacts: (ctx) =>
-					ctx.deliveries
-						.map((delivery) => delivery.text)
-						.filter(Boolean)
-						.join("\n"),
+				artifacts: (ctx) => {
+					const artifact = (name: string) => {
+						const path = join(ctx.channelDir, name);
+						return existsSync(path) ? readFileSync(path, "utf8") : "[missing]";
+					};
+					return `User-visible delivery:\n${ctx.deliveries.map((delivery) => delivery.text ?? "").join("\n")}\nDelivered brief (operator-brief.md):\n${artifact("operator-brief.md")}\nStructured decision:\n${artifact("operator-decision.json")}`;
+				},
 			},
 		],
 	},

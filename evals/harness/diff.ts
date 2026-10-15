@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ExecutionState } from "./execution-state.js";
 import { canonicalJson } from "./fingerprint.js";
 import type { CaseDescriptor, CaseSummary, RunManifest, RunPlan } from "./schema.js";
 import { formatWilson } from "./statistics.js";
@@ -11,6 +12,8 @@ export interface ComparisonEvidence {
 	leftPlan?: RunPlan;
 	rightPlan?: RunPlan;
 	experiment?: Experiment;
+	leftExecution?: ExecutionState;
+	rightExecution?: ExecutionState;
 }
 
 function runDir(run: string, root = process.cwd()): string {
@@ -18,7 +21,7 @@ function runDir(run: string, root = process.cwd()): string {
 		const latest = JSON.parse(readFileSync(join(root, "evals/baselines/latest.json"), "utf8")) as { runId: string };
 		return join(root, "evals/baselines", latest.runId);
 	}
-	for (const parent of ["results", "baselines"]) {
+	for (const parent of ["results", "baselines", "results/references"]) {
 		const candidate = join(root, "evals", parent, run);
 		if (existsSync(candidate)) return candidate;
 	}
@@ -41,6 +44,12 @@ export function compareRuns(
 		read<{ cases: CaseSummary[] }>(leftDir, "summary.json").cases,
 		read<{ cases: CaseSummary[] }>(rightDir, "summary.json").cases,
 		{
+			leftExecution: existsSync(join(leftDir, "execution-state.json"))
+				? read<ExecutionState>(leftDir, "execution-state.json")
+				: undefined,
+			rightExecution: existsSync(join(rightDir, "execution-state.json"))
+				? read<ExecutionState>(rightDir, "execution-state.json")
+				: undefined,
 			leftCases: read<CaseDescriptor[]>(leftDir, "cases.json"),
 			rightCases: read<CaseDescriptor[]>(rightDir, "cases.json"),
 			leftPlan: existsSync(join(leftDir, "plan.json")) ? read<RunPlan>(leftDir, "plan.json") : undefined,
@@ -61,11 +70,33 @@ export function comparisonBlockers(a: RunManifest, b: RunManifest, evidence: Com
 	};
 	if (a.schemaVersion !== 2 || b.schemaVersion !== 2 || !evidence.leftPlan || !evidence.rightPlan)
 		reasons.push("missing frozen plan / legacy measurement");
+	if (evidence.leftExecution || evidence.rightExecution) {
+		for (const state of [evidence.leftExecution, evidence.rightExecution])
+			if (state?.status !== "stable" || state.expected !== state.observed)
+				reasons.push("execution changed or unrecorded");
+		if (evidence.experiment !== "runtime")
+			same("compiled execution", evidence.leftExecution?.expected, evidence.rightExecution?.expected);
+	}
 	same("lockfile", a.lockfileHash, b.lockfileHash);
 	same("harness schema", a.harnessSchemaVersions, b.harnessSchemaVersions);
+	const policyA = evidence.leftPlan?.scoring;
+	const policyB = evidence.rightPlan?.scoring;
+	if (
+		policyA?.judgePolicy !== policyB?.judgePolicy ||
+		policyA?.judgeEnabled !== policyB?.judgeEnabled ||
+		policyA?.mode !== policyB?.mode ||
+		policyA?.maxInvalidShare !== policyB?.maxInvalidShare
+	)
+		reasons.push("acceptance / advisory policy");
 	same("environment", a.environment, b.environment);
 	same("thinking", a.thinkingLevel, b.thinkingLevel);
-	same("judge", a.profile?.judge, b.profile?.judge);
+	if (
+		policyA?.judgePolicy !== "advisory" ||
+		policyB?.judgePolicy !== "advisory" ||
+		policyA.judgeEnabled ||
+		policyB.judgeEnabled
+	)
+		same("judge", a.profile?.judge, b.profile?.judge);
 	if (evidence.experiment !== "runtime") {
 		same("git", a.gitSha, b.gitSha);
 		same("dirty diff", a.gitDirtyDiffHash, b.gitDirtyDiffHash);
@@ -123,6 +154,64 @@ function trialConditions(manifest: RunManifest, id: string): string[] {
 	].sort();
 }
 
+export function caseComparisonBlockers(
+	id: string,
+	a: RunManifest,
+	b: RunManifest,
+	x: CaseSummary | undefined,
+	y: CaseSummary | undefined,
+	evidence: ComparisonEvidence,
+): string[] {
+	const reasons = comparisonBlockers(a, b, evidence);
+	const definitionA = evidence.leftCases.find((item) => item.id === id);
+	const definitionB = evidence.rightCases.find((item) => item.id === id);
+	if (!x) reasons.push("added");
+	if (!y) reasons.push("removed");
+	if (!x?.valid || !y?.valid) reasons.push("no scorable samples");
+	if (x?.invalid || y?.invalid || x?.unknown || y?.unknown || x?.invariantUnknown || y?.invariantUnknown)
+		reasons.push("incomplete outcome / invariant evidence");
+	if (
+		!definitionA ||
+		!definitionB ||
+		definitionA.schemaVersion !== 2 ||
+		definitionB.schemaVersion !== 2 ||
+		definitionA.caseHash !== definitionB.caseHash
+	)
+		reasons.push("case / oracle / fixture changed or missing");
+	const seeds = (plan: RunPlan | undefined) =>
+		Object.entries(plan?.fixtureSeeds ?? {}).filter(([key]) => key.startsWith(`${id}:`));
+	if (
+		!seeds(evidence.leftPlan).length ||
+		canonicalJson(seeds(evidence.leftPlan)) !== canonicalJson(seeds(evidence.rightPlan))
+	)
+		reasons.push("fixture seeds");
+	const conditionsA = trialConditions(a, id);
+	const conditionsB = trialConditions(b, id);
+	if (!conditionsA.length || !conditionsB.length || canonicalJson(conditionsA) !== canonicalJson(conditionsB))
+		reasons.push("effective trial configuration");
+	const planA = evidence.leftPlan?.scoring;
+	const planB = evidence.rightPlan?.scoring;
+	if (
+		(planA?.judgePolicy === "advisory" || planB?.judgePolicy === "advisory") &&
+		(planA?.oracleChecks?.[id]?.status !== "qualified" ||
+			planB?.oracleChecks?.[id]?.status !== "qualified" ||
+			canonicalJson(planA?.oracleChecks?.[id]) !== canonicalJson(planB?.oracleChecks?.[id]))
+	)
+		reasons.push("oracle qualification / controls changed");
+	if (canonicalJson(evidence.leftPlan?.budgets[id]) !== canonicalJson(evidence.rightPlan?.budgets[id]))
+		reasons.push("trial resource budget");
+	if (
+		!planA ||
+		!planB ||
+		canonicalJson(planA.gates[id] ?? null) !== canonicalJson(planB.gates[id] ?? null) ||
+		planA.plannedTrials[id] !== planB.plannedTrials[id] ||
+		x?.started !== planA.plannedTrials[id] ||
+		y?.started !== planB.plannedTrials[id]
+	)
+		reasons.push("scoring policy / incomplete or unpaired plan");
+	return [...new Set(reasons)];
+}
+
 export function renderDiff(
 	leftName: string,
 	rightName: string,
@@ -137,44 +226,7 @@ export function renderDiff(
 	const rows = ids.map((id) => {
 		const x = left.find((summary) => summary.caseId === id);
 		const y = right.find((summary) => summary.caseId === id);
-		const reasons = [...blockers];
-		const definitionA = evidence.leftCases.find((item) => item.id === id);
-		const definitionB = evidence.rightCases.find((item) => item.id === id);
-		if (!x) reasons.push("added");
-		if (!y) reasons.push("removed");
-		if (!x?.valid || !y?.valid) reasons.push("no scorable samples");
-		if (
-			!definitionA ||
-			!definitionB ||
-			definitionA.schemaVersion !== 2 ||
-			definitionB.schemaVersion !== 2 ||
-			definitionA.caseHash !== definitionB.caseHash
-		)
-			reasons.push("case / oracle / fixture changed or missing");
-		const seeds = (plan: RunPlan | undefined) =>
-			Object.entries(plan?.fixtureSeeds ?? {}).filter(([key]) => key.startsWith(`${id}:`));
-		if (
-			!seeds(evidence.leftPlan).length ||
-			canonicalJson(seeds(evidence.leftPlan)) !== canonicalJson(seeds(evidence.rightPlan))
-		)
-			reasons.push("fixture seeds");
-		const conditionsA = trialConditions(a, id);
-		const conditionsB = trialConditions(b, id);
-		if (!conditionsA.length || !conditionsB.length || canonicalJson(conditionsA) !== canonicalJson(conditionsB))
-			reasons.push("effective trial configuration");
-		const planA = evidence.leftPlan?.scoring;
-		const planB = evidence.rightPlan?.scoring;
-		if (canonicalJson(evidence.leftPlan?.budgets[id]) !== canonicalJson(evidence.rightPlan?.budgets[id]))
-			reasons.push("trial resource budget");
-		if (
-			!planA ||
-			!planB ||
-			canonicalJson(planA.gates[id] ?? null) !== canonicalJson(planB.gates[id] ?? null) ||
-			planA.plannedTrials[id] !== planB.plannedTrials[id] ||
-			x?.started !== planA.plannedTrials[id] ||
-			y?.started !== planB.plannedTrials[id]
-		)
-			reasons.push("scoring policy / incomplete or unpaired plan");
+		const reasons = caseComparisonBlockers(id, a, b, x, y, evidence);
 		const rate = (value: CaseSummary | undefined) =>
 			value ? `${value.passed}/${value.valid} (${formatWilson(value.passed, value.valid)})` : "—";
 		if (reasons.length || !x || !y)

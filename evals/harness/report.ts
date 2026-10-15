@@ -1,18 +1,11 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { renderReport } from "./run.js";
-import type { CaseSummary, HumanReviewRecord, RunManifest, TrialRecord } from "./schema.js";
+import { renderDetailedReport, renderReport } from "./report-render.js";
+import type { CaseSummary, HumanReviewRecord, RunManifest, ScoringPlan, TrialRecord } from "./schema.js";
 
-/**
- * Re-render an archived run's `report.md`.
- *
- * Human review is the only path by which a model grader can ever be trusted enough to guard a
- * gate, and it is inherently after the fact: a reviewer records verdicts in `human-review.jsonl`
- * hours after the run finished. Without this command the run's report was written once, before
- * any verdict existed, so calibration was permanently "pending" and nobody had a reason to fill
- * the queue in. Archived grades stay immutable — only the rendering is recomputed.
- */
-export function rerenderReport(root: string, run: string): { path: string; reviews: number } {
+/** Refresh derived reports only; historical labels are optional, never a prerequisite. */
+export function rerenderReport(root: string, run: string): { path: string; detailsPath: string; reviews: number } {
+	if (!/^[A-Za-z0-9_-]+$/.test(run)) throw new Error("Invalid run id; use the id printed by eval.");
 	const dir = ["results", "baselines"]
 		.map((parent) => join(root, "evals", parent, run))
 		.find((candidate) => existsSync(candidate));
@@ -31,15 +24,23 @@ export function rerenderReport(root: string, run: string): { path: string; revie
 				.filter(Boolean)
 				.map((line) => JSON.parse(line) as HumanReviewRecord)
 		: [];
+	const summaries = read<{ cases: CaseSummary[] }>("summary.json").cases;
+	const manifest = read<RunManifest>("manifest.json");
+	const plan = existsSync(join(dir, "scoring-plan.json")) ? read<ScoringPlan>("scoring-plan.json") : undefined;
 	const report = renderReport(
-		read<RunManifest>("manifest.json"),
-		read<{ cases: CaseSummary[] }>("summary.json").cases,
+		manifest,
+		summaries,
 		records,
 		reviews,
+		plan,
+		existsSync(join(dir, "credential-scan-failure.txt")),
 	);
 	const path = join(dir, "report.md");
 	writeFileSync(path, report);
-	return { path, reviews: reviews.length };
+	const detailsPath = join(dir, "details.md");
+
+	writeFileSync(detailsPath, renderDetailedReport(manifest, summaries, records, reviews, plan));
+	return { path, detailsPath, reviews: reviews.length };
 }
 
 const invokedAsScript = process.argv[1]?.endsWith("/report.js") || process.argv[1]?.endsWith("\\report.js");
@@ -47,5 +48,5 @@ if (invokedAsScript) {
 	const run = process.argv[2] ?? process.env.EVAL_RUN;
 	if (!run) throw new Error("Use npm run eval:report -- <runId>.");
 	const { path, reviews } = rerenderReport(process.cwd(), run);
-	process.stdout.write(`Rewrote ${path} with ${reviews} human-review verdict(s).\n`);
+	process.stdout.write(`Rewrote ${path}; preserved ${reviews} historical annotation(s).\n`);
 }

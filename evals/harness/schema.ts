@@ -18,6 +18,7 @@ export interface RunManifest {
 	environment?: { node: string; platform: string; arch: string; concurrency: number; judgeConcurrency?: number };
 	runId: string;
 	startedAt: string;
+	finishedAt?: string;
 	label?: string;
 	gitSha: string;
 	gitDirtyDiffHash?: string;
@@ -89,6 +90,9 @@ export interface TraceEvent {
 }
 
 export interface CapturedDelivery {
+	/** Recorded at capture time; avoids ambiguous same-millisecond step boundaries. */
+	stepIndex?: number;
+	actorId?: string;
 	method:
 		| "ensureCard"
 		| "appendToCard"
@@ -119,6 +123,8 @@ export interface OutcomeSnapshot {
 }
 
 export interface GradeResult {
+	/** Advisory model opinions never decide objective acceptance or invariant health. */
+	authority?: "acceptance" | "advisory";
 	schemaVersion: 1;
 	graderId: string;
 	graderVersion: string;
@@ -146,13 +152,28 @@ export interface TrialResult {
 /** Frozen scoring policy; the full experiment/profile plan follows in renovation stage 2. */
 export interface ScoringPlan {
 	schemaVersion: 1;
+	/** Missing on archived plans means gate. Smoke never establishes a baseline. */
+	mode?: "smoke" | "gate";
 	gates: Record<string, GateRule>;
 	plannedTrials: Record<string, number>;
 	maxInvalidShare: number;
+	judgePolicy?: "advisory";
+	judgeEnabled?: boolean;
+	oracleChecks?: Record<string, OracleCheckSummary>;
+}
+
+export interface OracleCheckSummary {
+	status: "qualified" | "failed" | "uncovered";
+	fingerprint: string;
+	positive: number;
+	negative: number;
+	passed: number;
+	total: number;
 }
 
 export interface RunPlan {
 	schemaVersion: 1;
+	selection?: { profile: string; reasons: Record<string, string[]> };
 	runId: string;
 	scoring: ScoringPlan;
 	cases: CaseDescriptor[];
@@ -179,6 +200,7 @@ export interface TrialRecord {
 	attempt?: number;
 	observedModel: string;
 	promptFingerprint?: string;
+	fixtureSeed?: string;
 	outcome: Outcome;
 	grades: GradeResult[];
 	metrics: {
@@ -200,6 +222,8 @@ export interface TrialRecord {
 }
 
 export interface TrialContext {
+	/** Frozen fixture seed, independent of run id; paired trials use the same value. */
+	seed?: string;
 	homeDir: string;
 	workspaceDir: string;
 	channelDir: string;
@@ -238,6 +262,8 @@ export interface CodeGrader {
 }
 
 export interface ModelGrader {
+	/** Prose quality opinions are report-only; objective evidence owns acceptance. */
+	advisory?: boolean;
 	parameters?: JsonValue;
 	kind: "model";
 	graderId: string;
@@ -250,6 +276,7 @@ export interface ModelGrader {
 export type Grader = CodeGrader | ModelGrader;
 
 export interface TrialSetup {
+	seed?: string;
 	homeDir: string;
 	workspaceDir: string;
 	channelDir: string;

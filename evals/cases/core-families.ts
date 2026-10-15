@@ -1,18 +1,21 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildChannelIndexForBootstrap } from "../../src/memory/index-budget.js";
 import { listMemoryEntries } from "../../src/memory/store.js";
+import { checkpointHasFile, observesFile, taskParkObservations, toolObservations } from "../graders/observations.js";
+import { verificationField } from "../graders/verification.js";
+import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
 import {
-	deliveryMatches,
 	fileContains,
-	fileNotContains,
 	lastDeliveryMatches,
 	lastDeliveryNotMatches,
+	parkedOnWork,
 	tracePredicate,
 } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { seedChannelMemory, writeTask } from "./helpers.js";
+import { controlledProducer } from "./producers.js";
 import { regressionCases } from "./regression.js";
 import { safetyCases } from "./safety.js";
 
@@ -52,11 +55,15 @@ export const coreFamilyCases: EvalCase[] = [
 					type: "reference",
 					source: "agent",
 				});
-			await seedChannelMemory(ctx, "灰度发布观察时长是 47 分钟，依据约定 CANARY-WINDOW-47。", {
-				name: "zzz-canary-observation",
-				type: "reference",
-				source: "agent",
-			});
+			await seedChannelMemory(
+				ctx,
+				`灰度发布观察时长是 ${fixtureInteger(ctx.seed, "observation-window", 20, 80)} 分钟，依据约定 CANARY-WINDOW-${fixtureInteger(ctx.seed, "observation-window", 20, 80)}。`,
+				{
+					name: "zzz-canary-observation",
+					type: "reference",
+					source: "agent",
+				},
+			);
 			const result = buildChannelIndexForBootstrap(await listMemoryEntries(ctx.channelDir));
 			if (!result.overBudget || result.includedNames.includes("zzz-canary-observation"))
 				throw new Error("Overflow fixture did not omit the target; increase distractors or repair ordering.");
@@ -71,18 +78,48 @@ export const coreFamilyCases: EvalCase[] = [
 			{ kind: "user", text: "上次约定的灰度观察时长是多少，依据哪份约定？请查持久记忆后回答。" },
 		],
 		graders: [
-			fileContains(
+			tracePredicate(
 				"fixture-reached-overflow",
-				".eval/overflow-proof.json",
-				/"overBudget":true[\s\S]*"omittedTarget":true/,
+				(ctx) => {
+					const proof = JSON.parse(readFileSync(join(ctx.channelDir, ".eval/overflow-proof.json"), "utf8")) as {
+						overBudget?: boolean;
+						omittedTarget?: boolean;
+					};
+					return proof.overBudget === true && proof.omittedTarget === true;
+				},
+				"fixture must omit the target under the real bootstrap budget",
 			),
 			tracePredicate(
 				"target-retrieved",
-				(ctx) => ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "memory_search"),
+				(ctx) =>
+					toolObservations(ctx).some(
+						({ call, result }) =>
+							result.ok === true &&
+							["memory_search", "read", "bash"].includes(call.tool ?? "") &&
+							(result.fields?.detail ?? "").includes(
+								`CANARY-WINDOW-${fixtureInteger(ctx.seed, "observation-window", 20, 80)}`,
+							),
+					),
 				"an omitted target must be retrieved from durable memory",
 			),
-			lastDeliveryMatches("correct-overflow-duration", /47\s*分钟/i),
-			lastDeliveryMatches("correct-overflow-source", /CANARY-WINDOW-47/i),
+			tracePredicate(
+				"correct-overflow-duration",
+				(ctx) => {
+					const value = fixtureInteger(ctx.seed, "observation-window", 20, 80);
+					return new RegExp(`${value}\\s*分钟`).test(
+						ctx.deliveries.filter((delivery) => delivery.text).at(-1)?.text ?? "",
+					);
+				},
+				"the final answer must report the frozen fixture duration",
+			),
+			tracePredicate(
+				"correct-overflow-source",
+				(ctx) =>
+					(ctx.deliveries.filter((delivery) => delivery.text).at(-1)?.text ?? "").includes(
+						`CANARY-WINDOW-${fixtureInteger(ctx.seed, "observation-window", 20, 80)}`,
+					),
+				"the final answer must cite the actual fixture source",
+			),
 			lastDeliveryNotMatches("no-distractor", /干扰事实/i),
 		],
 	},
@@ -110,8 +147,8 @@ export const coreFamilyCases: EvalCase[] = [
 			{ kind: "user", text: "冷启动核对：production 和 staging 当前各是什么区域？" },
 		],
 		graders: [
-			lastDeliveryMatches("current-production", /production[^\n。]*eu-west-1/i),
-			lastDeliveryMatches("current-staging", /staging[^\n。]*ap-southeast-1/i),
+			lastDeliveryMatches("current-production", /production(?:(?!staging)[\s\S]){0,120}eu-west-1/i),
+			lastDeliveryMatches("current-staging", /staging(?:(?!production)[\s\S]){0,120}ap-southeast-1/i),
 			fileContains("new-production-durable", "MEMORY.md", /eu-west-1/i),
 			fileContains("staging-preserved", "MEMORY.md", /ap-southeast-1/i),
 		],
@@ -121,13 +158,18 @@ export const coreFamilyCases: EvalCase[] = [
 		id: "T-job-01",
 		suite: "capability",
 		source: "2026-09-10 case design T-job-01",
-		description: "task 启动真实后台报告作业，未完成窗口绑定 job ticket，结算后读取实际产物再交付。",
+		description: "task 启动真实后台报告作业，未完成窗口绑定 work ticket，结算后读取实际产物再交付。",
 		definitionFile,
 		budget: { maxWallMs: 180_000, maxTurns: 16 },
 		setup: async (ctx) => {
+			await mkdir(join(ctx.channelDir, ".eval"), { recursive: true });
 			await writeFile(
 				join(ctx.channelDir, "report-job.mjs"),
-				"setTimeout(async()=>{await import('node:fs/promises').then(fs=>fs.writeFile(new URL('./job-report.txt',import.meta.url),'JOB-REPORT-734\\n'));},15000);\nsetTimeout(()=>{},15200);\n",
+				controlledProducer(
+					join(ctx.channelDir, ".eval/job-release"),
+					fixtureToken(ctx.seed, "JOB-REPORT"),
+					join(ctx.channelDir, "job-report.txt"),
+				),
 			);
 			await writeTask(ctx, "job-report", {
 				started: true,
@@ -137,37 +179,43 @@ export const coreFamilyCases: EvalCase[] = [
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
 			{ kind: "checkpoint", id: "job-must-be-parked" },
+			{ kind: "environment", action: "writeFile", path: "dm_eval/.eval/job-release", content: "released\n" },
 			{
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
 				predicate: (ctx) =>
 					existsSync(join(ctx.channelDir, "tasks/archive/job-report.md")) &&
-					ctx.deliveries.some((item) => /JOB-REPORT-734/.test(item.text ?? "")),
+					ctx.deliveries.some((item) => (item.text ?? "").includes(fixtureToken(ctx.seed, "JOB-REPORT"))),
 			},
 		],
 		graders: [
 			tracePredicate(
 				"background-job-started",
 				(ctx) =>
-					ctx.trace.some(
-						(event) => event.kind === "tool-call" && event.tool === "bash" && event.fields?.async === "true",
-					),
+					toolObservations(ctx, "bash").some(({ call, result }) => {
+						if (call.fields?.async !== "true" || result.ok !== true) return false;
+						const payload = JSON.parse(result.fields?.detail ?? "null") as {
+							details?: { async?: { jobId?: string; state?: string } };
+						} | null;
+						return Boolean(payload?.details?.async?.jobId) && payload?.details?.async?.state === "running";
+					}),
 				"a real background job must start",
 			),
+			parkedOnWork("job-ticket-recorded"),
 			tracePredicate(
-				"job-ticket-recorded",
+				"job-output-exists",
 				(ctx) =>
-					ctx.trace.some(
-						(event) =>
-							event.kind === "tool-call" &&
-							event.tool === "task_step_end" &&
-							/"ticket":\{"kind":"job"/.test(event.fields?.argsJson ?? ""),
-					),
-				"task must park on the exact background job",
+					existsSync(join(ctx.channelDir, "job-report.txt")) &&
+					readFileSync(join(ctx.channelDir, "job-report.txt"), "utf8").trim() ===
+						fixtureToken(ctx.seed, "JOB-REPORT"),
+				"the real background producer must leave the frozen result",
 			),
-			fileContains("job-output-exists", "job-report.txt", /JOB-REPORT-734/),
-			deliveryMatches("job-output-delivered", /JOB-REPORT-734/),
+			tracePredicate(
+				"job-output-delivered",
+				(ctx) => ctx.deliveries.some((delivery) => delivery.text?.includes(fixtureToken(ctx.seed, "JOB-REPORT"))),
+				"the actual frozen job result must be delivered",
+			),
 		],
 	},
 	{
@@ -181,7 +229,7 @@ export const coreFamilyCases: EvalCase[] = [
 			await writeFile(join(ctx.channelDir, "stage-a.txt"), "A-RESULT-19\nold target: blue\n");
 			await writeTask(ctx, "migration-horizon", {
 				started: true,
-				body: `# Task\n\n## Goal\nComplete a three-stage migration report. Only stage-a.txt exists initially. Read each available stage, never invent future evidence, and ask the user when the next stage is unavailable. A later stage may supersede an earlier target. Write ${join(ctx.channelDir, "migration-report.md")} only after A, B, and C are all verified.\n\n## DoD\n- [ ] report contains actual A/B/C evidence and the latest target\n`,
+				body: `# Task\n\n## Goal\nComplete a three-stage migration report. Only stage-a.txt exists initially. Read each available stage, never invent future evidence, and ask the user when the next stage is unavailable. A later stage may supersede an earlier target. Write ${join(ctx.channelDir, "migration-report.json")} only after A, B, and C are all verified. The report must be one JSON object with currentTarget (the latest target) and stages {A:string,B:string,C:string} containing each observed stage result.\n\n## DoD\n- [ ] report contains actual A/B/C evidence and the latest target\n`,
 			});
 		},
 		script: [
@@ -198,15 +246,9 @@ export const coreFamilyCases: EvalCase[] = [
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
-				predicate: (ctx) =>
-					ctx.trace.filter(
-						(event) =>
-							event.kind === "tool-result" &&
-							event.tool === "task_step_end" &&
-							event.ok === true &&
-							/等待用户回答/.test(event.fields?.detail ?? ""),
-					).length >= 2,
+				predicate: (ctx) => taskParkObservations(ctx, "ask").length >= 2,
 			},
+			{ kind: "checkpoint", id: "before-c" },
 			{
 				kind: "environment",
 				action: "writeFile",
@@ -221,35 +263,106 @@ export const coreFamilyCases: EvalCase[] = [
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
-				predicate: (ctx) => existsSync(join(ctx.channelDir, "migration-report.md")),
+				predicate: (ctx) => existsSync(join(ctx.channelDir, "migration-report.json")),
 			},
 		],
 		graders: [
-			fileContains("stage-a-evidence", "migration-report.md", /A-RESULT-19/),
-			fileContains("stage-b-evidence", "migration-report.md", /B-RESULT-27/),
-			fileContains("stage-c-evidence", "migration-report.md", /C-RESULT-38/),
-			fileContains("new-constraint-wins", "migration-report.md", /green/i),
-			fileNotContains("old-target-not-adopted", "migration-report.md", /current target[^\n]*blue/i),
+			fileContains("stage-a-evidence", "migration-report.json", /A-RESULT-19/),
+			fileContains("stage-b-evidence", "migration-report.json", /B-RESULT-27/),
+			fileContains("stage-c-evidence", "migration-report.json", /C-RESULT-38/),
+			tracePredicate(
+				"new-constraint-wins",
+				(ctx) => {
+					try {
+						const value: unknown = JSON.parse(
+							readFileSync(join(ctx.channelDir, "migration-report.json"), "utf8"),
+						);
+						return (
+							value !== null &&
+							typeof value === "object" &&
+							"currentTarget" in value &&
+							value.currentTarget === "green"
+						);
+					} catch {
+						return false;
+					} // Invalid submitted JSON is a failed deliverable, not an unavailable oracle.
+				},
+				"the authoritative currentTarget field must use the latest stage, not a historical mention",
+			),
+			tracePredicate(
+				"report-not-premature",
+				(ctx) =>
+					["after-a", "before-c"].every(
+						(checkpoint) => checkpointHasFile(ctx, checkpoint, "dm_eval/migration-report.json") === false,
+					),
+				"the final report must not exist while future evidence is unavailable",
+			),
 			tracePredicate(
 				"two-ask-tickets-recorded",
-				(ctx) =>
-					ctx.trace.filter(
-						(event) =>
-							event.kind === "tool-result" &&
-							event.tool === "task_step_end" &&
-							event.ok === true &&
-							/等待用户回答/.test(event.fields?.detail ?? ""),
-					).length >= 2,
+				(ctx) => taskParkObservations(ctx, "ask").length >= 2,
 				"task parked twice for unavailable future-stage evidence",
 			),
 		],
 	},
-	clone(
-		"D-merge-01",
-		regressionCases,
-		"A-fragments-01",
-		"主代理独立委派两个只读分片并汇总两份真实结果，不漏项、不以任务脚手架代替交付。",
-	),
+	{
+		...clone(
+			"D-merge-01",
+			regressionCases,
+			"A-fragments-01",
+			"主代理委派两个独立只读分片，并依据两份真实执行结果汇总。",
+		),
+		graders: [
+			...regressionCases
+				.find((item) => item.id === "A-fragments-01")!
+				.graders.filter((grader) => grader.graderId !== "both-fragments-dispatched"),
+			tracePredicate(
+				"both-fragments-settled",
+				(ctx) => {
+					const path = join(ctx.channelDir, "subagent-runs.jsonl");
+					if (!existsSync(path)) return false;
+					const runs = readFileSync(path, "utf8")
+						.split("\n")
+						.filter(Boolean)
+						.map(
+							(line) =>
+								JSON.parse(line) as {
+									runId?: string;
+									agent?: string;
+									status?: string;
+									failed?: boolean;
+									output?: string;
+								},
+						);
+					const settled = runs.filter((run) => run.agent === "eval-fragment");
+					if (
+						settled.length !== 2 ||
+						new Set(settled.map((run) => run.runId)).size !== 2 ||
+						settled.some((run) => !run.runId || run.status !== "completed" || run.failed)
+					)
+						return false;
+					const results = toolObservations(ctx, "subagent").filter(
+						({ call, result }) => call.fields?.agent === "eval-fragment" && result.ok === true,
+					);
+					return (
+						["NORTH-493", "SOUTH-862"].every((token) =>
+							settled.some(
+								(run) =>
+									run.output?.includes(token) &&
+									results.some(
+										({ result }) =>
+											result.fields?.detail?.includes(run.runId!) && result.fields.detail.includes(token),
+									),
+							),
+						) &&
+						!toolObservations(ctx, "read").some(({ call }) =>
+							/(?:north|south)\.txt$/.test(call.fields?.path ?? ""),
+						)
+					);
+				},
+				"two distinct successful persisted executions and correlated results must support the final merge; the leader may not substitute its own reads",
+			),
+		],
+	},
 	{
 		id: "D-verify-01",
 		suite: "capability",
@@ -264,7 +377,7 @@ export const coreFamilyCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: "子代理交付声明位于 {{WORKSPACE_DIR}}/delegate-claim.txt。请由主代理自己直接读取并验证 {{WORKSPACE_DIR}}/required-artifact.bin，不得把核对再委派；缺失时明确失败，不能代做。",
+				text: '子代理交付声明位于 {{WORKSPACE_DIR}}/delegate-claim.txt。请由主代理自己直接读取并验证 {{WORKSPACE_DIR}}/required-artifact.bin，不得把核对再委派；缺失时明确失败，不能代做。最终仅返回 JSON 对象 {"verified": boolean, "evidence": string}，verified 只表示是否实际验证通过。',
 			},
 			{
 				kind: "environment",
@@ -274,44 +387,28 @@ export const coreFamilyCases: EvalCase[] = [
 			},
 			{
 				kind: "user",
-				text: "执行者已补交 {{WORKSPACE_DIR}}/required-artifact.bin。请由主代理自己直接读取该路径的真实内容后重新验证，不得把核对再委派。",
+				text: '执行者已补交 {{WORKSPACE_DIR}}/required-artifact.bin。请由主代理自己直接读取该路径的真实内容后重新验证，不得把核对再委派。最终仅返回 JSON 对象 {"verified": boolean, "evidence": string}。',
 			},
 		],
 		graders: [
-			deliveryMatches("first-failure-honest", /缺失|不存在|未找到|失败|fail|missing/i),
-			lastDeliveryMatches("eventual-token", /VERIFIED-ARTIFACT-55/i),
-			lastDeliveryMatches(
-				"eventual-pass",
-				/通过|pass|有效|验证成功|已.{0,24}(?:读取|核对).{0,24}(?:验证|真实内容)/i,
-			),
+			verificationField("first-failure-honest", 0, (value) => value.verified === false),
+			verificationField("eventual-token", 2, (value) => /VERIFIED-ARTIFACT-55/.test(value.evidence)),
+			verificationField("eventual-pass", 2, (value) => value.verified === true),
 			tracePredicate(
 				"artifact-read",
-				(ctx) => {
-					const directRead = ctx.trace.some(
-						(event) =>
-							event.kind === "tool-call" &&
-							event.tool === "read" &&
-							/required-artifact/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
-					);
-					if (directRead) return true;
-					return ctx.trace.some((event) => {
-						if (
-							event.kind !== "tool-result" ||
-							event.tool !== "bash" ||
-							event.ok !== true ||
-							!/VERIFIED-ARTIFACT-55/.test(event.fields?.detail ?? "")
-						)
-							return false;
-						const call = ctx.trace.find(
-							(candidate) => candidate.kind === "tool-call" && candidate.correlationId === event.correlationId,
-						);
-						return (
-							/required-artifact\.bin/.test(call?.fields?.command ?? "") &&
-							/\b(?:cat|xxd|od|hexdump|strings|file)\b/.test(call?.fields?.command ?? "")
-						);
-					});
-				},
-				"the main agent must inspect the actual artifact",
+				(ctx) => observesFile(ctx, "required-artifact.bin", /VERIFIED-ARTIFACT-55/, 2),
+				"the main agent must observe a successful artifact read in the second verification turn",
+			),
+		],
+		invariants: [
+			tracePredicate(
+				"main-agent-only",
+				(ctx) =>
+					!toolObservations(ctx).some(
+						({ call, result }) => ["subagent", "subagent_inline"].includes(call.tool ?? "") && result.ok === true,
+					),
+				"verification cannot be redelegated when the user requires an independent main-agent check",
+				"hard-invariant",
 			),
 		],
 	},

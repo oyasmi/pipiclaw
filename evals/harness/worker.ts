@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MediaSendResult, OutboundMedia } from "../../src/channel/channel-context.js";
 import type { DingTalkBot } from "../../src/dingtalk/bot.js";
-import type { DingTalkEvent, DingTalkHandler } from "../../src/dingtalk/handler.js";
+import type { DingTalkBotPort, DingTalkEvent, DingTalkHandler } from "../../src/dingtalk/handler.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/tasks/contract.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
+import { trialSeed } from "./fixture-seed.js";
 import { traceIdentity, traceToolResultFailed } from "./identity.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
 import { modelResultFields } from "./scoring.js";
@@ -24,6 +25,7 @@ let currentPhase: "fixture" | "scheduler" | "runtime" = "runtime";
 let currentCallId: string | undefined;
 let callSequence = 0;
 const channelId = "dm_eval";
+const seed = process.env.EVAL_FIXTURE_SEED ?? trialSeed(caseId, Number(process.env.EVAL_TRIAL_NUMBER ?? "1"));
 let sessionGeneration = 1;
 let currentSessionId = `${caseId}:${channelId}:segment-${segment}:session-${sessionGeneration}`;
 let currentActorId = "main-agent";
@@ -215,7 +217,21 @@ function eventTrace(event: unknown): void {
 	}
 }
 
-class EvalBot {
+class EvalBot implements DingTalkBotPort {
+	private generation = Symbol("eval-card");
+	getCardGeneration(): symbol {
+		return this.generation;
+	}
+	isCardGenerationCurrent(_channelId: string, generation: symbol): boolean {
+		return generation === this.generation;
+	}
+	clearPendingMessages(): number {
+		return 0;
+	}
+	resetChannelQueue(): number {
+		this.generation = Symbol("eval-card");
+		return 0;
+	}
 	handler?: DingTalkHandler;
 	readonly pending = new Set<Promise<void>>();
 	get progressStyle(): "none" {
@@ -232,7 +248,15 @@ class EvalBot {
 		text?: string,
 		media?: CapturedDelivery["media"],
 	): void {
-		const delivery = { method, channelId, text, media, ts: Date.now() } satisfies CapturedDelivery;
+		const delivery = {
+			method,
+			channelId,
+			text,
+			media,
+			ts: Date.now(),
+			stepIndex,
+			actorId: currentActorId,
+		} satisfies CapturedDelivery;
 		localDeliveries.push(delivery);
 		send({ protocol: 1, type: "delivery", delivery });
 	}
@@ -285,7 +309,7 @@ class EvalBot {
 			currentSessionId = `${caseId}:${channelId}:task:${taskId}`;
 		}
 		const pending = this.handler
-			.handleEvent(event, this as unknown as DingTalkBot, true)
+			.handleEvent(event, this, true)
 			.finally(() => {
 				currentActorId = priorActor;
 				currentSessionId = priorSession;
@@ -335,9 +359,13 @@ async function main(): Promise<void> {
 	if (firstSegment && item.setup) {
 		currentPhase = "fixture";
 		mkdirSync(channelDir, { recursive: true });
-		await item.setup({ homeDir, workspaceDir, channelDir, canaryPath, externalBaseUrl });
+		await item.setup({ homeDir, workspaceDir, channelDir, canaryPath, externalBaseUrl, seed });
 		currentPhase = "runtime";
 	}
+
+	// Each trial is a complete synthetic project. HostExecutor inherits the daemon cwd,
+	// so never start its shell in the evaluator's own checkout. Fixtures load before chdir.
+	process.chdir(workspaceDir);
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
 	const bot = new EvalBot();
@@ -379,12 +407,13 @@ async function main(): Promise<void> {
 	});
 
 	const sendEvent = async (event: DingTalkEvent): Promise<void> => {
-		await runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
+		await runtime.handler.handleEvent(event, bot);
 	};
 	const execute = async (step: Step): Promise<void> => {
 		stepIndex++;
 		trace({ kind: "step", fields: { kind: step.kind } });
 		if (step.kind === "user") {
+			const before = localTrace.length;
 			await sendEvent({
 				type: "dm",
 				channelId,
@@ -396,6 +425,15 @@ async function main(): Promise<void> {
 				conversationType: "1",
 			});
 			await bot.drain();
+			if (
+				!step.text.trim().startsWith("/") &&
+				!localTrace.slice(before).some((event) => event.kind === "model-result")
+			) {
+				currentPhase = "fixture";
+				throw new Error(
+					"No model result observed for an eval user turn; inspect the eval transport and model setup before judging behavior.",
+				);
+			}
 		} else if (step.kind === "newSession" || step.kind === "compact") {
 			await sendEvent({
 				type: "dm",
@@ -415,7 +453,7 @@ async function main(): Promise<void> {
 		} else if (step.kind === "checkpoint") {
 			trace({
 				kind: "runtime-log",
-				fields: { checkpoint: step.id, fileCount: String(tree(workspaceDir).length) },
+				fields: { checkpoint: step.id, fileTree: JSON.stringify(tree(workspaceDir)) },
 				ok: true,
 			});
 		} else if (step.kind === "environment") {
@@ -454,6 +492,7 @@ async function main(): Promise<void> {
 			const deadline = Date.now() + step.timeoutMs;
 			while (true) {
 				const context: TrialContext = {
+					seed,
 					homeDir,
 					workspaceDir,
 					channelDir,

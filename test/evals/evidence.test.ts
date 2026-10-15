@@ -1,8 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { allCases } from "../../evals/cases/index.js";
 import { atomicJson, captureArtifacts, sealArtifactIndex, verifyArtifacts } from "../../evals/harness/artifacts.js";
+import { setSelectedCasesEnvironment } from "../../evals/harness/cli.js";
+import { runCycle } from "../../evals/harness/cycle.js";
 import { fileContains } from "../../evals/harness/graders.js";
 import { runJudgeProcess } from "../../evals/harness/judge-process.js";
 import { EvalPool } from "../../evals/harness/pool.js";
@@ -10,8 +13,18 @@ import { regradeTrial } from "../../evals/harness/regrade.js";
 import { readResourceLedger, summarizeResources } from "../../evals/harness/resources.js";
 import { completedTrial, preserveInterruptedAttempt } from "../../evals/harness/resume.js";
 import { runWorkerSegment } from "../../evals/harness/run.js";
-import type { CaseDescriptor, EvalCase, TrialRecord } from "../../evals/harness/schema.js";
+import type {
+	CapturedDelivery,
+	CaseDescriptor,
+	EvalCase,
+	TraceEvent,
+	TrialRecord,
+} from "../../evals/harness/schema.js";
 import type { UsageLedgerEntry } from "../../src/usage/ledger.js";
+import { reply } from "../support/mock-provider/script.js";
+import { startMockProvider } from "../support/mock-provider/server.js";
+import * as setup from "../support/setup.js";
+import { createDeterministicHome } from "../support/setup.js";
 
 const roots: string[] = [];
 const temp = () => {
@@ -92,6 +105,116 @@ const record: TrialRecord = {
 };
 
 describe("eval supervision and evidence", () => {
+	it("boots the actual eval worker and observes a provider request and delivery through the transport", async () => {
+		// Regression: the eval-only bot omitted getCardGeneration; runtime swallowed its TypeError,
+		// no model was called, and every case became a misleading behavioral failure. The subprocess
+		// probes below use test-owned worker scripts and cannot catch this production-port drift.
+		// Mutation checked 2026-10-14: original missing method => 0 requests, this case red.
+		// Mutation checked 057: removing compiled worker chdir produced the source checkout in stdout; this test went red.
+		const model = await startMockProvider();
+		try {
+			model.script.route({
+				name: "eval-worker",
+				when: (request) => request.isMainTurn,
+				respond: [reply.toolCall("bash", { command: "pwd" }), reply.text("评测接线完成。")],
+				repeat: true,
+			});
+			const home = createDeterministicHome({ homeDir: temp(), mockBaseUrl: model.baseUrl });
+			const probe = allCases.find((entry) => entry.id === "S-inject-core-01")!;
+			const trace: TraceEvent[] = [];
+			const deliveries: CapturedDelivery[] = [];
+			const result = await runWorkerSegment({
+				item: probe,
+				homeDir: home.homeDir,
+				preparedHome: true,
+				segment: { start: 0, end: probe.script.length, mode: "graceful", delayMs: 0 },
+				segmentNumber: 1,
+				externalBaseUrl: "",
+				trace,
+				deliveries,
+				usage: { costUsd: 0, turns: 0 },
+				deadlineMs: Date.now() + 15_000,
+			});
+			expect(result.kind).toBe("complete");
+			expect(model.requests.filter((request) => request.isMainTurn)).toHaveLength(2);
+			const shellResult = trace.find((entry) => entry.kind === "tool-result" && entry.tool === "bash");
+			const body = JSON.parse(shellResult!.fields!.detail!) as { content: Array<{ text?: string }> };
+			expect(
+				body.content
+					.map((part) => part.text ?? "")
+					.join("\n")
+					.trim(),
+			).toBe(home.workspaceDir);
+			expect(trace.some((entry) => entry.kind === "model-result")).toBe(true);
+			expect(deliveries.some((delivery) => delivery.method === "sendPlain")).toBe(true);
+			expect(model.unmatched()).toHaveLength(0);
+		} finally {
+			await model.close();
+		}
+	});
+
+	it("rejects a cycle whose compiled inputs change while a real provider call is held", async () => {
+		// New failure: rebuilding during a long eval could mix worker versions under one frozen
+		// plan and publish a misleading reference. Direct-worker tests do not run this chain.
+		// Net eval-tooling growth +1; no deterministic e2e growth. Mutation checked 2026-10-15:
+		// forcing executionDrift=false made this test return 0 instead of 2 (red).
+		const provider = await startMockProvider();
+		provider.script.route({
+			name: "frozen-cycle",
+			when: (request) => request.isMainTurn,
+			respond: [reply.text("DOCUMENT-LABEL-7")],
+			repeat: true,
+		});
+		const hold = provider.script.hold({ when: (request) => request.isMainTurn });
+		const previousEnv = { ...process.env };
+		const previousExit = process.exitCode;
+		const availability = vi.spyOn(setup, "canRunE2E").mockReturnValue(true);
+		const home = vi
+			.spyOn(setup, "createE2ETestHome")
+			.mockImplementation((options) =>
+				createDeterministicHome({ homeDir: options?.homeDir, mockBaseUrl: provider.baseUrl }),
+			);
+		let output = "";
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+			output += String(chunk);
+			return true;
+		});
+		const changed = join(process.cwd(), "dist-evals/compiled-drift-probe.js");
+		let work: Promise<void> | undefined;
+		try {
+			for (const key of Object.keys(process.env))
+				if (key.startsWith("EVAL_") || key.startsWith("PIPICLAW_E2E_")) delete process.env[key];
+			work = runCycle(["--case", "S-inject-core-01"], setSelectedCasesEnvironment);
+			await hold.arrived;
+			writeFileSync(changed, "export const changedDuringExecution=true;\n");
+			hold.release();
+			await work;
+			const path = /Cycle report: (.+)\/cycle\.md/.exec(output)?.[1];
+			expect(path).toBeDefined();
+			roots.push(path!);
+			const state = JSON.parse(readFileSync(join(path!, "execution-state.json"), "utf8"));
+			expect(state.status).toBe("changed");
+			expect(process.exitCode).toBe(2);
+			expect(JSON.parse(readFileSync(join(path!, "cycle.json"), "utf8")).exitCode).toBe(2);
+			expect(existsSync(join(process.cwd(), "evals/results/references", path!.split("/").at(-1)!))).toBe(false);
+			expect(provider.requests.filter((request) => request.isMainTurn)).toHaveLength(1);
+		} finally {
+			hold.release();
+			if (work) await work.catch(() => {});
+			rmSync(changed, { force: true });
+			availability.mockRestore();
+			home.mockRestore();
+			stdout.mockRestore();
+			process.exitCode = previousExit;
+			for (const key of new Set([...Object.keys(process.env), ...Object.keys(previousEnv)]))
+				if (key.startsWith("EVAL_") || key.startsWith("PIPICLAW_")) {
+					if (previousEnv[key] === undefined) delete process.env[key];
+					else process.env[key] = previousEnv[key];
+				}
+			await provider.close();
+		}
+	}, 20_000);
+
 	it("does not let a held judge block another worker's budget or event persistence", async () => {
 		const root = temp();
 		const judgePath = join(root, "judge.mjs");
@@ -246,6 +369,12 @@ describe("eval resource accounting", () => {
 		expect(usage.byKind.subagent.entries).toBe(1);
 		// Identical turn rows may be two real calls; content equality is not an idempotency key.
 		expect(summarizeResources([entry("turn", 1), entry("turn", 1)]).agentCostUsd).toBe(2);
+		const sidecar = entry("sidecar", 3);
+		sidecar.usage.total = 0;
+		const normalized = summarizeResources([sidecar]);
+		expect(normalized.byKind.sidecar.tokens.total).toBe(3);
+		expect(normalized.byKind.sidecar.reconstructedTokenTotals).toBe(1);
+		expect(sidecar.usage.total).toBe(0); // retain original accounting evidence
 	});
 	it("keeps unpriced calls and incomplete ledger writes unknown instead of free", () => {
 		const unknown = { ...entry("subagent", 0), usageKnown: false, costKnown: false };

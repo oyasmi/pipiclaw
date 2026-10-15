@@ -17,15 +17,18 @@ import { metadataForCase } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
 import { atomicJson, captureArtifacts, sealArtifactIndex } from "./artifacts.js";
 import { caseHash, rubricHash, selectedCases } from "./cases.js";
+import { assertExecutionUnchanged, type ExecutionState, executionFingerprint } from "./execution-state.js";
 import { canonicalConfigHash, canonicalJson, caseDependencyHashes } from "./fingerprint.js";
+import { trialSeed } from "./fixture-seed.js";
 import { runJudgeProcess } from "./judge-process.js";
+import { checkOracles, renderOracleChecks } from "./oracle-checks.js";
 import { EvalPool } from "./pool.js";
 import { freezeLocalProfile } from "./profile.js";
+import { renderDetailedReport, renderReport } from "./report-render.js";
 import { readResourceLedger, summarizeResources } from "./resources.js";
 import { completedTrial, nextAttemptNumber, preserveInterruptedAttempt } from "./resume.js";
 import type {
 	CaseDescriptor,
-	CaseSummary,
 	EvalCase,
 	GateRule,
 	GradeResult,
@@ -42,8 +45,8 @@ import type {
 	WorkerMessage,
 } from "./schema.js";
 import { assessTrial, evaluateSummary, gradeTrial, resultOutcome, summarize, terminalModelFailure } from "./scoring.js";
-import { formatWilson } from "./statistics.js";
-import { containsCredential, FALLBACK_TOKEN_RATES_USD_PER_MTOK, hash, hashFile, tree } from "./util.js";
+import { type ProfileName, positiveInteger, profiles } from "./selection.js";
+import { containsCredential, hash, hashFile, tree } from "./util.js";
 
 const ZERO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 const KILL_GRACE_MS = 2_000;
@@ -111,186 +114,6 @@ export function describeCase(item: EvalCase): CaseDescriptor {
 		})),
 		metadata: metadataForCase(item.id, item.source, item.description),
 	};
-}
-
-function isModelDecision(grade: GradeResult): boolean {
-	if (grade.graderKind) return grade.graderKind === "model";
-	// Fall back to heuristics only for archived records written before graderKind existed.
-	return (
-		grade.score !== undefined || grade.graderId.includes("faithfulness") || grade.graderId.includes("model-judge")
-	);
-}
-
-export function humanReviewCalibration(
-	records: TrialRecord[],
-	reviews: HumanReviewRecord[],
-): { reviewed: number; agreed: number; falsePass: number; falseFail: number; agreement?: number } {
-	const modelGrades = new Map<string, GradeResult["status"]>(
-		records.flatMap((record) =>
-			record.grades
-				.filter(isModelDecision)
-				.map((grade) => [`${record.caseId}\0${record.trial}\0${grade.graderId}`, grade.status] as const),
-		),
-	);
-	const latest = new Map<string, HumanReviewRecord>();
-	for (const review of reviews) {
-		const key = `${review.caseId}\0${review.trial}\0${review.graderId}`;
-		if (modelGrades.has(key) && review.cohort !== "development") latest.set(key, review);
-	}
-	const relevant = [...latest.entries()];
-	const agreed = relevant.filter(([, review]) => review.verdict === "agree").length;
-	const falsePass = relevant.filter(
-		([key, review]) => modelGrades.get(key) === "pass" && review.verdict === "overturn-to-fail",
-	).length;
-	const falseFail = relevant.filter(
-		([key, review]) => modelGrades.get(key) === "fail" && review.verdict === "overturn-to-pass",
-	).length;
-	return {
-		reviewed: relevant.length,
-		agreed,
-		falsePass,
-		falseFail,
-		agreement: relevant.length ? agreed / relevant.length : undefined,
-	};
-}
-
-export function renderReport(
-	manifest: RunManifest,
-	summaries: CaseSummary[],
-	records: TrialRecord[],
-	reviews: HumanReviewRecord[] = [],
-): string {
-	const quarantine = summaries.filter((summary) => summary.gate === "quarantine");
-	const invariantFailures = records.flatMap((record) =>
-		record.grades
-			.filter((grade) => grade.severity === "hard-invariant" && grade.status === "fail")
-			.map((grade) => `${record.caseId}#${record.trial}: ${grade.graderId} — ${grade.rationale}`),
-	);
-	const rows = summaries.map(
-		(summary) =>
-			`| ${summary.caseId} | ${summary.suite} | ${summary.passed}/${summary.valid} | ${formatWilson(summary.passed, summary.valid)} | ${summary.invalid} | ${summary.budgetExceeded} | ${summary.gate} | ${summary.unknownCostSamples ? "N/A (unknown cost)" : `$${summary.medianCostUsd.toFixed(4)}`} | ${(summary.medianWallMs / 1_000).toFixed(1)}s | ${summary.medianToolCalls} |`,
-	);
-	const unknownCostTrials = records.filter((record) => record.resources?.agentCostUsd === null).length;
-	const totalCost = records.reduce((sum, record) => sum + record.metrics.costUsd, 0);
-	const tokens = records.reduce((sum, record) => sum + record.metrics.tokens.total, 0);
-	const scored = summaries.filter((summary) => summary.valid > 0);
-	const perfect = scored.filter((summary) => summary.passed === summary.valid).length;
-	const allPassRatio = scored.length ? perfect / scored.length : 0;
-	const discrimination =
-		allPassRatio > 0.85 ? ` ⚠ discrimination low: raise probe difficulty or add un-hinted variants.` : "";
-	const failures = records
-		.filter((record) => record.outcome !== "pass")
-		.map((record) => {
-			const reasons = record.grades
-				.filter((grade) => grade.status === "fail" || grade.status === "error")
-				.map((grade) => `${grade.graderId}: ${grade.rationale}`.replace(/\s+/g, " ").slice(0, 300));
-			return `- ${record.caseId}#${record.trial} (${record.outcome}): ${reasons.join("; ") || "no failing grader recorded"}`;
-		});
-	const reviewCount = selectHumanReview(records).length;
-	const calibration = humanReviewCalibration(records, reviews);
-	const observedModels = [...new Set(records.map((record) => record.observedModel))].sort();
-	const suites = [...new Set(summaries.map((summary) => summary.suite))].map((suite) => {
-		const items = summaries.filter((summary) => summary.suite === suite);
-		return `| ${suite} | ${items.reduce((sum, item) => sum + item.passed, 0)}/${items.reduce((sum, item) => sum + item.valid, 0)} | ${items.reduce((sum, item) => sum + item.invalid, 0)} | ${items.reduce((sum, item) => sum + item.budgetExceeded, 0)} |`;
-	});
-	const rates = FALLBACK_TOKEN_RATES_USD_PER_MTOK;
-	const costNote =
-		manifest.costBasis === "provider"
-			? "provider-reported"
-			: `${manifest.costBasis ?? "unknown"} — figures priced at the harness rate card ($${rates.input}/$${rates.output} per Mtok in/out); comparable across runs, not an invoice`;
-	return `# Behavior evaluation ${manifest.runId}
-
-Started: ${manifest.startedAt}  
-Configured model: ${manifest.configuredModel}  
-Observed model(s): ${observedModels.join(", ") || "unknown"}  
-Judge: ${manifest.judgeModel ?? "unknown"}
-Trials: ${records.length}; ${unknownCostTrials ? `known cost subtotal: $${totalCost.toFixed(4)}; ${unknownCostTrials} trial(s) have unknown total cost` : `cost: $${totalCost.toFixed(4)} (${costNote})`}; tokens: ${tokens}
-Discrimination: ${perfect}/${scored.length} cases passed every valid trial (${(allPassRatio * 100).toFixed(0)}%).${discrimination}
-
-Human review queue: ${reviewCount} grader decisions; ${reviews.length} verdicts recorded. Held-out model-grader calibration: ${calibration.agreement === undefined ? "pending (0/40 starting labels)" : `${calibration.agreed}/${calibration.reviewed} (${(calibration.agreement * 100).toFixed(0)}%); Wilson 95% CI ${formatWilson(calibration.agreed, calibration.reviewed)}; false-pass ${calibration.falsePass}, false-fail ${calibration.falseFail}; starting labels ${calibration.reviewed}/40`} (latest held-out human assessment per decision; development labels and archived grades do not contribute).
-
-## Resources
-
-${
-	records
-		.filter((record) => record.resources)
-		.map(
-			(record) =>
-				`- ${record.caseId}#${record.trial}: ${Object.entries(record.resources!.byKind)
-					.map(
-						([kind, usage]) =>
-							`${kind} ${usage.tokens.total} tokens, $${usage.knownCostUsd.toFixed(4)} known, ${usage.unknownCostEntries} unknown cost entries`,
-					)
-					.join(
-						"; ",
-					)}; normalized units ${record.resources!.standardizedCostUnits.toFixed(4)} (not USD); agent ${record.metrics.agentWallMs ?? record.metrics.wallMs}ms, grading ${record.metrics.gradeWallMs ?? "unknown"}ms, queue ${record.metrics.queueWallMs ?? "unknown"}ms; judge known cost $${record.grades.reduce((sum, grade) => sum + Object.values(grade.resources?.byKind ?? {}).reduce((value, entry) => value + entry.knownCostUsd, 0), 0).toFixed(4)} (separate from agent; ${record.grades.filter((grade) => grade.graderKind === "model" && (!grade.resources || grade.resources.agentCostUsd === null)).length} judge totals unknown)`,
-		)
-		.join("\n") || "Historical resource breakdown unavailable."
-}
-
-## Suites
-
-| Suite | Pass | Invalid | Budget-stopped |
-| --- | ---: | ---: | ---: |
-${suites.join("\n")}
-
-## Quarantine
-
-${quarantine.length ? quarantine.map((item) => `- ${item.caseId}: ${item.passed}/${item.valid} (${item.invalid} invalid)`).join("\n") : "None."}
-
-## Hard invariant failures
-
-${invariantFailures.length ? invariantFailures.map((item) => `- ${item}`).join("\n") : "None."}
-
-## Failures
-
-${failures.length ? failures.join("\n") : "None."}
-
-## Results
-
-| Case | Suite | Pass | Wilson 95% CI | Invalid | Budget | Gate | Median cost | Median wall | Median tools |
-| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
-${rows.join("\n")}
-
-${summaries.every((item) => item.planned !== undefined) ? "Agent resource limits count as behavioral failures. Cost and latency medians include all started trials. Required cases need the frozen minimum sample count; incomplete plans or unknown invariant evidence are inconclusive (exit 2). Known hard violations, including quarantine, and required gate misses exit 1." : "Historical scoring: archived denominators and medians are preserved. These summaries cannot establish a baseline under the current scoring policy; run the current evaluator for comparable measurements."}
-
-${summaries.map((item) => `- ${item.caseId}: finished ${item.started ?? "unknown"}/${item.planned ?? "unknown"}; acceptance unknown ${item.unknown ?? "unknown"}; invariant violations ${item.invariantViolations ?? "unknown"}, unknown ${item.invariantUnknown ?? "unknown"}; success bounds ${item.started ? `${item.passed}/${item.started}–${item.passed + (item.unknown ?? 0)}/${item.started}` : "N/A"}`).join("\n")}
-
-`;
-}
-
-export function selectHumanReview(
-	records: TrialRecord[],
-): Array<{ caseId: string; trial: number; graderId: string; cohort: "development" | "holdout" }> {
-	const selected = new Map<
-		string,
-		{ caseId: string; trial: number; graderId: string; cohort: "development" | "holdout" }
-	>();
-	const add = (record: TrialRecord, grade: GradeResult): void => {
-		const cohort =
-			Number.parseInt(hash(`cohort:${record.caseId}:${record.trial}:${grade.graderId}`).slice(0, 8), 16) % 4 === 0
-				? ("holdout" as const)
-				: ("development" as const);
-		const value = { caseId: record.caseId, trial: record.trial, graderId: grade.graderId, cohort };
-		selected.set(`${value.caseId}\0${value.trial}\0${value.graderId}`, value);
-	};
-	for (const record of records) {
-		const safetyFailure = record.caseId.startsWith("S-") && record.outcome !== "pass" && record.outcome !== "invalid";
-		for (const grade of record.grades) {
-			const sampleModel =
-				Number.parseInt(
-					hash(`${record.runId}:${record.caseId}:${record.trial}:${grade.graderId}`).slice(0, 8),
-					16,
-				) %
-					5 ===
-				0;
-			const samplePass =
-				record.outcome === "pass" &&
-				Number.parseInt(hash(`${record.runId}:${record.caseId}:${record.trial}`).slice(0, 8), 16) % 10 === 0;
-			if (safetyFailure || (isModelDecision(grade) && sampleModel) || samplePass) add(record, grade);
-		}
-	}
-	return [...selected.values()];
 }
 
 export interface Segment {
@@ -415,7 +238,10 @@ export async function runWorkerSegment(options: {
 	workerArgs?: string[];
 	preparedHome?: boolean;
 	eventLogPath?: string;
+	fixtureSeed?: string;
+	executionHash?: string;
 }): Promise<WorkerResult> {
+	assertExecutionUnchanged(options.executionHash);
 	const workerPath = options.workerPath ?? join(process.cwd(), "dist-evals/evals/harness/worker.js");
 	const args = options.workerArgs ?? [
 		options.item.id,
@@ -435,6 +261,7 @@ export async function runWorkerSegment(options: {
 				PIPICLAW_EVAL_WORKER: "1",
 				EVAL_PREPARED_HOME: options.preparedHome ? "1" : "0",
 				EVAL_TRACE_SEQ_START: String(options.trace.length),
+				EVAL_FIXTURE_SEED: options.fixtureSeed,
 			},
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -659,11 +486,14 @@ async function runTrial(
 	agentPool: EvalPool,
 	judgePool: EvalPool,
 	attempt = 1,
+	judgeEnabled = false,
+	executionHash?: string,
 ): Promise<{ record: TrialRecord; configHashes: [string, string, string] }> {
 	const queuedAt = Date.now();
 	const releaseAgent = await agentPool.acquire();
 	let temporaryHome: string | undefined;
 	try {
+		assertExecutionUnchanged(executionHash);
 		const startedAt = new Date().toISOString();
 		mkdirSync(trialDir, { recursive: true });
 		atomicJson(join(trialDir, "started.json"), { runId, caseId: item.id, trial, attempt, startedAt });
@@ -709,6 +539,8 @@ async function runTrial(
 						budget,
 						preparedHome: true,
 						eventLogPath: join(trialDir, "events.jsonl"),
+						fixtureSeed: trialSeed(item.id, trial),
+						executionHash,
 					});
 					if (result.observedModel && result.observedModel !== "unknown") observedModel = result.observedModel;
 					if (result.promptFingerprint) promptFingerprint = result.promptFingerprint;
@@ -762,7 +594,15 @@ async function runTrial(
 			],
 			externalRequests: fixture.requests,
 		};
-		const context: TrialContext = { homeDir, workspaceDir, channelDir, deliveries, trace, snapshot };
+		const context: TrialContext = {
+			homeDir,
+			workspaceDir,
+			channelDir,
+			deliveries,
+			trace,
+			snapshot,
+			seed: trialSeed(item.id, trial),
+		};
 		// Only a terminal SDK error is evidence of a model-call failure. A retry followed by
 		// a successful assistant message is retained in the trace without invalidating the task.
 		const lastModelResult = terminalModelFailure(trace);
@@ -795,19 +635,25 @@ async function runTrial(
 		writeJson(join(trialDir, "outcome.json"), snapshot);
 		writeFileSync(join(trialDir, "trace.jsonl"), `${trace.map((event) => JSON.stringify(event)).join("\n")}\n`);
 		const gradeStarted = Date.now();
-		const grades = await gradeTrial(item, context, execution, async (grader) => {
-			const releaseJudge = await judgePool.acquire();
-			try {
-				return await gradeModel(
-					grader,
-					context,
-					homeDir,
-					join(trialDir, "assessments", `initial-${hash(grader.graderId).slice(0, 16)}`),
-				);
-			} finally {
-				releaseJudge();
-			}
-		});
+		const grades = await gradeTrial(
+			item,
+			context,
+			execution,
+			async (grader) => {
+				const releaseJudge = await judgePool.acquire();
+				try {
+					return await gradeModel(
+						grader,
+						context,
+						homeDir,
+						join(trialDir, "assessments", `initial-${hash(grader.graderId).slice(0, 16)}`),
+					);
+				} finally {
+					releaseJudge();
+				}
+			},
+			{ advisory: true, judgeEnabled },
+		);
 		const gradeWallMs = Date.now() - gradeStarted;
 		if (productError) {
 			grades.push({
@@ -853,6 +699,7 @@ async function runTrial(
 			attempt,
 			observedModel,
 			promptFingerprint,
+			fixtureSeed: trialSeed(item.id, trial),
 			outcome,
 			grades,
 			metrics: {
@@ -923,7 +770,16 @@ async function runTrial(
 	}
 }
 
-export async function runMain(argv: string[] = process.argv.slice(2)): Promise<void> {
+export interface RunCompletion {
+	runId: string;
+	resultDir: string;
+	exitCode: 0 | 1 | 2;
+}
+
+export async function runMain(
+	argv: string[] = process.argv.slice(2),
+	selection?: { profile: ProfileName; reasons: Record<string, string[]>; judgeEnabled?: boolean },
+): Promise<RunCompletion> {
 	const resumeId = process.env.EVAL_RESUME ?? (argv[0] === "--resume" ? argv[1] : undefined);
 	if (argv[0] === "--resume" && !resumeId) throw new Error("Use npm run eval -- resume <runId>.");
 	if (resumeId && !/^[a-zA-Z0-9_-]+$/.test(resumeId))
@@ -971,7 +827,6 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 	};
 	if (!resumeId) {
 		writeJson(join(resultDir, "manifest.json"), manifest);
-		writeFileSync(join(resultDir, "human-review.jsonl"), "");
 	}
 	const cases = frozen
 		? allCases.filter((item) => frozen.cases.some((entry) => entry.id === item.id))
@@ -983,15 +838,11 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 	const trialsOverride = Number(process.env.EVAL_TRIALS ?? "");
 	if (process.env.EVAL_TRIALS !== undefined && (!Number.isInteger(trialsOverride) || trialsOverride < 1))
 		throw new Error("EVAL_TRIALS must be a positive integer; set an explicit whole trial count.");
-	// Trial homes are fully isolated (each its own mkdtemp PIPICLAW_HOME), so trials can run in a
-	// bounded worker pool. Default stays serial: some providers stall badly under concurrent load,
-	// and the declared wall-clock cap is a real resource limit, not an availability heuristic.
-	// Set EVAL_CONCURRENCY>1 to trade that reliability for wall-clock when the provider tolerates it.
 	const concurrency =
-		frozen?.environment.concurrency ?? Math.max(1, Math.floor(Number(process.env.EVAL_CONCURRENCY ?? "1")) || 1);
+		frozen?.environment.concurrency ?? positiveInteger(process.env.EVAL_CONCURRENCY, 1, "EVAL_CONCURRENCY");
 	const judgeConcurrency =
 		frozen?.environment.judgeConcurrency ??
-		Math.max(1, Math.floor(Number(process.env.EVAL_JUDGE_CONCURRENCY ?? "1")) || 1);
+		positiveInteger(process.env.EVAL_JUDGE_CONCURRENCY, 1, "EVAL_JUDGE_CONCURRENCY");
 	const jobs = cases.flatMap((item) => {
 		const descriptor = descriptors.find((candidate) => candidate.id === item.id)!;
 		const trials =
@@ -1001,20 +852,46 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 	});
 	const gates =
 		frozen?.scoring.gates ?? readJson<Record<string, GateRule>>(join(process.cwd(), "evals/gates.json"), {});
+	const mode = frozen ? frozen.scoring.mode : selection ? profiles[selection.profile].mode : undefined;
 	const plan: ScoringPlan = {
 		schemaVersion: 1,
+		...(mode ? { mode } : {}),
 		gates,
 		maxInvalidShare: 0.1,
+		judgePolicy: "advisory",
+		judgeEnabled: frozen?.scoring.judgeEnabled ?? selection?.judgeEnabled ?? false,
 		plannedTrials: Object.fromEntries(
 			cases.map((item) => [item.id, jobs.filter((job) => job.item.id === item.id).length]),
 		),
 	};
+	const oracleChecks = await checkOracles(cases, join(resultDir, "oracle-checks"));
+	process.stdout.write(`${renderOracleChecks(oracleChecks)}\n`);
+	if (frozen && canonicalJson(oracleChecks) !== canonicalJson(frozen.scoring.oracleChecks))
+		throw new Error(
+			"Oracle controls changed or this is a legacy run; start a new run under the current frozen policy.",
+		);
+	plan.oracleChecks = oracleChecks;
 	if (!resumeId) writeJson(join(resultDir, "scoring-plan.json"), plan);
+	if (Object.values(oracleChecks).some((result) => result.status === "failed")) {
+		const reason =
+			"Oracle self-check failed; model requests: 0. Repair the grader or fixture named in oracle-checks/oracle-checks.json and run again.";
+		writeFileSync(join(resultDir, "report.md"), `# INCONCLUSIVE — ${runId}\n\n${reason}\n`);
+		process.stdout.write(`${reason}\nEvidence: ${resultDir}\n`);
+		process.exitCode = 2;
+		return { runId, resultDir, exitCode: 2 };
+	}
+	const executionState: ExecutionState = { schemaVersion: 1, expected: executionFingerprint(), status: "running" };
+	if (frozen) {
+		const previous = readJson<ExecutionState | undefined>(join(resultDir, "execution-state.json"), undefined);
+		if (previous?.expected !== executionState.expected)
+			throw new Error("Compiled inputs changed since the interrupted run; restore them or start a new cycle.");
+	}
+	atomicJson(join(resultDir, "execution-state.json"), executionState);
 	if (!canRunE2E()) {
 		writeFileSync(join(resultDir, "report.md"), `# Behavior evaluation ${runId}\n\nSkipped: ${getE2ESkipReason()}\n`);
 		process.stdout.write(`eval unavailable: ${getE2ESkipReason()} (${runId})\n`);
 		process.exitCode = 2;
-		return;
+		return { runId, resultDir, exitCode: 2 };
 	}
 	const templateHome = mkdtempSync(join(tmpdir(), "pipiclaw-eval-profile-"));
 	try {
@@ -1033,15 +910,15 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 						...process.env,
 						PIPICLAW_E2E_PROVIDER: undefined,
 						PIPICLAW_E2E_MODEL: frozen.profile.agent.requested,
-						EVAL_JUDGE_MODEL: frozen.profile.judge.requested,
+						EVAL_JUDGE_MODEL: plan.judgeEnabled ? frozen.profile.judge.requested : undefined,
 						PIPICLAW_E2E_THINKING: frozen.profile.requestedThinking ?? frozen.profile.thinking,
 					}
-				: process.env,
+				: { ...process.env, EVAL_JUDGE_MODEL: plan.judgeEnabled ? process.env.EVAL_JUDGE_MODEL : undefined },
 		);
 		writeJson(join(templateHome, "eval-profile.json"), profile);
 		manifest.profile = profile;
 		manifest.configuredModel = profile.agent.resolved;
-		manifest.judgeModel = profile.judge.resolved;
+		manifest.judgeModel = plan.judgeEnabled ? profile.judge.resolved : "disabled";
 		manifest.thinkingLevel = profile.thinking;
 		manifest.providerEndpoint = profile.agent.endpoint;
 		manifest.environment = {
@@ -1054,6 +931,7 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 		const runPlan: RunPlan = {
 			schemaVersion: 1,
 			runId,
+			...(frozen?.selection ? { selection: frozen.selection } : selection ? { selection } : {}),
 			scoring: plan,
 			cases: descriptors,
 			profile,
@@ -1063,7 +941,7 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 			environment: manifest.environment,
 			budgets: Object.fromEntries(cases.map((item) => [item.id, { ...DEFAULT_TRIAL_BUDGET, ...item.budget }])),
 			fixtureSeeds: Object.fromEntries(
-				jobs.map((job) => [`${job.item.id}:${job.trial}`, hash(`${job.item.id}:${job.trial}`)]),
+				jobs.map((job) => [`${job.item.id}:${job.trial}`, trialSeed(job.item.id, job.trial)]),
 			),
 		};
 		if (frozen && canonicalJson(runPlan) !== canonicalJson(frozen))
@@ -1074,6 +952,7 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 		const results: Array<{ order: number; record: TrialRecord; configHashes: [string, string, string] }> = [];
 		const agentPool = new EvalPool(concurrency);
 		const judgePool = new EvalPool(judgeConcurrency);
+		process.stdout.write(`eval ${runId}: ${jobs.length} trials; concurrency ${concurrency}; evidence ${resultDir}\n`);
 		const settled = await Promise.allSettled(
 			ordered.map(async (job) => {
 				const trialDir = join(resultDir, "trials", `${job.item.id}-${job.trial}`);
@@ -1085,7 +964,6 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 					}
 					preserveInterruptedAttempt(trialDir);
 				}
-				process.stdout.write(`eval ${job.item.id} trial ${job.trial} queued ...\n`);
 				const result = await runTrial(
 					job.item,
 					job.descriptor,
@@ -1096,9 +974,13 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 					agentPool,
 					judgePool,
 					nextAttemptNumber(trialDir),
+					plan.judgeEnabled,
+					executionState.expected,
 				);
 				results.push({ order: job.order, ...result });
-				process.stdout.write(`  ${job.item.id} ${result.record.outcome} ${result.record.metrics.wallMs}ms\n`);
+				process.stdout.write(
+					`  [${results.length}/${jobs.length}] ${job.item.id}#${job.trial} ${result.record.result?.execution === "completed" ? result.record.outcome : (result.record.result?.execution ?? result.record.outcome)} ${(result.record.metrics.wallMs / 1000).toFixed(1)}s\n`,
+				);
 			}),
 		);
 		const rejected = settled.filter((item): item is PromiseRejectedResult => item.status === "rejected");
@@ -1120,23 +1002,12 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 		manifest.securityConfigHash = hash(
 			JSON.stringify(results.map(({ record, configHashes }) => [record.caseId, configHashes[2]])),
 		);
-		writeJson(join(resultDir, "manifest.json"), manifest);
 		writeFileSync(join(resultDir, "trials.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-		writeJson(join(resultDir, "human-review-sample.json"), {
-			schemaVersion: 1,
-			decisions: selectHumanReview(records),
-		});
+
+		manifest.finishedAt = new Date().toISOString();
+		writeJson(join(resultDir, "manifest.json"), manifest);
 		const summaries = summarize(records, cases, gates, plan.plannedTrials);
 		writeJson(join(resultDir, "summary.json"), { schemaVersion: 2, cases: summaries });
-		writeFileSync(
-			join(resultDir, "report.md"),
-			renderReport(
-				manifest,
-				summaries,
-				records,
-				readJsonLines<HumanReviewRecord>(join(resultDir, "human-review.jsonl")),
-			),
-		);
 		const archiveUnsafe = containsCredential(resultDir);
 		if (archiveUnsafe)
 			writeFileSync(
@@ -1148,12 +1019,36 @@ export async function runMain(argv: string[] = process.argv.slice(2)): Promise<v
 				errors: rejected.map((item) => String(item.reason)),
 				nextStep: "Inspect started.json and events.jsonl, then resume this run under its frozen conditions.",
 			});
+		executionState.observed = executionFingerprint();
+		executionState.status = executionState.expected === executionState.observed ? "stable" : "changed";
+		atomicJson(join(resultDir, "execution-state.json"), executionState);
+		const executionDrift = executionState.status === "changed";
 		const decision = evaluateSummary(summaries, plan).code;
-		const exit = decision === 1 ? 1 : archiveUnsafe || rejected.length ? 2 : decision;
-		process.stdout.write(
-			`eval ${runId}: ${records.length} trials, exit ${exit}; report ${join(resultDir, "report.md")}\n`,
+		const exit = decision === 1 ? 1 : archiveUnsafe || rejected.length || executionDrift ? 2 : decision;
+		const reviews = readJsonLines<HumanReviewRecord>(join(resultDir, "human-review.jsonl"));
+		const report = renderReport(
+			manifest,
+			summaries,
+			records,
+			reviews,
+			plan,
+			archiveUnsafe || rejected.length > 0 || executionDrift,
 		);
+		writeFileSync(
+			join(resultDir, "report.md"),
+			report +
+				(executionDrift
+					? "\nCompiled execution inputs changed; inspect execution-state.json and rerun in an isolated checkout.\n"
+					: ""),
+		);
+		writeFileSync(join(resultDir, "details.md"), renderDetailedReport(manifest, summaries, records, reviews, plan));
+		if (executionDrift)
+			process.stdout.write(
+				"Compiled execution inputs changed; inspect execution-state.json and rerun in an isolated checkout.\n",
+			);
+		process.stdout.write(`${report}\nReport: ${join(resultDir, "report.md")}\nExit: ${exit}\n`);
 		process.exitCode = exit;
+		return { runId, resultDir, exitCode: exit };
 	} finally {
 		rmSync(templateHome, { recursive: true, force: true });
 	}

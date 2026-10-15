@@ -47,6 +47,7 @@
 		"test:coverage": "vitest --run --coverage",
 		"check": "npm run lint && npm run typecheck && npm run arch && npm run deadcode && npm run test",
 		"prepublishOnly": "npm run clean && npm run build && npm run check",
+		"pretest:evals": "npm run eval:build",
 		"test:evals": "vitest --run --config vitest.config.evals.ts"
 	},
 	"dependencies": {

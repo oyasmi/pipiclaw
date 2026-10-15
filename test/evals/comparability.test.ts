@@ -166,6 +166,33 @@ describe("eval fingerprints and controlled comparisons", () => {
 
 	it("permits only the declared experimental variable", () => {
 		expect(comparisonBlockers(manifest, manifest, evidence)).toEqual([]);
+		const objectivePlan = {
+			...plan,
+			scoring: { ...plan.scoring, judgePolicy: "advisory" as const, judgeEnabled: false },
+		};
+		const changedJudge = {
+			...manifest,
+			profile: { ...manifest.profile!, judge: { ...manifest.profile!.judge, resolved: "provider/other" } },
+		};
+		expect(
+			comparisonBlockers(manifest, changedJudge, {
+				...evidence,
+				leftPlan: objectivePlan,
+				rightPlan: { ...objectivePlan, profile: changedJudge.profile! },
+			}),
+		).toEqual([]);
+		expect(
+			comparisonBlockers(manifest, changedJudge, {
+				...evidence,
+				leftPlan: { ...objectivePlan, scoring: { ...objectivePlan.scoring, judgeEnabled: true } },
+				rightPlan: {
+					...objectivePlan,
+					profile: changedJudge.profile!,
+					scoring: { ...objectivePlan.scoring, judgeEnabled: true },
+				},
+			}),
+		).toContain("judge");
+
 		expect(comparisonBlockers(manifest, { ...manifest, gitSha: "new" }, evidence)).toContain("git");
 		expect(
 			comparisonBlockers(
@@ -213,6 +240,15 @@ describe("eval fingerprints and controlled comparisons", () => {
 				rightCases: [{ ...descriptor, caseHash: "other" }],
 			}),
 			renderDiff("a", "b", manifest, manifest, [], [changed], evidence),
+			renderDiff(
+				"a",
+				"b",
+				manifest,
+				manifest,
+				[summary],
+				[{ ...changed, passed: 2, valid: 2, invalid: 1 }],
+				evidence,
+			),
 			renderDiff("a", "b", manifest, manifest, [summary], [{ ...changed, valid: 0 }], evidence),
 			renderDiff("a", "b", manifest, manifest, [summary], [changed]),
 			renderDiff("a", "b", manifest, { ...manifest, lockfileHash: "other" }, [summary], [changed], evidence),

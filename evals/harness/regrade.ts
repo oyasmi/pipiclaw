@@ -63,6 +63,7 @@ export async function regradeTrial(
 			.filter(Boolean)
 			.map((line) => rebase(JSON.parse(line)) as TraceEvent);
 		const context: TrialContext = {
+			seed: original.fixtureSeed,
 			homeDir,
 			workspaceDir,
 			channelDir,
@@ -87,7 +88,7 @@ export async function regradeTrial(
 			);
 			if (!grader)
 				throw new Error(
-					`Model grader '${modelGraderId}' is not declared by ${item.id}; use list/review to find its id.`,
+					`Model grader '${modelGraderId}' is not declared by ${item.id}; inspect cases.json to find its id.`,
 				);
 			const judgeHome = mkdtempSync(join(tmpdir(), "eval-regrade-judge-"));
 			try {
@@ -95,7 +96,9 @@ export async function regradeTrial(
 				const profile = await freezeLocalProfile(judgeHome);
 				writeFileSync(join(judgeHome, "eval-profile.json"), `${JSON.stringify(profile, null, 2)}\n`);
 				const replacement = await gradeModel(grader, context, judgeHome, join(assessmentDir, "judge"));
-				grades = grades.map((grade) => (grade.graderId === modelGraderId ? replacement : grade));
+				grades = grades.map((grade) =>
+					grade.graderId === modelGraderId ? { ...replacement, authority: "advisory" as const } : grade,
+				);
 				modelRequests = 1;
 			} finally {
 				rmSync(judgeHome, { recursive: true, force: true });
