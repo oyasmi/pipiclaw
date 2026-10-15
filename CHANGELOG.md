@@ -4,11 +4,21 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## Unreleased
 
+### Added
+
+- **Autonomous evaluation cycles (specs 056–057).** `npm run eval -- cycle` checks planned budgets, validates objective graders, runs the configured local model, diagnoses failures, replays sealed evidence without model calls, and compares compatible references. Complete, qualified core runs that meet the frozen gates can create immutable local references automatically; daily dev runs use six representative cases and cannot establish a baseline.
+- `npm run eval -- selftest` validates executable positive, negative and equivalence controls offline. Failed controls stop paid runs before model calls; uncovered cases remain inconclusive. Execution fingerprints, evidence hashes and paired comparison checks reject mixed runtime inputs or incompatible references. Model judges are opt-in advisory opinions; objective acceptance needs no human labels or approval.
+
 ### Changed
 
 - Pin all four pi dependencies to 1.2.0 (spec 055). AgentSession owns persisted prompt/tool context; backup retries omit only the current failed attempt by entry ID, preserve raw evidence/usage, respect stop and session ownership, and quarantine a context-write failure until reconstruction.
 - OpenAI ChatGPT OAuth receives a stable installation identity under the explicit Pipiclaw app home. Existing API keys and other OAuth do not require migration. Real OAuth/provider/DingTalk/TUI acceptance remains a release gate.
 - Old built-in Azure provider references require field-specific migration to `azure`; the API id and `AZURE_OPENAI_*` variables keep their names. Back up complete application/project state before upgrading; rollback after external effects requires reconciliation.
+- Evaluation reports separate short summaries from detailed evidence, resource accounting and actionable diagnostics. Original failures remain intact across replay and regrading, and unknown costs stay explicit. See [the evaluation guide](docs/evals.md) for commands and interpretation limits.
+
+### Fixed
+
+- Evaluation workers now implement the production delivery port and execute shell commands in their isolated trial project. Missing model results no longer count as completed runs; task/delegation graders check successful persisted work, and coding graders use independent verification that candidate code cannot weaken.
 
 ## [0.9.4-beta.2] - 2026-10-13
 
