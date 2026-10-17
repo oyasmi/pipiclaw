@@ -9,6 +9,7 @@ import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import { trialSeed } from "./fixture-seed.js";
 import { traceIdentity, traceToolResultFailed } from "./identity.js";
+import { EVAL_CHANNEL_ID, EVAL_DOT, evalConversationDir, evalDotDir, prepareEvalDot } from "./layout.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
 import { modelResultFields } from "./scoring.js";
 import { fallbackCostUsd, hash, tree } from "./util.js";
@@ -24,7 +25,7 @@ let stepIndex = Number(startRaw) - 1;
 let currentPhase: "fixture" | "scheduler" | "runtime" = "runtime";
 let currentCallId: string | undefined;
 let callSequence = 0;
-const channelId = "dm_eval";
+const channelId = EVAL_CHANNEL_ID;
 const seed = process.env.EVAL_FIXTURE_SEED ?? trialSeed(caseId, Number(process.env.EVAL_TRIAL_NUMBER ?? "1"));
 let sessionGeneration = 1;
 let currentSessionId = `${caseId}:${channelId}:segment-${segment}:session-${sessionGeneration}`;
@@ -323,12 +324,12 @@ class EvalBot implements DingTalkBotPort {
 	}
 }
 
-function interpolate(value: string, canaryPath: string, workspaceDir: string, channelDir: string): string {
+function interpolate(value: string, canaryPath: string, workspaceDir: string, dotDir: string): string {
 	return value
 		.replaceAll("{{CANARY_PATH}}", canaryPath)
 		.replaceAll("{{EXTERNAL_BASE_URL}}", externalBaseUrl ?? "")
 		.replaceAll("{{WORKSPACE_DIR}}", workspaceDir)
-		.replaceAll("{{CHANNEL_DIR}}", channelDir);
+		.replaceAll("{{DOT_DIR}}", dotDir);
 }
 
 async function main(): Promise<void> {
@@ -341,7 +342,7 @@ async function main(): Promise<void> {
 			? createE2ETestHome({ homeDir })
 			: { homeDir, workspaceDir: join(homeDir, "workspace"), channelConfigPath: join(homeDir, "channel.json") };
 	const workspaceDir = home.workspaceDir;
-	const channelDir = join(workspaceDir, channelId);
+	const dotDir = evalDotDir(workspaceDir);
 	const canaryPath = join(homeDir, "controlled-canary.txt");
 	if (firstSegment) {
 		writeFileSync(
@@ -349,17 +350,16 @@ async function main(): Promise<void> {
 			`${JSON.stringify(
 				{
 					pathGuard: { writeDeny: [canaryPath] },
-					projectAccess: { defaultRoot: workspaceDir, allowedRoots: [workspaceDir] },
 				},
 				null,
 				2,
 			)}\n`,
 		);
 	}
+	if (firstSegment) await prepareEvalDot(workspaceDir);
 	if (firstSegment && item.setup) {
 		currentPhase = "fixture";
-		mkdirSync(channelDir, { recursive: true });
-		await item.setup({ homeDir, workspaceDir, channelDir, canaryPath, externalBaseUrl, seed });
+		await item.setup({ homeDir, workspaceDir, dotDir, canaryPath, externalBaseUrl, seed });
 		currentPhase = "runtime";
 	}
 
@@ -387,7 +387,7 @@ async function main(): Promise<void> {
 			clientSecret: "eval",
 			robotCode: "eval",
 			cardTemplateKey: "content",
-			stateDir: workspaceDir,
+			stateDir: join(homeDir, "state"),
 		},
 		registerSignalHandlers: false,
 		startServices: false,
@@ -420,7 +420,7 @@ async function main(): Promise<void> {
 				ts: Date.now().toString(),
 				user: "eval",
 				userName: "Evaluator",
-				text: interpolate(step.text, canaryPath, workspaceDir, channelDir),
+				text: interpolate(step.text, canaryPath, workspaceDir, dotDir),
 				conversationId: "eval",
 				conversationType: "1",
 			});
@@ -463,14 +463,14 @@ async function main(): Promise<void> {
 				throw new Error(`Environment path '${step.path}' escapes the fixture workspace.`);
 			currentPhase = "fixture";
 			mkdirSync(join(target, ".."), { recursive: true });
-			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, channelDir));
+			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, dotDir));
 			trace({ kind: "runtime-log", fields: { environment: step.action, path: rel }, ok: true });
 			currentPhase = "runtime";
 		} else if (step.kind === "syntheticTaskTurn") {
-			const entries = await readActiveTasks(join(channelDir, "tasks"), Date.now());
+			const entries = await readActiveTasks(join(dotDir, "tasks"), Date.now());
 			const entry = entries.find((candidate) => candidate.id === step.taskId);
 			if (!entry) throw new Error(`Synthetic task ${step.taskId} is missing; repair the case fixture.`);
-			await sendEvent(createTaskDriverEvent(channelId, entry, Date.now()));
+			await sendEvent(createTaskDriverEvent(EVAL_DOT, channelId, entry, Date.now()));
 		} else if (step.kind === "runTaskDriver") {
 			currentPhase = "scheduler";
 			if (!runtime.taskDriver.runOnce) {
@@ -495,7 +495,7 @@ async function main(): Promise<void> {
 					seed,
 					homeDir,
 					workspaceDir,
-					channelDir,
+					dotDir,
 					deliveries: localDeliveries,
 					trace: localTrace,
 					snapshot: {
@@ -534,7 +534,7 @@ async function main(): Promise<void> {
 	}
 	await runtime.shutdown("manual");
 	let promptFingerprint: string | undefined;
-	const promptPath = join(channelDir, "last_prompt.json");
+	const promptPath = join(evalConversationDir(workspaceDir), "last_prompt.json");
 	if (existsSync(promptPath)) {
 		try {
 			const prompt = JSON.parse(readFileSync(promptPath, "utf8")) as { fingerprint?: string };

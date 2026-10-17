@@ -28,10 +28,10 @@ export async function regradeTrial(
 	const homeDir = mkdtempSync(join(tmpdir(), "eval-regrade-"));
 	try {
 		const workspaceDir = join(homeDir, "workspace");
-		const channelRelative = relative(index.mounts.workspaceDir, index.mounts.channelDir);
-		if (isAbsolute(channelRelative) || channelRelative.startsWith(".."))
-			throw new Error("Invalid archived channel mount; restore the original artifact index.");
-		const channelDir = join(workspaceDir, channelRelative);
+		const dotRelative = relative(index.mounts.workspaceDir, index.mounts.dotDir ?? index.mounts.channelDir ?? "");
+		if (isAbsolute(dotRelative) || dotRelative.startsWith(".."))
+			throw new Error("Invalid archived dot mount; restore the original artifact index.");
+		const dotDir = join(workspaceDir, dotRelative);
 		for (const entry of index.entries) {
 			if (
 				entry.status !== "complete" ||
@@ -42,7 +42,7 @@ export async function regradeTrial(
 				? homeDir
 				: entry.id.startsWith("workspace/")
 					? workspaceDir
-					: channelDir;
+					: dotDir;
 			const target = resolve(root, entry.id.slice(entry.id.indexOf("/") + 1));
 			const rel = relative(homeDir, target);
 			if (isAbsolute(rel) || rel.startsWith(".."))
@@ -66,7 +66,7 @@ export async function regradeTrial(
 			seed: original.fixtureSeed,
 			homeDir,
 			workspaceDir,
-			channelDir,
+			dotDir,
 			trace,
 			deliveries: snapshot.deliveries,
 			snapshot,

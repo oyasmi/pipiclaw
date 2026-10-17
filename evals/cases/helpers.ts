@@ -36,7 +36,7 @@ export async function writeTask(
 		budget: options.budget,
 		usage: options.started ? createUsage() : undefined,
 	};
-	const tasksDir = join(ctx.channelDir, "tasks");
+	const tasksDir = join(ctx.dotDir, "tasks");
 	await mkdir(tasksDir, { recursive: true });
 	await writeFile(join(tasksDir, `${id}.md`), renderTaskDocument(fields, options.body));
 }
@@ -51,7 +51,7 @@ export async function seedChannelMemory(
 	description: string,
 	options: { name?: string; type?: MemoryType; source?: MemorySource; details?: string } = {},
 ): Promise<void> {
-	await applyMemoryOps(ctx.channelDir, [
+	await applyMemoryOps(ctx.dotDir, [
 		{
 			op: "add",
 			name: options.name,

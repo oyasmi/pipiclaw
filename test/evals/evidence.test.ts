@@ -300,14 +300,14 @@ describe("eval supervision and evidence", () => {
 		const root = temp();
 		const homeDir = join(root, "home");
 		const workspaceDir = join(homeDir, "workspace");
-		const channelDir = join(workspaceDir, "dm_eval");
-		mkdirSync(channelDir, { recursive: true });
-		writeFileSync(join(channelDir, "result.txt"), "broken; claimed complete");
+		const dotDir = join(workspaceDir, "dots", "eval");
+		mkdirSync(dotDir, { recursive: true });
+		writeFileSync(join(dotDir, "result.txt"), "broken; claimed complete");
 		writeFileSync(join(workspaceDir, "code.ts"), "x".repeat(70000));
 		mkdirSync(join(homeDir, ".eval-hidden"));
 		writeFileSync(join(homeDir, ".eval-hidden/evaluator.mjs"), "hidden\n");
 		const trialDir = join(root, "trial");
-		const index = captureArtifacts({ homeDir, workspaceDir, channelDir }, trialDir, [
+		const index = captureArtifacts({ homeDir, workspaceDir, dotDir }, trialDir, [
 			{ root: "workspace", path: "." },
 			{ root: "home", path: ".eval-hidden/evaluator.mjs" },
 		]);
@@ -332,10 +332,10 @@ describe("eval supervision and evidence", () => {
 			expect.objectContaining({ graderId: "hidden-evaluator-restored", status: "pass" }),
 		);
 		expect(readFileSync(join(trialDir, "record.json"), "utf8")).toBe(original);
-		expect(readFileSync(join(trialDir, "artifacts/workspace/dm_eval/result.txt"), "utf8")).toBe(
+		expect(readFileSync(join(trialDir, "artifacts/workspace/dots/eval/result.txt"), "utf8")).toBe(
 			"broken; claimed complete",
 		);
-		writeFileSync(join(trialDir, "artifacts/workspace/dm_eval/result.txt"), "fixed");
+		writeFileSync(join(trialDir, "artifacts/workspace/dots/eval/result.txt"), "fixed");
 		expect(() => verifyArtifacts(trialDir)).toThrow(/changed/);
 	});
 

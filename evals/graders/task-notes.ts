@@ -9,10 +9,10 @@ export function noteObservedEvidence(): CodeGrader {
 		graderId: "note-observed-evidence",
 		graderVersion: "1",
 		grade: (ctx) => {
-			const file = join(ctx.channelDir, "evidence.txt");
+			const file = join(ctx.dotDir, "evidence.txt");
 			const logs = [
-				join(ctx.channelDir, "tasks/evidence-note.jsonl"),
-				join(ctx.channelDir, "tasks/archive/evidence-note.jsonl"),
+				join(ctx.dotDir, "tasks/evidence-note.jsonl"),
+				join(ctx.dotDir, "tasks/archive/evidence-note.jsonl"),
 			];
 			const notes = logs
 				.filter(existsSync)

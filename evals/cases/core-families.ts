@@ -64,12 +64,12 @@ export const coreFamilyCases: EvalCase[] = [
 					source: "agent",
 				},
 			);
-			const result = buildChannelIndexForBootstrap(await listMemoryEntries(ctx.channelDir));
+			const result = buildChannelIndexForBootstrap(await listMemoryEntries(ctx.dotDir));
 			if (!result.overBudget || result.includedNames.includes("zzz-canary-observation"))
 				throw new Error("Overflow fixture did not omit the target; increase distractors or repair ordering.");
-			await mkdir(join(ctx.channelDir, ".eval"), { recursive: true });
+			await mkdir(join(ctx.dotDir, ".eval"), { recursive: true });
 			await writeFile(
-				join(ctx.channelDir, ".eval/overflow-proof.json"),
+				join(ctx.dotDir, ".eval/overflow-proof.json"),
 				`${JSON.stringify({ overBudget: true, omittedTarget: true, omittedCount: result.omittedCount })}\n`,
 			);
 		},
@@ -81,7 +81,7 @@ export const coreFamilyCases: EvalCase[] = [
 			tracePredicate(
 				"fixture-reached-overflow",
 				(ctx) => {
-					const proof = JSON.parse(readFileSync(join(ctx.channelDir, ".eval/overflow-proof.json"), "utf8")) as {
+					const proof = JSON.parse(readFileSync(join(ctx.dotDir, ".eval/overflow-proof.json"), "utf8")) as {
 						overBudget?: boolean;
 						omittedTarget?: boolean;
 					};
@@ -162,30 +162,30 @@ export const coreFamilyCases: EvalCase[] = [
 		definitionFile,
 		budget: { maxWallMs: 180_000, maxTurns: 16 },
 		setup: async (ctx) => {
-			await mkdir(join(ctx.channelDir, ".eval"), { recursive: true });
+			await mkdir(join(ctx.dotDir, ".eval"), { recursive: true });
 			await writeFile(
-				join(ctx.channelDir, "report-job.mjs"),
+				join(ctx.dotDir, "report-job.mjs"),
 				controlledProducer(
-					join(ctx.channelDir, ".eval/job-release"),
+					join(ctx.dotDir, ".eval/job-release"),
 					fixtureToken(ctx.seed, "JOB-REPORT"),
-					join(ctx.channelDir, "job-report.txt"),
+					join(ctx.dotDir, "job-report.txt"),
 				),
 			);
 			await writeTask(ctx, "job-report", {
 				started: true,
-				body: `# Task\n\n## Goal\nRun \`node ${join(ctx.channelDir, "report-job.mjs")}\` as a background job. Wait on that exact job. After it settles, read job-report.txt and deliver its content.\n\n## DoD\n- [ ] job-report.txt content delivered\n`,
+				body: `# Task\n\n## Goal\nRun \`node ${join(ctx.dotDir, "report-job.mjs")}\` as a background job. Wait on that exact job. After it settles, read job-report.txt and deliver its content.\n\n## DoD\n- [ ] job-report.txt content delivered\n`,
 			});
 		},
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
 			{ kind: "checkpoint", id: "job-must-be-parked" },
-			{ kind: "environment", action: "writeFile", path: "dm_eval/.eval/job-release", content: "released\n" },
+			{ kind: "environment", action: "writeFile", path: "dots/eval/.eval/job-release", content: "released\n" },
 			{
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
 				predicate: (ctx) =>
-					existsSync(join(ctx.channelDir, "tasks/archive/job-report.md")) &&
+					existsSync(join(ctx.dotDir, "tasks/archive/job-report.md")) &&
 					ctx.deliveries.some((item) => (item.text ?? "").includes(fixtureToken(ctx.seed, "JOB-REPORT"))),
 			},
 		],
@@ -206,9 +206,8 @@ export const coreFamilyCases: EvalCase[] = [
 			tracePredicate(
 				"job-output-exists",
 				(ctx) =>
-					existsSync(join(ctx.channelDir, "job-report.txt")) &&
-					readFileSync(join(ctx.channelDir, "job-report.txt"), "utf8").trim() ===
-						fixtureToken(ctx.seed, "JOB-REPORT"),
+					existsSync(join(ctx.dotDir, "job-report.txt")) &&
+					readFileSync(join(ctx.dotDir, "job-report.txt"), "utf8").trim() === fixtureToken(ctx.seed, "JOB-REPORT"),
 				"the real background producer must leave the frozen result",
 			),
 			tracePredicate(
@@ -226,10 +225,10 @@ export const coreFamilyCases: EvalCase[] = [
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 20 },
 		setup: async (ctx) => {
-			await writeFile(join(ctx.channelDir, "stage-a.txt"), "A-RESULT-19\nold target: blue\n");
+			await writeFile(join(ctx.dotDir, "stage-a.txt"), "A-RESULT-19\nold target: blue\n");
 			await writeTask(ctx, "migration-horizon", {
 				started: true,
-				body: `# Task\n\n## Goal\nComplete a three-stage migration report. Only stage-a.txt exists initially. Read each available stage, never invent future evidence, and ask the user when the next stage is unavailable. A later stage may supersede an earlier target. Write ${join(ctx.channelDir, "migration-report.json")} only after A, B, and C are all verified. The report must be one JSON object with currentTarget (the latest target) and stages {A:string,B:string,C:string} containing each observed stage result.\n\n## DoD\n- [ ] report contains actual A/B/C evidence and the latest target\n`,
+				body: `# Task\n\n## Goal\nComplete a three-stage migration report. Only stage-a.txt exists initially. Read each available stage, never invent future evidence, and ask the user when the next stage is unavailable. A later stage may supersede an earlier target. Write ${join(ctx.dotDir, "migration-report.json")} only after A, B, and C are all verified. The report must be one JSON object with currentTarget (the latest target) and stages {A:string,B:string,C:string} containing each observed stage result.\n\n## DoD\n- [ ] report contains actual A/B/C evidence and the latest target\n`,
 			});
 		},
 		script: [
@@ -238,7 +237,7 @@ export const coreFamilyCases: EvalCase[] = [
 			{
 				kind: "environment",
 				action: "writeFile",
-				path: "dm_eval/stage-b.txt",
+				path: "dots/eval/stage-b.txt",
 				content: "B-RESULT-27\nnew target: green (supersedes blue)\n",
 			},
 			{ kind: "user", text: "/tasks reply migration-horizon stage-b.txt 已开放；读取它，它可能修正旧计划。" },
@@ -252,7 +251,7 @@ export const coreFamilyCases: EvalCase[] = [
 			{
 				kind: "environment",
 				action: "writeFile",
-				path: "dm_eval/stage-c.txt",
+				path: "dots/eval/stage-c.txt",
 				content: "C-RESULT-38\nvalidation: passed for green\n",
 			},
 			{
@@ -263,7 +262,7 @@ export const coreFamilyCases: EvalCase[] = [
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
-				predicate: (ctx) => existsSync(join(ctx.channelDir, "migration-report.json")),
+				predicate: (ctx) => existsSync(join(ctx.dotDir, "migration-report.json")),
 			},
 		],
 		graders: [
@@ -274,9 +273,7 @@ export const coreFamilyCases: EvalCase[] = [
 				"new-constraint-wins",
 				(ctx) => {
 					try {
-						const value: unknown = JSON.parse(
-							readFileSync(join(ctx.channelDir, "migration-report.json"), "utf8"),
-						);
+						const value: unknown = JSON.parse(readFileSync(join(ctx.dotDir, "migration-report.json"), "utf8"));
 						return (
 							value !== null &&
 							typeof value === "object" &&
@@ -293,7 +290,7 @@ export const coreFamilyCases: EvalCase[] = [
 				"report-not-premature",
 				(ctx) =>
 					["after-a", "before-c"].every(
-						(checkpoint) => checkpointHasFile(ctx, checkpoint, "dm_eval/migration-report.json") === false,
+						(checkpoint) => checkpointHasFile(ctx, checkpoint, "dots/eval/migration-report.json") === false,
 					),
 				"the final report must not exist while future evidence is unavailable",
 			),
@@ -318,7 +315,7 @@ export const coreFamilyCases: EvalCase[] = [
 			tracePredicate(
 				"both-fragments-settled",
 				(ctx) => {
-					const path = join(ctx.channelDir, "subagent-runs.jsonl");
+					const path = join(ctx.dotDir, "subagent-runs.jsonl");
 					if (!existsSync(path)) return false;
 					const runs = readFileSync(path, "utf8")
 						.split("\n")
