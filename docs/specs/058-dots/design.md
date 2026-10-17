@@ -759,3 +759,46 @@ e2e：56 → 56。
 **用例数**：单测 969 → 943（−26），全部是被删除机制的测试：`project-commands` 5、`runtime-project-scope-store` 9、`security-project-scope` 6、path-guard 的 `boundary="project"` 3、委派的项目边界 1、follow_up 重查项目边界 1、`commands-subcommands` 里自动生成的 `/project` 用例 1。`security-config` 的诊断用例扩展为同时覆盖退役键（用例数不变）。
 
 e2e：56 → 55（−1）：第二个 A19（"`/project set` 在忙碌时被拒绝"）删除，P3 改写为 `/dot bind` 后补回。
+
+### P2 存储模型切换
+
+提交：`5153eac`（纯改名 channelDir→dotDir）、`a295667`（任务 `channel` 字段 + 跨进程任务锁），其余按模块分提交（见 git log）。
+
+**闸门**（2026-10-18）：`npm run check` 全绿（lint 无告警、typecheck、arch「基线剩余 0 条 R1、0 个 R2 循环、3 个 R3 超长文件」、knip、单测 133 个文件 905 例）；`npm run test:e2e` 24 个文件 57 例全绿；`npm run eval:typecheck` 通过，`npm run test:evals` 69 例全绿；`npm run build` 后 `node dist/main.js --version` 输出 `0.9.4`。INV-3 三条检索在 `src`、`test` 中均为空；`rg -n "channelDir" src` 为空（`legacy-layout.ts` 中指旧频道目录的变量改名为 `legacyChannelDirs`）。
+
+**用例数**（与 P1 结束时 `14ef524` 逐文件对比）：
+
+- 单测 943 → 905（−38）：
+  - −37 `task-migration.test.ts`（18）与 `task-migration-faults.test.ts`（19）——删除的 v3→v5 迁移机制（plan 估计 30，实际 37）；
+  - −2 `channel-paths.test.ts`——删除的 channelId 路径转义；
+  - −3 `channel-index.test.ts`——删除的目录发现（3 例），四列兼容并入原往返用例；
+  - −2 `memory-maintenance-scheduler.test.ts`——删除的频道发现与斜杠去重；
+  - `memory-maintenance-state.test.ts` +1：新增「另一进程持有 memory.lock 时等待」（故障：daemon 与 TUI 并发写坏同一 dot 的记忆）；斜杠扁平文件用例改写为「按 dot/会话区落盘」，队列用例改为按 dot；
+  - `subagent-runs.test.ts` +1：新增「换绑后丢弃唤醒但仍兑现任务的 work 票」（故障：换绑期间任务永久停在 work 票上）；斜杠转义目录用例改写为「按 dot 目录恢复并唤醒各 run 自己的频道」；
+  - `task-store.test.ts` +1：跨进程任务锁（`a295667`）；
+  - `dot-runtime.test.ts` +3：激活/休眠（故障：休眠 dot 的 watcher 泄漏、修复前就接流量）、`sendFromDot` 绑定校验（故障：跨 dot 投递）、启动拒绝旧布局（故障：在未迁移的 home 上静默忽略全部旧状态）。
+  - 原地扩展、不增用例：`job-manager.test.ts` 的重载用例改为经 `createJobRuntime().restore()` 的按 dot 目录扫描（mutation：去掉状态目录里的 dot 一级，变红）；task driver 冻结、events 绑定跳过、durable dispatch 拒绝无 dot 事件、job 唤醒抑制，均为扩展原用例。
+- 确定性 e2e 55 → 57（+2）：
+  - DOT-1 并入 `memory.test.ts` 的 M2（「跨 project」换成「同一 dot 的两个频道」），mutation：首回合注入改读会话区目录、两频道共用一个会话区，均变红；
+  - +1 DOT-2（`memory.test.ts`），mutation：`memory_save` 绕过 dot 队列，约 3 秒内变红；
+  - +1 DOT-4（`dots.test.ts`），mutation：`DotRuntime.resolve` 对未绑定频道回落到其他绑定，模型请求数变为 2，变红；
+  - A18（独立进程 SIGKILL 重启）扩展：重启前不再重写绑定，只靠盘上的 `bindings.json`；重启后同一频道的新消息到达 provider。mutation：把 `log.jsonl` 归档到 `join(workspaceDir, channelId)`，重启后的 daemon 拒绝启动，变红；
+  - **DOT-3 移到 P3**：它需要运行中换绑，而绑定表只在启动时加载，换绑要等 P3 的 `DotRuntime.bind`。
+
+**D16 核对结论**：pi 1.2 按 cwd 发现 `<cwd>/.pi/{extensions,skills,prompts,themes}` 与 cwd 到 git 根之间各级的 `.agents/skills`（Pipiclaw 的 SDK settings 默认信任项目）。本机旧 cwd `/home/oyasmi` 与新 cwd `dots/<dot>`（workspace 是 git 仓库，向上止于 workspace 根）均无这些目录；`~/.agents/skills` 为用户级、与 cwd 无关。结论：不新增、不丢失资源。残留风险：模型若在 dot 目录写 `.pi/extensions/`，下次加载时会生效（与旧 cwd 下同类风险一致）。
+
+**偏差与按代码事实所做的决定**：
+
+- **`work` 等待条件的兑现并非与唤醒无关**（plan 的说法与代码不符）：它只在唤醒被认领时发生。唤醒因频道未绑定被丢弃时，run/job 的 owner 在丢弃处经 `redeemTicket` 兑现 `work` 票，绑回后任务立即继续。
+- run 结算归档 `subagent-runs.jsonl` 显式写入 run 所属 dot，而不是按频道当前绑定解析（换绑后结算会写错 dot）；因此 `ChannelStore` 只需解析会话区目录（`resolveArchiveDir`），不是 plan 写的返回两个目录。
+- run/job manager 以自身 dot 目录记账任务，不再依赖记录里持久化的目录字段。
+- 后台 reflect 的 detached 上下文读取会话区的 active session（新增无副作用的 `peekActiveSessionFile`），而不是固定读 `context.jsonl`。
+- `last_prompt.json` 写到会话区目录。
+- 单发事件因投递频道未绑定被跳过时，保留文件并写错误标记（与队列满的处理一致）。
+- `event_manage` 的 list 覆盖整个 dot（标注投递到其他频道的事件、只读），update/delete 仍只限本频道的事件。
+- `/tasks doctor` 补上 `capReply`（dot 级列表可能超出 053 的长度预算）。
+- `legacy-layout.ts` 放在 `src/dot/` 而不是 plan 写的 `src/runtime/`：TUI 也要调用它，而 `tui` 不允许依赖 `runtime`（arch R1）；它只依赖 `paths`。
+- workspace 脚手架建 `dots/`，不再建 `events/`（否则新装的 home 会自带一个旧布局目录名）。
+- P4 的 TUI 核心（`--dot` 必填、`--create`、`--channel` 报错、会话区 `.lock`）提前到 P2 完成，因为 P2 闸门包含 TUI 的 e2e；P4 剩下文档与手动核对。
+- **knip 临时入口**：`src/dot/*.ts`、`src/channel/channel-id.ts` 已移除；无调用方的 `isChannelId` 删除（`channelKind` 覆盖同一判断）。只剩 `src/dot/commands.ts` 一条，因为 `handleDotCommand` 由 P3 的 `/dot` 命令接入；P3 结束前移除。
+- 评测框架：`channelDir` 改名为 `dotDir`、`{{CHANNEL_DIR}}` 改为 `{{DOT_DIR}}`，新增 `evals/harness/layout.ts` 在首段建 dot `eval` 并绑定 `dm_eval`；归档证据的 `mounts.channelDir` 仍可读（regrade 兜底），产物根的持久化取值 `"channel"` 不改，以免旧基线无法 regrade。M-search-01 的对照事实移到另一个 dot 的会话区，事件用例改读 dot 的 `events/`。评测本身（需要凭据）未运行。
