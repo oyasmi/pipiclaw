@@ -1,0 +1,206 @@
+/**
+ * Cross-process advisory lock on one file path (spec 058, D6). Two processes — the daemon and a
+ * TUI — may write the same dot; an in-process serial queue cannot see the other one, so the
+ * writers of shared files additionally hold one of these.
+ *
+ * A lock is a file holding `{ pid, hostname, acquiredAt, token }`. It is created exclusively: the
+ * content is written to a private temp file first and then `link`ed into place, which fails with
+ * `EEXIST` when someone else holds it — so a lock file never exists half-written. A lock whose
+ * holder ran on this host and whose pid is gone is stale and is reclaimed; a holder on another
+ * host is never presumed dead. Release removes the file only while it still carries this
+ * acquisition's token.
+ *
+ * Domain-free on purpose (layer 0): memory, tasks and the dot registry each pick their own path
+ * and timeout.
+ */
+import { randomUUID } from "node:crypto";
+import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { hostname as osHostname } from "node:os";
+import { dirname } from "node:path";
+
+export interface FileLockHolder {
+	pid: number;
+	hostname: string;
+	acquiredAt: string;
+}
+
+interface LockContent extends FileLockHolder {
+	token: string;
+}
+
+export interface FileLockHandle {
+	release(): Promise<void>;
+}
+
+export type AcquireFileLockResult =
+	| { kind: "acquired"; handle: FileLockHandle }
+	| { kind: "held"; heldBy: FileLockHolder | undefined };
+
+export interface WithFileLockOptions {
+	/** How long to keep retrying a held lock before giving up with {@link FileLockTimeoutError}. */
+	timeoutMs: number;
+}
+
+export class FileLockTimeoutError extends Error {
+	readonly lockPath: string;
+	readonly heldBy: FileLockHolder | undefined;
+
+	// Plain fields, not parameter properties: the lock tests load this file into a child
+	// process with Node's type stripping, which does not support them.
+	constructor(lockPath: string, heldBy: FileLockHolder | undefined) {
+		super(
+			heldBy
+				? `Lock ${lockPath} is held by pid ${heldBy.pid} on ${heldBy.hostname} since ${heldBy.acquiredAt}`
+				: `Lock ${lockPath} is held by another process`,
+		);
+		this.name = "FileLockTimeoutError";
+		this.lockPath = lockPath;
+		this.heldBy = heldBy;
+	}
+}
+
+const FIRST_RETRY_MS = 20;
+const MAX_RETRY_MS = 250;
+
+function errorCode(error: unknown): string | undefined {
+	return error && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : undefined;
+}
+
+function parseContent(text: string): LockContent | undefined {
+	try {
+		const value = JSON.parse(text) as Partial<LockContent>;
+		if (
+			typeof value.pid === "number" &&
+			typeof value.hostname === "string" &&
+			typeof value.acquiredAt === "string" &&
+			typeof value.token === "string"
+		) {
+			return value as LockContent;
+		}
+	} catch {}
+	return undefined;
+}
+
+async function readContent(path: string): Promise<LockContent | undefined> {
+	try {
+		return parseContent(await readFile(path, "utf-8"));
+	} catch {
+		return undefined;
+	}
+}
+
+function toHolder(content: LockContent | undefined): FileLockHolder | undefined {
+	return content ? { pid: content.pid, hostname: content.hostname, acquiredAt: content.acquiredAt } : undefined;
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		// EPERM: the pid exists but belongs to someone else — still alive.
+		return errorCode(error) !== "ESRCH";
+	}
+}
+
+function isStale(content: LockContent): boolean {
+	return content.hostname === osHostname() && !isProcessAlive(content.pid);
+}
+
+/** One exclusive-create attempt. `undefined` = acquired; otherwise the current holder's content. */
+async function tryCreate(path: string, content: LockContent): Promise<{ held: LockContent | undefined } | undefined> {
+	await mkdir(dirname(path), { recursive: true });
+	const temp = `${path}.${content.token}.tmp`;
+	await writeFile(temp, JSON.stringify(content), { encoding: "utf-8", flag: "wx" });
+	try {
+		await link(temp, path);
+		return undefined;
+	} catch (error) {
+		if (errorCode(error) !== "EEXIST") throw error;
+		return { held: await readContent(path) };
+	} finally {
+		await unlink(temp).catch(() => undefined);
+	}
+}
+
+/**
+ * Remove a stale lock without clobbering a fresh one a concurrent reclaimer may have created in
+ * the meantime: move it aside, confirm it is the stale holder we judged, and put it back if not.
+ */
+async function reclaimStale(path: string, stale: LockContent): Promise<void> {
+	const aside = `${path}.${randomUUID()}.stale`;
+	try {
+		await rename(path, aside);
+	} catch {
+		return; // already gone — someone else reclaimed it
+	}
+	const moved = await readContent(aside);
+	if (moved && moved.token !== stale.token) {
+		await link(aside, path).catch(() => undefined);
+	}
+	await unlink(aside).catch(() => undefined);
+}
+
+async function attempt(path: string): Promise<AcquireFileLockResult> {
+	for (;;) {
+		const content: LockContent = {
+			pid: process.pid,
+			hostname: osHostname(),
+			acquiredAt: new Date().toISOString(),
+			token: randomUUID(),
+		};
+		const result = await tryCreate(path, content);
+		if (!result) return { kind: "acquired", handle: createHandle(path, content.token) };
+		if (result.held && isStale(result.held)) {
+			await reclaimStale(path, result.held);
+			continue;
+		}
+		return { kind: "held", heldBy: toHolder(result.held) };
+	}
+}
+
+function createHandle(path: string, token: string): FileLockHandle {
+	let released = false;
+	return {
+		async release(): Promise<void> {
+			if (released) return;
+			released = true;
+			const current = await readContent(path);
+			if (current?.token === token && current.pid === process.pid) {
+				await unlink(path).catch(() => undefined);
+			}
+		},
+	};
+}
+
+/**
+ * Take the lock once, without waiting: the long-lived form (a TUI holding its conversation for
+ * the whole session). A stale lock is reclaimed first; a live holder is reported.
+ */
+export function acquireFileLock(path: string): Promise<AcquireFileLockResult> {
+	return attempt(path);
+}
+
+/**
+ * Run `fn` while holding the lock, retrying with backoff until `timeoutMs` elapses. Not
+ * re-entrant: a nested call on the same path from the same process waits for itself — callers
+ * that can nest (task mutations) track re-entry themselves.
+ */
+export async function withFileLock<T>(path: string, fn: () => Promise<T>, options: WithFileLockOptions): Promise<T> {
+	const deadline = Date.now() + options.timeoutMs;
+	let delay = FIRST_RETRY_MS;
+	for (;;) {
+		const result = await attempt(path);
+		if (result.kind === "acquired") {
+			try {
+				return await fn();
+			} finally {
+				await result.handle.release();
+			}
+		}
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw new FileLockTimeoutError(path, result.heldBy);
+		await new Promise((resolve) => setTimeout(resolve, Math.min(delay, remaining)));
+		delay = Math.min(delay * 2, MAX_RETRY_MS);
+	}
+}

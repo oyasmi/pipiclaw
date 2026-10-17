@@ -718,4 +718,28 @@ daemon 启动时，在任何服务启动之前做旧布局检测。发现以下�
 
 > 由实施 Agent 按 [plan.md](./plan.md) 的「通用规则」逐阶段填写：基线与用例数变化、偏差及理由、D16 SDK 发现路径核对结论、迁移演练报告、评测执行情况。
 
-（尚未开始）
+### 分支
+
+用户指示在 `dev/dots` 上实施；plan 写的是 `feat/dots`。`dev/dots` 从 `feat/dots`（含 spec 提交 `ba10670`）切出。
+
+### P0 基线与 `src/dot/`
+
+**基线**（`ba10670`，全部闸门通过）：单测 136 个文件 / 959 例；确定性 e2e 23 个文件 / 56 例；`src/` 257 个 `.ts` 文件 / 48,684 行；`eval:typecheck` 通过；`node dist/main.js --version` 输出 `0.9.4`。
+
+**交付**：`src/dot/{types,paths,registry,commands}.ts`、`src/shared/file-lock.ts`、`src/channel/channel-id.ts`；`check-architecture.mjs` 与 AGENTS.md 模块表加入 `dot`。
+
+**偏差与决定**：
+
+- **锁文件的独占创建用 `link` 而不是 `open(path, "wx")`**：先把内容写进私有临时文件，再 `link` 到锁路径（已存在时 `EEXIST`）。语义同样是独占创建，但锁文件不会出现"已创建、还没写内容"的空窗，否则一个进程恰好在那一刻崩溃会留下无法判定持有者的空锁。陈旧锁回收先 `rename` 到旁路再核对 token，避免两个回收者互相删掉对方刚建的新锁。锁内容在 `{ pid, hostname, acquiredAt }` 之外多一个 `token`，`release` 同时核对 pid 和 token。
+- **`FileLockTimeoutError` 不用构造函数参数属性**：测试的子进程用 Node 的 type stripping 直接加载 `file-lock.ts`（跨进程结论必须由真实的另一个进程、用真实实现来证明），而 strip 模式不支持参数属性。
+- **`/dot` 的参数解析用例推迟到 P3**：`commands-subcommands.test.ts` 只遍历 catalog 里带 `subcommands` 的命令，而 `dot` 的 catalog 条目在 P3 才加（提前加会让 `/help` 宣传一个还不能执行的命令）。P3 加 catalog 条目时同步把 `parseDotCommand` 登记进该测试的 `PARSERS`。
+- **knip 临时入口**：`knip.json` 的 `entry` 临时加入 `src/dot/*.ts` 和 `src/channel/channel-id.ts`，P2 接入运行时后移除（P2 闸门核对）。
+- `BindOutcome` 比 plan 多一个 `unavailable`：D5 第 1 步要求"dot 存在且可用"，存在但 `dot.json` 损坏的情况需要单独的回复。
+
+**用例数**：单测 959 → 969（+10）。
+
+- `test/file-lock.test.ts` +4：等待另一个进程释放、超时报出持有者 pid、持有者被杀后回收陈旧锁、不删除别人的锁。故障模式都是跨进程互斥失效；现有用例没有任何跨进程锁。
+- `test/dot-registry.test.ts` +6：名字语法边界（一个表驱动用例）、重名创建、会话区按 kind 编号且幂等、另一个进程持有 `dot-json.lock` 时分配会等待、绑定表缺失与损坏、`dot.json` 名字与目录不符判为 invalid。全部是新机制。
+- mutation check：去掉 `allocateConversation` 外层的锁，"分配会等待"变红；让陈旧判定恒为 false，"回收陈旧锁"变红。
+
+e2e：56 → 56。

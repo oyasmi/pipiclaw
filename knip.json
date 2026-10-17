@@ -2,7 +2,9 @@
 	"$schema": "https://unpkg.com/knip@6/schema.json",
 	"entry": [
 		"src/main.ts",
-		"src/index.ts"
+		"src/index.ts",
+		"src/dot/*.ts",
+		"src/channel/channel-id.ts"
 	],
 	"project": [
 		"src/**/*.ts"

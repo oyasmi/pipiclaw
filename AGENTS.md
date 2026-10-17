@@ -10,23 +10,24 @@ A module is a path under `src/`. Dependencies run strictly downward through the 
 
 | Layer | Module | Path | Owns | May import | Typical files |
 |---|---|---|---|---|---|
-| 0 | `shared` | `src/shared/` | small helpers with no domain knowledge | — | `serial-queue.ts`, `atomic-file.ts`, `text-utils.ts` |
+| 0 | `shared` | `src/shared/` | small helpers with no domain knowledge | — | `serial-queue.ts`, `atomic-file.ts`, `file-lock.ts`, `text-utils.ts` |
 | 0 | `commands` | `src/commands/catalog.ts`, `reply-limits.ts` | the slash-command catalog and the reply length budget | — | `catalog.ts`, `reply-limits.ts` |
 | 1 | `foundation` | `src/log.ts`, `paths.ts`, `executor.ts`, `file-store.ts` | process-wide logging and paths, plus the host I/O ports (`Executor` for commands, `FileStore` for file contents, spec 044) | shared | the four files named |
 | 2 | `security` | `src/security/` | command, path and network guards, project scope, audit log | layers 0–1 | `command-guard.ts`, `path-guard.ts`, `network.ts`, `logger.ts` |
 | 2 | `usage` | `src/usage/` | usage ledger, usage rendering, `UsageTotals` | layers 0–1 | `ledger.ts`, `render.ts`, `totals.ts` |
 | 2 | `tasks` | `src/tasks/` | the one-off task project: contract, waiting tickets, loop log, budget, `/tasks`. Scheduling and wake wiring live in `runtime/task-*.ts` so this module stays a leaf | layers 0–1 | `contract.ts`, `ticket.ts`, `loop-log.ts`, `bound-work.ts`, `commands.ts` |
+| 2 | `dot` | `src/dot/` | the dot: a named, explicitly created assistant that owns memory, tasks, events and working files (spec 058); `dot.json`, `dots/bindings.json`, conversation allocation, `/dot` parsing and rendering. Never parses a channel id | layers 0–1 | `types.ts`, `paths.ts`, `registry.ts`, `commands.ts` |
 | 2 | `playbooks` | `src/playbooks/` | read-only runtime playbooks shipped with the package | layers 0–1 | `catalog.ts`, `*.md` |
-| 3 | `channel` | `src/channel/` | the transport-neutral channel domain: the delivery and event contracts, identity, persisted state, `/project` | layers 0–1, security | `channel-context.ts`, `channel-event.ts`, `channel-index.ts`, `store.ts`, `commands.ts` |
+| 3 | `channel` | `src/channel/` | the transport-neutral channel domain: the delivery and event contracts, identity, persisted state, `/project` | layers 0–1, security, dot | `channel-context.ts`, `channel-event.ts`, `channel-id.ts`, `channel-index.ts`, `store.ts`, `commands.ts` |
 | 3 | `tools-contract` | `src/tools/contract/` | tool-result `details` contract, how a tool call is shown, the tool-name lists | layers 0–1, security | `details.ts`, `presentation.ts`, `names.ts` |
 | 4 | `config` | `src/config/` | `settings.json` and `tools.json` loading and validation | layers 0–1, channel (types only) | `settings.ts`, `tools.ts` |
 | 5 | `models` | `src/models/` | model references, the model runtime, API keys, backup-model fallback | layers 0–1, config | `reference.ts`, `runtime.ts`, `fallback.ts` |
 | 5 | `web` | `src/web/` | search and fetch clients, extraction | layers 0–1, security, config | `client.ts`, `search.ts`, `fetch.ts` |
 | 5 | `skills` | `src/skills/` | workspace skill loading, validation, reading, `/skills` | layers 0–1, security | `loader.ts`, `workspace.ts`, `validation.ts`, `commands.ts` |
-| 6 | `memory` | `src/memory/` | channel memory, daily journal, the reflect pass, session search, `/memory` | layers 0–1, channel, config, models, usage | `store.ts`, `reflect.ts`, `scheduler.ts`, `commands.ts` |
-| 6 | `events` | `src/events/` | scheduled and sensor events: definitions, validation, the file watcher, `/events`. Never touches task files (spec 052, INV-8) | layers 0–1, channel, security, tasks | `types.ts`, `parse.ts`, `watcher.ts`, `validation.ts`, `commands.ts` |
-| 7 | `jobs` | `src/jobs/` | background shell jobs | layers 0–1, channel, tasks | `manager.ts`, `launch.ts`, `record.ts` |
-| 7 | `subagents` | `src/subagents/` | role discovery, delegation dispatch, internal and external execution, run lifecycle, leases, `/subagents`. `discovery.ts` is a registered over-long exception: do not grow it | layers 0–1, security, usage, tasks, channel, config, models, memory, tools-contract | `dispatch.ts`, `runs.ts`, `internal/run.ts`, `external/dispatch.ts`, `discovery.ts` |
+| 6 | `memory` | `src/memory/` | channel memory, daily journal, the reflect pass, session search, `/memory` | layers 0–1, dot, channel, config, models, usage | `store.ts`, `reflect.ts`, `scheduler.ts`, `commands.ts` |
+| 6 | `events` | `src/events/` | scheduled and sensor events: definitions, validation, the file watcher, `/events`. Never touches task files (spec 052, INV-8) | layers 0–1, dot, channel, security, tasks | `types.ts`, `parse.ts`, `watcher.ts`, `validation.ts`, `commands.ts` |
+| 7 | `jobs` | `src/jobs/` | background shell jobs | layers 0–1, dot, channel, tasks | `manager.ts`, `launch.ts`, `record.ts` |
+| 7 | `subagents` | `src/subagents/` | role discovery, delegation dispatch, internal and external execution, run lifecycle, leases, `/subagents`. `discovery.ts` is a registered over-long exception: do not grow it | layers 0–1, security, usage, tasks, dot, channel, config, models, memory, tools-contract | `dispatch.ts`, `runs.ts`, `internal/run.ts`, `external/dispatch.ts`, `discovery.ts` |
 | 8 | `tools` | `src/tools/` (not `contract/`) | the tools handed to the model: schemas, validation, calls into domain code, `content`/`details` | layers 0–7 | `registry.ts`, `subagent.ts`, `job.ts`, `memory-manage.ts` |
 | 9 | `agent` | `src/agent/` | per-channel orchestration: the SDK session, one turn, prompts, session commands | layers 0–8 | `channel-runner.ts`, `session/session-host.ts`, `turn/turn-pipeline.ts`, `prompt/` |
 | 10 | `commands-router` | `src/commands/router.ts` | the one dispatch point for stateless report commands, shared by both transports | layers 0–9 | `router.ts` |
