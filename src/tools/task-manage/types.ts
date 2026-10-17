@@ -43,6 +43,8 @@ export interface TaskManageToolOptions {
 	jobManager: ChannelJobManager;
 	runManager: SubAgentRunManager;
 	dotDir: string;
+	/** The current turn's channel: a task created here delivers to it (spec 058, D13). */
+	channelId: string;
 	/** Present only inside a task session: which task's loop this tool set belongs to. */
 	taskId?: string;
 	/** Tools this step has completed so far; feeds the loop log's idle-step evidence (D6). */

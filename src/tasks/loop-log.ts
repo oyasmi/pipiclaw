@@ -6,6 +6,7 @@ import { formatLocalTime } from "../shared/local-time.js";
 import { clipText, truncate } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { normalizeTaskId } from "./contract.js";
+import { withTaskMutation } from "./mutation-lock.js";
 
 /**
  * The task's append-only loop log (spec 051, D5) — `tasks/<id>.jsonl`.
@@ -161,7 +162,9 @@ export async function appendTaskLog(dotDir: string, id: string, record: TaskLogI
 		withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
 		if (withTs.report) withTs.report = clipText(withTs.report, NOTE_MAX_CHARS);
 	}
-	await appenderFor(taskLogPath(dotDir, id)).appendStrict(withTs);
+	// Under the task's mutation lock: the appender rotates by size, and two processes rotating
+	// one log at once would each move the other's fresh records aside.
+	await withTaskMutation(dotDir, id, () => appenderFor(taskLogPath(dotDir, id)).appendStrict(withTs));
 }
 
 const RECORD_KINDS: readonly TaskLogRecord["kind"][] = ["step", "dispatch", "settle", "expired", "close", "note"];

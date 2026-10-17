@@ -228,7 +228,11 @@ export class ArchiveUndoError extends Error {
  * log shard are in the archive, and "rejected" to mean the pre-call state still stands (or, if the
  * undo itself failed, the error says so).
  */
-export async function archiveTask(dotDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
+export function archiveTask(dotDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
+	return withTaskMutation(dotDir, id, () => moveToArchive(dotDir, id, outcome));
+}
+
+async function moveToArchive(dotDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
 	const normalized = normalizeTaskId(id);
 	const archiveDir = join(tasksDir(dotDir), "archive");
 	await mkdir(archiveDir, { recursive: true });

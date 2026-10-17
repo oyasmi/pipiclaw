@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { normalizeTaskId } from "./contract.js";
+import { withTaskMutation } from "./mutation-lock.js";
 
 /**
  * Out-of-band guidance for a running task loop (spec 051, D11) — `/tasks steer` and `/tasks reply`.
@@ -13,6 +14,9 @@ import { normalizeTaskId } from "./contract.js";
  * loop injects whole and which has a hard size budget) and must be consumed exactly once. The
  * next step reads it, deletes it, and puts the text at the top of its own brief; nothing is left
  * behind for a later step to act on twice.
+ *
+ * Each read-modify-write runs under the task's mutation lock: a TUI's `/tasks steer` appending
+ * while the daemon's step consumes would otherwise lose the appended line.
  */
 function steerDir(dotDir: string): string {
 	return join(dotDir, "tasks", ".steer");
@@ -26,23 +30,30 @@ function steerPath(dotDir: string, id: string): string {
 export async function queueTaskSteer(dotDir: string, id: string, text: string, label = "用户指示"): Promise<void> {
 	const trimmed = text.trim();
 	if (!trimmed) return;
-	await mkdir(steerDir(dotDir), { recursive: true });
-	const path = steerPath(dotDir, id);
-	const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n` : "";
-	await writeFileAtomically(path, `${existing}- [${formatLocalTime()}] ${label}：${trimmed}\n`);
+	await withTaskMutation(dotDir, id, async () => {
+		await mkdir(steerDir(dotDir), { recursive: true });
+		const path = steerPath(dotDir, id);
+		const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n` : "";
+		await writeFileAtomically(path, `${existing}- [${formatLocalTime()}] ${label}：${trimmed}\n`);
+	});
 }
 
 /** Read and clear the pending guidance. Returns `undefined` when there is none. */
 export async function consumeTaskSteer(dotDir: string, id: string): Promise<string | undefined> {
-	const path = steerPath(dotDir, id);
+	return consumeOnce(dotDir, id, steerPath(dotDir, id));
+}
+
+async function consumeOnce(dotDir: string, id: string, path: string): Promise<string | undefined> {
 	if (!existsSync(path)) return undefined;
-	try {
-		const text = (await readFile(path, "utf-8")).trim();
-		await rm(path, { force: true });
-		return text || undefined;
-	} catch {
-		return undefined;
-	}
+	return withTaskMutation(dotDir, id, async () => {
+		try {
+			const text = (await readFile(path, "utf-8")).trim();
+			await rm(path, { force: true });
+			return text || undefined;
+		} catch {
+			return undefined;
+		}
+	});
 }
 
 /** Whether guidance is waiting, without consuming it (for `/tasks show`). */
@@ -62,20 +73,14 @@ function noticePath(dotDir: string, id: string): string {
 export async function queueTaskNotice(dotDir: string, id: string, text: string): Promise<void> {
 	const trimmed = text.trim();
 	if (!trimmed) return;
-	await mkdir(steerDir(dotDir), { recursive: true });
-	const path = noticePath(dotDir, id);
-	const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n\n` : "";
-	await writeFileAtomically(path, `${existing}${trimmed}`);
+	await withTaskMutation(dotDir, id, async () => {
+		await mkdir(steerDir(dotDir), { recursive: true });
+		const path = noticePath(dotDir, id);
+		const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n\n` : "";
+		await writeFileAtomically(path, `${existing}${trimmed}`);
+	});
 }
 
 export async function consumeTaskNotice(dotDir: string, id: string): Promise<string | undefined> {
-	const path = noticePath(dotDir, id);
-	if (!existsSync(path)) return undefined;
-	try {
-		const text = (await readFile(path, "utf-8")).trim();
-		await rm(path, { force: true });
-		return text || undefined;
-	} catch {
-		return undefined;
-	}
+	return consumeOnce(dotDir, id, noticePath(dotDir, id));
 }

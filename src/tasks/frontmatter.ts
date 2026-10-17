@@ -39,6 +39,12 @@ export type TaskArchiveOutcome = "completed" | "cancelled";
 export interface TaskFrontmatter {
 	state: TaskState;
 	paused?: TaskPaused;
+	/**
+	 * The delivery channel: where every step, stop receipt and report of this task goes (spec 058,
+	 * D13). Plain text so a human can retarget it by hand. Missing, or not bound to this task's dot,
+	 * means the task is suspended — the driver leaves it frozen until the channel is bound again.
+	 */
+	channel?: string;
 	/** Present iff `state === "parked"` (INV-1). */
 	ticket?: Ticket;
 	usage?: TaskUsage;
@@ -70,7 +76,7 @@ export function taskStateLabel(state: TaskState): string {
 	return STATE_LABELS[state] ?? state;
 }
 /** Fixed render order, so a diff of a task file reads the same way every time. */
-const FIELD_ORDER = ["state", "paused", "origin", "ticket", "usage", "budget"] as const;
+const FIELD_ORDER = ["state", "paused", "channel", "origin", "ticket", "usage", "budget"] as const;
 /** v3 frontmatter keys; their presence means the one-time conversion has not run on this file. */
 const LEGACY_KEYS = new Set(["status", "enabled", "control", "wake", "schedule"]);
 
@@ -158,6 +164,9 @@ export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
 			case "origin":
 				fields.origin = value || undefined;
 				break;
+			case "channel":
+				fields.channel = value || undefined;
+				break;
 			case "outcome":
 				if (value === "completed" || value === "cancelled") fields.outcome = value;
 				break;
@@ -200,6 +209,7 @@ export function renderTaskFrontmatter(fields: TaskFrontmatter): string {
 	if (document.outcome) {
 		lines.push(`outcome: ${document.outcome}`);
 		if (document.closedAt) lines.push(`closedAt: ${document.closedAt}`);
+		if (document.channel) lines.push(`channel: ${document.channel}`);
 		if (document.origin) lines.push(`origin: ${document.origin}`);
 		if (document.usage) lines.push(`usage: ${JSON.stringify(document.usage)}`);
 		lines.push("---");

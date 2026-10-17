@@ -35,7 +35,7 @@ describe("task tool surface (spec 052, D7)", () => {
 		dotDir = join(workspaceDir, CHANNEL_ID);
 		tasksDir = join(dotDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
-		options = { ...testManagers(CHANNEL_ID), dotDir };
+		options = { ...testManagers(CHANNEL_ID), dotDir, channelId: CHANNEL_ID };
 	});
 
 	afterEach(async () => {
@@ -262,12 +262,12 @@ describe("task tool surface (spec 052, D7)", () => {
 
 		it("the tool wrapper sets terminate:true on success but not on a recoverable failure", async () => {
 			await writeTask("term");
-			const tool = createTaskStepEndTool({ ...testManagers(), dotDir, taskId: "term" });
+			const tool = createTaskStepEndTool({ ...testManagers(), dotDir, channelId: CHANNEL_ID, taskId: "term" });
 			expect((await tool.execute("c", { outcome: "continue", note: "n" } as never)).terminate).toBe(true);
 
 			await writeTask("term2", {}, OPEN_DOD_BODY);
 			await expect(
-				createTaskStepEndTool({ ...testManagers(), dotDir, taskId: "term2" }).execute("c", {
+				createTaskStepEndTool({ ...testManagers(), dotDir, channelId: CHANNEL_ID, taskId: "term2" }).execute("c", {
 					outcome: "done",
 					note: "n",
 				} as never),

@@ -64,6 +64,7 @@ export function createTaskSpawner(
 			dotDir,
 			id,
 			input: request.template,
+			channel: request.channelId,
 			origin: request.eventName,
 			now: request.occurrence,
 		});

@@ -129,6 +129,7 @@ function taskToolOptions(ctx: ToolBuildContext) {
 		jobManager: req(ctx.jobManager, "jobManager"),
 		runManager: req(ctx.runManager, "runManager"),
 		dotDir: ctx.dotDir,
+		channelId: ctx.channelId,
 	};
 }
 
