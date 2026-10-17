@@ -50,7 +50,7 @@ export interface ToolBuildContext {
 	securityConfig: SecurityConfig;
 	securityContext: SecurityRuntimeContext;
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	/** Main set: `toolsConfig.tools.web`; sub-agent set: the sub-agent's own webConfig. */
 	webConfig?: PipiclawWebToolsConfig;
@@ -62,7 +62,7 @@ export interface ToolBuildContext {
 	rtkEnabled?: boolean;
 	/**
 	 * Set by `buildToolSet` from `BuildToolSetOptions.forSubagent`. A sub-agent's `securityContext`
-	 * has no `channelDir` and may be project-bounded, so tools that would otherwise write into the
+	 * has no `dotDir` and may be project-bounded, so tools that would otherwise write into the
 	 * channel directory (bash/job output spill) must fall back to a neutral location for it.
 	 */
 	forSubagent?: boolean;
@@ -119,7 +119,7 @@ function fileToolOptions(ctx: ToolBuildContext) {
 function memoryToolOptions(ctx: ToolBuildContext) {
 	return {
 		channelId: ctx.channelId,
-		channelDir: ctx.channelDir,
+		dotDir: ctx.dotDir,
 		workspaceDir: ctx.workspaceDir,
 	};
 }
@@ -128,7 +128,7 @@ function taskToolOptions(ctx: ToolBuildContext) {
 	return {
 		jobManager: req(ctx.jobManager, "jobManager"),
 		runManager: req(ctx.runManager, "runManager"),
-		channelDir: ctx.channelDir,
+		dotDir: ctx.dotDir,
 	};
 }
 
@@ -155,7 +155,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				rtkEnabled: ctx.rtkEnabled === true,
 				interceptorEnabled: ctx.toolsConfig?.tools.bashInterceptor.enabled === true,
 				// Sub-agents get no channel dir (their guard context has none); their spill stays in tmpdir.
-				...(ctx.forSubagent ? {} : { channelDir: ctx.channelDir }),
+				...(ctx.forSubagent ? {} : { dotDir: ctx.dotDir }),
 				...(ctx.taskLoop ? { boundTaskId: ctx.taskLoop.taskId } : {}),
 				...(ctx.jobManager ? { jobManager: ctx.jobManager } : {}),
 				...(ctx.bashDefaultTimeoutSeconds !== undefined
@@ -199,7 +199,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				securityConfig: ctx.securityConfig,
 				workspaceDir: ctx.workspaceDir,
 				channelId: ctx.channelId,
-				channelDir: ctx.channelDir,
+				dotDir: ctx.dotDir,
 			}),
 	},
 	{
@@ -220,7 +220,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		create: (ctx) =>
 			createSessionSearchTool({
 				channelId: ctx.channelId,
-				channelDir: ctx.channelDir,
+				dotDir: ctx.dotDir,
 				getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
 				resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
 				getSessionSearchSettings: req(ctx.getSessionSearchSettings, "getSessionSearchSettings"),

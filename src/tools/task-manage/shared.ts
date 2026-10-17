@@ -8,7 +8,7 @@ import { RecoverableToolError } from "../contract/details.js";
 import type { TaskManageToolOptions } from "./types.js";
 
 export function tasksDir(options: TaskManageToolOptions): string {
-	return join(options.channelDir, "tasks");
+	return join(options.dotDir, "tasks");
 }
 
 export function requiredField(value: string | undefined, field: string, action: string): string {
@@ -105,7 +105,7 @@ export async function closeTaskDocument(input: CloseTaskInput): Promise<{ stillR
 	}
 	await input.afterChecks?.();
 	const usage = document.fields.usage;
-	await appendTaskLog(options.channelDir, id, {
+	await appendTaskLog(options.dotDir, id, {
 		kind: "close",
 		outcome: outcome === "complete" ? "done" : "cancelled",
 		note,
@@ -113,6 +113,6 @@ export async function closeTaskDocument(input: CloseTaskInput): Promise<{ stillR
 		usd: usage?.usd ?? 0,
 	});
 	await writeStoredTask(document);
-	await archiveTask(options.channelDir, id, outcome === "complete" ? "completed" : "cancelled");
+	await archiveTask(options.dotDir, id, outcome === "complete" ? "completed" : "cancelled");
 	return { stillRunning: outcome === "cancel" ? pending : [] };
 }

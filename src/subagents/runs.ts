@@ -353,8 +353,8 @@ export class SubAgentRunManager {
 					this.externalLaunches.delete(record.runId);
 					throw error;
 				}
-				if (record.taskId && record.channelDir) {
-					await logTaskDispatch(record.channelDir, record.taskId, {
+				if (record.taskId && record.dotDir) {
+					await logTaskDispatch(record.dotDir, record.taskId, {
 						ref: record.runId,
 						item: record.item,
 						agent: record.agent,
@@ -408,7 +408,7 @@ export class SubAgentRunManager {
 			 *  would, not a thinner subset. */
 			maxWallTimeSec?: number;
 			processStartedAt?: number;
-			channelDir?: string;
+			dotDir?: string;
 			/** Spec 042 D10: non-fatal invocation warnings from argv assembly (e.g. a dropped
 			 *  placeholder token), so they survive on the run rather than only ever hitting a log line. */
 			invocationWarnings?: string[];
@@ -433,7 +433,7 @@ export class SubAgentRunManager {
 			if (info.sessionId) record.sessionId = info.sessionId;
 			record.maxWallTimeSec = info.maxWallTimeSec;
 			record.processStartedAt = info.processStartedAt;
-			record.channelDir = info.channelDir;
+			record.dotDir = info.dotDir;
 			record.invocationWarnings = info.invocationWarnings;
 			record.roleFingerprint = info.roleFingerprint;
 			record.parserVersion = info.parserVersion;
@@ -618,7 +618,7 @@ export class SubAgentRunManager {
 			// budget and the outcome onto its log (the board's source), whether or not the run record
 			// is still around by the time the leader looks. Guarded by its own idempotency marker
 			// inside the same settlement lock, so a replay writes nothing twice.
-			if (!record.taskAccounted && record.taskId && record.channelDir) {
+			if (!record.taskAccounted && record.taskId && record.dotDir) {
 				record.taskAccounted = true;
 				await this.creditOwningTask(record, input, outputSaved).catch((error) => {
 					log.logWarn("subagent.task_settle.log_failed", "Task credit for run failed", {
@@ -645,11 +645,11 @@ export class SubAgentRunManager {
 	 * block the completion wake.
 	 */
 	private async creditOwningTask(record: RunRecord, input: SettleInput, outputSaved: boolean): Promise<void> {
-		const channelDir = record.channelDir;
+		const dotDir = record.dotDir;
 		const taskId = record.taskId;
-		if (!channelDir || !taskId) return;
+		if (!dotDir || !taskId) return;
 		await logTaskSettlement(
-			channelDir,
+			dotDir,
 			taskId,
 			{
 				ref: record.runId,

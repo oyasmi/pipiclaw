@@ -24,8 +24,8 @@ export function relativeImagePaths(
 	images: InboundImage[] | undefined,
 ): string[] {
 	if (!images || images.length === 0) return [];
-	const channelDir = getChannelDir(workspaceDir, channelId);
-	return images.map((image) => relative(channelDir, image.path));
+	const dotDir = getChannelDir(workspaceDir, channelId);
+	return images.map((image) => relative(dotDir, image.path));
 }
 
 /**

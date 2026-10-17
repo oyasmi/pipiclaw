@@ -42,7 +42,7 @@ describe("E2E deterministic: event_manage guards", () => {
 			(message) => message.role === "tool",
 		);
 		expect(toolResult?.content.length).toBeGreaterThan(0);
-		const stored = readFileSync(join(harness.channelDir, "context.jsonl"), "utf8")
+		const stored = readFileSync(join(harness.dotDir, "context.jsonl"), "utf8")
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line))

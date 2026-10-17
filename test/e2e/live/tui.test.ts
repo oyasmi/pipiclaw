@@ -58,9 +58,9 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		expect(output.toUpperCase(), getE2ESkipReason() ?? undefined).toContain("PONG");
 
 		// The terminal channel shares the DingTalk memory layout: workspace/<id>/.
-		const channelDir = join(home.workspaceDir, "tui_e2e");
-		expect(existsSync(join(channelDir, "SESSION.md"))).toBe(true);
-		const logPath = join(channelDir, "log.jsonl");
+		const dotDir = join(home.workspaceDir, "tui_e2e");
+		expect(existsSync(join(dotDir, "SESSION.md"))).toBe(true);
+		const logPath = join(dotDir, "log.jsonl");
 		expect(existsSync(logPath)).toBe(true);
 		// The incoming user message was archived, mirroring the DingTalk path.
 		expect(readFileSync(logPath, "utf-8")).toContain("PONG");

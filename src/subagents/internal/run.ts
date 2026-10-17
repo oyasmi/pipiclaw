@@ -87,7 +87,7 @@ export async function dispatchInternalRun(input: InternalRunInput): Promise<Dele
 			item: runContext.item,
 			workingDirectory: runContext.workingDirectory,
 			artifactDir: runContext.artifactDir,
-			channelDir: options.channelDir,
+			dotDir: options.dotDir,
 			leaseKey,
 			mutates: config.mutates,
 			workspaceBaseline: input.workspaceBaseline,

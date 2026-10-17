@@ -82,8 +82,8 @@ describe("command subcommand examples round-trip through their parser", () => {
 					continue;
 				}
 				if (name === "memory") {
-					const channelDir = makeChannel();
-					await applyMemoryOps(channelDir, [
+					const dotDir = makeChannel();
+					await applyMemoryOps(dotDir, [
 						{
 							op: "add",
 							name: "deploy-window-thursday",
@@ -93,9 +93,9 @@ describe("command subcommand examples round-trip through their parser", () => {
 						},
 					]);
 					if (args.startsWith("journal")) {
-						await appendJournalEntries(channelDir, localDayKey(), ["01:23 memory journal route sentinel"]);
+						await appendJournalEntries(dotDir, localDayKey(), ["01:23 memory journal route sentinel"]);
 					}
-					const result = await handleMemoryCommand({ channelId: "dm_1", channelDir, args });
+					const result = await handleMemoryCommand({ channelId: "dm_1", dotDir, args });
 					switch (args.trim().split(/\s+/)[0]) {
 						case "status":
 							expect(result).toContain("频道条目：`1`");
@@ -107,7 +107,7 @@ describe("command subcommand examples round-trip through their parser", () => {
 							expect(result).toContain("memory command route sentinel");
 							break;
 						case "forget":
-							expect(await listMemoryEntries(channelDir)).toHaveLength(0);
+							expect(await listMemoryEntries(dotDir)).toHaveLength(0);
 							break;
 						case "journal":
 							expect(result).toContain("memory journal route sentinel");

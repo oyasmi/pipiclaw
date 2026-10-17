@@ -46,12 +46,12 @@ export async function runReportCommand(
 	args: string,
 ): Promise<string> {
 	const { channelId, paths } = context;
-	const channelDir = getChannelDir(paths.workspaceDir, channelId);
+	const dotDir = getChannelDir(paths.workspaceDir, channelId);
 	switch (name) {
 		case "events":
 			return handleEventsCommand({ args, workspaceDir: paths.workspaceDir, historyPath: paths.eventHistoryPath });
 		case "tasks":
-			return handleTasksCommand({ args, channelDir, dispatchTask: context.dispatchTask });
+			return handleTasksCommand({ args, dotDir, dispatchTask: context.dispatchTask });
 		case "status":
 			return renderStatus({
 				runner: context.peekRunner(),

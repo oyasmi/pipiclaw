@@ -106,11 +106,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	log.configureLogging(settingsManager.getLoggingSettings());
 	log.logStartup(paths.workspaceDir);
 
-	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
+	const dotDir = ensureChannelDir(paths.workspaceDir, channelId);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
 	const jobs = createJobRuntime(createExecutor());
 	const runs = createSubAgentRuntime();
-	const runner = createRunner(channelId, channelDir, {
+	const runner = createRunner(channelId, dotDir, {
 		jobManager: jobs.get(channelId),
 		runManager: runs.get(channelId),
 		appHomeDir: paths.appHomeDir,

@@ -47,7 +47,7 @@ export type {
  */
 
 async function withLock<T>(options: TaskManageToolOptions, id: string, mutate: () => Promise<T>): Promise<T> {
-	return withTaskMutation(options.channelDir, normalizeTaskId(id), mutate);
+	return withTaskMutation(options.dotDir, normalizeTaskId(id), mutate);
 }
 
 export function createTaskListTool(options: TaskManageToolOptions): AgentTool<typeof taskListSchema> {

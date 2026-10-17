@@ -205,8 +205,8 @@ const CHANNEL_DIR_PREFIXES = ["dm_", "group_"];
 
 export interface WorkspaceRecoveryReport {
 	scanned: number;
-	repaired: Array<{ channelDir: string; outcome: Extract<TurnRecoveryOutcome, { kind: "repaired" }> }>;
-	blocked: Array<{ channelDir: string; reason: string }>;
+	repaired: Array<{ dotDir: string; outcome: Extract<TurnRecoveryOutcome, { kind: "repaired" }> }>;
+	blocked: Array<{ dotDir: string; reason: string }>;
 }
 
 /**
@@ -233,19 +233,19 @@ export async function scanWorkspaceForInterruptedTurns(
 		if (!entry.isDirectory() || !CHANNEL_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) {
 			continue;
 		}
-		const channelDir = join(workspaceDir, entry.name);
+		const dotDir = join(workspaceDir, entry.name);
 		report.scanned++;
 		try {
-			const activeSessionFile = resolveActiveSessionFile(channelDir);
-			const sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
+			const activeSessionFile = resolveActiveSessionFile(dotDir);
+			const sessionManager = SessionManager.open(join(dotDir, activeSessionFile), dotDir);
 			const outcome = recoverInterruptedTurn(sessionManager, fallbackModel);
 			if (outcome.kind === "repaired") {
-				report.repaired.push({ channelDir, outcome });
+				report.repaired.push({ dotDir, outcome });
 			} else if (outcome.kind === "blocked") {
-				report.blocked.push({ channelDir, reason: outcome.reason });
+				report.blocked.push({ dotDir, reason: outcome.reason });
 			}
 		} catch (error) {
-			report.blocked.push({ channelDir, reason: error instanceof Error ? error.message : String(error) });
+			report.blocked.push({ dotDir, reason: error instanceof Error ? error.message : String(error) });
 		}
 	}
 	return report;

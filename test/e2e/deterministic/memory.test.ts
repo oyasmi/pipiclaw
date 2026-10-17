@@ -24,11 +24,8 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// Regression: the tool advertised journal search but never passed journals to searchMemory.
 		// Mutation check: omit journal.days in memory-manage.ts; the tool-message assertion fails.
 		harness = await createDeterministicHarness();
-		mkdirSync(join(harness.channelDir, "journal"), { recursive: true });
-		writeFileSync(
-			join(harness.channelDir, "journal", "2020-01-02.md"),
-			"- release checkpoint: JOURNAL-EVIDENCE-73\n",
-		);
+		mkdirSync(join(harness.dotDir, "journal"), { recursive: true });
+		writeFileSync(join(harness.dotDir, "journal", "2020-01-02.md"), "- release checkpoint: JOURNAL-EVIDENCE-73\n");
 		harness.model.script.route({
 			name: "search-journal",
 			when: (r) => r.isMainTurn,
@@ -67,7 +64,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("记住：生产库端口 6432。");
 
 		const saved = await waitForFileContent(
-			join(harness.channelDir, "memory", "prod-db-port.md"),
+			join(harness.dotDir, "memory", "prod-db-port.md"),
 			(c) => c.includes("6432"),
 			{ timeoutMs: 10_000, intervalMs: 100 },
 		);
@@ -142,7 +139,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 
 		// One task step in between. The task cycle gets its own session, so it gets its own
 		// bootstrap — that part is correct and stays.
-		const tasksDir = join(harness.channelDir, "tasks");
+		const tasksDir = join(harness.dotDir, "tasks");
 		const entry = (await readActiveTasks(tasksDir)).find((e) => e.id === taskId);
 		expect(entry).toBeDefined();
 		const driver = createTaskDriverEvent(harness.channelId, entry!, Date.now());
@@ -189,7 +186,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("部署脚本在哪？");
 		await harness.sendUserMessage("/new"); // boundary reflect, runs detached in the background
 
-		const indexPath = join(harness.channelDir, "MEMORY.md");
+		const indexPath = join(harness.dotDir, "MEMORY.md");
 		await waitForFileContent(indexPath, (c) => c.includes("部署脚本是 scripts/deploy.sh"), {
 			timeoutMs: 10_000,
 			intervalMs: 100,
@@ -197,13 +194,13 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// The journal filename is the *local* calendar day (`localDayKey`), not the UTC one — deriving
 		// it from `toISOString()` made this case fail for every hour the two disagree (found 2026-09-06).
 		const today = localDayKey();
-		const journalPath = join(harness.channelDir, "journal", `${today}.md`);
+		const journalPath = join(harness.dotDir, "journal", `${today}.md`);
 		const journal = await waitForFileContent(journalPath, (c) => c.includes("完成一次部署"), {
 			timeoutMs: 10_000,
 			intervalMs: 100,
 		});
 		expect(journal).toContain("01:00 完成一次部署");
-		expect(readdirSync(join(harness.channelDir, "memory")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
+		expect(readdirSync(join(harness.dotDir, "memory")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
 
 		// A second /new with nothing said in between reflects on an empty window — no new call.
 		// Instantiate the empty session: /new alone can take the runner-free runtime path.
@@ -248,20 +245,20 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		});
 
 		await harness.sendUserMessage("记住：生产密钥保管在保险柜。");
-		await waitForFileContent(join(harness.channelDir, "memory", "prod-key-location.md"), () => true, {
+		await waitForFileContent(join(harness.dotDir, "memory", "prod-key-location.md"), () => true, {
 			timeoutMs: 10_000,
 			intervalMs: 100,
 		});
 
 		await harness.sendUserMessage("/new");
-		const reviewLogPath = join(harness.channelDir, "memory-review.jsonl");
+		const reviewLogPath = join(harness.dotDir, "memory-review.jsonl");
 		await waitForFileContent(
 			reviewLogPath,
 			(c) => c.includes("prod-key-location") && c.includes("cannot be auto-deleted"),
 			{ timeoutMs: 10_000, intervalMs: 100 },
 		);
 
-		expect(existsSync(join(harness.channelDir, "memory", "prod-key-location.md"))).toBe(true);
+		expect(existsSync(join(harness.dotDir, "memory", "prod-key-location.md"))).toBe(true);
 	});
 
 	it("M8: touch clears probation; an untouched, already-expired entry is deleted before the next reflect", async () => {
@@ -276,7 +273,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// First turn establishes the channel (and its migration) before we hand-seed entries.
 		await harness.sendUserMessage("你好");
 
-		const memoryDir = join(harness.channelDir, "memory");
+		const memoryDir = join(harness.dotDir, "memory");
 		mkdirSync(memoryDir, { recursive: true });
 		const yesterday = localDayKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
 		const farFuture = localDayKey(new Date(Date.now() + 20 * 24 * 60 * 60 * 1000));
@@ -302,7 +299,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("/new");
 
 		await waitForFileContent(
-			join(harness.channelDir, "MEMORY.md"),
+			join(harness.dotDir, "MEMORY.md"),
 			(c) => c.includes("touched probationary fact") && !c.includes("already-expired"),
 			{ timeoutMs: 10_000, intervalMs: 100 },
 		);

@@ -69,7 +69,7 @@ const memoryForgetSchema = Type.Object({
 
 export interface MemoryManageToolOptions {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	channelMemoryQueue?: ChannelMemoryQueue;
 }
@@ -135,14 +135,14 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 			// `replaces: "none"` is an explicit "both facts are true, keep both" waiver, so it skips
 			// the near-duplicate gate just like naming a real target does.
 			if (!args.replaces) {
-				const existing = await listMemoryEntries(options.channelDir);
+				const existing = await listMemoryEntries(options.dotDir);
 				const near = findNearDuplicateEntries(content, existing);
 				if (near.length > 0) {
 					similar = near;
 					return null;
 				}
 			}
-			return applyMemoryOps(options.channelDir, [
+			return applyMemoryOps(options.dotDir, [
 				replaces
 					? {
 							op: "update",
@@ -210,7 +210,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 	}
 
 	async function logMemorySave(opts: MemoryManageToolOptions, name: string, op: "add" | "update") {
-		await appendMemoryReviewLog(opts.channelDir, {
+		await appendMemoryReviewLog(opts.dotDir, {
 			timestamp: new Date().toISOString(),
 			channelId: opts.channelId,
 			reason: "memory-save",
@@ -224,14 +224,14 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 			throw new RecoverableToolError("memory_search requires a non-empty query.");
 		}
 		const [entries, workspaceMemory, journal] = await Promise.all([
-			listMemoryEntries(options.channelDir),
+			listMemoryEntries(options.dotDir),
 			readWorkspaceMemory(options.workspaceDir),
-			readJournalForSearch(options.channelDir),
+			readJournalForSearch(options.dotDir),
 		]);
 		const hits = searchMemory({ query: trimmed, entries, workspaceMemory, journal: journal.days });
 		const scopeHint =
 			journal.omittedDays > 0 || journal.truncatedDates.length > 0
-				? `\nJournal search omitted ${journal.omittedDays} older day files and older text in ${journal.truncatedDates.length} large files. Use grep in ${join(options.channelDir, "journal")} or read a dated file to search the omitted history.`
+				? `\nJournal search omitted ${journal.omittedDays} older day files and older text in ${journal.truncatedDates.length} large files. Use grep in ${join(options.dotDir, "journal")} or read a dated file to search the omitted history.`
 				: "";
 		if (hits.length === 0) {
 			return textResult(
@@ -265,16 +265,16 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		if (!trimmed) {
 			throw new RecoverableToolError("memory_forget requires a non-empty name.");
 		}
-		const entry = await readMemoryEntry(options.channelDir, trimmed);
+		const entry = await readMemoryEntry(options.dotDir, trimmed);
 		if (!entry) {
 			return textResult(`No memory named "${trimmed}" exists in this channel; nothing was removed.`, {
 				forgotten: false,
 			});
 		}
 		await queue.run(options.channelId, () =>
-			applyMemoryOps(options.channelDir, [{ op: "delete", name: trimmed, reason: "user forget" }]),
+			applyMemoryOps(options.dotDir, [{ op: "delete", name: trimmed, reason: "user forget" }]),
 		);
-		await appendMemoryReviewLog(options.channelDir, {
+		await appendMemoryReviewLog(options.dotDir, {
 			timestamp: new Date().toISOString(),
 			channelId: options.channelId,
 			reason: "memory-forget",

@@ -84,7 +84,7 @@ export function boundCompactionMessages(
 
 export interface MemoryLifecycleOptions {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	appHomeDir?: string;
 	getMessages: () => AgentMessage[];
@@ -194,7 +194,7 @@ export class MemoryLifecycle {
 		correlationId?: string;
 	}): Promise<void> {
 		try {
-			await appendMemoryReviewLog(this.options.channelDir, {
+			await appendMemoryReviewLog(this.options.dotDir, {
 				timestamp: formatLocalTime(),
 				channelId: this.options.channelId,
 				...entry,
@@ -258,7 +258,7 @@ export class MemoryLifecycle {
 			log.logInfo(`[${this.options.channelId}] Memory reflect starting (${reason})`);
 			const result = await runReflect({
 				channelId: this.options.channelId,
-				channelDir: this.options.channelDir,
+				dotDir: this.options.dotDir,
 				workspaceDir: this.options.workspaceDir,
 				model: this.options.getModel(),
 				resolveApiKey: this.options.resolveApiKey,

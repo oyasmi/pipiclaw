@@ -114,9 +114,9 @@ export function createEventTurnRunner(
 	): Promise<{ taskId: string; brief: string } | undefined> => {
 		const taskId = parseDriverTaskId(event.text) ?? event.internalWake?.taskId;
 		if (!taskId) return undefined;
-		const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
+		const dotDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
 		try {
-			const brief = await buildTaskStepBrief({ channelDir, taskId });
+			const brief = await buildTaskStepBrief({ dotDir, taskId });
 			if (!brief) return undefined;
 			await runner.bindTaskSession(taskId);
 			return { taskId, brief };
@@ -132,9 +132,9 @@ export function createEventTurnRunner(
 
 	/** Deliver whatever the step asked to say, then hand the runner back to the chat session. */
 	const finishTaskStep = async (channelId: string, taskId: string, bot: DingTalkBotPort): Promise<void> => {
-		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
+		const dotDir = ensureChannelDir(options.paths.workspaceDir, channelId);
 		try {
-			const notice = await consumeTaskNotice(channelDir, taskId);
+			const notice = await consumeTaskNotice(dotDir, taskId);
 			if (notice) {
 				// runner.run closes its per-turn delivery context before returning. Sending through that
 				// closed context silently dropped successful task_step_end notifications (T-run-01).

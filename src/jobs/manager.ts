@@ -69,10 +69,10 @@ export interface JobManagerOptions {
 	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
 	fileStore?: FileStore;
 	/** Directory the full-output spill (and its `.exit`/`.ready`/`.meta` siblings) is written to.
-	 * Defaults to the OS temp dir; the runtime passes `<channelDir>/logs` so the model can read it. */
+	 * Defaults to the OS temp dir; the runtime passes `<dotDir>/logs` so the model can read it. */
 	spillDir?: string;
 	/** This channel's directory, where a task-bound job logs its dispatch and settlement (spec 052, D4). */
-	channelDir?: string;
+	dotDir?: string;
 }
 
 /** Cap on concurrently running jobs per channel, so a runaway model can't spawn unbounded processes. */
@@ -373,8 +373,8 @@ export class ChannelJobManager {
 			});
 			throw failure;
 		}
-		if (options.taskId && this.options.channelDir) {
-			await logTaskDispatch(this.options.channelDir, options.taskId, {
+		if (options.taskId && this.options.dotDir) {
+			await logTaskDispatch(this.options.dotDir, options.taskId, {
 				ref: id,
 				agent: "job",
 				label,
@@ -681,11 +681,11 @@ export class ChannelJobManager {
 	 */
 	private async logSettlementToTask(record: JobRecord): Promise<void> {
 		const taskId = record.contract.taskId;
-		const channelDir = this.options.channelDir;
-		if (!taskId || !channelDir || record.taskLogged) return;
+		const dotDir = this.options.dotDir;
+		if (!taskId || !dotDir || record.taskLogged) return;
 		record.taskLogged = true;
 		const output = await this.readOutput(record.id).catch(() => undefined);
-		await logTaskSettlement(channelDir, taskId, {
+		await logTaskSettlement(dotDir, taskId, {
 			ref: record.id,
 			status: record.status,
 			exitCode: record.exitCode,
@@ -1041,7 +1041,7 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 				...(config.workspaceDir
 					? {
 							spillDir: join(getChannelDir(config.workspaceDir, channelId), "logs"),
-							channelDir: getChannelDir(config.workspaceDir, channelId),
+							dotDir: getChannelDir(config.workspaceDir, channelId),
 						}
 					: {}),
 				...(config.dispatch ? { dispatch: config.dispatch } : {}),

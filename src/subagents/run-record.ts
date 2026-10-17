@@ -117,7 +117,7 @@ export interface RunRecord extends RunUsage {
 	processStartedAt?: number;
 	/** This run's channel directory, so settlement (including restart reconciliation) can reach the
 	 *  owning task's log (spec 052, D4). */
-	channelDir?: string;
+	dotDir?: string;
 	/** True when `durationMs` is a restart-reconciliation estimate rather than a measured process
 	 *  lifetime (spec 042 D1) — display surfaces prefix it with "≈". */
 	durationEstimated?: boolean;
@@ -155,7 +155,7 @@ export interface RegisterRunInput {
 	/** This run's channel directory — where its owning task lives. Set at registration for every
 	 *  runtime, so settlement can credit the task whether the run was internal or external; the
 	 *  external launch path re-persists it with the rest of its info. */
-	channelDir?: string;
+	dotDir?: string;
 	/** Set only when the caller already holds a workspace write lease for this run (D10.1). */
 	leaseKey?: string;
 	mutates?: RunMutates;

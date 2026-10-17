@@ -6,8 +6,8 @@ import { normalizeTaskId } from "./contract.js";
 const mutationQueue = createSerialQueue<string>();
 const heldKeys = new AsyncLocalStorage<ReadonlySet<string>>();
 
-function taskMutationKey(channelDir: string, id: string): string {
-	return join(channelDir, "tasks", `${normalizeTaskId(id)}.md`);
+function taskMutationKey(dotDir: string, id: string): string {
+	return join(dotDir, "tasks", `${normalizeTaskId(id)}.md`);
 }
 
 /**
@@ -17,8 +17,8 @@ function taskMutationKey(channelDir: string, id: string): string {
  * unsupported. Re-entrancy is required because a command/tool transaction may call a lower-level
  * store helper for the same task.
  */
-export function withTaskMutation<T>(channelDir: string, id: string, mutate: () => Promise<T>): Promise<T> {
-	const key = taskMutationKey(channelDir, id);
+export function withTaskMutation<T>(dotDir: string, id: string, mutate: () => Promise<T>): Promise<T> {
+	const key = taskMutationKey(dotDir, id);
 	const current = heldKeys.getStore();
 	if (current?.has(key)) return mutate();
 

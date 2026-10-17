@@ -7,7 +7,7 @@ import { runSidecarTask } from "./sidecar-worker.js";
 
 export interface SearchChannelSessionsRequest {
 	channelId?: string;
-	channelDir: string;
+	dotDir: string;
 	query: string;
 	roleFilter?: string[];
 	limit: number;
@@ -195,7 +195,7 @@ function toResult(
 ): SessionSearchResult {
 	return {
 		source: document.source,
-		path: relative(request.channelDir, document.path) || document.path,
+		path: relative(request.dotDir, document.path) || document.path,
 		when: document.timestamp,
 		role: document.role,
 		score: Number(score.toFixed(3)),
@@ -205,7 +205,7 @@ function toResult(
 }
 
 interface CorpusCacheEntry {
-	channelDir: string;
+	dotDir: string;
 	maxFiles: number;
 	maxCharsPerChunk: number;
 	documents: SessionSearchDocument[];
@@ -216,16 +216,16 @@ const CORPUS_CACHE_TTL_MS = 30_000;
 const CORPUS_CACHE_MAX_CHANNELS = 8;
 const corpusCache = new Map<string, CorpusCacheEntry>();
 
-function corpusCacheKey(channelDir: string, maxFiles: number, maxCharsPerChunk: number): string {
-	return JSON.stringify([channelDir, maxFiles, maxCharsPerChunk]);
+function corpusCacheKey(dotDir: string, maxFiles: number, maxCharsPerChunk: number): string {
+	return JSON.stringify([dotDir, maxFiles, maxCharsPerChunk]);
 }
 
 async function getCachedCorpus(
-	channelDir: string,
+	dotDir: string,
 	maxFiles: number,
 	maxCharsPerChunk: number,
 ): Promise<SessionSearchDocument[]> {
-	const key = corpusCacheKey(channelDir, maxFiles, maxCharsPerChunk);
+	const key = corpusCacheKey(dotDir, maxFiles, maxCharsPerChunk);
 	const cached = corpusCache.get(key);
 	if (cached && Date.now() - cached.timestamp < CORPUS_CACHE_TTL_MS) {
 		corpusCache.delete(key);
@@ -234,12 +234,12 @@ async function getCachedCorpus(
 	}
 
 	const documents = await buildSessionCorpus({
-		channelDir,
+		dotDir,
 		maxFiles,
 		maxCharsPerDocument: maxCharsPerChunk,
 	});
 	corpusCache.delete(key);
-	corpusCache.set(key, { channelDir, maxFiles, maxCharsPerChunk, documents, timestamp: Date.now() });
+	corpusCache.set(key, { dotDir, maxFiles, maxCharsPerChunk, documents, timestamp: Date.now() });
 	if (corpusCache.size > CORPUS_CACHE_MAX_CHANNELS) {
 		const oldestKey = corpusCache.keys().next().value;
 		if (oldestKey) corpusCache.delete(oldestKey);
@@ -252,7 +252,7 @@ export async function searchChannelSessions(request: SearchChannelSessionsReques
 	const maxChunks = clampInteger(request.maxChunks, 1, 500);
 	const query = request.query.trim();
 	const roleFilter = normalizeRoleFilter(request.roleFilter);
-	const documents = (await getCachedCorpus(request.channelDir, request.maxFiles, request.maxCharsPerChunk))
+	const documents = (await getCachedCorpus(request.dotDir, request.maxFiles, request.maxCharsPerChunk))
 		.filter((document) => roleFilter.size === 0 || roleFilter.has(document.role))
 		.sort(sortRecentDocuments)
 		.slice(0, maxChunks);

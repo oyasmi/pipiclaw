@@ -62,7 +62,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly runManager: SubAgentRunManager;
 	private readonly fileStore: FileStore;
 	private readonly channelId: string;
-	private readonly channelDir: string;
+	private readonly dotDir: string;
 	private readonly appHomeDir: string;
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
@@ -91,9 +91,9 @@ export class ChannelRunner implements AgentRunner {
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
 
-	constructor(channelId: string, channelDir: string, paths: RunnerFactoryPaths, deps: RunnerDeps) {
+	constructor(channelId: string, dotDir: string, paths: RunnerFactoryPaths, deps: RunnerDeps) {
 		this.channelId = channelId;
-		this.channelDir = channelDir;
+		this.dotDir = dotDir;
 		this.appHomeDir = paths.appHomeDir;
 		this.authConfigPath = paths.authConfigPath;
 		this.modelsConfigPath = paths.modelsConfigPath;
@@ -105,16 +105,16 @@ export class ChannelRunner implements AgentRunner {
 		this.runManager = paths.runManager;
 		this.fileStore = deps.fileStore;
 		this.loadSecurityConfig = deps.loadSecurityConfig;
-		this.workspaceDir = resolve(dirname(channelDir));
+		this.workspaceDir = resolve(dirname(dotDir));
 
 		// Initial skill summaries
-		const initialSkills = loadPipiclawSkills(channelDir);
+		const initialSkills = loadPipiclawSkills(dotDir);
 
 		// Create session manager, opening whichever session this channel's active-session ref
 		// (or the context.jsonl default, for a channel that has never run a topology op) names
 		// (spec 043, D1).
-		const activeSessionFile = resolveActiveSessionFile(channelDir);
-		const sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
+		const activeSessionFile = resolveActiveSessionFile(dotDir);
+		const sessionManager = SessionManager.open(join(dotDir, activeSessionFile), dotDir);
 
 		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact
 		// SessionManager instance, before anything else touches it — a second `open()` of the same
@@ -130,7 +130,7 @@ export class ChannelRunner implements AgentRunner {
 		if (recoveryOutcome.kind === "blocked") {
 			throw new Error(
 				`[${channelId}] Cannot start channel: session left in an unrecoverable state after a restart (${recoveryOutcome.reason}). ` +
-					`Back up ${join(channelDir, activeSessionFile)} on the host, move it aside, then use /new to start a fresh session.`,
+					`Back up ${join(dotDir, activeSessionFile)} on the host, move it aside, then use /new to start a fresh session.`,
 			);
 		}
 		if (recoveryOutcome.kind === "repaired") {
@@ -163,7 +163,7 @@ export class ChannelRunner implements AgentRunner {
 
 		this.memoryLifecycle = new MemoryLifecycle({
 			channelId: this.channelId,
-			channelDir: this.channelDir,
+			dotDir: this.dotDir,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
 			getMessages: () => this.session.messages,
@@ -175,7 +175,7 @@ export class ChannelRunner implements AgentRunner {
 
 		this.host = new SessionHost({
 			channelId,
-			channelDir,
+			dotDir,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
 			authConfigPath: this.authConfigPath,
@@ -199,7 +199,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 		this.pipeline = new TurnPipeline({
 			channelId,
-			channelDir,
+			dotDir,
 			workspaceDir: this.workspaceDir,
 			host: this.host,
 			models: this.models,
@@ -209,7 +209,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 		this.turnFinisher = new TurnFinisher({
 			channelId,
-			channelDir,
+			dotDir,
 			host: this.host,
 			models: this.models,
 			ledger: this.ledger,
@@ -291,7 +291,7 @@ export class ChannelRunner implements AgentRunner {
 			const input = await this.pipeline.prepareUserInput(ctx);
 
 			// Ensure channel directory exists
-			await mkdir(this.channelDir, { recursive: true });
+			await mkdir(this.dotDir, { recursive: true });
 
 			const channelCapsule = await this.pipeline.gatherTurnContext(input.preserveRawInput, turn);
 			const assembled = assembleTurnPrompt({
@@ -426,7 +426,7 @@ export class ChannelRunner implements AgentRunner {
 		this.settingsManager.reload();
 		return {
 			channelId: this.channelId,
-			channelDir: this.channelDir,
+			dotDir: this.dotDir,
 			workspaceDir: this.workspaceDir,
 			// Snapshot only when a maintenance job actually needs the transcript; most ticks
 			// stop at a schedule gate and never call these.

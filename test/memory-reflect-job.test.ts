@@ -34,8 +34,8 @@ function maintenanceSettings(overrides: Partial<Record<string, unknown>> = {}) {
 async function harness() {
 	const workspaceDir = makeTempDir();
 	const appHomeDir = join(workspaceDir, ".app");
-	const channelDir = join(workspaceDir, "dm_1");
-	return { appHomeDir, channelDir, workspaceDir };
+	const dotDir = join(workspaceDir, "dm_1");
+	return { appHomeDir, dotDir, workspaceDir };
 }
 
 const reflectResult = (overrides: Partial<Record<string, unknown>> = {}) => ({
@@ -60,11 +60,11 @@ afterEach(() => {
 
 describe("runReflectJob", () => {
 	it("skips without calling the model when the channel is not dirty", async () => {
-		const { appHomeDir, channelDir, workspaceDir } = await harness();
+		const { appHomeDir, dotDir, workspaceDir } = await harness();
 		await runReflectJob({
 			appHomeDir,
 			channelId: "dm_1",
-			channelDir,
+			dotDir,
 			workspaceDir,
 			channelActive: false,
 			settings: { memoryMaintenance: maintenanceSettings() },
@@ -74,7 +74,7 @@ describe("runReflectJob", () => {
 			sessionEntries: () => sessionEntries,
 		});
 		expect(runReflect).not.toHaveBeenCalled();
-		const log = readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim();
+		const log = readFileSync(getMemoryReviewLogPath(dotDir), "utf-8").trim();
 		expect(JSON.parse(log.split("\n").at(-1) as string)).toMatchObject({
 			reason: "reflect",
 			skipped: [{ target: "reflect", reason: "clean" }],
@@ -82,7 +82,7 @@ describe("runReflectJob", () => {
 	});
 
 	it("runs reflect when dirty, then advances the cursor and clears backoff", async () => {
-		const { appHomeDir, channelDir, workspaceDir } = await harness();
+		const { appHomeDir, dotDir, workspaceDir } = await harness();
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
 			...state,
 			dirty: true,
@@ -93,7 +93,7 @@ describe("runReflectJob", () => {
 		const input = {
 			appHomeDir,
 			channelId: "dm_1",
-			channelDir,
+			dotDir,
 			workspaceDir,
 			channelActive: false,
 			now: new Date("2026-04-19T12:00:00.000Z"),
@@ -105,13 +105,13 @@ describe("runReflectJob", () => {
 		};
 		await runReflectJob(input);
 		expect(runReflect).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(runReflect).mock.calls[0][0]).toMatchObject({ channelId: "dm_1", channelDir, workspaceDir });
+		expect(vi.mocked(runReflect).mock.calls[0][0]).toMatchObject({ channelId: "dm_1", dotDir, workspaceDir });
 
 		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
 		expect(state.lastReflectedEntryId).toBe("entry-2");
 		expect(state.failureBackoffUntil).toBeNull();
 
-		const log = readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim();
+		const log = readFileSync(getMemoryReviewLogPath(dotDir), "utf-8").trim();
 		const entry = JSON.parse(log.split("\n").at(-1) as string);
 		expect(entry.reason).toBe("reflect");
 		expect(entry.actions).toEqual(
@@ -121,19 +121,19 @@ describe("runReflectJob", () => {
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (current) => ({ ...current, dirty: true }));
 		await runReflectJob({ ...input, now: new Date("2026-04-19T12:30:00.000Z") });
 		expect(runReflect).toHaveBeenCalledTimes(1);
-		const lastSkip = JSON.parse(readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim().split("\n").at(-1)!);
+		const lastSkip = JSON.parse(readFileSync(getMemoryReviewLogPath(dotDir), "utf-8").trim().split("\n").at(-1)!);
 		expect(lastSkip.skipped).toEqual([{ target: "reflect", reason: "no-new-entry" }]);
 	});
 
 	it("sets a failure backoff and logs the error when reflect throws", async () => {
-		const { appHomeDir, channelDir, workspaceDir } = await harness();
+		const { appHomeDir, dotDir, workspaceDir } = await harness();
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({ ...state, dirty: true }));
 		vi.mocked(runReflect).mockRejectedValue(new Error("sidecar timeout"));
 
 		await runReflectJob({
 			appHomeDir,
 			channelId: "dm_1",
-			channelDir,
+			dotDir,
 			workspaceDir,
 			channelActive: false,
 			now: new Date("2026-04-19T12:00:00.000Z"),
@@ -149,7 +149,7 @@ describe("runReflectJob", () => {
 			new Date("2026-04-19T12:00:00.000Z").getTime(),
 		);
 
-		const log = readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim();
+		const log = readFileSync(getMemoryReviewLogPath(dotDir), "utf-8").trim();
 		const entry = JSON.parse(log.split("\n").at(-1) as string);
 		expect(entry).toMatchObject({ reason: "reflect", error: expect.stringContaining("sidecar timeout") });
 	});

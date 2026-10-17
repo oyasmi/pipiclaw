@@ -276,12 +276,7 @@ export class TaskDriver {
 	 * backstops. Runs whether or not the channel is busy — only model
 	 * dispatch is gated on an idle channel.
 	 */
-	private async maintain(
-		channelDir: string,
-		channelId: string,
-		entries: TaskLedgerEntry[],
-		now: Date,
-	): Promise<boolean> {
+	private async maintain(dotDir: string, channelId: string, entries: TaskLedgerEntry[], now: Date): Promise<boolean> {
 		const nowMs = now.getTime();
 		let changed = false;
 		for (const entry of entries) {
@@ -291,12 +286,12 @@ export class TaskDriver {
 
 			// A due timer redeems into an open task.
 			if (entry.dueMs !== undefined && entry.dueMs <= nowMs) {
-				if (await redeemTicket(channelDir, entry.id, (current) => current.kind === ticket.kind)) changed = true;
+				if (await redeemTicket(dotDir, entry.id, (current) => current.kind === ticket.kind)) changed = true;
 				continue;
 			}
 
 			if (entry.expired) {
-				const expiry = await expireTicket(channelDir, entry.id);
+				const expiry = await expireTicket(dotDir, entry.id);
 				if (!expiry) continue;
 				changed = true;
 				if (expiry.outcome === "paused") {
@@ -334,7 +329,7 @@ export class TaskDriver {
 	 * comparison a `echo x` could defeat.
 	 */
 	private async detectIdleLoop(
-		channelDir: string,
+		dotDir: string,
 		channelId: string,
 		entries: TaskLedgerEntry[],
 		nowMs: number,
@@ -343,12 +338,12 @@ export class TaskDriver {
 		for (const entry of entries) {
 			const usage = entry.fields.usage;
 			if (!usage || usage.steps < IDLE_STEP_LIMIT) continue;
-			const steps = (await readTaskLog(channelDir, entry.id, { kinds: ["step"] })).slice(-IDLE_STEP_LIMIT);
+			const steps = (await readTaskLog(dotDir, entry.id, { kinds: ["step"] })).slice(-IDLE_STEP_LIMIT);
 			if (steps.length < IDLE_STEP_LIMIT) continue;
 			const idle = steps.every((record) => record.kind === "step" && record.tools.length === 0);
 			if (!idle) continue;
 			const reason = `连续 ${IDLE_STEP_LIMIT} 步没有任何工具调用，已停下等你确认`;
-			if (await pauseTask(channelDir, entry.id, { by: "runtime", reason })) {
+			if (await pauseTask(dotDir, entry.id, { by: "runtime", reason })) {
 				paused = true;
 				log.logWarn("taskdriver.task.paused", "Task paused: idle loop", {
 					channelId: channelId,
@@ -384,12 +379,12 @@ export class TaskDriver {
 				if (!channelId) continue;
 				// `channelId` is the raw id, which for a DingTalk group routinely contains `/`;
 				// only `getChannelDir` folds it into the escaped directory name that exists on disk.
-				const channelDir = getChannelDir(this.options.workspaceDir, channelId);
-				let entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
+				const dotDir = getChannelDir(this.options.workspaceDir, channelId);
+				let entries = await readActiveTasks(join(dotDir, "tasks"), nowMs);
 				for (const entry of entries) seen.add(attemptKey(channelId, entry.id));
 
-				if (await this.maintain(channelDir, channelId, entries, now)) {
-					entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
+				if (await this.maintain(dotDir, channelId, entries, now)) {
+					entries = await readActiveTasks(join(dotDir, "tasks"), nowMs);
 				}
 
 				if (dispatched >= settings.maxDispatchesPerTick || this.options.isChannelActive(channelId)) continue;
@@ -405,7 +400,7 @@ export class TaskDriver {
 						budgeted.push(entry);
 						continue;
 					}
-					if (await pauseTask(channelDir, entry.id, { by: "runtime", reason: status.reason })) {
+					if (await pauseTask(dotDir, entry.id, { by: "runtime", reason: status.reason })) {
 						log.logWarn("taskdriver.task.paused", "Task paused: budget exhausted", {
 							channelId: channelId,
 							reason: status.reason,
@@ -414,9 +409,9 @@ export class TaskDriver {
 						await this.notifyStop(channelId, entry, status.reason, nowMs, status.breach);
 					}
 				}
-				const idled = await this.detectIdleLoop(channelDir, channelId, budgeted, nowMs);
+				const idled = await this.detectIdleLoop(dotDir, channelId, budgeted, nowMs);
 				const ready = idled
-					? (await readActiveTasks(join(channelDir, "tasks"), nowMs)).filter((entry) => entry.runnable)
+					? (await readActiveTasks(join(dotDir, "tasks"), nowMs)).filter((entry) => entry.runnable)
 					: budgeted;
 				const candidates = ready.filter((entry) => !entry.fields.paused);
 				if (candidates.length === 0) continue;

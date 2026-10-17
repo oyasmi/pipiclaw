@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
 	applyMemoryOps,
 	clearMemoryStoreCache,
-	getChannelMemoryDir,
-	getChannelMemoryIndexPath,
+	getMemoryDir,
 	getMemoryEntryPath,
+	getMemoryIndexPath,
 	isValidMemoryName,
 	listMemoryEntries,
 	parseMemoryFile,
@@ -17,9 +17,9 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-memory-store-");
 
-async function seed(channelDir: string, name: string, raw: string): Promise<void> {
-	await mkdir(getChannelMemoryDir(channelDir), { recursive: true });
-	await writeFile(getMemoryEntryPath(channelDir, name), raw, "utf-8");
+async function seed(dotDir: string, name: string, raw: string): Promise<void> {
+	await mkdir(getMemoryDir(dotDir), { recursive: true });
+	await writeFile(getMemoryEntryPath(dotDir, name), raw, "utf-8");
 	clearMemoryStoreCache();
 }
 
@@ -83,23 +83,23 @@ describe("memory store — frontmatter round trip", () => {
 
 describe("memory store — index generation", () => {
 	it("groups by type in canonical order, sorts by name, marks bodies with (+)", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		await seed(
-			channelDir,
+			dotDir,
 			"b-pref",
 			"---\ndescription: no auto emoji\ntype: feedback\nsource: user\ncreated: 2026-09-01\n---\n",
 		);
 		await seed(
-			channelDir,
+			dotDir,
 			"a-lang",
 			"---\ndescription: speak Chinese\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n",
 		);
 		await seed(
-			channelDir,
+			dotDir,
 			"deploy",
 			"---\ndescription: Thursday window\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n\nlong body\n",
 		);
-		const index = renderMemoryIndex(await listMemoryEntries(channelDir));
+		const index = renderMemoryIndex(await listMemoryEntries(dotDir));
 		const userHeading = index.indexOf("## user");
 		const feedbackHeading = index.indexOf("## feedback");
 		const projectHeading = index.indexOf("## project");
@@ -115,16 +115,16 @@ describe("memory store — index generation", () => {
 
 describe("memory store — mtime cache", () => {
 	it("re-reads a file after its mtime changes", async () => {
-		const channelDir = createTempDir();
-		await mkdir(getChannelMemoryDir(channelDir), { recursive: true });
-		const path = getMemoryEntryPath(channelDir, "x");
+		const dotDir = createTempDir();
+		await mkdir(getMemoryDir(dotDir), { recursive: true });
+		const path = getMemoryEntryPath(dotDir, "x");
 		await writeFile(
 			path,
 			"---\ndescription: first\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n",
 			"utf-8",
 		);
 		clearMemoryStoreCache();
-		expect((await listMemoryEntries(channelDir))[0].description).toBe("first");
+		expect((await listMemoryEntries(dotDir))[0].description).toBe("first");
 
 		await writeFile(
 			path,
@@ -133,66 +133,66 @@ describe("memory store — mtime cache", () => {
 		);
 		const future = new Date(Date.now() + 5_000);
 		await utimes(path, future, future);
-		expect((await listMemoryEntries(channelDir))[0].description).toBe("second");
+		expect((await listMemoryEntries(dotDir))[0].description).toBe("second");
 	});
 });
 
 describe("memory store — applyMemoryOps", () => {
 	it("adds, dedupes the name, and rebuilds the index", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [
 			{ op: "add", name: "lead", description: "user is the PM", source: "user", type: "user" },
 		]);
-		const result = await applyMemoryOps(channelDir, [
+		const result = await applyMemoryOps(dotDir, [
 			{ op: "add", name: "lead", description: "second lead fact", source: "agent" },
 		]);
 		expect(result.added).toEqual(["lead-2"]);
 		expect(result.renamed).toEqual([{ requested: "lead", used: "lead-2" }]);
-		const third = await applyMemoryOps(channelDir, [
+		const third = await applyMemoryOps(dotDir, [
 			{ op: "add", name: "lead", description: "third lead fact", source: "agent" },
 		]);
 		expect(third.added).toEqual(["lead-3"]);
-		expect(await readFile(getChannelMemoryIndexPath(channelDir), "utf-8")).toContain("- lead-2 — second lead fact");
+		expect(await readFile(getMemoryIndexPath(dotDir), "utf-8")).toContain("- lead-2 — second lead fact");
 	});
 
 	it("update merges fields, bumps updated, and can clear probation", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [
 			{ op: "add", name: "d", description: "old", source: "agent", expires: "2026-10-04" },
 		]);
-		await applyMemoryOps(channelDir, [{ op: "update", name: "d", description: "new", expires: null }], {
+		await applyMemoryOps(dotDir, [{ op: "update", name: "d", description: "new", expires: null }], {
 			today: "2026-09-20",
 		});
 		clearMemoryStoreCache();
-		const entry = (await listMemoryEntries(channelDir))[0];
+		const entry = (await listMemoryEntries(dotDir))[0];
 		expect(entry.description).toBe("new");
 		expect(entry.updated).toBe("2026-09-20");
 		expect(entry.expires).toBeUndefined();
 	});
 
 	it("touch clears probation and reports missing targets", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [
 			{ op: "add", name: "p", description: "probationary", source: "agent", expires: "2026-10-04" },
 		]);
-		const result = await applyMemoryOps(channelDir, [{ op: "touch", names: ["p", "ghost"] }], {
+		const result = await applyMemoryOps(dotDir, [{ op: "touch", names: ["p", "ghost"] }], {
 			today: "2026-09-15",
 		});
 		expect(result.touched).toEqual(["p"]);
 		expect(result.missingTarget).toBe(1);
 		clearMemoryStoreCache();
-		expect((await listMemoryEntries(channelDir))[0].expires).toBeUndefined();
+		expect((await listMemoryEntries(dotDir))[0].expires).toBeUndefined();
 	});
 
 	it("lets an explicit user save through a tombstone and revokes it for the background pass too (batch 1.7)", async () => {
 		// A tombstone must only stop the *background* reflect pass from silently re-learning a
 		// forgotten fact — not the user's own explicit re-save. Mutation check: drop the
 		// `op.source !== "user"` guard on the tombstone check and `userAdd.added` is empty.
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [{ op: "add", name: "gone", description: "obsolete fact", source: "agent" }]);
-		await applyMemoryOps(channelDir, [{ op: "delete", name: "gone", reason: "user said so" }]);
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [{ op: "add", name: "gone", description: "obsolete fact", source: "agent" }]);
+		await applyMemoryOps(dotDir, [{ op: "delete", name: "gone", reason: "user said so" }]);
 
-		const userAdd = await applyMemoryOps(channelDir, [
+		const userAdd = await applyMemoryOps(dotDir, [
 			{ op: "add", name: "back", description: "Obsolete   fact", source: "user" },
 		]);
 		expect(userAdd.added).toEqual(["back"]);
@@ -200,12 +200,12 @@ describe("memory store — applyMemoryOps", () => {
 
 		// The explicit save revokes the tombstone for later background reflection too.
 		const { isDescriptionTombstoned } = await import("../src/memory/store.js");
-		expect(await isDescriptionTombstoned(channelDir, "obsolete fact")).toBe(false);
+		expect(await isDescriptionTombstoned(dotDir, "obsolete fact")).toBe(false);
 	});
 
 	it("rejects a description that looks like a secret", async () => {
-		const channelDir = createTempDir();
-		const result = await applyMemoryOps(channelDir, [
+		const dotDir = createTempDir();
+		const result = await applyMemoryOps(dotDir, [
 			{ op: "add", description: "api_key = abcdef1234567890", source: "user" },
 		]);
 		expect(result.added).toEqual([]);

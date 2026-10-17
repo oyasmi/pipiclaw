@@ -120,7 +120,7 @@ export interface LaunchExternalRunInput {
 	runId: string;
 	channelId: string;
 	/** Where a task-bound run logs its dispatch and settlement (spec 052, D4). */
-	channelDir?: string;
+	dotDir?: string;
 	label: string;
 	agent: string;
 	source: "predefined" | "inline";
@@ -257,7 +257,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		item: input.item,
 		workingDirectory: input.workingDirectory,
 		artifactDir: input.artifactDir,
-		channelDir: input.channelDir,
+		dotDir: input.dotDir,
 		leaseKey: input.leaseKey,
 		mutates: input.mutates,
 		workspaceBaseline: input.workspaceBaseline,
@@ -385,7 +385,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			// with an inaccurate timeout message and an unestimatable duration.
 			maxWallTimeSec: input.maxWallTimeSec,
 			processStartedAt,
-			channelDir: input.channelDir,
+			dotDir: input.dotDir,
 			invocationWarnings: mergeInvocationWarnings(invocation.warnings, envFilterResult.dropped),
 			// Spec 042 D12: distinguishes "the target CLI's schema drifted" from "the agent failed".
 			parserVersion: harness.parserVersion,

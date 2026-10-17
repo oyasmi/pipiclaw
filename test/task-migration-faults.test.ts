@@ -32,7 +32,7 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 	let root: string;
 	let workspaceDir: string;
 	let stateDir: string;
-	let channelDir: string;
+	let dotDir: string;
 	const markerPath = () => join(stateDir, "task-migration-v5.done");
 	const report = async () =>
 		JSON.parse(await readFile(join(stateDir, "task-migration-v5.failed.json"), "utf-8")).failures;
@@ -41,8 +41,8 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 		root = await mkdtemp(join(tmpdir(), "task-migration-faults-"));
 		workspaceDir = join(root, "workspace");
 		stateDir = join(root, "state");
-		channelDir = join(workspaceDir, "dm_1");
-		await mkdir(join(channelDir, "tasks"), { recursive: true });
+		dotDir = join(workspaceDir, "dm_1");
+		await mkdir(join(dotDir, "tasks"), { recursive: true });
 	});
 	afterEach(async () => {
 		faults.fail = undefined;
@@ -51,8 +51,8 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 	});
 
 	it("does not treat an unreadable task directory as empty: no marker, failure reported, original untouched", async () => {
-		await writeFile(join(channelDir, "tasks", "old.md"), ACTIVE);
-		faults.fail = (op, path) => (op === "readdir" && path === join(channelDir, "tasks") ? eacces() : undefined);
+		await writeFile(join(dotDir, "tasks", "old.md"), ACTIVE);
+		faults.fail = (op, path) => (op === "readdir" && path === join(dotDir, "tasks") ? eacces() : undefined);
 
 		await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow(/failed for 1 item/);
 
@@ -60,12 +60,12 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 		expect(await report()).toMatchObject([
 			{ channelId: "dm_1", stage: "scan", error: expect.stringContaining("EACCES") },
 		]);
-		expect(await readFile(join(channelDir, "tasks", "old.md"), "utf-8")).toBe(ACTIVE);
+		expect(await readFile(join(dotDir, "tasks", "old.md"), "utf-8")).toBe(ACTIVE);
 
 		// Once the directory is readable again the same start converts it.
 		faults.fail = undefined;
 		await migrateTasksToV5(workspaceDir, stateDir);
-		expect((await readStoredTask(channelDir, "old"))?.fields.state).toBe("open");
+		expect((await readStoredTask(dotDir, "old"))?.fields.state).toBe("open");
 		expect(existsSync(markerPath())).toBe(true);
 	});
 
@@ -82,53 +82,52 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 	});
 
 	it("keeps a pre-existing archive when the final archive step fails, and restores the original", async () => {
-		await writeFile(join(channelDir, "tasks", "daily.md"), SLEEPING);
-		await mkdir(join(channelDir, "tasks", "archive"), { recursive: true });
-		await writeFile(join(channelDir, "tasks", "archive", "daily.md"), "earlier archive");
-		await writeFile(join(channelDir, "tasks", "archive", "daily.jsonl"), "earlier log\n");
+		await writeFile(join(dotDir, "tasks", "daily.md"), SLEEPING);
+		await mkdir(join(dotDir, "tasks", "archive"), { recursive: true });
+		await writeFile(join(dotDir, "tasks", "archive", "daily.md"), "earlier archive");
+		await writeFile(join(dotDir, "tasks", "archive", "daily.jsonl"), "earlier log\n");
 
 		await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow(/failed for 1 item/);
 
-		expect(await readFile(join(channelDir, "tasks", "archive", "daily.md"), "utf-8")).toBe("earlier archive");
-		expect(await readFile(join(channelDir, "tasks", "archive", "daily.jsonl"), "utf-8")).toBe("earlier log\n");
-		expect(await readFile(join(channelDir, "tasks", "daily.md"), "utf-8")).toBe(SLEEPING);
+		expect(await readFile(join(dotDir, "tasks", "archive", "daily.md"), "utf-8")).toBe("earlier archive");
+		expect(await readFile(join(dotDir, "tasks", "archive", "daily.jsonl"), "utf-8")).toBe("earlier log\n");
+		expect(await readFile(join(dotDir, "tasks", "daily.md"), "utf-8")).toBe(SLEEPING);
 		expect(existsSync(join(workspaceDir, "events", "daily.json"))).toBe(false);
 		expect(existsSync(markerPath())).toBe(false);
 		expect(await report()).toMatchObject([{ task: "daily", stage: "archive", rollback: "ok" }]);
 	});
 
 	it("fails the migration, without a marker, when the active contract cannot be removed after archiving", async () => {
-		await writeFile(join(channelDir, "tasks", "daily.md"), SLEEPING);
-		await mkdir(join(channelDir, "tasks", "archive"), { recursive: true });
-		faults.fail = (op, path) =>
-			op === "rm" && path === join(channelDir, "tasks", "daily.md") ? eacces() : undefined;
+		await writeFile(join(dotDir, "tasks", "daily.md"), SLEEPING);
+		await mkdir(join(dotDir, "tasks", "archive"), { recursive: true });
+		faults.fail = (op, path) => (op === "rm" && path === join(dotDir, "tasks", "daily.md") ? eacces() : undefined);
 
 		await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow(/failed for 1 item/);
 
 		expect(existsSync(markerPath())).toBe(false);
-		expect(existsSync(join(channelDir, "tasks", "archive", "daily.md"))).toBe(false);
-		expect(existsSync(join(channelDir, "tasks", "archive", "daily.jsonl"))).toBe(false);
+		expect(existsSync(join(dotDir, "tasks", "archive", "daily.md"))).toBe(false);
+		expect(existsSync(join(dotDir, "tasks", "archive", "daily.jsonl"))).toBe(false);
 		expect(await report()).toMatchObject([{ task: "daily", stage: "archive", rollback: "ok" }]);
 	});
 
 	it("detects an archived-log rename failure: nothing is half-archived and no marker is written", async () => {
-		await writeFile(join(channelDir, "tasks", "daily.md"), SLEEPING);
+		await writeFile(join(dotDir, "tasks", "daily.md"), SLEEPING);
 		faults.fail = (op, path) =>
-			op === "rename" && path === join(channelDir, "tasks", "daily.jsonl") ? eacces() : undefined;
+			op === "rename" && path === join(dotDir, "tasks", "daily.jsonl") ? eacces() : undefined;
 
 		await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow(/failed for 1 item/);
 
 		expect(existsSync(markerPath())).toBe(false);
-		expect(existsSync(join(channelDir, "tasks", "archive", "daily.md"))).toBe(false);
+		expect(existsSync(join(dotDir, "tasks", "archive", "daily.md"))).toBe(false);
 		expect(existsSync(join(workspaceDir, "events", "daily.json"))).toBe(false);
-		expect(await readFile(join(channelDir, "tasks", "daily.md"), "utf-8")).toBe(SLEEPING);
+		expect(await readFile(join(dotDir, "tasks", "daily.md"), "utf-8")).toBe(SLEEPING);
 		expect(await report()).toMatchObject([
 			{ task: "daily", stage: "archive", error: expect.stringContaining("EACCES") },
 		]);
 	});
 
 	it("fails discovery loudly when the workspace root cannot be listed: no marker, report, retry still converts", async () => {
-		await writeFile(join(channelDir, "tasks", "old.md"), ACTIVE);
+		await writeFile(join(dotDir, "tasks", "old.md"), ACTIVE);
 		faults.fail = (op, path) => (op === "readdir" && path === workspaceDir ? eacces() : undefined);
 
 		await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow(/failed for 1 item/);
@@ -137,12 +136,12 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 		expect(await report()).toMatchObject([
 			{ channelId: "*", stage: "discover", error: expect.stringContaining("EACCES") },
 		]);
-		expect(await readFile(join(channelDir, "tasks", "old.md"), "utf-8")).toBe(ACTIVE);
+		expect(await readFile(join(dotDir, "tasks", "old.md"), "utf-8")).toBe(ACTIVE);
 
 		faults.fail = undefined;
 		await migrateTasksToV5(workspaceDir, stateDir);
 		expect(existsSync(markerPath())).toBe(true);
-		expect(await readFile(join(channelDir, "tasks", "old.md"), "utf-8")).toContain("state: open");
+		expect(await readFile(join(dotDir, "tasks", "old.md"), "utf-8")).toContain("state: open");
 	});
 
 	it("does not migrate a group channel under a fabricated id when CHANNELS.md is missing", async () => {
@@ -160,10 +159,10 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 	});
 
 	it("keeps every old log and reports a failed rollback when the archive undo itself fails", async () => {
-		await writeFile(join(channelDir, "tasks", "daily.md"), SLEEPING);
-		await writeFile(join(channelDir, "tasks", "daily.jsonl"), "active\n");
-		await writeFile(join(channelDir, "tasks", "daily.jsonl.1"), "shard\n");
-		const tasks = join(channelDir, "tasks");
+		await writeFile(join(dotDir, "tasks", "daily.md"), SLEEPING);
+		await writeFile(join(dotDir, "tasks", "daily.jsonl"), "active\n");
+		await writeFile(join(dotDir, "tasks", "daily.jsonl.1"), "shard\n");
+		const tasks = join(dotDir, "tasks");
 		const archive = join(tasks, "archive");
 		faults.fail = (op, path) => {
 			if (op !== "rename") return undefined;

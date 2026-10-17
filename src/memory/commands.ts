@@ -25,7 +25,7 @@ import { hashMemoryContent } from "./tombstones.js";
 
 interface MemoryCommandOptions {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	appHomeDir?: string;
 	args: string;
 }
@@ -39,7 +39,7 @@ function isMemoryType(value: string | undefined): value is MemoryType {
 }
 
 async function handleStatus(options: MemoryCommandOptions): Promise<string> {
-	const entries = await listMemoryEntries(options.channelDir);
+	const entries = await listMemoryEntries(options.dotDir);
 	const byType = new Map<MemoryType, number>(MEMORY_TYPE_ORDER.map((type) => [type, 0]));
 	for (const entry of entries) {
 		byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
@@ -69,7 +69,7 @@ async function handleList(options: MemoryCommandOptions, typeArg: string | undef
 	if (typeArg && !isMemoryType(typeArg)) {
 		return `未知的记忆类型 \`${typeArg}\`。可用类型：${MEMORY_TYPE_ORDER.join(", ")}。`;
 	}
-	const entries = await listMemoryEntries(options.channelDir);
+	const entries = await listMemoryEntries(options.dotDir);
 	const filtered = typeArg ? entries.filter((entry) => entry.type === typeArg) : entries;
 	if (filtered.length === 0) {
 		return typeArg
@@ -88,7 +88,7 @@ async function handleList(options: MemoryCommandOptions, typeArg: string | undef
 
 async function handleShow(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
 	if (!name) return `缺少记忆名称。\n\n${renderUsage()}`;
-	const entry = await readMemoryEntry(options.channelDir, name);
+	const entry = await readMemoryEntry(options.dotDir, name);
 	if (!entry) return `未找到记忆 \`${name}\`。用 \`/memory list\` 查看可用名称。`;
 	// Frontmatter keys stay visible (the user sees them when opening the file), introduced by a
 	// Chinese label rather than shown bare (spec 053, D1).
@@ -108,12 +108,12 @@ async function handleShow(options: MemoryCommandOptions, name: string | undefine
 
 async function handleForget(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
 	if (!name) return `缺少记忆名称。\n\n${renderUsage()}`;
-	const entry = await readMemoryEntry(options.channelDir, name);
+	const entry = await readMemoryEntry(options.dotDir, name);
 	if (!entry) return `未找到记忆 \`${name}\`，未做任何改动。用 \`/memory list\` 查看可用名称。`;
 	await getDefaultChannelMemoryQueue().run(options.channelId, () =>
-		applyMemoryOps(options.channelDir, [{ op: "delete", name, reason: "/memory forget" }]),
+		applyMemoryOps(options.dotDir, [{ op: "delete", name, reason: "/memory forget" }]),
 	);
-	await appendMemoryReviewLog(options.channelDir, {
+	await appendMemoryReviewLog(options.dotDir, {
 		timestamp: new Date().toISOString(),
 		channelId: options.channelId,
 		reason: "memory-forget",
@@ -127,9 +127,9 @@ async function handleJournal(options: MemoryCommandOptions, dateArg: string | un
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
 		return `日期格式应为 \`YYYY-MM-DD\`。\n\n${renderUsage()}`;
 	}
-	const content = await readJournalDay(options.channelDir, date);
+	const content = await readJournalDay(options.dotDir, date);
 	if (!content.trim()) {
-		const dates = await listJournalDates(options.channelDir);
+		const dates = await listJournalDates(options.dotDir);
 		const hint =
 			dates.length > 0
 				? `有记录的日期：${dates.slice(-10).join("、")}`

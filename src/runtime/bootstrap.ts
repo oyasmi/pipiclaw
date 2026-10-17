@@ -208,8 +208,8 @@ export async function createRuntimeContext(
 			return existing;
 		}
 
-		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
-		const runner = createRunner(channelId, channelDir, {
+		const dotDir = ensureChannelDir(options.paths.workspaceDir, channelId);
+		const runner = createRunner(channelId, dotDir, {
 			jobManager: jobs.get(channelId),
 			runManager: runs.get(channelId),
 			appHomeDir: options.paths.appHomeDir,
@@ -326,13 +326,13 @@ export async function createRuntimeContext(
 			fields: {
 				repaired: recoveryReport.repaired.length,
 				scanned: recoveryReport.scanned,
-				channels: recoveryReport.repaired.map((r) => r.channelDir),
+				channels: recoveryReport.repaired.map((r) => r.dotDir),
 			},
 		});
 	}
 	if (recoveryReport.blocked.length > 0) {
 		log.logWarn("runtime.recovery.blocked", "Channels with an unrecoverable session will refuse new turns", {
-			reason: recoveryReport.blocked.map((b) => `${b.channelDir}: ${b.reason}`).join("; "),
+			reason: recoveryReport.blocked.map((b) => `${b.dotDir}: ${b.reason}`).join("; "),
 		});
 	}
 	const eventsWatcher = options.createEventsWatcher
@@ -367,7 +367,7 @@ export async function createRuntimeContext(
 					}
 					return loadDetachedMaintenanceContext({
 						channelId,
-						channelDir: getChannelDir(options.paths.workspaceDir, channelId),
+						dotDir: getChannelDir(options.paths.workspaceDir, channelId),
 						authConfigPath: options.paths.authConfigPath,
 						modelsConfigPath: options.paths.modelsConfigPath,
 						settingsManager: runtimeSettingsManager,

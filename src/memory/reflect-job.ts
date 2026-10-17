@@ -25,7 +25,7 @@ import { hasMeaningfulExchange, sanitizeMessagesForMemory } from "./transcript.j
 export interface ReflectJobInput {
 	appHomeDir: string;
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	channelActive: boolean;
 	now?: Date;
@@ -73,7 +73,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 			},
 		});
 		if (!decision.allowed) {
-			await appendMemoryReviewLog(input.channelDir, {
+			await appendMemoryReviewLog(input.dotDir, {
 				timestamp: formatLocalTime(now),
 				channelId: input.channelId,
 				reason: "reflect",
@@ -86,7 +86,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 		try {
 			const result = await runReflect({
 				channelId: input.channelId,
-				channelDir: input.channelDir,
+				dotDir: input.dotDir,
 				workspaceDir: input.workspaceDir,
 				model: input.model,
 				resolveApiKey: input.resolveApiKey,
@@ -99,7 +99,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 				lastReflectedEntryId: sourceWindow.throughEntryId ?? current.lastReflectedEntryId,
 				failureBackoffUntil: null,
 			}));
-			await appendMemoryReviewLog(input.channelDir, {
+			await appendMemoryReviewLog(input.dotDir, {
 				timestamp: formatLocalTime(now),
 				channelId: input.channelId,
 				reason: "reflect",
@@ -112,7 +112,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 				failureBackoffUntil: backoffUntil(now, maintenance),
 			}));
 			const message = errorMessage(error);
-			await appendMemoryReviewLog(input.channelDir, {
+			await appendMemoryReviewLog(input.dotDir, {
 				timestamp: formatLocalTime(now),
 				channelId: input.channelId,
 				reason: "reflect",

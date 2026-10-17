@@ -112,18 +112,18 @@ export type TaskLogRecord =
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
 const NOTE_MAX_CHARS = 4_000;
 
-export function taskLogPath(channelDir: string, id: string): string {
-	return join(channelDir, "tasks", `${normalizeTaskId(id)}.jsonl`);
+export function taskLogPath(dotDir: string, id: string): string {
+	return join(dotDir, "tasks", `${normalizeTaskId(id)}.jsonl`);
 }
 
 /** Where `archiveTask` moves a closed task's `.jsonl`. */
-export function taskArchiveLogPath(channelDir: string, id: string): string {
-	return join(channelDir, "tasks", "archive", `${normalizeTaskId(id)}.jsonl`);
+export function taskArchiveLogPath(dotDir: string, id: string): string {
+	return join(dotDir, "tasks", "archive", `${normalizeTaskId(id)}.jsonl`);
 }
 
 /** True when the loop log for `id` lives only in the archive (the task is closed). */
-export function taskLogIsArchived(channelDir: string, id: string): boolean {
-	return !existsSync(taskLogPath(channelDir, id)) && existsSync(taskArchiveLogPath(channelDir, id));
+export function taskLogIsArchived(dotDir: string, id: string): boolean {
+	return !existsSync(taskLogPath(dotDir, id)) && existsSync(taskArchiveLogPath(dotDir, id));
 }
 
 const appenders = new Map<string, JsonlAppender>();
@@ -155,17 +155,13 @@ export type TaskLogInput =
  * Append one record. `appendStrict` rather than `append`: the loop log is the only durable trace
  * of what a step did, so a dropped record would make the next brief lie about the task's history.
  */
-export async function appendTaskLog(
-	channelDir: string,
-	id: string,
-	record: TaskLogInput & { ts?: string },
-): Promise<void> {
+export async function appendTaskLog(dotDir: string, id: string, record: TaskLogInput & { ts?: string }): Promise<void> {
 	const withTs = { ts: record.ts ?? formatLocalTime(), ...record };
 	if (withTs.kind === "step") {
 		withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
 		if (withTs.report) withTs.report = clipText(withTs.report, NOTE_MAX_CHARS);
 	}
-	await appenderFor(taskLogPath(channelDir, id)).appendStrict(withTs);
+	await appenderFor(taskLogPath(dotDir, id)).appendStrict(withTs);
 }
 
 const RECORD_KINDS: readonly TaskLogRecord["kind"][] = ["step", "dispatch", "settle", "expired", "close", "note"];
@@ -215,15 +211,13 @@ function parseLogLines(content: string, options: ReadTaskLogOptions, into: TaskL
  * alike even though it was still on disk.
  */
 export async function readTaskLog(
-	channelDir: string,
+	dotDir: string,
 	id: string,
 	options: ReadTaskLogOptions = {},
 ): Promise<TaskLogRecord[]> {
 	// Fall back to the archived copy so `task_log` on a completed task returns its history rather
 	// than "暂无日志" — a task that finished still has a loop log worth reading.
-	const basePath = existsSync(taskLogPath(channelDir, id))
-		? taskLogPath(channelDir, id)
-		: taskArchiveLogPath(channelDir, id);
+	const basePath = existsSync(taskLogPath(dotDir, id)) ? taskLogPath(dotDir, id) : taskArchiveLogPath(dotDir, id);
 	const paths = shardPaths(basePath);
 	if (paths.length === 0) return [];
 	const records: TaskLogRecord[] = [];

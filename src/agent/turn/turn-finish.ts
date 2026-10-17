@@ -33,7 +33,7 @@ function getFinalOutcomeText(outcome: FinalOutcome): string | null {
 
 export interface TurnFinisherDeps {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	host: SessionHost;
 	models: ModelSelection;
 	ledger: UsageLedger;
@@ -47,7 +47,7 @@ export interface TurnFinisherDeps {
 
 export class TurnFinisher {
 	private readonly channelId: string;
-	private readonly channelDir: string;
+	private readonly dotDir: string;
 	private readonly host: SessionHost;
 	private readonly models: ModelSelection;
 	private readonly ledger: UsageLedger;
@@ -55,7 +55,7 @@ export class TurnFinisher {
 
 	constructor(private readonly deps: TurnFinisherDeps) {
 		this.channelId = deps.channelId;
-		this.channelDir = deps.channelDir;
+		this.dotDir = deps.dotDir;
 		this.host = deps.host;
 		this.models = deps.models;
 		this.ledger = deps.ledger;
@@ -101,7 +101,7 @@ export class TurnFinisher {
 				taskDigest: input.taskDigestText || undefined,
 				newUserMessage: input.promptText,
 			};
-			await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
+			await writeFile(join(this.dotDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
 				(error: unknown) =>
 					log.logWarn("agent.debug.dump_failed", "last_prompt.json write failed", {
 						channelId: this.channelId,

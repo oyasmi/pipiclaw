@@ -29,7 +29,7 @@ export interface SessionSearchDocument {
 export const SESSION_SCAN_MAX_CHARS = 20_000;
 
 export interface BuildSessionCorpusOptions {
-	channelDir: string;
+	dotDir: string;
 	maxFiles: number;
 	maxCharsPerDocument?: number;
 	maxDocumentsTotal?: number;
@@ -273,10 +273,10 @@ async function parseJsonlFile(
 	return docs;
 }
 
-async function listChannelSessionJsonlFiles(channelDir: string, maxFiles: number): Promise<string[]> {
+async function listChannelSessionJsonlFiles(dotDir: string, maxFiles: number): Promise<string[]> {
 	let names: string[];
 	try {
-		names = await readdir(channelDir);
+		names = await readdir(dotDir);
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") {
 			return [];
@@ -291,7 +291,7 @@ async function listChannelSessionJsonlFiles(channelDir: string, maxFiles: number
 		names
 			.filter((name) => name.endsWith(".jsonl") && !IGNORED_JSONL_FILES.has(name))
 			.map(async (name) => {
-				const path = join(channelDir, name);
+				const path = join(dotDir, name);
 				try {
 					const stats = await stat(path);
 					return stats.isFile() ? { path, mtimeMs: stats.mtimeMs } : null;
@@ -314,12 +314,12 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 	const maxDocuments = options.maxDocumentsTotal ?? DEFAULT_MAX_DOCUMENTS_TOTAL;
 	const docs: SessionSearchDocument[] = [];
 	const readPlan: Array<{ path: string; source: SessionSearchSource }> = [
-		{ path: join(options.channelDir, "context.jsonl"), source: "context" },
-		{ path: join(options.channelDir, "log.jsonl"), source: "log" },
-		{ path: join(options.channelDir, "log.jsonl.1"), source: "log" },
+		{ path: join(options.dotDir, "context.jsonl"), source: "context" },
+		{ path: join(options.dotDir, "log.jsonl"), source: "log" },
+		{ path: join(options.dotDir, "log.jsonl.1"), source: "log" },
 	];
 
-	for (const path of await listChannelSessionJsonlFiles(options.channelDir, maxFiles)) {
+	for (const path of await listChannelSessionJsonlFiles(options.dotDir, maxFiles)) {
 		readPlan.push({ path, source: "session" });
 	}
 

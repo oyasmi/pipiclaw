@@ -168,7 +168,7 @@ export function buildFollowUpTask(
  */
 async function buildContextualBlocks(
 	config: Pick<SubAgentConfig, "contextMode" | "paths" | "memory">,
-	options: Pick<SubAgentToolOptions, "channelDir" | "workspaceDir">,
+	options: Pick<SubAgentToolOptions, "dotDir" | "workspaceDir">,
 ): Promise<string[]> {
 	if (config.contextMode !== "contextual") {
 		return [];
@@ -192,9 +192,9 @@ async function buildContextualBlocks(
 		}
 	};
 	const [entries, workspaceMemory, journalToday] = await Promise.all([
-		listMemoryEntries(options.channelDir).catch(() => []),
+		listMemoryEntries(options.dotDir).catch(() => []),
 		readOptionalFile(join(options.workspaceDir, "MEMORY.md")),
-		readJournalDay(options.channelDir, today).catch(() => ""),
+		readJournalDay(options.dotDir, today).catch(() => ""),
 	]);
 	const index = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS / 2);
 	const bootstrap = renderMemoryBootstrap({

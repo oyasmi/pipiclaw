@@ -21,7 +21,7 @@ export const MAX_INBOUND_IMAGE_BYTES = 5 * 1024 * 1024;
  * happened.
  */
 export interface InboundImage {
-	/** Absolute path under `<channelDir>/inbox/`. */
+	/** Absolute path under `<dotDir>/inbox/`. */
 	path: string;
 	/**
 	 * Sniffed MIME type ("image/jpeg", …), or `"application/octet-stream"` when magic-byte

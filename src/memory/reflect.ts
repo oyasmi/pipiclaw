@@ -85,7 +85,7 @@ content, or its reason should say plainly why the fact no longer matters.`;
 
 export interface ReflectRunOptions {
 	channelId?: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
@@ -187,9 +187,9 @@ function classifyWrite(
 
 async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{ prompt: string; condense: boolean }> {
 	const [entries, workspaceMemory, journalToday] = await Promise.all([
-		listMemoryEntries(options.channelDir),
+		listMemoryEntries(options.dotDir),
 		readOptionalTextFile(`${options.workspaceDir}/MEMORY.md`),
-		readOptionalTextFile(`${options.channelDir}/journal/${today}.md`),
+		readOptionalTextFile(`${options.dotDir}/journal/${today}.md`),
 	]);
 	const tiered = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS);
 	const transcript = clipText(
@@ -233,7 +233,7 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	};
 
 	// Deterministic pre-step, independent of whether the window has meaningful material.
-	const expiredProbation = await expireProbationaryEntries(options.channelDir, today);
+	const expiredProbation = await expireProbationaryEntries(options.dotDir, today);
 
 	const sanitized = sanitizeMessagesForMemory(options.messages);
 	if (!hasMeaningfulExchange(sanitized)) {
@@ -253,7 +253,7 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	});
 	const parsed = response.output;
 
-	const currentEntries = await listMemoryEntries(options.channelDir);
+	const currentEntries = await listMemoryEntries(options.dotDir);
 	const byName = new Map(currentEntries.map((entry) => [entry.name, entry]));
 	const hasUserMessage = sanitized.some((message) => message.role === "user");
 
@@ -385,8 +385,8 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 		storeOps.push({ op: "touch", names: touchNames });
 	}
 
-	const applied = await applyMemoryOps(options.channelDir, storeOps, { today });
-	const journalResult = await appendJournalEntries(options.channelDir, today, parsed.journal);
+	const applied = await applyMemoryOps(options.dotDir, storeOps, { today });
+	const journalResult = await appendJournalEntries(options.dotDir, today, parsed.journal);
 
 	return {
 		skipped: false,

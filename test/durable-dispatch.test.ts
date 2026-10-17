@@ -174,10 +174,10 @@ describe("DurableDispatchService", () => {
 		const stateDir = join(root, "state", "dispatch");
 		const workspaceDir = join(root, "workspace");
 		const channelId = "dm_redelivery_task";
-		const channelDir = join(workspaceDir, channelId);
-		await mkdir(join(channelDir, "tasks", "archive"), { recursive: true });
+		const dotDir = join(workspaceDir, channelId);
+		await mkdir(join(dotDir, "tasks", "archive"), { recursive: true });
 		await writeFile(
-			join(channelDir, "tasks", "T-redelivery.md"),
+			join(dotDir, "tasks", "T-redelivery.md"),
 			renderTaskDocument(
 				{
 					state: "parked",
@@ -250,7 +250,7 @@ describe("DurableDispatchService", () => {
 		const claimed = await claimVerifiedWake(delivered[1]!, workspaceDir, manager);
 		expect(claimed?.activated).toBe(true);
 		await claimed?.finish();
-		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
+		expect((await readStoredTask(dotDir, "T-redelivery"))?.fields.state).toBe("open");
 
 		await service.drainOnce(Date.now() + 22);
 		expect(delivered[2]?.text).toContain("[REDELIVERY:3]");
@@ -258,7 +258,7 @@ describe("DurableDispatchService", () => {
 		// manager's dispatchId-scoped wake claim is what makes this idempotent, not any per-task
 		// attempt counter (that mechanism was retired).
 		await expect(claimVerifiedWake(delivered[2]!, workspaceDir, manager)).resolves.toBeUndefined();
-		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
+		expect((await readStoredTask(dotDir, "T-redelivery"))?.fields.state).toBe("open");
 	});
 
 	it("renews a running turn's lease — persisting only past the half-life — so it never redelivers itself (spec 031, D2)", async () => {

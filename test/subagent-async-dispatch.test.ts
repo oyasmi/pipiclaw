@@ -32,8 +32,8 @@ function sleep(ms: number): Promise<void> {
 describe("subagent tool: async dispatch past the sync grace window (spec 040, D2)", () => {
 	it("returns a dispatched placeholder once the grace window elapses, then wakes the channel once the run actually finishes", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];
 		configureSubAgentRuntime({
@@ -52,7 +52,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			runtimeContext: { workspaceDir, channelId: "dm_123" },
 			// Tiny grace window; maxWallTimeSec (default 300s via inline systemPrompt path) stays
 			// far above it so the wall-clock budget timer cannot fire and confound the test.

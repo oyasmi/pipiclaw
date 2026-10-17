@@ -10,7 +10,7 @@ export async function createTask(
 	// Same validator the event-template admission uses, so a task that can be created from a
 	// template can be created here and the other way round.
 	const input = validateTaskContractInput(contract);
-	const document = await createTaskDocument({ channelDir: options.channelDir, id, input });
+	const document = await createTaskDocument({ dotDir: options.dotDir, id, input });
 	return {
 		action: "create",
 		id: document.id,

@@ -26,16 +26,16 @@ const OPEN_DOD_BODY = renderStandardTaskBody({ title: "W", goal: "G", dod: "- [ 
 
 describe("task tool surface (spec 052, D7)", () => {
 	let workspaceDir: string;
-	let channelDir: string;
+	let dotDir: string;
 	let tasksDir: string;
 	let options: TaskManageToolOptions;
 
 	beforeEach(async () => {
 		workspaceDir = await mkdtemp(join(tmpdir(), "task-manage-"));
-		channelDir = join(workspaceDir, CHANNEL_ID);
-		tasksDir = join(channelDir, "tasks");
+		dotDir = join(workspaceDir, CHANNEL_ID);
+		tasksDir = join(dotDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
-		options = { ...testManagers(CHANNEL_ID), channelDir };
+		options = { ...testManagers(CHANNEL_ID), dotDir };
 	});
 
 	afterEach(async () => {
@@ -78,7 +78,7 @@ describe("task tool surface (spec 052, D7)", () => {
 				budget: { steps: 12, usd: 3 },
 			});
 			expect(result).toMatchObject({ state: "open" });
-			const document = await readStoredTask(channelDir, "work");
+			const document = await readStoredTask(dotDir, "work");
 			expect(document?.fields.usage).toMatchObject({ steps: 0, usd: 0 });
 			expect(document?.fields.budget).toEqual({ steps: 12, usd: 3 });
 			expect(document?.body).toContain("- [ ] W2 second");
@@ -115,7 +115,7 @@ describe("task tool surface (spec 052, D7)", () => {
 				],
 				budget: { steps: 5 },
 			});
-			const document = await readStoredTask(channelDir, "edit");
+			const document = await readStoredTask(dotDir, "edit");
 			expect(document?.body).toContain("W3 Ship it");
 			expect(document?.body).toContain("- [x] W1 Build it");
 			expect(document?.fields.budget?.steps).toBe(5);
@@ -141,12 +141,12 @@ describe("task tool surface (spec 052, D7)", () => {
 				{ outcome: "continue", note: "ran the check", items: [{ id: "W1", status: "done" }] },
 			);
 			expect(result.state).toBe("open");
-			expect((await readStoredTask(channelDir, "work"))?.body).toContain("- [x] W1 Build it");
-			const [record] = await readTaskLog(channelDir, "work", { kinds: ["step"] });
+			expect((await readStoredTask(dotDir, "work"))?.body).toContain("- [x] W1 Build it");
+			const [record] = await readTaskLog(dotDir, "work", { kinds: ["step"] });
 			expect(record).toMatchObject({ kind: "step", seq: 1, outcome: "continue" });
 			// Deduplicated: the idle detector asks "did anything happen", not "how many times".
 			expect(record?.kind === "step" && record.tools).toEqual(["bash", "read"]);
-			expect((await readStoredTask(channelDir, "work"))?.fields.usage?.steps).toBe(1);
+			expect((await readStoredTask(dotDir, "work"))?.fields.usage?.steps).toBe(1);
 		});
 
 		it("adds the step's own model cost to the task's usage, before a done writes its close record", async () => {
@@ -156,16 +156,16 @@ describe("task tool surface (spec 052, D7)", () => {
 				getStepCost: () => ({ usd, estimated }),
 			});
 			await endTaskStep(priced(0.4), { outcome: "continue", note: "n" });
-			expect((await readStoredTask(channelDir, "costly"))?.fields.usage).toMatchObject({
+			expect((await readStoredTask(dotDir, "costly"))?.fields.usage).toMatchObject({
 				usd: 0.4,
 				usdEstimated: false,
 			});
 
 			// The leader's last step is spent by the time it ends the project, so the close record counts it.
 			await endTaskStep(priced(0.1, true), { outcome: "done", note: "n" });
-			const close = (await readTaskLog(channelDir, "costly", { kinds: ["close"] }))[0];
+			const close = (await readTaskLog(dotDir, "costly", { kinds: ["close"] }))[0];
 			expect(close?.kind === "close" && close.usd).toBeCloseTo(0.5);
-			expect((await readStoredTask(channelDir, "costly", true))?.fields.usage?.usdEstimated).toBe(true);
+			expect((await readStoredTask(dotDir, "costly", true))?.fields.usage?.usdEstimated).toBe(true);
 		});
 
 		it("park requires a ticket, and refuses a work ticket when nothing is in flight", async () => {
@@ -176,7 +176,7 @@ describe("task tool surface (spec 052, D7)", () => {
 			).rejects.toThrow(/nothing to wait for|no delegation or background job/);
 
 			await endTaskStep(loop("work"), { outcome: "park", note: "n", ticket: { kind: "time", at: "+2h" } });
-			const fields = (await readStoredTask(channelDir, "work"))?.fields;
+			const fields = (await readStoredTask(dotDir, "work"))?.fields;
 			expect(fields?.state).toBe("parked");
 			expect(fields?.ticket?.by).toBeTruthy();
 		});
@@ -186,7 +186,7 @@ describe("task tool surface (spec 052, D7)", () => {
 			await startRun("work", "run_a");
 			await startRun("other", "run_other");
 			await endTaskStep(loop("work"), { outcome: "park", note: "waiting", ticket: { kind: "work" } });
-			const ticket = (await readStoredTask(channelDir, "work"))?.fields.ticket;
+			const ticket = (await readStoredTask(dotDir, "work"))?.fields.ticket;
 			// Only this task's own delegation counts; another task's run never props up the wait.
 			expect(ticket).toMatchObject({ kind: "work", refs: ["run_a"] });
 		});
@@ -198,7 +198,7 @@ describe("task tool surface (spec 052, D7)", () => {
 				note: "n",
 				ticket: { kind: "ask", asked: "Merge to master?" },
 			});
-			const fields = (await readStoredTask(channelDir, "work"))?.fields;
+			const fields = (await readStoredTask(dotDir, "work"))?.fields;
 			expect(fields?.ticket).toMatchObject({ kind: "ask", asked: "Merge to master?" });
 			// A task waiting on a person that never says so is the silent dead end tickets exist to prevent.
 			const notice = await readFile(join(tasksDir, ".steer", "work.out.md"), "utf-8");
@@ -230,7 +230,7 @@ describe("task tool surface (spec 052, D7)", () => {
 			expect(archivedLog).toContain('"kind":"close"');
 			expect(await readFile(join(tasksDir, ".steer", "once.out.md"), "utf-8")).toContain("成果在这里");
 			// What was delivered is kept with the task, so the next occurrence can see it.
-			const steps = await readTaskLog(channelDir, "once", { kinds: ["step"] });
+			const steps = await readTaskLog(dotDir, "once", { kinds: ["step"] });
 			expect(steps[0]).toMatchObject({ kind: "step", report: "成果在这里" });
 		});
 
@@ -257,17 +257,17 @@ describe("task tool surface (spec 052, D7)", () => {
 			).rejects.toThrow(/unmet acceptance items/);
 			expect(existsSync(join(tasksDir, ".steer", "open-dod.out.md"))).toBe(false);
 			expect(await readFile(join(tasksDir, "open-dod.md"), "utf-8")).toBe(before);
-			expect(await readTaskLog(channelDir, "open-dod")).toEqual([]);
+			expect(await readTaskLog(dotDir, "open-dod")).toEqual([]);
 		});
 
 		it("the tool wrapper sets terminate:true on success but not on a recoverable failure", async () => {
 			await writeTask("term");
-			const tool = createTaskStepEndTool({ ...testManagers(), channelDir, taskId: "term" });
+			const tool = createTaskStepEndTool({ ...testManagers(), dotDir, taskId: "term" });
 			expect((await tool.execute("c", { outcome: "continue", note: "n" } as never)).terminate).toBe(true);
 
 			await writeTask("term2", {}, OPEN_DOD_BODY);
 			await expect(
-				createTaskStepEndTool({ ...testManagers(), channelDir, taskId: "term2" }).execute("c", {
+				createTaskStepEndTool({ ...testManagers(), dotDir, taskId: "term2" }).execute("c", {
 					outcome: "done",
 					note: "n",
 				} as never),

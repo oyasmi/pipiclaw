@@ -187,18 +187,18 @@ describe("ChannelJobManager", () => {
 	});
 
 	it("logs a task-bound job's dispatch and settlement onto the task, once, before the completion wake (spec 052, D4)", async () => {
-		const channelDir = mkdtempSync(join(tmpdir(), "job-task-"));
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		const dotDir = mkdtempSync(join(tmpdir(), "job-task-"));
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
 		writeFileSync(
-			join(channelDir, "tasks", "T.md"),
+			join(dotDir, "tasks", "T.md"),
 			renderTaskDocument({ state: "open", usage: createUsage() }, "# T\n"),
 		);
 		const wakeSawSettle: boolean[] = [];
 		const executor = new FakeJobExecutor();
 		const manager = new ChannelJobManager("dm_1", executor, {
-			channelDir,
+			dotDir,
 			dispatch: async () => {
-				wakeSawSettle.push((await readTaskLog(channelDir, "T", { kinds: ["settle"] })).length === 1);
+				wakeSawSettle.push((await readTaskLog(dotDir, "T", { kinds: ["settle"] })).length === 1);
 				return true;
 			},
 		});
@@ -210,7 +210,7 @@ describe("ChannelJobManager", () => {
 		await manager.list();
 		await manager.list();
 
-		const records = await readTaskLog(channelDir, "T", { kinds: ["dispatch", "settle"] });
+		const records = await readTaskLog(dotDir, "T", { kinds: ["dispatch", "settle"] });
 		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
 		// The output tail travels with the settlement: a task step's brief replaces the wake that carried it.
 		expect(records[1]).toMatchObject({ ref: job.id, status: "completed", exitCode: 0, tail: "compiling\nBUILD_OK" });

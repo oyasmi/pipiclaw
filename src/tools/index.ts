@@ -28,7 +28,7 @@ export interface CreatePipiclawToolsOptions {
 	workspaceDir: string;
 	/** Base for relative paths in the generic file tools, the shell's cwd and the default delegation `workingDirectory`. */
 	cwd: string;
-	channelDir: string;
+	dotDir: string;
 	channelId: string;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getSubAgentModelReference?: () => string | null;
@@ -72,7 +72,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		securityConfig,
 		securityContext,
 		channelId: options.channelId,
-		channelDir: options.channelDir,
+		dotDir: options.dotDir,
 		workspaceDir: options.workspaceDir,
 		webConfig: toolsConfig.tools.web,
 		toolsConfig,
@@ -99,7 +99,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		workspaceDir: options.workspaceDir,
 		// A delegation runs in the parent's cwd unless the model passes an explicit workingDirectory.
 		workingDirectory: options.cwd,
-		channelDir: options.channelDir,
+		dotDir: options.dotDir,
 		getSubAgentDiscovery: options.getSubAgentDiscovery,
 		getSubAgentModelReference: options.getSubAgentModelReference,
 		resolveFallbackModel: options.resolveFallbackModel,
@@ -116,7 +116,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	const subAgentManageOptions = {
 		runManager: options.runManager,
 		channelId: options.channelId,
-		channelDir: options.channelDir,
+		dotDir: options.dotDir,
 		getSubAgentDiscovery: options.getSubAgentDiscovery,
 		workspaceDir: options.workspaceDir,
 		securityConfig,

@@ -30,13 +30,13 @@ function safeRunSegment(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 48) || "run";
 }
 
-function getSubAgentArtifactsRoot(channelDir: string): string {
-	return join(channelDir, "subagent-artifacts");
+function getSubAgentArtifactsRoot(dotDir: string): string {
+	return join(dotDir, "subagent-artifacts");
 }
 
 /** Every run gets its own artifact directory (spec 032 D4), independent of `returns` mode. */
-async function prepareArtifactDir(channelDir: string, runId: string): Promise<string> {
-	const artifactDir = join(getSubAgentArtifactsRoot(channelDir), safeRunSegment(runId));
+async function prepareArtifactDir(dotDir: string, runId: string): Promise<string> {
+	const artifactDir = join(getSubAgentArtifactsRoot(dotDir), safeRunSegment(runId));
 	await mkdir(artifactDir, { recursive: true });
 	return artifactDir;
 }
@@ -97,7 +97,7 @@ async function prepareRunContext(
 	if (item && !taskId) throw new RecoverableToolError("item names a Work Item of a task; pass taskId too.");
 	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new RecoverableToolError(`Invalid taskId: ${taskId}`);
 	if (taskId) {
-		const task = await readStoredTask(options.channelDir, taskId);
+		const task = await readStoredTask(options.dotDir, taskId);
 		if (!task) {
 			throw new RecoverableToolError(
 				`Task ${taskId} does not exist. Create it with task_create before delegating task-owned work.`,
@@ -112,7 +112,7 @@ async function prepareRunContext(
 			);
 		}
 	}
-	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
+	const artifactDir = await prepareArtifactDir(options.dotDir, runId);
 	const workingDirectory = resolveRunWorkingDirectory(params.workingDirectory, options);
 	return { runId, purpose, taskId, item, workingDirectory, artifactDir };
 }

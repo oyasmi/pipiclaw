@@ -423,15 +423,12 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 	it("keeps a purpose=verify run's declared verdict and logs its settlement when it completes across a restart", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_verify_restart";
-		const channelDir = join(workspaceDir, channelId);
+		const dotDir = join(workspaceDir, channelId);
 		const stateDir = join(workspaceDir, "state");
-		const artifactDir = join(channelDir, "subagent-artifacts", "run-verify");
+		const artifactDir = join(dotDir, "subagent-artifacts", "run-verify");
 		mkdirSync(artifactDir, { recursive: true });
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
-		writeFileSync(
-			join(channelDir, "tasks", "ship.md"),
-			"---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n",
-		);
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
+		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n");
 		const projectDir = join(workspaceDir, "project");
 		mkdirSync(projectDir, { recursive: true });
 
@@ -463,7 +460,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			taskId: "ship",
 			workingDirectory: projectDir,
 			artifactDir,
-			channelDir,
+			dotDir,
 			leaseKey: lease.ok ? lease.leaseKey : undefined,
 			mutates: "write",
 		});
@@ -473,7 +470,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			deadlineAt: Date.now() + 60_000,
 			maxWallTimeSec: 60,
 			processStartedAt: Date.now(),
-			channelDir,
+			dotDir,
 		});
 
 		firstDaemon.stop();
@@ -484,7 +481,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const record = secondDaemon.get("run-verify");
 		expect(record?.status).toBe("completed");
 		expect(record?.verificationVerdict).toBe("pass");
-		const settled = (await readTaskLog(channelDir, "ship", { kinds: ["settle"] }))[0];
+		const settled = (await readTaskLog(dotDir, "ship", { kinds: ["settle"] }))[0];
 		expect(settled).toMatchObject({ ref: "run-verify", status: "completed", verdict: "pass" });
 		await resetTaskLogAppenders();
 	});

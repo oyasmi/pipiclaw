@@ -50,8 +50,8 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_ext_envelope");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_ext_envelope");
+		mkdirSync(dotDir, { recursive: true });
 
 		const researcherRole: SubAgentConfig = {
 			...baseRole,
@@ -69,7 +69,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: () => ({
 				directory: `${workspaceDir}/sub-agents`,
 				agents: [researcherRole],
@@ -110,8 +110,8 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 	// callers toward. `subagentSchema`/`subagentInlineSchema` have no `returns` field any more, so
 	// the rejection this test asserted is now a compile-time impossibility, not a runtime one.
 
-	async function seedMemory(channelDir: string): Promise<void> {
-		await applyMemoryOps(channelDir, [
+	async function seedMemory(dotDir: string): Promise<void> {
+		await applyMemoryOps(dotDir, [
 			{
 				op: "add",
 				name: "refactoring-memory-pipeline",
@@ -129,9 +129,9 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_ext_no_memory");
-		mkdirSync(channelDir, { recursive: true });
-		await seedMemory(channelDir);
+		const dotDir = join(workspaceDir, "dm_ext_no_memory");
+		mkdirSync(dotDir, { recursive: true });
+		await seedMemory(dotDir);
 
 		const role: SubAgentConfig = {
 			...baseRole,
@@ -149,7 +149,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
 			runtimeContext: { workspaceDir, channelId: "dm_ext_no_memory" },
 		});
@@ -165,9 +165,9 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_ext_with_memory");
-		mkdirSync(channelDir, { recursive: true });
-		await seedMemory(channelDir);
+		const dotDir = join(workspaceDir, "dm_ext_with_memory");
+		mkdirSync(dotDir, { recursive: true });
+		await seedMemory(dotDir);
 
 		const role: SubAgentConfig = {
 			...baseRole,
@@ -185,7 +185,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
 			runtimeContext: { workspaceDir, channelId: "dm_ext_with_memory" },
 		});
@@ -205,9 +205,9 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_ext_invocation_context");
-		mkdirSync(channelDir, { recursive: true });
-		await seedMemory(channelDir);
+		const dotDir = join(workspaceDir, "dm_ext_invocation_context");
+		mkdirSync(dotDir, { recursive: true });
+		await seedMemory(dotDir);
 
 		const role: SubAgentConfig = {
 			...baseRole,
@@ -225,7 +225,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
 			runtimeContext: { workspaceDir, channelId: "dm_ext_invocation_context" },
 		});
@@ -240,9 +240,9 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_ext_envelope_verify");
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
-		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
+		const dotDir = join(workspaceDir, "dm_ext_envelope_verify");
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
+		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
 
 		const checkerRole: SubAgentConfig = {
 			...baseRole,
@@ -260,7 +260,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [checkerRole], warnings: [] }),
 			runtimeContext: { workspaceDir, channelId: "dm_ext_envelope_verify" },
 		});
@@ -274,7 +274,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		expect(launchExternalRunMock).toHaveBeenCalledTimes(1);
 		const input = launchExternalRunMock.mock.calls[0]?.[0] as { task: string };
-		expect(input.task).toContain(join(channelDir, "tasks", "ship.md"));
+		expect(input.task).toContain(join(dotDir, "tasks", "ship.md"));
 		expect(input.task).toContain("VERDICT: PASS or VERDICT: FAIL");
 	});
 });

@@ -91,7 +91,7 @@ export interface WorkerToolRequest {
 	securityConfig: SecurityConfig;
 	securityContext: SecurityRuntimeContext;
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
@@ -112,7 +112,7 @@ export interface SubAgentToolOptions {
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
-	channelDir: string;
+	dotDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	/** `settings.subagentModel` (spec 032 D5); null/undefined means unset. */
 	getSubAgentModelReference?: () => string | null;

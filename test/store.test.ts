@@ -9,9 +9,9 @@ const createTempDir = useTempDirs("pipiclaw-store-");
 
 /** The store resolves archive paths without creating them, so a test that seeds a file says so. */
 function seedChannelDir(workingDir: string, channelId: string): string {
-	const channelDir = join(workingDir, getChannelDirName(channelId));
-	mkdirSync(channelDir, { recursive: true });
-	return channelDir;
+	const dotDir = join(workingDir, getChannelDirName(channelId));
+	mkdirSync(dotDir, { recursive: true });
+	return dotDir;
 }
 
 function sampleSubAgentRun(): LoggedSubAgentRun {
@@ -104,9 +104,9 @@ describe("ChannelStore", () => {
 	it("rotates oversized logs, resets sync offsets, and writes subagent runs", async () => {
 		const workingDir = createTempDir();
 		const store = new ChannelStore({ workingDir });
-		const channelDir = seedChannelDir(workingDir, "dm_rotate");
-		const logPath = join(channelDir, "log.jsonl");
-		const syncOffsetPath = join(channelDir, ".sync-offset");
+		const dotDir = seedChannelDir(workingDir, "dm_rotate");
+		const logPath = join(dotDir, "log.jsonl");
+		const syncOffsetPath = join(dotDir, ".sync-offset");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 		writeFileSync(syncOffsetPath, "42", "utf-8");
@@ -126,14 +126,14 @@ describe("ChannelStore", () => {
 
 		await store.logSubAgentRun("dm_rotate", sampleSubAgentRun());
 		await store.flush();
-		expect(readFileSync(join(channelDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
+		expect(readFileSync(join(dotDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
 	});
 
 	it("serializes concurrent writes to the same log file around rotation", async () => {
 		const workingDir = createTempDir();
 		const store = new ChannelStore({ workingDir });
-		const channelDir = seedChannelDir(workingDir, "dm_concurrent");
-		const logPath = join(channelDir, "log.jsonl");
+		const dotDir = seedChannelDir(workingDir, "dm_concurrent");
+		const logPath = join(dotDir, "log.jsonl");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 
@@ -176,7 +176,7 @@ describe("ChannelStore", () => {
 		});
 		await store.flush();
 
-		const channelDir = join(workingDir, getChannelDirName(channelId));
-		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"hello group"');
+		const dotDir = join(workingDir, getChannelDirName(channelId));
+		expect(readFileSync(join(dotDir, "log.jsonl"), "utf-8")).toContain('"text":"hello group"');
 	});
 });

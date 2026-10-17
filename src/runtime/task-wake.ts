@@ -40,8 +40,8 @@ export interface ClaimedWake {
 	finish(): Promise<void>;
 }
 
-async function isTaskActivelyDriven(channelDir: string, taskId: string): Promise<boolean> {
-	const document = await readStoredTask(channelDir, taskId).catch(() => undefined);
+async function isTaskActivelyDriven(dotDir: string, taskId: string): Promise<boolean> {
+	const document = await readStoredTask(dotDir, taskId).catch(() => undefined);
 	return document !== undefined && document.fields.state === "open" && !document.fields.paused;
 }
 
@@ -64,13 +64,13 @@ export async function claimVerifiedWake(
 	if (!wake || typeof event.dispatchId !== "string") return undefined;
 	if (!(await owner.beginWakeConsumption(wake.resourceId, wake.taskId, event.dispatchId))) return undefined;
 	const dispatchId = event.dispatchId;
-	const channelDir = getChannelDir(workspaceDir, event.channelId);
+	const dotDir = getChannelDir(workspaceDir, event.channelId);
 	hooks?.beforeActivation?.();
-	const redeemed = await redeemTicket(channelDir, wake.taskId, (ticket) => ticket.kind === "work");
+	const redeemed = await redeemTicket(dotDir, wake.taskId, (ticket) => ticket.kind === "work");
 	return {
 		taskId: wake.taskId,
 		activated: redeemed !== undefined,
-		taskStillDriven: redeemed !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId)),
+		taskStillDriven: redeemed !== undefined || (await isTaskActivelyDriven(dotDir, wake.taskId)),
 		finish: () => owner.finishWakeConsumption(wake.resourceId, dispatchId),
 	};
 }

@@ -271,22 +271,22 @@ async function listDirectory(dir: string): Promise<string[]> {
 async function convertOneTask(
 	workspaceDir: string,
 	channelId: string,
-	channelDir: string,
+	dotDir: string,
 	id: string,
 	now: Date,
 ): Promise<boolean> {
-	return withTaskMutation(channelDir, id, async () => {
-		const path = join(channelDir, "tasks", `${id}.md`);
+	return withTaskMutation(dotDir, id, async () => {
+		const path = join(dotDir, "tasks", `${id}.md`);
 		const content = await readFile(path, "utf-8");
 		const v3 = parseV3Frontmatter(content);
 		if (!v3 || v3.v5 || v3.status === undefined) return false;
 
 		let stage: ConversionStage = "backup";
 		let createdEvent: string | undefined;
-		const logPath = join(channelDir, "tasks", `${id}.jsonl`);
+		const logPath = join(dotDir, "tasks", `${id}.jsonl`);
 		const hadLog = existsSync(logPath);
 		try {
-			await backupOriginal(join(channelDir, "tasks", BACKUP_DIRNAME), id, path, content);
+			await backupOriginal(join(dotDir, "tasks", BACKUP_DIRNAME), id, path, content);
 			const original = taskBody(content);
 			const notes: string[] = [];
 
@@ -332,10 +332,10 @@ async function convertOneTask(
 			stage = "task";
 			await writeStoredTask({ id, path, fields, body: convertBody(original) });
 			stage = "log";
-			for (const note of notes) await appendTaskLog(channelDir, id, { kind: "note", note });
+			for (const note of notes) await appendTaskLog(dotDir, id, { kind: "note", note });
 			if (retire) {
 				stage = "archive";
-				await archiveTask(channelDir, id, "cancelled");
+				await archiveTask(dotDir, id, "cancelled");
 			}
 			log.logInfoEvent("tasks.migration.converted", "Task converted to v5", {
 				reason: `state=${fields.state}${fields.paused ? " paused" : ""}${origin ? ` origin=${origin}` : ""}${retire ? " (retired)" : ""}`,
@@ -370,7 +370,7 @@ async function convertOneTask(
 }
 
 /** Move task-owned sensor events (`task.<channelId>.<taskId>.<use>`) out of the way: v5 has no `signal` ticket. */
-async function moveTaskOwnedEvents(workspaceDir: string, channelId: string, channelDir: string): Promise<void> {
+async function moveTaskOwnedEvents(workspaceDir: string, channelId: string, dotDir: string): Promise<void> {
 	const eventsDir = join(workspaceDir, "events");
 	const names = (await listDirectory(eventsDir)).filter((name) => name.endsWith(".json"));
 	const prefix = `task.${channelId}.`;
@@ -383,15 +383,15 @@ async function moveTaskOwnedEvents(workspaceDir: string, channelId: string, chan
 		// Copy (never overwriting a same-named backup), then remove the live file: if the removal
 		// fails the event is still in place and the retry finds an identical backup.
 		await copyWithoutOverwrite(
-			join(channelDir, "tasks", BACKUP_DIRNAME, "events"),
+			join(dotDir, "tasks", BACKUP_DIRNAME, "events"),
 			name.slice(0, -".json".length),
 			".json",
 			source,
 			await readFile(source, "utf-8"),
 		);
 		await rm(source);
-		if (ownerId && (await readStoredTask(channelDir, ownerId).catch(() => undefined))) {
-			await appendTaskLog(channelDir, ownerId, {
+		if (ownerId && (await readStoredTask(dotDir, ownerId).catch(() => undefined))) {
+			await appendTaskLog(dotDir, ownerId, {
 				kind: "note",
 				note: `转换到 v5：传感器事件 ${name.slice(0, -".json".length)} 已移到 tasks/.v3/events/（v5 没有 signal 票）；需要等待外部条件时，改用带超时的后台作业。`,
 			});
@@ -462,10 +462,10 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 		failures.push({ channelId: "*", stage: "discover", error: errorMessage(error), rollback: "ok" });
 	}
 	for (const channelId of channelIds) {
-		const channelDir = getChannelDir(workspaceDir, channelId);
+		const dotDir = getChannelDir(workspaceDir, channelId);
 		let filenames: string[] = [];
 		try {
-			filenames = (await listDirectory(join(channelDir, "tasks"))).filter((name) => name.endsWith(".md"));
+			filenames = (await listDirectory(join(dotDir, "tasks"))).filter((name) => name.endsWith(".md"));
 		} catch (error) {
 			// An unreadable task directory is not an empty one: the originals were not looked at.
 			log.logWarn("tasks.migration.list_failed", "Channel tasks could not be listed", {
@@ -477,7 +477,7 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 		for (const filename of filenames) {
 			const id = filename.slice(0, -".md".length);
 			try {
-				if (await convertOneTask(workspaceDir, channelId, channelDir, normalizeTaskId(id), now)) converted++;
+				if (await convertOneTask(workspaceDir, channelId, dotDir, normalizeTaskId(id), now)) converted++;
 			} catch (error) {
 				log.logWarn("tasks.migration.convert_failed", "Task could not be converted to v5", {
 					reason: errorMessage(error),
@@ -492,7 +492,7 @@ export async function migrateTasksToV5(workspaceDir: string, stateDir: string): 
 				});
 			}
 		}
-		await moveTaskOwnedEvents(workspaceDir, channelId, channelDir).catch((error) => {
+		await moveTaskOwnedEvents(workspaceDir, channelId, dotDir).catch((error) => {
 			log.logWarn("tasks.migration.events_failed", "Task-owned events could not be moved", {
 				channelId: channelId,
 				reason: errorMessage(error),

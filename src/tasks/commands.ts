@@ -36,8 +36,8 @@ import { describeTicketForUser } from "./ticket.js";
 
 export interface HandleTasksCommandOptions {
 	args: string;
-	/** The channel directory; tasks live in `<channelDir>/tasks/`. */
-	channelDir: string;
+	/** The channel directory; tasks live in `<dotDir>/tasks/`. */
+	dotDir: string;
 	/** Optional immediate task wake, available in the long-lived DingTalk runtime. */
 	dispatchTask?: (id: string) => Promise<boolean>;
 }
@@ -113,8 +113,8 @@ export function parseTasksCommand(args: string): TasksCommand {
 	throw new Error(`未知子命令 \`${action}\`。`);
 }
 
-function tasksDir(channelDir: string): string {
-	return join(channelDir, "tasks");
+function tasksDir(dotDir: string): string {
+	return join(dotDir, "tasks");
 }
 
 /** `（最晚 3 小时后重新检查）` — when the runtime looks at a parked task again no matter what. */
@@ -137,7 +137,7 @@ function ticketSummary(entry: TaskLedgerEntry, now: number): string | undefined 
 	return ticket ? `${describeTicketForUser(ticket)}${backstopHint(ticket.by, now)}` : undefined;
 }
 
-function renderListLine(entry: TaskLedgerEntry, channelDir: string, now: number): string {
+function renderListLine(entry: TaskLedgerEntry, dotDir: string, now: number): string {
 	const bits = [`\`${entry.id}\` ${entry.title}`, taskStateLabel(entry.fields.state)];
 	if (entry.fields.paused) bits.push(`已暂停（${entry.fields.paused.reason}）`);
 	const ticket = ticketSummary(entry, now);
@@ -146,21 +146,20 @@ function renderListLine(entry: TaskLedgerEntry, channelDir: string, now: number)
 	if (entry.fields.origin) bits.push(`来自 ${entry.fields.origin}`);
 	const usage = usageSummary(entry);
 	if (usage) bits.push(usage);
-	if (hasTaskSteer(channelDir, entry.id)) bits.push("有待处理的指示");
+	if (hasTaskSteer(dotDir, entry.id)) bits.push("有待处理的指示");
 	if (!entry.readable) bits.push("⚠️ 文件头（frontmatter）不可读");
 	return `- ${bits.join(" · ")}`;
 }
 
-async function listTasks(channelDir: string): Promise<string> {
+async function listTasks(dotDir: string): Promise<string> {
 	const now = Date.now();
-	const entries = (await readActiveTasks(tasksDir(channelDir), now)).filter((entry) => !entry.fields.outcome);
+	const entries = (await readActiveTasks(tasksDir(dotDir), now)).filter((entry) => !entry.fields.outcome);
 	if (entries.length === 0) {
 		return "暂无进行中的任务。\n在对话里告诉我目标，并说明作为长程任务推进。";
 	}
-	const report = [
-		`**任务（${entries.length}）**`,
-		...entries.map((entry) => renderListLine(entry, channelDir, now)),
-	].join("\n");
+	const report = [`**任务（${entries.length}）**`, ...entries.map((entry) => renderListLine(entry, dotDir, now))].join(
+		"\n",
+	);
 	return capReply(report, { nextStepHint: "用 `/tasks show <id>` 查看单个任务" }).text;
 }
 
@@ -179,12 +178,12 @@ function contractExcerpt(body: string, maxChars: number): { text: string; clippe
 	return { text: openFence ? `${head}\n\`\`\`` : head, clipped: true };
 }
 
-async function showTask(channelDir: string, idInput: string): Promise<string> {
+async function showTask(dotDir: string, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = (await readStoredTask(channelDir, id, true)) ?? undefined;
+	const document = (await readStoredTask(dotDir, id, true)) ?? undefined;
 	if (!document) return notFound(id);
 	const now = Date.now();
-	const entry = (await readActiveTasks(tasksDir(channelDir), now)).find((candidate) => candidate.id === id);
+	const entry = (await readActiveTasks(tasksDir(dotDir), now)).find((candidate) => candidate.id === id);
 
 	const head: string[] = [`**任务 ${id}**`];
 	head.push(`- 状态：${taskStateLabel(document.fields.state)}`);
@@ -200,16 +199,16 @@ async function showTask(channelDir: string, idInput: string): Promise<string> {
 	const usage = entry ? usageSummary(entry) : undefined;
 	if (usage) head.push(`- 用量：${usage}`);
 
-	const board = await buildTaskBoard(channelDir, id, document.body);
+	const board = await buildTaskBoard(dotDir, id, document.body);
 	const boardLines = board ? ["", "**工作项**", renderTaskBoardForUser(board, id, now)] : [];
 
-	const log = await readTaskLog(channelDir, id, {
+	const log = await readTaskLog(dotDir, id, {
 		kinds: ["step", "expired", "close", "note"],
 		limit: SHOW_LOG_LINES,
 	});
 	const logLines = log.length > 0 ? ["", "**最近记录**", ...log.map(renderTaskLogLineForUser)] : [];
 
-	const path = existsSync(taskPath(channelDir, id)) ? taskPath(channelDir, id) : archivedTaskPath(channelDir, id);
+	const path = existsSync(taskPath(dotDir, id)) ? taskPath(dotDir, id) : archivedTaskPath(dotDir, id);
 	const contract = contractExcerpt(document.body, TASK_SHOW_CONTRACT_CHARS);
 	const report = [
 		...head,
@@ -227,15 +226,15 @@ async function showTask(channelDir: string, idInput: string): Promise<string> {
 
 const ARCHIVE_OUTCOME: Record<string, string> = { completed: "已完成", cancelled: "已取消" };
 
-async function listArchive(channelDir: string): Promise<string> {
-	const archiveDir = join(tasksDir(channelDir), "archive");
+async function listArchive(dotDir: string): Promise<string> {
+	const archiveDir = join(tasksDir(dotDir), "archive");
 	if (!existsSync(archiveDir)) return "暂无已归档任务。\n任务完成或取消后会出现在这里。";
 	const files = (await readdir(archiveDir)).filter((name) => name.endsWith(".md")).sort();
 	if (files.length === 0) return "暂无已归档任务。\n任务完成或取消后会出现在这里。";
 	const lines: string[] = [];
 	for (const filename of files.slice(0, ARCHIVE_LIST_LIMIT)) {
 		const id = filename.slice(0, -".md".length);
-		const document = await readStoredTask(channelDir, id, true).catch(() => undefined);
+		const document = await readStoredTask(dotDir, id, true).catch(() => undefined);
 		const outcome = document?.fields.outcome;
 		const bits = [`\`${id}\``];
 		if (outcome) bits.push(ARCHIVE_OUTCOME[outcome] ?? outcome);
@@ -250,12 +249,12 @@ async function listArchive(channelDir: string): Promise<string> {
 	}).text;
 }
 
-async function showTaskLog(channelDir: string, idInput: string): Promise<string> {
+async function showTaskLog(dotDir: string, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const all = await readTaskLog(channelDir, id);
+	const all = await readTaskLog(dotDir, id);
 	if (all.length === 0) return `任务 \`${id}\` 暂无记录。\n任务执行第一步后会出现在这里。`;
 	const records = all.slice(-LOG_LINES);
-	const path = taskLogIsArchived(channelDir, id) ? taskArchiveLogPath(channelDir, id) : taskLogPath(channelDir, id);
+	const path = taskLogIsArchived(dotDir, id) ? taskArchiveLogPath(dotDir, id) : taskLogPath(dotDir, id);
 	const lines = [
 		`**任务 ${id} 的记录（最近 ${records.length} 条，共 ${all.length} 条）**`,
 		...records.map(renderTaskLogLineForUser),
@@ -266,7 +265,7 @@ async function showTaskLog(channelDir: string, idInput: string): Promise<string>
 
 async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await pauseTaskDocument(options.channelDir, id, {
+	const document = await pauseTaskDocument(options.dotDir, id, {
 		by: "user",
 		reason: "用户通过 /tasks pause 暂停。",
 	});
@@ -280,11 +279,11 @@ export async function resumeTask(
 	grants: Partial<TaskBudget> = {},
 ): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await resumeTaskDocument(options.channelDir, id);
+	const document = await resumeTaskDocument(options.dotDir, id);
 	if (!document) return notFound(id);
 	const granted: string[] = [];
 	if (Object.keys(grants).length > 0) {
-		await updateStoredTask(options.channelDir, id, (task) => {
+		await updateStoredTask(options.dotDir, id, (task) => {
 			const budget = { ...task.fields.budget };
 			for (const key of ["steps", "usd"] as const) {
 				const extra = grants[key];
@@ -304,9 +303,9 @@ export async function resumeTask(
 
 async function steerTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await readStoredTask(options.channelDir, id);
+	const document = await readStoredTask(options.dotDir, id);
 	if (!document) return notFound(id);
-	await queueTaskSteer(options.channelDir, id, text);
+	await queueTaskSteer(options.dotDir, id, text);
 	return `已把这条指示排给任务 \`${id}\` 的下一步，不会打断正在执行的这一步。`;
 }
 
@@ -317,10 +316,10 @@ async function steerTask(options: HandleTasksCommandOptions, idInput: string, te
  */
 async function replyToTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await readStoredTask(options.channelDir, id);
+	const document = await readStoredTask(options.dotDir, id);
 	if (!document) return notFound(id);
-	await queueTaskSteer(options.channelDir, id, text, "用户回答");
-	const redeemed = await redeemTicket(options.channelDir, id, (ticket) => ticket.kind === "ask");
+	await queueTaskSteer(options.dotDir, id, text, "用户回答");
+	const redeemed = await redeemTicket(options.dotDir, id, (ticket) => ticket.kind === "ask");
 	if (!redeemed) {
 		return `任务 \`${id}\` 当前并没有在等你的回答；内容已记下，下一步会看到。`;
 	}
@@ -341,7 +340,7 @@ function issue(problem: string, nextStep: string): string {
  */
 async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	const now = Date.now();
-	const entries = await readActiveTasks(tasksDir(options.channelDir), now);
+	const entries = await readActiveTasks(tasksDir(options.dotDir), now);
 	const problems: string[] = [];
 
 	for (const entry of entries) {
@@ -349,7 +348,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			problems.push(
 				issue(
 					`\`${entry.id}\` 的文件头（frontmatter）不可读`,
-					`让我修复 \`${taskPath(options.channelDir, entry.id)}\` 的文件头，或手动修改`,
+					`让我修复 \`${taskPath(options.dotDir, entry.id)}\` 的文件头，或手动修改`,
 				),
 			);
 			continue;
@@ -387,7 +386,7 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 
 	try {
 		if ("id" in command && command.id && command.action !== "show" && command.action !== "log") {
-			return await withTaskMutation(options.channelDir, command.id, () => dispatchTasksCommand(options, command));
+			return await withTaskMutation(options.dotDir, command.id, () => dispatchTasksCommand(options, command));
 		}
 		return await dispatchTasksCommand(options, command);
 	} catch (error) {
@@ -398,13 +397,13 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 async function dispatchTasksCommand(options: HandleTasksCommandOptions, command: TasksCommand): Promise<string> {
 	switch (command.action) {
 		case "list":
-			return await listTasks(options.channelDir);
+			return await listTasks(options.dotDir);
 		case "show":
-			return await showTask(options.channelDir, command.id);
+			return await showTask(options.dotDir, command.id);
 		case "log":
-			return await showTaskLog(options.channelDir, command.id);
+			return await showTaskLog(options.dotDir, command.id);
 		case "archive":
-			return await listArchive(options.channelDir);
+			return await listArchive(options.dotDir);
 		case "pause":
 			return await pauseTask(options, command.id);
 		case "resume":

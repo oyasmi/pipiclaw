@@ -199,12 +199,12 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 				.catch(() => undefined)
 				.then(async () => {
 					try {
-						const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
+						const dotDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
 
 						// The empty session file and active pointer are committed before the old
 						// generation is touched. A filesystem failure therefore leaves the live
 						// session authoritative and retryable.
-						const result = await createFreshActiveSession(channelDir, process.cwd());
+						const result = await createFreshActiveSession(dotDir, process.cwd());
 						const oldRunner = channelRunners.get(event.channelId);
 						if (oldRunner) {
 							channelRunners.delete(event.channelId);
@@ -276,10 +276,8 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 					getRunner: () => getRunner(channelId),
 					runManager: getRuns().get(channelId),
 					dispatchTask: async (id) => {
-						const channelDir = getChannelDir(options.paths.workspaceDir, channelId);
-						const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
-							(candidate) => candidate.id === id,
-						);
+						const dotDir = getChannelDir(options.paths.workspaceDir, channelId);
+						const entry = (await readActiveTasks(join(dotDir, "tasks"))).find((candidate) => candidate.id === id);
 						if (!entry) return false;
 						// A human asking to run a task twice means twice, so this key is deliberately
 						// unique per invocation rather than sharing the driver's occurrence key (D1).

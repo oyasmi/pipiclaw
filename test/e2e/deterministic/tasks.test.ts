@@ -26,7 +26,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		await harness.shutdown();
 	});
 
-	const tasksDir = () => join(harness.channelDir, "tasks");
+	const tasksDir = () => join(harness.dotDir, "tasks");
 	const activePath = () => join(tasksDir(), `${taskId}.md`);
 	const archivedPath = () => join(tasksDir(), "archive", `${taskId}.md`);
 
@@ -67,8 +67,8 @@ describe("E2E deterministic: task lifecycle", () => {
 		// Upgrade compatibility: bind an old independent task session with a completed tool.
 		const taskSession = join(tasksDir(), ".sessions", `${taskId}.jsonl`);
 		seedLegacySession("task", taskSession, process.cwd());
-		await parkTask(harness.channelDir, taskId, ticket);
-		await expireTicket(harness.channelDir, taskId);
+		await parkTask(harness.dotDir, taskId, ticket);
+		await expireTicket(harness.dotDir, taskId);
 		const entry = (await readActiveTasks(tasksDir())).find((task) => task.id === taskId)!;
 		await harness.sendWake(createTaskDriverEvent(harness.channelId, entry, Date.now()).text, {
 			user: "TASK_DRIVER",
@@ -78,7 +78,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		expect(request?.tools).toContain("task_step_end");
 		expect(JSON.stringify(request?.messages)).toContain("TASK_TOOL_RESULT");
 		expect(readFileSync(taskSession, "utf8")).toContain("TASK_HISTORY");
-		expect(readFileSync(join(harness.channelDir, "context.jsonl"), "utf8")).not.toContain("TASK_HISTORY");
+		expect(readFileSync(join(harness.dotDir, "context.jsonl"), "utf8")).not.toContain("TASK_HISTORY");
 		for (const unavailable of ["task_create", "event_manage", "memory_save"]) {
 			expect(request?.tools).not.toContain(unavailable);
 		}
@@ -90,7 +90,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		expect(request?.lastUserText).not.toContain("<task_agenda>");
 		expect(existsSync(activePath())).toBe(false);
 		expect(
-			(await readTaskLog(harness.channelDir, taskId, { kinds: ["close"] })).map(
+			(await readTaskLog(harness.dotDir, taskId, { kinds: ["close"] })).map(
 				(record) => record.kind === "close" && record.outcome,
 			),
 		).toEqual(["done"]);
@@ -252,7 +252,7 @@ describe("E2E deterministic: task lifecycle", () => {
 			userName: "TASK_DRIVER",
 		});
 
-		const log = await readTaskLog(harness.channelDir, taskId, { kinds: ["dispatch", "settle", "close"] });
+		const log = await readTaskLog(harness.dotDir, taskId, { kinds: ["dispatch", "settle", "close"] });
 		expect(log.map((record) => record.kind)).toEqual(["dispatch", "settle", "close"]);
 		expect(log[0]).toMatchObject({ kind: "dispatch", item: "W1" });
 		// The result tail is recorded at settlement, so a later step's <task_results> can show it.
@@ -318,7 +318,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		}
 		await harness.waitForIdle();
 		expect(existsSync(join(tasksDir(), "archive", `${id}.md`))).toBe(true);
-		expect((await readTaskLog(harness.channelDir, id, { kinds: ["close"] })).map((r) => r.kind)).toEqual(["close"]);
+		expect((await readTaskLog(harness.dotDir, id, { kinds: ["close"] })).map((r) => r.kind)).toEqual(["close"]);
 		writeOccurrence("2020-01-06T09:00:00+08:00");
 		await recorded("skipped", 3); // An archived instance also suppresses its own replay.
 		const nextId = "weekly-20200113-0900";

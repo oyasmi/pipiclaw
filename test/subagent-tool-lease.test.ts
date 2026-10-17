@@ -64,7 +64,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
-function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_lease") {
+function makeTool(workspaceDir: string, dotDir: string, channelId = "dm_lease") {
 	return createSubAgentInlineTool({
 		...testManagers(channelId),
 		executor: fakeExecutor,
@@ -74,7 +74,7 @@ function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_leas
 		resolveApiKey: async () => "test-key",
 		workspaceDir,
 		workingDirectory: workspaceDir,
-		channelDir,
+		dotDir,
 		runtimeContext: { workspaceDir, channelId },
 		createWorker: () =>
 			new FakeWorker((_input, worker) => {
@@ -103,8 +103,8 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 	it("releases the lease when resolveApiKey rejects before registration", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_resolve_reject";
-		const channelDir = join(workspaceDir, channelId);
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, channelId);
+		mkdirSync(dotDir, { recursive: true });
 		const manager = new SubAgentRunManager(channelId, {});
 		const tool = createSubAgentInlineTool({
 			...testManagers(channelId),
@@ -116,7 +116,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 				throw new Error("api key lookup rejected");
 			},
 			workspaceDir,
-			channelDir,
+			dotDir,
 			runtimeContext: { workspaceDir, channelId },
 			getRunManager: () => manager,
 		});
@@ -129,8 +129,8 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 	it("releases the lease when per-channel admission rejects registration", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_channel_cap_reject";
-		const channelDir = join(workspaceDir, channelId);
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, channelId);
+		mkdirSync(dotDir, { recursive: true });
 		const manager = new SubAgentRunManager(channelId, {});
 		for (let index = 0; index < MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL; index++) {
 			await manager.register({
@@ -154,7 +154,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			runtimeContext: { workspaceDir, channelId },
 			getRunManager: () => manager,
 		});
@@ -184,9 +184,9 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		}
 		const workspaceDir = createTempWorkspace();
 		const channelId = `${prefix}-rejected`;
-		const channelDir = join(workspaceDir, channelId);
-		mkdirSync(channelDir, { recursive: true });
-		const tool = makeTool(workspaceDir, channelDir, channelId);
+		const dotDir = join(workspaceDir, channelId);
+		mkdirSync(dotDir, { recursive: true });
+		const tool = makeTool(workspaceDir, dotDir, channelId);
 
 		await expect(tool.execute("host-cap-reject", writeParams())).rejects.toThrow("host-wide");
 		expect(getSubAgentRunManager(channelId).runningCount()).toBe(0);
@@ -201,8 +201,8 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 	it("releases the lease and removes the provisional record when required registration persistence fails", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_persist_reject";
-		const channelDir = join(workspaceDir, channelId);
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, channelId);
+		mkdirSync(dotDir, { recursive: true });
 		const blockedStateDir = join(workspaceDir, "state-file");
 		writeFileSync(blockedStateDir, "not a directory");
 		const manager = new SubAgentRunManager(channelId, { stateDir: blockedStateDir });
@@ -214,7 +214,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			runtimeContext: { workspaceDir, channelId },
 			getRunManager: () => manager,
 		});
@@ -227,8 +227,8 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("rejects a write-mutating internal delegation when another run already holds the directory", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_lease");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_lease");
+		mkdirSync(dotDir, { recursive: true });
 
 		const held = acquireWorkspaceLease({
 			runId: "other-run",
@@ -238,7 +238,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		expect(held.ok).toBe(true);
 
 		try {
-			const tool = makeTool(workspaceDir, channelDir);
+			const tool = makeTool(workspaceDir, dotDir);
 			await expect(
 				tool.execute("lease-call-1", {
 					systemPrompt: "Edit things.",
@@ -253,8 +253,8 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("does not block a read-only delegation from the same directory", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_lease");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_lease");
+		mkdirSync(dotDir, { recursive: true });
 
 		const held = acquireWorkspaceLease({
 			runId: "other-run",
@@ -264,7 +264,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		expect(held.ok).toBe(true);
 
 		try {
-			const tool = makeTool(workspaceDir, channelDir);
+			const tool = makeTool(workspaceDir, dotDir);
 			const result = await tool.execute("lease-call-2", {
 				systemPrompt: "Read things.",
 				tools: ["read"],
@@ -278,10 +278,10 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("releases its own lease once the run settles, so the directory becomes available again", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_lease");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_lease");
+		mkdirSync(dotDir, { recursive: true });
 
-		const tool = makeTool(workspaceDir, channelDir);
+		const tool = makeTool(workspaceDir, dotDir);
 		const result = await tool.execute("lease-call-3", {
 			systemPrompt: "Edit things.",
 			tools: ["read", "edit"],
@@ -298,12 +298,9 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 	it("allows a write-capable verifier, holds its lease during execution, and releases it on settlement", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_verify_write_lease";
-		const channelDir = join(workspaceDir, channelId);
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
-		writeFileSync(
-			join(channelDir, "tasks", "ship.md"),
-			"---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n",
-		);
+		const dotDir = join(workspaceDir, channelId);
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
+		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n");
 		const manager = new SubAgentRunManager(channelId, {});
 		let releasePrompt: (() => void) | undefined;
 		const tool = createSubAgentInlineTool({
@@ -315,7 +312,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			workingDirectory: workspaceDir,
-			channelDir,
+			dotDir,
 			runtimeContext: { workspaceDir, channelId },
 			getRunManager: () => manager,
 			createWorker: () =>
@@ -367,11 +364,11 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 describe("subagent tool: purpose=verify admission (D9)", () => {
 	async function makeExternalTool(role: string) {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_lease");
-		mkdirSync(channelDir, { recursive: true });
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		const dotDir = join(workspaceDir, "dm_lease");
+		mkdirSync(dotDir, { recursive: true });
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
+		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
 		const subAgentsDir = join(workspaceDir, "sub-agents");
 		mkdirSync(subAgentsDir, { recursive: true });
 		writeFileSync(join(subAgentsDir, "builder.md"), role, "utf-8");
@@ -385,7 +382,7 @@ describe("subagent tool: purpose=verify admission (D9)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: () => discoverSubAgents(workspaceDir, [model]),
 			runtimeContext: { workspaceDir, channelId: "dm_lease" },
 		});

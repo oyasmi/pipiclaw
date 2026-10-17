@@ -27,12 +27,12 @@ export function shouldPreserveRawInput(text: string): boolean {
  * pointer.
  */
 export async function persistOversizedInput(
-	channelDir: string,
+	dotDir: string,
 	channelId: string,
 	text: string,
 ): Promise<string | undefined> {
 	try {
-		const dir = join(channelDir, "inbox");
+		const dir = join(dotDir, "inbox");
 		await mkdir(dir, { recursive: true });
 		const path = join(dir, `message-${localStampForFilename()}.txt`);
 		await writeFile(path, text.replace(/\r/g, ""), { mode: 0o600 });

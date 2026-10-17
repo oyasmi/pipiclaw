@@ -56,7 +56,7 @@ export function createTurnProgress(): TurnProgress {
 
 export interface TurnPipelineDeps {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	host: SessionHost;
 	models: ModelSelection;
@@ -68,7 +68,7 @@ export interface TurnPipelineDeps {
 
 export class TurnPipeline {
 	private readonly channelId: string;
-	private readonly channelDir: string;
+	private readonly dotDir: string;
 	private readonly workspaceDir: string;
 	private readonly host: SessionHost;
 	private readonly models: ModelSelection;
@@ -76,7 +76,7 @@ export class TurnPipeline {
 
 	constructor(private readonly deps: TurnPipelineDeps) {
 		this.channelId = deps.channelId;
-		this.channelDir = deps.channelDir;
+		this.dotDir = deps.dotDir;
 		this.workspaceDir = deps.workspaceDir;
 		this.host = deps.host;
 		this.models = deps.models;
@@ -98,7 +98,7 @@ export class TurnPipeline {
 		const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
 		let oversizedInputPath: string | undefined;
 		if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
-			oversizedInputPath = await persistOversizedInput(this.channelDir, this.channelId, ctx.message.text);
+			oversizedInputPath = await persistOversizedInput(this.dotDir, this.channelId, ctx.message.text);
 			await ctx.respondInThread(
 				oversizedInputPath
 					? `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理；完整内容已存到 \`${oversizedInputPath}\`，需要时让我读取这个文件查看被省略的部分。`
@@ -121,7 +121,7 @@ export class TurnPipeline {
 		if (preserveRawInput) return "";
 		// Channel facts are turn-dynamic by design (spec 025 §7.3): keeping them out of the
 		// system prompt is what lets every channel in a workspace share one cached prefix.
-		const channelCapsuleText = renderChannelTurnContext(this.channelDir);
+		const channelCapsuleText = renderChannelTurnContext(this.dotDir);
 
 		// The task digest reads the whole tasks/ directory and depends on nothing the memory
 		// bootstrap below produces, so it runs alongside it rather than queuing behind it.
@@ -131,7 +131,7 @@ export class TurnPipeline {
 		// fails the turn exactly as it did when this ran inline. A task step gets none: its brief
 		// already carries its own task, and the channel's other tasks are noise there.
 		const taskDigestPromise = (
-			this.host.tasksEnabled && !this.host.taskLoop ? buildTaskDigestForTurn(this.channelDir) : Promise.resolve("")
+			this.host.tasksEnabled && !this.host.taskLoop ? buildTaskDigestForTurn(this.dotDir) : Promise.resolve("")
 		).then(
 			(text) => ({ text }) as { text: string; error?: never },
 			(error: unknown) => ({ error }) as { text?: never; error: unknown },
@@ -141,7 +141,7 @@ export class TurnPipeline {
 		// (and the first turn after compaction — see `subscribeToSessionEvents`), never per
 		// turn. Mid-session, the model uses `memory_search` to look things up.
 		if (this.host.firstTurnMemoryBootstrapPending) {
-			turn.durableMemoryBootstrapText = await buildFirstTurnMemoryBootstrap(this.channelDir, this.workspaceDir);
+			turn.durableMemoryBootstrapText = await buildFirstTurnMemoryBootstrap(this.dotDir, this.workspaceDir);
 			turn.bootstrapPrepared = true;
 		}
 
@@ -279,7 +279,7 @@ export class TurnPipeline {
 		await this.host.ensureSessionReady();
 
 		const oversized = text.replace(/\r/g, "").trim().length > MAX_USER_MESSAGE_CHARS;
-		const oversizedPath = oversized ? await persistOversizedInput(this.channelDir, this.channelId, text) : undefined;
+		const oversizedPath = oversized ? await persistOversizedInput(this.dotDir, this.channelId, text) : undefined;
 		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS, oversizedPath);
 		if (oversized) {
 			log.logWarn("agent.input.clipped", "Queued message clipped", {

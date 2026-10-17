@@ -27,8 +27,8 @@ export interface WebCacheEntry {
 	sourceTruncated: boolean;
 }
 
-function cacheDir(channelDir: string): string {
-	return join(channelDir, WEB_CACHE_DIR);
+function cacheDir(dotDir: string): string {
+	return join(dotDir, WEB_CACHE_DIR);
 }
 
 /** Cache key from the requested URL plus extract mode (markdown vs text render differently). */
@@ -36,17 +36,17 @@ export function webCacheKey(url: string, extractMode: string): string {
 	return createHash("sha256").update(`${extractMode}\n${url}`).digest("hex").slice(0, 24);
 }
 
-function bodyPath(channelDir: string, key: string): string {
-	return join(cacheDir(channelDir), `${key}.json`);
+function bodyPath(dotDir: string, key: string): string {
+	return join(cacheDir(dotDir), `${key}.json`);
 }
 
 /** Return the cached entry if present and within the TTL, else null. */
 export async function readWebCache(
-	channelDir: string,
+	dotDir: string,
 	key: string,
 	ttlMs = WEB_CACHE_TTL_MS,
 ): Promise<WebCacheEntry | null> {
-	const path = bodyPath(channelDir, key);
+	const path = bodyPath(dotDir, key);
 	try {
 		const stats = await stat(path);
 		// `>=` so a TTL of 0 means "always refetch" rather than depending on sub-ms timing.
@@ -72,13 +72,13 @@ export async function readWebCache(
 }
 
 /** Persist an entry and evict the oldest beyond the cap. Best-effort; never throws. */
-export async function writeWebCache(channelDir: string, key: string, entry: WebCacheEntry): Promise<void> {
+export async function writeWebCache(dotDir: string, key: string, entry: WebCacheEntry): Promise<void> {
 	try {
-		const dir = cacheDir(channelDir);
+		const dir = cacheDir(dotDir);
 		if (!existsSync(dir)) {
 			await mkdir(dir, { recursive: true });
 		}
-		await writeFileAtomically(bodyPath(channelDir, key), JSON.stringify(entry));
+		await writeFileAtomically(bodyPath(dotDir, key), JSON.stringify(entry));
 		await pruneWebCache(dir);
 	} catch {
 		// Caching is an optimization; a failure just means the next read refetches.
@@ -86,8 +86,8 @@ export async function writeWebCache(channelDir: string, key: string, entry: WebC
 }
 
 /** Remove one cached entry (used by `refresh: true` before a forced refetch). */
-export async function clearWebCacheEntry(channelDir: string, key: string): Promise<void> {
-	await rm(bodyPath(channelDir, key), { force: true }).catch(() => undefined);
+export async function clearWebCacheEntry(dotDir: string, key: string): Promise<void> {
+	await rm(bodyPath(dotDir, key), { force: true }).catch(() => undefined);
 }
 
 async function pruneWebCache(dir: string): Promise<void> {

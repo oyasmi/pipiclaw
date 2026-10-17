@@ -13,36 +13,36 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-active-session-");
 
-function readRef(channelDir: string): ActiveSessionRefV1 {
-	return JSON.parse(readFileSync(getActiveSessionRefPath(channelDir), "utf-8"));
+function readRef(dotDir: string): ActiveSessionRefV1 {
+	return JSON.parse(readFileSync(getActiveSessionRefPath(dotDir), "utf-8"));
 }
 
 describe("resolveActiveSessionFile", () => {
 	it("migrates a channel with no ref to context.jsonl and materializes it", () => {
-		const channelDir = makeTempDir();
+		const dotDir = makeTempDir();
 
-		const file = resolveActiveSessionFile(channelDir);
+		const file = resolveActiveSessionFile(dotDir);
 
 		expect(file).toBe("context.jsonl");
-		expect(existsSync(join(channelDir, "context.jsonl"))).toBe(true);
-		expect(statSync(join(channelDir, "context.jsonl")).size).toBe(0);
+		expect(existsSync(join(dotDir, "context.jsonl"))).toBe(true);
+		expect(statSync(join(dotDir, "context.jsonl")).size).toBe(0);
 		// Migration is interpretive, not eager: no ref file is written just from resolving.
-		expect(existsSync(getActiveSessionRefPath(channelDir))).toBe(false);
+		expect(existsSync(getActiveSessionRefPath(dotDir))).toBe(false);
 	});
 
 	it("does not truncate an existing session file", () => {
-		const channelDir = makeTempDir();
-		writeFileSync(join(channelDir, "context.jsonl"), '{"type":"session"}\n');
+		const dotDir = makeTempDir();
+		writeFileSync(join(dotDir, "context.jsonl"), '{"type":"session"}\n');
 
-		resolveActiveSessionFile(channelDir);
+		resolveActiveSessionFile(dotDir);
 
-		expect(readFileSync(join(channelDir, "context.jsonl"), "utf-8")).toBe('{"type":"session"}\n');
+		expect(readFileSync(join(dotDir, "context.jsonl"), "utf-8")).toBe('{"type":"session"}\n');
 	});
 
 	it("honors a committed ref instead of the context.jsonl default", () => {
-		const channelDir = makeTempDir();
+		const dotDir = makeTempDir();
 		writeFileSync(
-			getActiveSessionRefPath(channelDir),
+			getActiveSessionRefPath(dotDir),
 			JSON.stringify({
 				version: 1,
 				file: "20260101_abc.jsonl",
@@ -51,10 +51,10 @@ describe("resolveActiveSessionFile", () => {
 			}),
 		);
 
-		const file = resolveActiveSessionFile(channelDir);
+		const file = resolveActiveSessionFile(dotDir);
 
 		expect(file).toBe("20260101_abc.jsonl");
-		expect(existsSync(join(channelDir, "20260101_abc.jsonl"))).toBe(true);
+		expect(existsSync(join(dotDir, "20260101_abc.jsonl"))).toBe(true);
 	});
 
 	it("falls back to context.jsonl for any unusable ref instead of throwing", () => {
@@ -69,65 +69,65 @@ describe("resolveActiveSessionFile", () => {
 			JSON.stringify({ version: 1, file: "sub/dir.jsonl", sessionId: "x", updatedAt }),
 			JSON.stringify({ version: 1, file: "context.txt", sessionId: "x", updatedAt }),
 		]) {
-			const channelDir = makeTempDir();
-			writeFileSync(getActiveSessionRefPath(channelDir), ref);
-			expect(resolveActiveSessionFile(channelDir), ref).toBe("context.jsonl");
+			const dotDir = makeTempDir();
+			writeFileSync(getActiveSessionRefPath(dotDir), ref);
+			expect(resolveActiveSessionFile(dotDir), ref).toBe("context.jsonl");
 		}
 	});
 });
 
 describe("commitActiveSessionRef", () => {
 	it("creates a header-backed fresh session before switching the active ref", async () => {
-		const channelDir = makeTempDir();
+		const dotDir = makeTempDir();
 
-		const result = await createFreshActiveSession(channelDir, channelDir);
+		const result = await createFreshActiveSession(dotDir, dotDir);
 
-		const ref = readRef(channelDir);
+		const ref = readRef(dotDir);
 		expect(ref.sessionId).toBe(result.sessionId);
-		const sessionFile = join(channelDir, ref.file);
+		const sessionFile = join(dotDir, ref.file);
 		expect(existsSync(sessionFile)).toBe(true);
 		const header = JSON.parse(readFileSync(sessionFile, "utf-8").split("\n")[0] as string);
 		expect(header).toMatchObject({ type: "session", id: result.sessionId });
 	});
 
 	it("writes a ref pointing at the session's own file, atomically", async () => {
-		const channelDir = makeTempDir();
-		const manager = SessionManager.open(join(channelDir, "next.jsonl"), channelDir);
+		const dotDir = makeTempDir();
+		const manager = SessionManager.open(join(dotDir, "next.jsonl"), dotDir);
 
-		await commitActiveSessionRef(channelDir, manager);
+		await commitActiveSessionRef(dotDir, manager);
 
-		const ref = readRef(channelDir);
+		const ref = readRef(dotDir);
 		expect(ref).toMatchObject({ version: 1, file: "next.jsonl", sessionId: manager.getSessionId() });
-		expect(resolveActiveSessionFile(channelDir)).toBe("next.jsonl");
+		expect(resolveActiveSessionFile(dotDir)).toBe("next.jsonl");
 		expect(typeof ref.updatedAt).toBe("string");
 	});
 
 	it("rejects an unusable session (outside the channel dir or with no backing file) and writes nothing", async () => {
-		const channelDir = makeTempDir();
+		const dotDir = makeTempDir();
 		const outsideDir = makeTempDir();
 		const manager = SessionManager.open(join(outsideDir, "other.jsonl"), outsideDir);
 
-		await expect(commitActiveSessionRef(channelDir, manager)).rejects.toThrow(/channel directory/);
+		await expect(commitActiveSessionRef(dotDir, manager)).rejects.toThrow(/channel directory/);
 
 		const handle = { getSessionFile: () => undefined, getSessionId: () => "x" };
-		await expect(commitActiveSessionRef(channelDir, handle)).rejects.toThrow(/no backing file/);
+		await expect(commitActiveSessionRef(dotDir, handle)).rejects.toThrow(/no backing file/);
 
-		expect(existsSync(getActiveSessionRefPath(channelDir))).toBe(false);
+		expect(existsSync(getActiveSessionRefPath(dotDir))).toBe(false);
 	});
 });
 
 describe("F4: durable header materialization unblocks synchronous first-message persistence", () => {
 	it("lets a freshly materialized session's first user message be read back by another process's SessionManager", () => {
-		const channelDir = makeTempDir();
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = makeTempDir();
+		mkdirSync(dotDir, { recursive: true });
 
-		const file = resolveActiveSessionFile(channelDir);
-		const manager = SessionManager.open(join(channelDir, file), channelDir);
+		const file = resolveActiveSessionFile(dotDir);
+		const manager = SessionManager.open(join(dotDir, file), dotDir);
 		manager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() } as never);
 
 		// Simulate a crash right after the user message: open a fresh SessionManager over the same
 		// file, as a new process would on restart, without any explicit flush/close call.
-		const reopened = SessionManager.open(join(channelDir, file), channelDir);
+		const reopened = SessionManager.open(join(dotDir, file), dotDir);
 		const branch = reopened.getBranch();
 		const userEntry = branch.find((entry) => entry.type === "message" && entry.message.role === "user");
 

@@ -42,7 +42,7 @@ export type TaskStepEndRequest = Static<typeof taskStepEndSchema>;
 export interface TaskManageToolOptions {
 	jobManager: ChannelJobManager;
 	runManager: SubAgentRunManager;
-	channelDir: string;
+	dotDir: string;
 	/** Present only inside a task session: which task's loop this tool set belongs to. */
 	taskId?: string;
 	/** Tools this step has completed so far; feeds the loop log's idle-step evidence (D6). */

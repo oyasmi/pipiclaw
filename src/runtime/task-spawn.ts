@@ -33,14 +33,14 @@ export function createTaskSpawner(
 	options: TaskSpawnerOptions,
 ): (request: SpawnTaskRequest) => Promise<SpawnTaskResult> {
 	return async (request) => {
-		const channelDir = options.getChannelDir(request.channelId);
+		const dotDir = options.getChannelDir(request.channelId);
 		const id = `${request.eventName}-${instanceStamp(request.occurrence)}`;
 
-		if (existsSync(taskPath(channelDir, id)) || existsSync(archivedTaskPath(channelDir, id))) {
+		if (existsSync(taskPath(dotDir, id)) || existsSync(archivedTaskPath(dotDir, id))) {
 			return { outcome: "exists", id };
 		}
 
-		const active = (await readActiveTasks(tasksDir(channelDir))).find(
+		const active = (await readActiveTasks(tasksDir(dotDir))).find(
 			(entry) => entry.fields.origin === request.eventName && !entry.fields.outcome,
 		);
 		if (active) {
@@ -61,7 +61,7 @@ export function createTaskSpawner(
 		}
 
 		await createTaskDocument({
-			channelDir,
+			dotDir,
 			id,
 			input: request.template,
 			origin: request.eventName,

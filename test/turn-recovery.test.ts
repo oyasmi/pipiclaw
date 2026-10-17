@@ -186,12 +186,12 @@ describe("recoverInterruptedTurn", () => {
 describe("scanWorkspaceForInterruptedTurns", () => {
 	it("repairs a dangling tool call in a channel dir and skips non-channel siblings", async () => {
 		const workspaceDir = makeTempDir();
-		const channelDir = join(workspaceDir, "dm_scan_1");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_scan_1");
+		mkdirSync(dotDir, { recursive: true });
 		mkdirSync(join(workspaceDir, "skills"), { recursive: true });
 		mkdirSync(join(workspaceDir, "sub-agents"), { recursive: true });
 
-		const m = SessionManager.open(join(channelDir, "context.jsonl"), channelDir);
+		const m = SessionManager.open(join(dotDir, "context.jsonl"), dotDir);
 		appendUser(m);
 		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
 
@@ -199,10 +199,10 @@ describe("scanWorkspaceForInterruptedTurns", () => {
 
 		expect(report.scanned).toBe(1);
 		expect(report.repaired).toHaveLength(1);
-		expect(report.repaired[0].channelDir).toBe(channelDir);
+		expect(report.repaired[0].dotDir).toBe(dotDir);
 		expect(report.blocked).toHaveLength(0);
 
-		const reopened = SessionManager.open(join(channelDir, "context.jsonl"), channelDir);
+		const reopened = SessionManager.open(join(dotDir, "context.jsonl"), dotDir);
 		const last = reopened.getBranch().at(-1);
 		if (last?.type !== "message" || last.message.role !== "toolResult") throw new Error("unexpected shape");
 		expect(last.message.toolCallId).toBe("tc1");
@@ -229,7 +229,7 @@ describe("scanWorkspaceForInterruptedTurns", () => {
 		expect(report.scanned).toBe(2);
 		expect(report.repaired).toHaveLength(0);
 		expect(report.blocked).toHaveLength(1);
-		expect(report.blocked[0].channelDir).toBe(blockedDir);
+		expect(report.blocked[0].dotDir).toBe(blockedDir);
 	});
 
 	it("returns an empty report for a workspace directory that doesn't exist", async () => {

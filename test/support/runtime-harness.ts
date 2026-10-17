@@ -17,7 +17,7 @@ export interface E2ERuntimeHarness {
 	homeDir: string;
 	workspaceDir: string;
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	deliveries: CapturedDelivery[];
 	sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/**
@@ -46,7 +46,7 @@ export async function createRuntimeHarness(options?: {
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
 	const channelId = options?.channelId ?? "dm_e2e_user";
-	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
+	const dotDir = join(home.workspaceDir, getChannelDirName(channelId));
 	const fakeBot = new E2EFakeDingTalkBot();
 	const runtime = await createRuntimeContext({
 		paths: {
@@ -79,7 +79,7 @@ export async function createRuntimeHarness(options?: {
 		homeDir: home.homeDir,
 		workspaceDir: home.workspaceDir,
 		channelId,
-		channelDir,
+		dotDir,
 		deliveries: fakeBot.deliveries,
 		async sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void> {
 			await runtime.handler.handleEvent(
@@ -130,7 +130,7 @@ export interface DeterministicHarness {
 	homeDir: string;
 	workspaceDir: string;
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	deliveries: CapturedDelivery[];
 	/** The in-process mock provider. Register routes on `model.script` before sending. */
 	model: import("./mock-provider/server.js").MockProvider;
@@ -187,7 +187,7 @@ export async function createDeterministicHarness(options?: {
 	 *  tests need at least one model declaring vision support). */
 	visionModels?: Array<"mock-main" | "mock-fallback">;
 	/** Seed historical state before the first runtime is constructed. */
-	seed?: (paths: { homeDir: string; channelDir: string }) => void | Promise<void>;
+	seed?: (paths: { homeDir: string; dotDir: string }) => void | Promise<void>;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
@@ -210,8 +210,8 @@ export async function createDeterministicHarness(options?: {
 		visionModels: options?.visionModels,
 	});
 	const channelId = options?.channelId ?? "dm_e2e_user";
-	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
-	await options?.seed?.({ homeDir: home.homeDir, channelDir });
+	const dotDir = join(home.workspaceDir, getChannelDirName(channelId));
+	await options?.seed?.({ homeDir: home.homeDir, dotDir });
 	const deliveries: CapturedDelivery[] = [];
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
@@ -310,7 +310,7 @@ export async function createDeterministicHarness(options?: {
 		homeDir: home.homeDir,
 		workspaceDir: home.workspaceDir,
 		channelId,
-		channelDir,
+		dotDir,
 		deliveries,
 		get runtime() {
 			return runtime;
@@ -392,11 +392,11 @@ export function writeWorkspaceSkill(
 	);
 }
 
-export function getChannelFile(harness: Pick<E2ERuntimeHarness, "channelDir">, filename: string): string {
-	return join(harness.channelDir, filename);
+export function getChannelFile(harness: Pick<E2ERuntimeHarness, "dotDir">, filename: string): string {
+	return join(harness.dotDir, filename);
 }
 
-export function channelFileExists(harness: Pick<E2ERuntimeHarness, "channelDir">, filename: string): boolean {
+export function channelFileExists(harness: Pick<E2ERuntimeHarness, "dotDir">, filename: string): boolean {
 	return existsSync(getChannelFile(harness, filename));
 }
 

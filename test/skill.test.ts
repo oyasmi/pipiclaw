@@ -38,15 +38,15 @@ function makeTool(workspaceDir: string) {
 describe("skill tool", () => {
 	it("returns diagnostics for malformed skills and ignores reference Markdown", async () => {
 		const workspaceDir = createWorkspace();
-		const channelDir = join(workspaceDir, "dm_1");
-		mkdirSync(channelDir);
+		const dotDir = join(workspaceDir, "dm_1");
+		mkdirSync(dotDir);
 		await writeSkill(workspaceDir, "release-notes");
 		writeFileSync(join(workspaceDir, "skills", "README.md"), "Reference notes without frontmatter\n");
 		const brokenDir = join(workspaceDir, "skills", "broken");
 		mkdirSync(brokenDir);
 		writeFileSync(join(brokenDir, "SKILL.md"), "---\nname: [broken\ndescription: invalid\n---\n");
 
-		const result = loadPipiclawSkills(channelDir);
+		const result = loadPipiclawSkills(dotDir);
 		expect(result.skills.map((skill) => skill.name)).toEqual(["release-notes"]);
 		expect(result.diagnostics.some((diagnostic) => diagnostic.path?.endsWith("broken/SKILL.md"))).toBe(true);
 	});

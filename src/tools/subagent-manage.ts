@@ -45,7 +45,7 @@ export interface SubAgentManageToolOptions {
 	 * only tightens what was already true rather than changing production behavior.
 	 */
 	workspaceDir: string;
-	channelDir: string;
+	dotDir: string;
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	securityConfig?: SecurityConfig;
@@ -318,7 +318,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 					runManager: manager,
 					runId: newRunId,
 					channelId: options.channelId,
-					channelDir: options.channelDir,
+					dotDir: options.dotDir,
 					label: `follow-up: ${task.slice(0, 80)}`,
 					agent: role.name,
 					source: role.source,

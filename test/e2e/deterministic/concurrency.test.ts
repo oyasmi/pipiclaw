@@ -115,14 +115,14 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 			gate.release();
 		}
 		await harness.waitForIdle();
-		const ref = JSON.parse(readFileSync(getActiveSessionRefPath(harness.channelDir), "utf8"));
+		const ref = JSON.parse(readFileSync(getActiveSessionRefPath(harness.dotDir), "utf8"));
 		await harness.restart();
 		await harness.sendUserMessage("FRESH_TURN");
 		const latest = harness.lastMainTurnRequest();
 		expect(latest?.lastUserText).toContain("FRESH_TURN");
 		expect(JSON.stringify(latest?.messages)).not.toMatch(/RETIRED_TURN|STALE_QUEUED/);
 		expect(harness.mainTurnRequests().some((r) => r.lastUserText.includes("STALE_QUEUED"))).toBe(false);
-		const persisted = readFileSync(join(harness.channelDir, ref.file), "utf8");
+		const persisted = readFileSync(join(harness.dotDir, ref.file), "utf8");
 		expect(persisted).toContain("FRESH_TURN");
 		expect(persisted).not.toMatch(/RETIRED_TURN|STALE_QUEUED/);
 	});

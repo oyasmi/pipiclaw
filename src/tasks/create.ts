@@ -11,7 +11,7 @@ import type { StoredTaskDocument } from "./store.js";
 import { archivedTaskPath, taskPath, tasksDir } from "./store.js";
 
 export interface CreateTaskDocumentOptions {
-	channelDir: string;
+	dotDir: string;
 	id: string;
 	input: TaskCreateInput;
 	/** The event whose template spawned this instance. */
@@ -25,11 +25,11 @@ export interface CreateTaskDocumentOptions {
  */
 export async function createTaskDocument(options: CreateTaskDocumentOptions): Promise<StoredTaskDocument> {
 	const id = normalizeTaskId(options.id);
-	const path = taskPath(options.channelDir, id);
+	const path = taskPath(options.dotDir, id);
 	if (existsSync(path)) {
 		throw new RecoverableToolError(`Task "${id}" already exists; use task_update or edit the body instead.`);
 	}
-	if (existsSync(archivedTaskPath(options.channelDir, id))) {
+	if (existsSync(archivedTaskPath(options.dotDir, id))) {
 		throw new RecoverableToolError(
 			`Archived task "${id}" already exists; choose a new id or restore it manually first.`,
 		);
@@ -42,7 +42,7 @@ export async function createTaskDocument(options: CreateTaskDocumentOptions): Pr
 		budget: options.input.budget,
 	};
 	const body = renderStandardTaskBody(options.input);
-	await writeFileAtomically(join(tasksDir(options.channelDir), `${id}.md`), renderTaskDocument(fields, body));
+	await writeFileAtomically(join(tasksDir(options.dotDir), `${id}.md`), renderTaskDocument(fields, body));
 	return { id, path, fields, body };
 }
 

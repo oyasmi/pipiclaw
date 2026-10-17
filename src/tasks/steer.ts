@@ -14,27 +14,27 @@ import { normalizeTaskId } from "./contract.js";
  * next step reads it, deletes it, and puts the text at the top of its own brief; nothing is left
  * behind for a later step to act on twice.
  */
-function steerDir(channelDir: string): string {
-	return join(channelDir, "tasks", ".steer");
+function steerDir(dotDir: string): string {
+	return join(dotDir, "tasks", ".steer");
 }
 
-function steerPath(channelDir: string, id: string): string {
-	return join(steerDir(channelDir), `${normalizeTaskId(id)}.md`);
+function steerPath(dotDir: string, id: string): string {
+	return join(steerDir(dotDir), `${normalizeTaskId(id)}.md`);
 }
 
 /** Queue guidance for the task's next step. Repeated calls append, so nothing is silently lost. */
-export async function queueTaskSteer(channelDir: string, id: string, text: string, label = "用户指示"): Promise<void> {
+export async function queueTaskSteer(dotDir: string, id: string, text: string, label = "用户指示"): Promise<void> {
 	const trimmed = text.trim();
 	if (!trimmed) return;
-	await mkdir(steerDir(channelDir), { recursive: true });
-	const path = steerPath(channelDir, id);
+	await mkdir(steerDir(dotDir), { recursive: true });
+	const path = steerPath(dotDir, id);
 	const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n` : "";
 	await writeFileAtomically(path, `${existing}- [${formatLocalTime()}] ${label}：${trimmed}\n`);
 }
 
 /** Read and clear the pending guidance. Returns `undefined` when there is none. */
-export async function consumeTaskSteer(channelDir: string, id: string): Promise<string | undefined> {
-	const path = steerPath(channelDir, id);
+export async function consumeTaskSteer(dotDir: string, id: string): Promise<string | undefined> {
+	const path = steerPath(dotDir, id);
 	if (!existsSync(path)) return undefined;
 	try {
 		const text = (await readFile(path, "utf-8")).trim();
@@ -46,8 +46,8 @@ export async function consumeTaskSteer(channelDir: string, id: string): Promise<
 }
 
 /** Whether guidance is waiting, without consuming it (for `/tasks show`). */
-export function hasTaskSteer(channelDir: string, id: string): boolean {
-	return existsSync(steerPath(channelDir, id));
+export function hasTaskSteer(dotDir: string, id: string): boolean {
+	return existsSync(steerPath(dotDir, id));
 }
 
 /**
@@ -55,21 +55,21 @@ export function hasTaskSteer(channelDir: string, id: string): boolean {
  * `notify`). Held in a file rather than returned inline because the tool result never reaches the
  * transport — the runtime reads and clears this after the step ends, and delivers it once.
  */
-function noticePath(channelDir: string, id: string): string {
-	return join(steerDir(channelDir), `${normalizeTaskId(id)}.out.md`);
+function noticePath(dotDir: string, id: string): string {
+	return join(steerDir(dotDir), `${normalizeTaskId(id)}.out.md`);
 }
 
-export async function queueTaskNotice(channelDir: string, id: string, text: string): Promise<void> {
+export async function queueTaskNotice(dotDir: string, id: string, text: string): Promise<void> {
 	const trimmed = text.trim();
 	if (!trimmed) return;
-	await mkdir(steerDir(channelDir), { recursive: true });
-	const path = noticePath(channelDir, id);
+	await mkdir(steerDir(dotDir), { recursive: true });
+	const path = noticePath(dotDir, id);
 	const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n\n` : "";
 	await writeFileAtomically(path, `${existing}${trimmed}`);
 }
 
-export async function consumeTaskNotice(channelDir: string, id: string): Promise<string | undefined> {
-	const path = noticePath(channelDir, id);
+export async function consumeTaskNotice(dotDir: string, id: string): Promise<string | undefined> {
+	const path = noticePath(dotDir, id);
 	if (!existsSync(path)) return undefined;
 	try {
 		const text = (await readFile(path, "utf-8")).trim();

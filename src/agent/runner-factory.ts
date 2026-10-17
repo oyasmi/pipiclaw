@@ -11,8 +11,8 @@ import type { AgentRunner, RunnerFactoryPaths } from "./types.js";
  * `const`, one channel per process) — a second cache here just duplicated that ownership and
  * could hold a stale entry the real owner had already disposed.
  */
-export function createRunner(channelId: string, channelDir: string, paths: RunnerFactoryPaths): AgentRunner {
-	return new ChannelRunner(channelId, channelDir, paths, {
+export function createRunner(channelId: string, dotDir: string, paths: RunnerFactoryPaths): AgentRunner {
+	return new ChannelRunner(channelId, dotDir, paths, {
 		executor: createExecutor(),
 		fileStore: createFileStore(),
 		loadSecurityConfig: () => loadSecurityConfigWithDiagnostics(paths.appHomeDir),

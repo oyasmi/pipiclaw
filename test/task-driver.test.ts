@@ -109,7 +109,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 
 	// D2-INV, the whole point of the ticket: a park that nothing redeems must not go silent.
 	it("reopens an expired ticket, then stops the task and notifies on the second expiry", async () => {
-		const channelDir = join(workspaceDir, "dm_a");
+		const dotDir = join(workspaceDir, "dm_a");
 		const parked = taskDoc({
 			state: "parked",
 			ticket: { kind: "work", refs: ["run_never"], by: PAST },
@@ -121,13 +121,13 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		const instance = driver(dispatch, { notify });
 
 		await instance.runOnce(NOW);
-		expect((await readStoredTask(channelDir, "stuck"))?.fields.state).toBe("open");
+		expect((await readStoredTask(dotDir, "stuck"))?.fields.state).toBe("open");
 		expect(notify).not.toHaveBeenCalled();
 
 		// Re-park on the same dead ticket, preserving the consecutive-expiry count.
-		await parkTask(channelDir, "stuck", { kind: "work", refs: ["run_never"], by: PAST });
+		await parkTask(dotDir, "stuck", { kind: "work", refs: ["run_never"], by: PAST });
 		await instance.runOnce(NOW);
-		const fields = (await readStoredTask(channelDir, "stuck"))?.fields;
+		const fields = (await readStoredTask(dotDir, "stuck"))?.fields;
 		expect(fields?.paused?.by).toBe("runtime");
 		expect(notify).toHaveBeenCalledOnce();
 		expect(notify.mock.calls[0]?.[0].text).toContain("/tasks resume stuck");
@@ -148,10 +148,10 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	});
 
 	it("stops a loop whose last two steps called no tool at all", async () => {
-		const channelDir = join(workspaceDir, "dm_a");
+		const dotDir = join(workspaceDir, "dm_a");
 		await writeTask("dm_a", "idle", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
-			await appendTaskLog(channelDir, "idle", {
+			await appendTaskLog(dotDir, "idle", {
 				kind: "step",
 				seq,
 				outcome: "continue",
@@ -163,14 +163,14 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		const notify = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch, { notify }).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
-		expect((await readStoredTask(channelDir, "idle"))?.fields.paused?.reason).toContain("没有任何工具调用");
+		expect((await readStoredTask(dotDir, "idle"))?.fields.paused?.reason).toContain("没有任何工具调用");
 	});
 
 	it("keeps driving a loop whose steps actually used tools", async () => {
-		const channelDir = join(workspaceDir, "dm_a");
+		const dotDir = join(workspaceDir, "dm_a");
 		await writeTask("dm_a", "busy", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
-			await appendTaskLog(channelDir, "busy", {
+			await appendTaskLog(dotDir, "busy", {
 				kind: "step",
 				seq,
 				outcome: "continue",

@@ -79,7 +79,7 @@ function plainTextOf(content: unknown): string {
 		.join("\n");
 }
 
-/** Task sessions live under `<channelDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
+/** Task sessions live under `<dotDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
 function isTaskSessionPath(sessionFile: string | undefined): boolean {
 	return sessionFile?.replace(/\\/g, "/").includes(`/${TASK_SESSIONS_DIRNAME}/`) === true;
 }
@@ -101,7 +101,7 @@ export function reportSettingsDiagnostics(
 
 export interface SessionHostDeps {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	appHomeDir: string;
 	authConfigPath: string;
@@ -130,7 +130,7 @@ export interface SessionHostDeps {
 
 export class SessionHost {
 	private readonly channelId: string;
-	private readonly channelDir: string;
+	private readonly dotDir: string;
 	private readonly workspaceDir: string;
 	private readonly appHomeDir: string;
 	private readonly authConfigPath: string;
@@ -190,7 +190,7 @@ export class SessionHost {
 
 	constructor(private readonly deps: SessionHostDeps) {
 		this.channelId = deps.channelId;
-		this.channelDir = deps.channelDir;
+		this.dotDir = deps.dotDir;
 		this.workspaceDir = deps.workspaceDir;
 		this.appHomeDir = deps.appHomeDir;
 		this.authConfigPath = deps.authConfigPath;
@@ -315,7 +315,7 @@ export class SessionHost {
 				// ref at it, or `/new` and restart recovery would adopt a task's transcript as the
 				// conversation (spec 051, D3).
 				if (!isTaskSessionPath(sessionManager.getSessionFile())) {
-					await commitActiveSessionRef(this.channelDir, sessionManager);
+					await commitActiveSessionRef(this.dotDir, sessionManager);
 				}
 				const next = await this.createSessionRuntime(sessionManager, sessionStartEvent);
 				return {
@@ -346,7 +346,7 @@ export class SessionHost {
 	private async reloadSessionResources(): Promise<void> {
 		this.settingsManager.reload();
 		this.reportSettingsDiagnostics();
-		const skills = loadPipiclawSkills(this.channelDir);
+		const skills = loadPipiclawSkills(this.dotDir);
 		this.currentSkills = skills;
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 		this.rebuildSessionTools();
@@ -522,7 +522,7 @@ export class SessionHost {
 					runMemoryCommand: async (args) =>
 						handleMemoryCommand({
 							channelId: this.channelId,
-							channelDir: this.channelDir,
+							dotDir: this.dotDir,
 							appHomeDir: this.appHomeDir,
 							args,
 						}),
@@ -643,7 +643,7 @@ export class SessionHost {
 	 */
 	async bindTaskSession(taskId: string): Promise<void> {
 		await this.sessionReady;
-		const path = taskSessionPath(this.channelDir, taskId);
+		const path = taskSessionPath(this.dotDir, taskId);
 		await mkdir(dirname(path), { recursive: true });
 		this.taskLoop = { taskId };
 		await this.sessionRuntime.switchSession(path);
@@ -654,7 +654,7 @@ export class SessionHost {
 	async bindChatSession(): Promise<void> {
 		if (!this.taskLoop) return;
 		this.taskLoop = undefined;
-		await this.sessionRuntime.switchSession(join(this.channelDir, resolveActiveSessionFile(this.channelDir)));
+		await this.sessionRuntime.switchSession(join(this.dotDir, resolveActiveSessionFile(this.dotDir)));
 		this.syncMemoryBootstrapPendingFromSession();
 	}
 
@@ -692,7 +692,7 @@ export class SessionHost {
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
 			cwd: this.cwd,
-			channelDir: this.channelDir,
+			dotDir: this.dotDir,
 			channelId: this.channelId,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
 			getSubAgentModelReference: () => this.settingsManager.getSubAgentModelReference(),

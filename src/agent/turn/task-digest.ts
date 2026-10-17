@@ -18,8 +18,8 @@ export const TASK_AGENDA_MAX_UNITS = 600;
  */
 
 export interface TaskDigestOptions {
-	/** The channel directory; tasks live in `<channelDir>/tasks/`. */
-	channelDir: string;
+	/** The channel directory; tasks live in `<dotDir>/tasks/`. */
+	dotDir: string;
 	maxTasks: number;
 	maxChars: number;
 	/** Runtime hard cap in prompt units (spec 026 §5.3); whichever of chars/units is hit first clips. */
@@ -69,7 +69,7 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
  */
 export async function buildTaskDigest(options: TaskDigestOptions): Promise<string> {
 	const now = options.now ?? Date.now();
-	const tasksDir = join(options.channelDir, "tasks");
+	const tasksDir = join(options.dotDir, "tasks");
 	const all = await readActiveTasks(tasksDir, now);
 	// A closed task that has not been archived yet is non-actionable and must not enter prompt context.
 	const agenda = all.filter((entry) => !entry.fields.outcome);

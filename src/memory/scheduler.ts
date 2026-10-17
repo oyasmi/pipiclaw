@@ -16,7 +16,7 @@ import { runReflectJob } from "./reflect-job.js";
 
 export interface MemoryMaintenanceRuntimeContext {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	/**
 	 * Transcript accessors, not arrays: the scheduler visits a channel every tick but almost
@@ -184,7 +184,7 @@ export class MemoryMaintenanceScheduler {
 		await runReflectJob({
 			appHomeDir: this.options.appHomeDir,
 			channelId,
-			channelDir: context.channelDir,
+			dotDir: context.dotDir,
 			workspaceDir: context.workspaceDir,
 			channelActive: this.options.isChannelActive(channelId),
 			now,

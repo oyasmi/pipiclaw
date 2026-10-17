@@ -32,19 +32,19 @@ const BASH_LOG_RETENTION = 40;
 const TAIL_FROM_SPILL_BYTES = DEFAULT_MAX_BYTES * 4;
 
 /**
- * Where the "full output" spill file for a command goes: under `<channelDir>/logs/` on the main
+ * Where the "full output" spill file for a command goes: under `<dotDir>/logs/` on the main
  * path, next to the rest of the agent's files (fix plan §2.2). Sub-agents get no channel dir, so
  * they fall back to the OS temp dir as before.
  */
-function getSpillFilePath(channelDir: string | undefined): string {
+function getSpillFilePath(dotDir: string | undefined): string {
 	const id = randomBytes(8).toString("hex");
-	const dir = channelDir ? join(channelDir, BASH_LOG_DIR_NAME) : tmpdir();
+	const dir = dotDir ? join(dotDir, BASH_LOG_DIR_NAME) : tmpdir();
 	return join(dir, `pipiclaw-bash-${id}.log`);
 }
 
 /** Best-effort: keep the channel's `logs/` dir from growing without bound. */
-async function pruneBashLogs(channelDir: string): Promise<void> {
-	const dir = join(channelDir, BASH_LOG_DIR_NAME);
+async function pruneBashLogs(dotDir: string): Promise<void> {
+	const dir = join(dotDir, BASH_LOG_DIR_NAME);
 	let names: string[];
 	try {
 		names = (await readdir(dir)).filter((n) => n.startsWith("pipiclaw-bash-") && n.endsWith(".log"));
@@ -125,10 +125,10 @@ export interface BashToolOptions {
 	channelId?: string;
 	/**
 	 * The channel directory. When set, the "full output" spill file lives under
-	 * `<channelDir>/logs/` so the pointer the tool hands back is one the model's `read` can open
+	 * `<dotDir>/logs/` so the pointer the tool hands back is one the model's `read` can open
 	 * under both path-guard boundaries. Absent on the sub-agent path (spill falls back to tmpdir).
 	 */
-	channelDir?: string;
+	dotDir?: string;
 	/**
 	 * When true, route each command through the `rtk` command optimizer before executing
 	 * (best-effort; falls back to the raw command when rtk is unavailable or declines).
@@ -224,8 +224,8 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 		agentWorkspaceDir: process.cwd(),
 		cwd: process.cwd(),
 	};
-	if (options.channelDir) {
-		void pruneBashLogs(options.channelDir);
+	if (options.dotDir) {
+		void pruneBashLogs(options.dotDir);
 	}
 
 	return {
@@ -410,9 +410,9 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				return { text, details: { ...details, producedOutput: output.trim().length > 0 } };
 			};
 
-			const spillPath = getSpillFilePath(options.channelDir);
-			if (options.channelDir) {
-				await mkdir(join(options.channelDir, BASH_LOG_DIR_NAME), { recursive: true }).catch(() => undefined);
+			const spillPath = getSpillFilePath(options.dotDir);
+			if (options.dotDir) {
+				await mkdir(join(options.dotDir, BASH_LOG_DIR_NAME), { recursive: true }).catch(() => undefined);
 			}
 			try {
 				const result = await executor.exec(effectiveCommand, {

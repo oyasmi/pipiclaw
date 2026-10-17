@@ -57,8 +57,8 @@ function filterScannedSkills(skills: Skill[]): { skills: Skill[]; diagnostics: R
  * scan above) were previously dropped on the floor, so a broken workspace skill silently vanished
  * from the prompt. They are returned now and surfaced by the runner.
  */
-export function loadPipiclawSkills(channelDir: string): PipiclawSkillsResult {
-	const workspaceSkillsDir = join(channelDir, "..", "skills");
+export function loadPipiclawSkills(dotDir: string): PipiclawSkillsResult {
+	const workspaceSkillsDir = join(dotDir, "..", "skills");
 	const loaded = loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" });
 	const scanned = filterScannedSkills(loaded.skills);
 	return { skills: scanned.skills, diagnostics: [...loaded.diagnostics, ...scanned.diagnostics] };

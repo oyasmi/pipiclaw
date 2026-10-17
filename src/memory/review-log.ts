@@ -28,8 +28,8 @@ function gateSkipKey(path: string, reason: MemoryReviewReason): string {
 	return `${path}\u0000${reason}`;
 }
 
-export function getMemoryReviewLogPath(channelDir: string): string {
-	return join(channelDir, "memory-review.jsonl");
+export function getMemoryReviewLogPath(dotDir: string): string {
+	return join(dotDir, "memory-review.jsonl");
 }
 
 async function rotateIfNeeded(path: string, incomingBytes: number): Promise<void> {
@@ -52,8 +52,8 @@ async function rotateIfNeeded(path: string, incomingBytes: number): Promise<void
 	}
 }
 
-export async function appendMemoryReviewLog(channelDir: string, entry: MemoryReviewLogEntry): Promise<void> {
-	const path = getMemoryReviewLogPath(channelDir);
+export async function appendMemoryReviewLog(dotDir: string, entry: MemoryReviewLogEntry): Promise<void> {
+	const path = getMemoryReviewLogPath(dotDir);
 	const gateSkipOnly = (entry.skipped?.length ?? 0) > 0 && (entry.actions?.length ?? 0) === 0 && !entry.error;
 	const key = gateSkipKey(path, entry.reason);
 	if (gateSkipOnly) {

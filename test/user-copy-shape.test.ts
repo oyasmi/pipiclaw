@@ -87,8 +87,8 @@ function expectUserCopyShape(label: string, text: string, options: ShapeOptions 
 	}
 }
 
-async function seedTasks(channelDir: string): Promise<void> {
-	const tasksDir = join(channelDir, "tasks");
+async function seedTasks(dotDir: string): Promise<void> {
+	const tasksDir = join(dotDir, "tasks");
 	await mkdir(join(tasksDir, "archive"), { recursive: true });
 	const longGoal = `${"把季度报表的每一张表都核对一遍，并记录差异。".repeat(40)}`;
 	const body = renderStandardTaskBody({
@@ -116,14 +116,14 @@ async function seedTasks(channelDir: string): Promise<void> {
 		);
 	}
 	for (let index = 0; index < 30; index++) {
-		await appendTaskLog(channelDir, "task-0", {
+		await appendTaskLog(dotDir, "task-0", {
 			kind: "dispatch",
 			ref: `run_${index}`,
 			item: `W${(index % 12) + 1}`,
 			agent: "builder",
 			purpose: index % 4 ? "work" : "verify",
 		});
-		await appendTaskLog(channelDir, "task-0", {
+		await appendTaskLog(dotDir, "task-0", {
 			kind: "settle",
 			ref: `run_${index}`,
 			item: `W${(index % 12) + 1}`,
@@ -132,7 +132,7 @@ async function seedTasks(channelDir: string): Promise<void> {
 			exitCode: index % 3 ? 0 : 1,
 			output: `/tmp/runs/run_${index}/output.md`,
 		});
-		await appendTaskLog(channelDir, "task-0", {
+		await appendTaskLog(dotDir, "task-0", {
 			kind: "step",
 			seq: index + 1,
 			outcome: index % 2 ? "park" : "continue",
@@ -199,13 +199,13 @@ function fakeRunManager(records: RunRecord[]): SubAgentRunManager {
 
 describe("user-facing copy shape (spec 053, D13)", () => {
 	it("keeps every /tasks report in shape and inside the budget", async () => {
-		const channelDir = tempDir();
-		await seedTasks(channelDir);
+		const dotDir = tempDir();
+		await seedTasks(dotDir);
 		for (const args of ["", "show task-0", "log task-0", "archive", "doctor", "show missing", "bogus"]) {
-			expectUserCopyShape(`/tasks ${args}`, await handleTasksCommand({ args, channelDir }));
+			expectUserCopyShape(`/tasks ${args}`, await handleTasksCommand({ args, dotDir }));
 		}
 		// Empty state, too.
-		expectUserCopyShape("/tasks (empty)", await handleTasksCommand({ args: "", channelDir: tempDir() }));
+		expectUserCopyShape("/tasks (empty)", await handleTasksCommand({ args: "", dotDir: tempDir() }));
 	});
 
 	it("keeps every /subagents report in shape and inside the budget", async () => {
@@ -233,11 +233,11 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 	});
 
 	it("keeps /memory, /events and /skills in shape", async () => {
-		const channelDir = tempDir();
+		const dotDir = tempDir();
 		const workspaceDir = tempDir();
 		const appHomeDir = tempDir();
 		await applyMemoryOps(
-			channelDir,
+			dotDir,
 			Array.from({ length: 60 }, (_, index) => ({
 				op: "add" as const,
 				name: `fact-${index}`,
@@ -249,7 +249,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			})),
 		);
 		for (const args of ["status", "list", "list project", "show fact-1", "journal", "forget nope", "bogus"]) {
-			expectUserCopyShape(`/memory ${args}`, await handleMemoryCommand({ channelId: "dm_1", channelDir, args }));
+			expectUserCopyShape(`/memory ${args}`, await handleMemoryCommand({ channelId: "dm_1", dotDir, args }));
 		}
 
 		mkdirSync(join(workspaceDir, "events"), { recursive: true });

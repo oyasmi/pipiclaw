@@ -31,10 +31,10 @@ describeE2E("E2E: task lifecycle", () => {
 	});
 
 	function activeTaskPath(): string {
-		return join(harness.channelDir, "tasks", `${taskId}.md`);
+		return join(harness.dotDir, "tasks", `${taskId}.md`);
 	}
 	function archivedTaskPath(): string {
-		return join(harness.channelDir, "tasks", "archive", `${taskId}.md`);
+		return join(harness.dotDir, "tasks", "archive", `${taskId}.md`);
 	}
 	/** The task may still be open (progress-only) or fully closed and archived by the same turn. */
 	function currentTaskPath(): string {
@@ -62,7 +62,7 @@ describeE2E("E2E: task lifecycle", () => {
 		const before = readFileSync(activeTaskPath(), "utf-8");
 
 		// Use the exact wake text production sends, derived from the task file on disk.
-		const entry = (await readActiveTasks(join(harness.channelDir, "tasks"))).find((e) => e.id === taskId);
+		const entry = (await readActiveTasks(join(harness.dotDir, "tasks"))).find((e) => e.id === taskId);
 		expect(entry, "task must exist before it can be resumed").toBeDefined();
 		const driverEvent = createTaskDriverEvent(harness.channelId, entry!, Date.now());
 		await harness.sendUserMessage(driverEvent.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
@@ -77,9 +77,9 @@ describeE2E("E2E: task lifecycle", () => {
 		const frontmatter = parseTaskFrontmatter(after);
 		expect(frontmatter.readable).toBe(true); // frontmatter still parses after the agent's edit
 		// The evidence lives in the loop log now, not inline in the contract (spec 051, D5).
-		const logPath = existsSync(join(harness.channelDir, "tasks", `${taskId}.jsonl`))
-			? join(harness.channelDir, "tasks", `${taskId}.jsonl`)
-			: join(harness.channelDir, "tasks", "archive", `${taskId}.jsonl`);
+		const logPath = existsSync(join(harness.dotDir, "tasks", `${taskId}.jsonl`))
+			? join(harness.dotDir, "tasks", `${taskId}.jsonl`)
+			: join(harness.dotDir, "tasks", "archive", `${taskId}.jsonl`);
 		expect(readFileSync(logPath, "utf-8")).toContain("42");
 	});
 });

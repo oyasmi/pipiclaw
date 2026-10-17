@@ -9,7 +9,7 @@ import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../m
 
 export interface DetachedMaintenanceContextOptions {
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;
 	settingsManager: PipiclawSettingsManager;
@@ -24,7 +24,7 @@ interface CachedTranscript {
 
 // The maintenance scheduler visits idle channels every tick; re-parsing an
 // unchanged context.jsonl each time would be pure I/O waste for long-dead
-// channels. Keyed by channelDir, replaced whenever the file changes.
+// channels. Keyed by dotDir, replaced whenever the file changes.
 const transcriptCache = new Map<string, CachedTranscript>();
 
 /** Test hook: drop cached transcripts so a fresh read is forced. */
@@ -45,7 +45,7 @@ export function clearDetachedMaintenanceCache(): void {
 export async function loadDetachedMaintenanceContext(
 	options: DetachedMaintenanceContextOptions,
 ): Promise<MemoryMaintenanceRuntimeContext | null> {
-	const contextFile = join(options.channelDir, "context.jsonl");
+	const contextFile = join(options.dotDir, "context.jsonl");
 	let stats: { mtimeMs: number; size: number };
 	try {
 		stats = statSync(contextFile);
@@ -53,10 +53,10 @@ export async function loadDetachedMaintenanceContext(
 		return null;
 	}
 
-	let cached = transcriptCache.get(options.channelDir);
+	let cached = transcriptCache.get(options.dotDir);
 	if (!cached || cached.mtimeMs !== stats.mtimeMs || cached.size !== stats.size) {
 		try {
-			const sessionManager = SessionManager.open(contextFile, options.channelDir);
+			const sessionManager = SessionManager.open(contextFile, options.dotDir);
 			cached = {
 				mtimeMs: stats.mtimeMs,
 				size: stats.size,
@@ -66,7 +66,7 @@ export async function loadDetachedMaintenanceContext(
 		} catch {
 			return null;
 		}
-		transcriptCache.set(options.channelDir, cached);
+		transcriptCache.set(options.dotDir, cached);
 	}
 	const cachedTranscript = cached;
 
@@ -80,9 +80,9 @@ export async function loadDetachedMaintenanceContext(
 	options.settingsManager.reload();
 	return {
 		channelId: options.channelId,
-		channelDir: options.channelDir,
-		// `channelDir` is always a direct child of the workspace dir (`getChannelDir`).
-		workspaceDir: dirname(options.channelDir),
+		dotDir: options.dotDir,
+		// `dotDir` is always a direct child of the workspace dir (`getChannelDir`).
+		workspaceDir: dirname(options.dotDir),
 		messages: () => [...cachedTranscript.messages],
 		sessionEntries: () => [...cachedTranscript.sessionEntries],
 		model,

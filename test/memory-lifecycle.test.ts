@@ -63,7 +63,7 @@ function createLifecycle(
 ) {
 	return new MemoryLifecycle({
 		channelId: "dm_123",
-		channelDir: "/tmp/dm_123",
+		dotDir: "/tmp/dm_123",
 		workspaceDir: "/tmp",
 		getMessages: () => [{ role: "assistant", content: "live state" }] as never[],
 		getSessionEntries: () => [],
@@ -161,7 +161,7 @@ describe("MemoryLifecycle", () => {
 		const liveMessages = [{ role: "assistant", content: "current state" }] as never[];
 		const lifecycle = new MemoryLifecycle({
 			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
+			dotDir: "/tmp/dm_123",
 			workspaceDir: "/tmp",
 			getMessages: () => liveMessages,
 			getSessionEntries: () => [],

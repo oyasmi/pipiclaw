@@ -26,7 +26,7 @@ function makeOptions(subagentInlineEnabled: boolean) {
 		resolveApiKey: async () => "test-key",
 		workspaceDir: "/repo",
 		cwd: process.cwd(),
-		channelDir: "/repo/dm_1",
+		dotDir: "/repo/dm_1",
 		channelId: "dm_1",
 		getSubAgentDiscovery: () => ({ directory: "/repo/sub-agents", warnings: [], agents: [] }),
 		getSessionSearchSettings: () => ({

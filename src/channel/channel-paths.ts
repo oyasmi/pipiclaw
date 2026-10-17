@@ -51,7 +51,7 @@ export function dedupeChannelIdsByDirectory(channelIds: Iterable<string>): strin
 }
 
 export function ensureChannelDir(baseDir: string, channelId: string): string {
-	const channelDir = getChannelDir(baseDir, channelId);
-	mkdirSync(channelDir, { recursive: true });
-	return channelDir;
+	const dotDir = getChannelDir(baseDir, channelId);
+	mkdirSync(dotDir, { recursive: true });
+	return dotDir;
 }
