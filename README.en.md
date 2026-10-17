@@ -86,19 +86,19 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw auth login
 ```
 
-Then start:
+Then create a dot and open it in the terminal (a dot is one assistant with its own memory, tasks and files):
 
 ```bash
-pipiclaw tui
+pipiclaw tui --dot main --create
 ```
 
 It can also be used for scripted one-shot requests:
 
 ```bash
-pipiclaw tui --print "Reply with only: Pipiclaw model call succeeded"
+pipiclaw tui --dot main --print "Reply with only: Pipiclaw model call succeeded"
 ```
 
-Only an actual model reply proves that the request path works; `pipiclaw tui --help` and `/model` only prove that the CLI or model catalog is visible. Before real work, use `/project` to confirm the current project directory. To connect an enterprise gateway, a local model, or set a default model, see [Configuration reference](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md).
+Only an actual model reply proves that the request path works; `pipiclaw tui --help` and `/model` only prove that the CLI or model catalog is visible. To connect an enterprise gateway, a local model, or set a default model, see [Configuration reference](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md).
 
 ### 3. Connect DingTalk
 

@@ -322,39 +322,41 @@ DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身�
 
 ## 终端 TUI（Terminal TUI）
 
-除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）、同一套记忆与会话。适合在命令行里快速使用，或接管某个钉钉会话的身份继续对话。
+除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）。TUI 每次打开一个 dot，与这个 dot 的钉钉频道共享记忆、任务、事件和工作文件，但有自己的会话。
 
 ### 启动（Usage）
 
 ```bash
-pipiclaw tui                      # 交互式，默认 channel：tui_local
-pipiclaw tui --channel dm_1234    # 复用某个钉钉会话（dm_<staffId>）的记忆
-echo "问题" | pipiclaw tui --print  # 一次性：跑一轮、打印答案、退出（可脚本化）
-pipiclaw tui --print "总结今天的进展"  # 一次性，prompt 走命令行位置参数
+pipiclaw tui --dot news                       # 交互式，打开 dot `news`
+pipiclaw tui --dot lab --create               # dot 不存在时先创建
+echo "问题" | pipiclaw tui --dot news --print  # 一次性：跑一轮、打印答案、退出（可脚本化）
+pipiclaw tui --dot news --print "总结今天的进展"  # 一次性，prompt 走命令行位置参数
 ```
 
 选项：
 
 | 选项 | 说明 |
 |------|------|
-| `--channel <id>` | 要接入的 channel（默认 `tui_local`）。传 `dm_<staffId>` 可复用该钉钉会话的记忆目录 `workspace/<id>/`。合法字符：字母、数字、`.`、`-`、`_`。 |
+| `--dot <name>` | 要打开的 dot，必填。不检查它是否已绑定、daemon 是否在运行。dot 不存在时报错并列出已有的 dot。 |
+| `--create` | dot 不存在时先创建它（与 `/dot new` 相同，不绑定任何频道）。 |
 | `--print`, `-p` | 一次性非交互模式：运行位置参数（或管道 stdin）作为唯一 prompt，打印最终答案后退出。 |
 | `--quiet`, `-q` | 纯文本模式下只输出最终答案（进度与提示写入 stderr 的部分被静音）。 |
 | `--plain` | 即使在 TTY 下也强制使用纯文本前端（不进入全屏 UI）。 |
 | `--version` / `--help` | 打印版本 / 帮助。 |
 
-**命令**：交互模式支持运行时命令 `/help` `/stop` `/status` `/usage` `/events` `/tasks` `/subagents` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前频道记忆。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
+**命令**：交互模式支持运行时命令 `/help` `/stop` `/dot` `/status` `/usage` `/events` `/tasks` `/subagents` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前 dot 的记忆。`/dot list` 和 `/dot new` 可用；`/dot bind` 只在钉钉频道里可用。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
 
 非 TTY（管道 / 重定向）或 `--print` 会自动使用纯文本前端；真实终端下使用带滚动记录、状态行、斜杠命令补全的富界面。
 
 ### 会话续接（Resume）
 
-TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 channel 而不是靠挑选历史会话：
+TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 dot 的终端会话区而不是靠挑选历史会话：
 
-- **退出重进即自动续上次对话。** 当前聊天上下文由 `workspace/<channel>/active-session.json` 指向的 session JSONL 持久化；没有指针时使用 `context.jsonl`。`/new` 会创建新文件并更新指针，旧会话仍保留。再次 `pipiclaw tui`（同一 channel）会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
-- **`--channel <id>` = 挂到任意历史对话继续。** 传 `dm_<staffId>` 就接管该钉钉会话的上下文与记忆继续聊；传任意自定义 id 则是另一条独立对话线。想「换一个历史对话」就退出后用不同的 `--channel` 重进（注意上面的并发约束）。
-- **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `memory/*.md`（生成 `MEMORY.md` 索引）与 `journal/`（见「记忆分层」），会在下一次会话首轮整份带回——这是 pipiclaw「每 channel 一条长会话 + 记忆层」模型对多会话历史的替代。
-- **暂无同一 channel 内的会话选择器**，即不能在 TUI 里从多个历史会话之间挑一个切过去。要切换到别的对话，退出后用不同 `--channel` 重进即可。
+- **退出重进即自动续上次对话。** 当前聊天上下文由 `workspace/dots/<dot>/conversations/tui-N/active-session.json` 指向的 session JSONL 持久化；没有指针时使用 `context.jsonl`。`/new` 会创建新文件并更新指针，旧会话仍保留。再次 `pipiclaw tui --dot <dot>` 会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
+- **同一个 dot 同一时间只能开一个 TUI。** 运行期间 TUI 持有 `conversations/tui-N/.lock`，第二个 TUI 打开同一个 dot 会报错退出并给出持有者的 pid。进程被杀掉留下的锁，下次启动时（同一主机、pid 已不存在）自动回收。
+- **钉钉频道的对话不会出现在 TUI 里。** TUI 与 dot 的钉钉频道共享记忆、任务和文件，但会话各自独立；要在终端里接着某件事做，靠的是记忆层和任务，而不是接管频道的会话。
+- **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `memory/*.md`（生成 `MEMORY.md` 索引）与 `journal/`（见「记忆分层」），会在下一次会话首轮整份带回。
+- **暂无会话选择器**，即不能在 TUI 里从多个历史会话之间挑一个切过去。
 
 ### `tui` 设置（settings.json）
 

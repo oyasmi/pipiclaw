@@ -802,3 +802,37 @@ e2e：56 → 55（−1）：第二个 A19（"`/project set` 在忙碌时被拒�
 - P4 的 TUI 核心（`--dot` 必填、`--create`、`--channel` 报错、会话区 `.lock`）提前到 P2 完成，因为 P2 闸门包含 TUI 的 e2e；P4 剩下文档与手动核对。
 - **knip 临时入口**：`src/dot/*.ts`、`src/channel/channel-id.ts` 已移除；无调用方的 `isChannelId` 删除（`channelKind` 覆盖同一判断）。只剩 `src/dot/commands.ts` 一条，因为 `handleDotCommand` 由 P3 的 `/dot` 命令接入；P3 结束前移除。
 - 评测框架：`channelDir` 改名为 `dotDir`、`{{CHANNEL_DIR}}` 改为 `{{DOT_DIR}}`，新增 `evals/harness/layout.ts` 在首段建 dot `eval` 并绑定 `dm_eval`；归档证据的 `mounts.channelDir` 仍可读（regrade 兜底），产物根的持久化取值 `"channel"` 不改，以免旧基线无法 regrade。M-search-01 的对照事实移到另一个 dot 的会话区，事件用例改读 dot 的 `events/`。评测本身（需要凭据）未运行。
+
+### P3 `/dot` 命令与动态绑定
+
+**闸门**（2026-10-18）：`npm run check` 全绿（单测 133 个文件 908 例）；`npm run test:e2e` 24 个文件 59 例全绿；`npm run eval:typecheck` 通过。knip 的最后一条临时入口 `src/dot/commands.ts` 已移除（`handleDotCommand` 由 router 接入）。
+
+**实现要点**：
+
+- `/dot` 进入 catalog（`availableWhileBusy`，`bind` 在忙碌时由 `DotRuntime.bind` 自己拒绝）。router 的上下文改为联合类型 `ReportCommandContext | UnboundCommandContext`：未绑定频道只带 `dotPort` 和拒绝文案，`/dot` 在两种上下文里都能执行，其余命令在未绑定时直接返回拒绝文案；类型上不需要 `!`。
+- 空闲时的 `/dot` 在 `runEventTurn` 里于准入之前执行：不归档、不建 runner、`reserveEvent` 不为它占回合。这样 `/dot bind` 看到的频道是空闲的，排在它后面的消息按新绑定解析。忙碌时由传输层的运行时命令分支执行（与其他报告命令一致）。
+- `DotRuntime.bind` 按 D5 七步实现，整个过程在一个绑定写队列里串行（不同频道的 bind 也是对同一个 `bindings.json` 的读改写）。绑定表写入失败时抛错，内存中的绑定、runner 都不变，为这次 bind 而激活的目标 dot 重新休眠。第 5 步复用 bootstrap 抽出的 `releaseCachedRunner`（先移出缓存，再 `dispose`，LRU 淘汰也改用它），失败只记日志。挂起计数只读旧 dot 的 `tasks/` 与 `events/`。
+- 绑定变化时 `channelIndex.noteBindingChanged()` 立即重写 CHANNELS.md。
+- `/dot list` 截断提示给出 `CHANNELS.md` 的绝对路径（由端口提供 `channelIndexPath`）：053 的形状规则要求截断提示交出命令或绝对路径，相对路径会被 `user-copy-shape` 判为不合格。
+- 与 plan 的出入：D5 第 3 步之后没有再做一次中断回合修复。目标 dot 中该频道的会话区只在绑定于该 dot 时被写入，崩溃后重启时它仍绑定在那里，激活时已经修复过。
+
+**用例数**：
+
+- 单测 905 → 908（+3）：
+  - `dot-runtime.test.ts` +2：「拒绝时无副作用，换绑后释放旧 runner、旧 dot 挂起或休眠」（覆盖 busy/same/unknown/invalid、dispose 失败不回滚、挂起计数、最后一个频道离开后旧 dot 休眠、盘上状态可被新进程读回）；「绑定表写入失败时绑定、runner、目标 dot 的休眠都不变」。mutation（均变红）：去掉写入失败时的目标休眠、release 失败向上抛、去掉旧 dot 休眠、去掉忙碌检查。
+  - `commands-subcommands.test.ts` +1：该文件按 catalog 中带 subcommands 的命令逐个生成用例，新增 `/dot` 自动多一例（`PARSERS` 接上 `parseDotCommand`）。
+  - `user-copy-shape.test.ts` 不增用例：`/dot` 各动作、各 bind 结果、TUI 端口、未绑定/不可用拒绝文案并入原有用例。mutation：把截断提示改回相对路径，变红。
+- 确定性 e2e 57 → 59（+2）：
+  - +1 A19「`/dot bind` 在回合进行中被拒绝」（`guards.test.ts`，抵消 P1 的 −1）。mutation：去掉 `DotRuntime.bind` 的忙碌检查，`bindings.json` 改变，变红。
+  - +1 DOT-3（`dots.test.ts`）：通过 `/dot new`、`/dot bind` 命令换绑；旧 dot 的在途唤醒被丢弃（模型请求数不变、durable 记录删除），旧 dot 中以本频道为投递频道的任务不上 outbox，换绑后的下一回合落在 `lab` 的会话区，绑回后任务步骤被派发。mutation：去掉 `runEventTurn` 的准入检查（模型请求数变为 2）、去掉 task driver 的绑定过滤（任务步骤上了 outbox），均变红。
+  - DOT-3 的一个发现：只换绑唯一的频道时，旧 dot 整体休眠，task driver 根本不扫描它，任务级过滤测不到；即使去掉任务级过滤，准入也会把误派的步骤丢掉，模型请求数看不出来。因此用例给旧 dot 多绑一个频道使其保持激活，并在 driver→outbox 边界断言（spy `DurableDispatchService.dispatch`）。
+
+### P4 TUI
+
+TUI 核心已在 P2 完成。本阶段：
+
+- `/dot list` 和 `/dot new` 在 TUI 中可用（端口直接用 `dot/registry.ts`，名称来自 `loadChannelNames` 读一次 CHANNELS.md），`/dot bind` 回复不支持。TUI 中当前 dot 标为「（当前打开）」而不是「（本频道）」：TUI 打开的 dot 不一定有绑定，「本频道：未绑定频道」读起来自相矛盾。
+- 会话区锁的释放：获取锁之后的全部启动步骤都放进 `try/finally`，之前在两者之间失败会留下锁（只能靠陈旧回收）。交互模式的 Ctrl-C 经 controller 走到 `finally`；`--print` 下的 Ctrl-C 或 kill 会留下陈旧锁，下次启动时（同主机、pid 已不存在）回收。
+- 核对：`src/tui/` 不创建 task driver、事件 watcher、记忆调度器；jobs/runs 的 runtime 没有 state 目录，不落盘（与现状一致）。
+- 文档：TUI 的用法实际写在 `docs/interaction-and-commands.md`、`docs/configuration-reference.md` 和两份 README（plan 写的 `deployment-and-operations.md` 没有 TUI 一节），已改为 `--dot`/`--create`。
+- **手工核对**（2026-10-18，临时 app home：`~/.pipiclaw` 只读地复制了 `auth.json`、`models.json`、`settings.json`，没有对真实 home 运行任何命令，因为 TUI 的 bootstrap 会先建脚手架）：不带 `--create` 打开不存在的 dot 报错并提示 `--create`；`--create --print "/dot"` 列出新 dot；`/dot new side` 创建成功并提示去钉钉绑定；`/dot bind side` 回复终端不支持；一次真实模型对话回答了正确的 dot 名和工作目录（`dots/manual`），落盘为 `conversations/tui-1/` 与 `dot.json` 中的 `tui` 条目，退出后 `.lock` 已释放。交互式全屏界面没有手工跑（这里没有交互终端），只跑了 `--print`。

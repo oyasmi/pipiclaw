@@ -8,15 +8,16 @@
 Pipiclaw 有两个交互前端：
 
 - **钉钉**是长期运行的主入口。daemon 通过 Stream Mode 收发消息，可使用 AI Card 展示进度并在后台工作完成时主动通知。
-- **终端 TUI**适合本机调试、快速对话和脚本调用。它不需要钉钉凭据，但复用相同的模型配置、工具、记忆和频道文件。
+- **终端 TUI**适合本机调试、快速对话和脚本调用。它不需要钉钉凭据，打开一个 dot，复用它的模型配置、工具、记忆、任务和工作文件。
 
 ```bash
 pipiclaw                 # 钉钉常驻进程，等价于 pipiclaw run
-pipiclaw tui             # 终端交互
-pipiclaw tui --print "总结当前仓库"  # 一次性运行后退出
+pipiclaw tui --dot news            # 终端交互，打开 dot `news`
+pipiclaw tui --dot lab --create    # dot 不存在时先创建
+pipiclaw tui --dot news --print "总结当前仓库"  # 一次性运行后退出
 ```
 
-TUI 默认使用 `tui_local` 频道。`--channel <id>` 可以连接到已有频道的持久上下文；不要让 TUI 和钉钉 daemon 同时操作同一个频道。
+`--dot` 必须提供。TUI 打开的 dot 可以已经绑定了钉钉频道，也可以正由 daemon 服务：两边共享这个 dot 的记忆、任务、事件和文件，记忆与任务的写入有跨进程锁。TUI 有自己的会话区（`conversations/tui-N/`），不会接着某个钉钉频道的对话往下聊；同一个 dot 同一时间只能开一个 TUI。TUI 里能用 `/dot` 查看和创建 dot，但不能绑定：绑定只在钉钉频道里做。
 
 TUI 适合前台对话和同步完成的内置委派，不是外部异步 run 的常驻宿主。当前只有 DingTalk daemon 配置了委派状态持久化、完成唤醒和重启对账；在 TUI 中启动外部角色后不会主动弹出完成通知，退出 TUI 也不会在下次启动时重新认领该 run。长时间外部委派请使用常驻 daemon。
 
@@ -153,7 +154,7 @@ Workspace skill 用 `/skills` 查看目录、用 `/skills show <name>` 查看正
 
 **为什么群里记得的事情，私聊里不知道？** 群聊与私聊是不同频道，默认隔离是为了避免信息泄漏。确实需要共享的稳定背景由管理员写入 `workspace/MEMORY.md`。
 
-**如何继续上次 TUI 对话？** 重新使用相同的 `--channel`。没有 `/resume` 命令，频道本身就是持久身份。
+**如何继续上次 TUI 对话？** 用同一个 `--dot` 重新打开。没有 `/resume` 命令，每个 dot 的终端会话区会自动续上。
 
 ## 相关文档
 

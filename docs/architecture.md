@@ -12,7 +12,7 @@ Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtim
 
 ```
 pipiclaw            # 默认：长驻钉钉 daemon（等价 pipiclaw run）
-pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
+pipiclaw tui --dot <名字> [提示] # 终端聊天：打开一个 dot，同一 agent 内核，无需钉钉凭据
 ```
 
 核心设计取向（从实现中反推出来的一致性原则）：

@@ -86,16 +86,16 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw auth login
 ```
 
-然后启动：
+然后创建一个 dot 并在终端里打开它（dot 是一个独立的助手个体，拥有自己的记忆、任务和文件）：
 
 ```bash
-pipiclaw tui
+pipiclaw tui --dot main --create
 ```
 
 也可以用于脚本化的一次性请求：
 
 ```bash
-pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
+pipiclaw tui --dot main --print "只回复：Pipiclaw 模型调用成功"
 ```
 
 看到模型实际回复才表示调用链路已经跑通；`pipiclaw tui --help` 或 `/model` 只能证明 CLI 或模型目录可见。如需接入企业网关、本地模型或指定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
