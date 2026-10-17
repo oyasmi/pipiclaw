@@ -109,12 +109,8 @@ export function buildSubagentTools(
 			fileStore: options.fileStore,
 			securityConfig,
 			securityContext: {
-				// No `channelDir`: a sub-agent receives channel state through its injected context
-				// blocks, not by reading the channel's own files, so it does not inherit the parent's
-				// channel-directory exception (see security/types.ts).
 				agentWorkspaceDir: options.workspaceDir,
-				projectRoot: runContext.workingDirectory,
-				boundary: options.projectBoundary,
+				cwd: runContext.workingDirectory,
 			},
 			channelId: options.runtimeContext.channelId,
 			channelDir: options.channelDir,

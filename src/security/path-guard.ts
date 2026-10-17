@@ -1,10 +1,10 @@
 /**
- * The path guard: resolves a requested path once against the project scope and the read/write allow and
- * deny lists, and returns the resolved path that file tools must then use.
+ * The path guard: resolves a requested path once (relative paths against the caller's `cwd`) and checks it
+ * against the read/write allow and deny lists, returning the resolved path that file tools must then use.
  */
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { basename, dirname, isAbsolute, normalize, resolve } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import { stripNullAndNormalize, withTrailingSlash } from "../shared/text-utils.js";
 import type { PathGuardContext, PathGuardResult } from "./types.js";
@@ -86,7 +86,7 @@ function resolveConfiguredPath(rawPath: string, ctx: PathGuardContext): string {
 
 function resolveTargetPath(rawPath: string, ctx: PathGuardContext): string {
 	const homeDir = ctx.homeDir ?? homedir();
-	const cwd = ctx.projectRoot ?? process.cwd();
+	const cwd = ctx.cwd ?? process.cwd();
 	const normalized = stripNullAndNormalize(rawPath);
 	const expanded = maybeExpandHome(normalized, homeDir);
 	if (isAbsolute(expanded)) {
@@ -260,47 +260,6 @@ function isWithinAgentWorkspace(path: string, agentWorkspaceDir: string): boolea
 	return startsWithPathPrefix(path, normalize(agentWorkspaceDir));
 }
 
-function isWithinProjectRoot(path: string, ctx: PathGuardContext): boolean {
-	const root = ctx.projectRoot;
-	if (!root) {
-		return false;
-	}
-	return startsWithPathPrefix(path, normalize(root));
-}
-
-/** Runtime-owned exception: the AgentWorkspace's `skills/` tree stays reachable under
- * `boundary: "project"` regardless of which project is selected (spec 043, D6.2) -- reads so the
- * model can load a skill's playbook, and writes so `write`/`edit` can author one (the `skill` tool
- * itself is read-only; authoring goes through the generic file tools). The symlink-write check
- * above this call in `guardPath` still applies, so a skill file that is itself a symlink cannot be
- * written through even inside this exception. */
-function isAgentWorkspaceSkillsAccess(path: string, ctx: PathGuardContext): boolean {
-	return startsWithPathPrefix(path, normalize(join(ctx.agentWorkspaceDir, "skills")));
-}
-
-/**
- * Runtime-owned exception for the channel's own directory, in the same spirit as `skills/`: spec
- * 043's D5 puts `SESSION.md`, channel `MEMORY.md`, `HISTORY.md` and `tasks/` in the AgentWorkspace
- * precisely so a channel keeps its continuity across project switches — but D6.2's project bound
- * then put them outside every allowed root, so a task wake could tell the model to open
- * `tasks/<id>.md` and the guard would refuse.
- *
- * Reads are allowed throughout. Writes are allowed only under `tasks/`: the three memory files are
- * runtime-maintained and go through the memory tools (a file write there races the maintenance
- * queue), while a task's body is model-authored prose that `task_update` cannot rewrite — it
- * replaces frontmatter and keeps the body verbatim, so revising a task contract needs `edit`.
- */
-function isChannelDirAccess(path: string, operation: "read" | "write", ctx: PathGuardContext): boolean {
-	if (!ctx.channelDir) {
-		return false;
-	}
-	const channelDir = normalize(ctx.channelDir);
-	if (!startsWithPathPrefix(path, channelDir)) {
-		return false;
-	}
-	return operation === "read" || startsWithPathPrefix(path, normalize(join(channelDir, "tasks")));
-}
-
 function isDeniedSystemPath(path: string): boolean {
 	if (isWithinTemp(path)) {
 		return false;
@@ -319,9 +278,6 @@ function matchesConfiguredPath(path: string, entries: string[], ctx: PathGuardCo
 }
 
 function pathAllowedByDefaults(path: string, ctx: PathGuardContext): boolean {
-	if (ctx.boundary === "project") {
-		return isWithinProjectRoot(path, ctx);
-	}
 	const homeDir = ctx.homeDir ?? homedir();
 	return isWithinAgentWorkspace(path, ctx.agentWorkspaceDir) || isWithinTemp(path) || isWithinHome(path, homeDir);
 }
@@ -361,8 +317,6 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		...ctx,
 		agentWorkspaceDir: resolveRootForGuard(ctx.agentWorkspaceDir, ctx),
 		homeDir: resolveRootForGuard(homeDir, ctx),
-		projectRoot: ctx.projectRoot ? resolveRootForGuard(ctx.projectRoot, ctx) : ctx.projectRoot,
-		channelDir: ctx.channelDir ? resolveRootForGuard(ctx.channelDir, ctx) : ctx.channelDir,
 	};
 	const resolvedTarget = resolveTargetPath(rawPath, ctx);
 	const guardedPath = resolveForGuard(resolvedTarget, ctx);
@@ -424,20 +378,12 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 			guardedPath,
 			operation === "read" ? effectiveCtx.config.readAllow : effectiveCtx.config.writeAllow,
 			effectiveCtx,
-		) &&
-		// D6.2: `boundary: "project"` is pathGuard's outer bound — a configured allow entry can
-		// narrow within the project but never widen a generic tool past it.
-		(effectiveCtx.boundary !== "project" || isWithinProjectRoot(guardedPath, effectiveCtx))
+		)
 	) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 
-	if (
-		pathAllowedByDefaults(guardedPath, effectiveCtx) ||
-		isBundledPlaybookRead(guardedPath, operation) ||
-		isAgentWorkspaceSkillsAccess(guardedPath, effectiveCtx) ||
-		isChannelDirAccess(guardedPath, operation, effectiveCtx)
-	) {
+	if (pathAllowedByDefaults(guardedPath, effectiveCtx) || isBundledPlaybookRead(guardedPath, operation)) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 
@@ -451,18 +397,11 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		);
 	}
 
-	// The reason names the roots that are actually in effect. Under `boundary: "project"` the
-	// generic wording ("outside workspace, home, and temp") is worse than unhelpful: workspace and
-	// home are themselves out of bounds there, so a model taking it at face value retries against a
-	// path that can never be allowed.
-	const verb = operation === "read" ? "Reading" : "Writing";
 	return formatBlockedResult(
 		operation,
 		rawPath,
 		guardedPath,
 		"outside-allowed-roots",
-		effectiveCtx.boundary === "project"
-			? `${verb} outside the current project root (${effectiveCtx.projectRoot ?? "unset"}) is not allowed`
-			: `${verb} outside workspace, home, and temp paths is not allowed`,
+		`${operation === "read" ? "Reading" : "Writing"} outside workspace, home, and temp paths is not allowed`,
 	);
 }

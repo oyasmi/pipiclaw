@@ -8,7 +8,6 @@
  */
 import { userInfo } from "node:os";
 import { createRunner } from "../agent/runner-factory.js";
-import type { AgentRunner } from "../agent/types.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -71,29 +70,6 @@ export interface TuiAppOptions {
 	paths?: BootstrapPaths;
 }
 
-/**
- * A replaceable `AgentRunner` reference (spec 043, D4.2): `TurnController` holds a single
- * `AgentRunner` for the process's lifetime, but `/project set|reset` needs to dispose the runner
- * built under the old scope and hand the next turn a fresh one built under the new scope. The
- * proxy forwards every call to whichever runner is current, so `TurnController` never needs to
- * know the reference changed.
- */
-function createRunnerSlot(initial: AgentRunner): { runner: AgentRunner; replace(next: AgentRunner): void } {
-	let current = initial;
-	const runner = new Proxy({} as AgentRunner, {
-		get(_target, prop, _receiver) {
-			const value = Reflect.get(current as object, prop);
-			return typeof value === "function" ? value.bind(current) : value;
-		},
-	});
-	return {
-		runner,
-		replace(next) {
-			current = next;
-		},
-	};
-}
-
 export function resolveChannelId(raw: string | undefined, io: BootstrapIO = console): string {
 	const channel = raw?.trim() || DEFAULT_CHANNEL_ID;
 	if (!CHANNEL_ID_PATTERN.test(channel)) {
@@ -134,18 +110,15 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
 	const jobs = createJobRuntime(createExecutor());
 	const runs = createSubAgentRuntime();
-	const buildRunner = (): AgentRunner =>
-		createRunner(channelId, channelDir, {
-			jobManager: jobs.get(channelId),
-			runManager: runs.get(channelId),
-			appHomeDir: paths.appHomeDir,
-			authConfigPath: paths.authConfigPath,
-			modelsConfigPath: paths.modelsConfigPath,
-			settingsManager,
-			mediaSender: createTerminalMediaSender(io),
-		});
-	const runnerSlot = createRunnerSlot(buildRunner());
-	const runner = runnerSlot.runner;
+	const runner = createRunner(channelId, channelDir, {
+		jobManager: jobs.get(channelId),
+		runManager: runs.get(channelId),
+		appHomeDir: paths.appHomeDir,
+		authConfigPath: paths.authConfigPath,
+		modelsConfigPath: paths.modelsConfigPath,
+		settingsManager,
+		mediaSender: createTerminalMediaSender(io),
+	});
 
 	const tuiSettings = settingsManager.getTuiSettings();
 	const traits: DeliveryTraits = {
@@ -176,17 +149,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 				{
 					channelId,
 					paths,
-					actor: "tui-command",
 					version: readCliVersion(),
 					startedAt,
 					peekRunner: () => runner,
 					getRunner: () => runner,
 					runManager: runs.get(channelId),
-					runningJobLines: () => jobs.runningLines(channelId),
-					onScopeChanged: async () => {
-						await runner.dispose();
-						runnerSlot.replace(buildRunner());
-					},
 				},
 				name,
 				args,

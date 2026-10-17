@@ -76,7 +76,6 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | `/usage [7d\|month]` | 查看频道与全局用量、成本和未知用量条目 |
 | `/context [detail]` | 查看系统提示词、工具定义和每回合自动附加内容的体量；`detail` 列出各分段来源和工具、skill 清单 |
 | `/subagents ...` | 查看、控制委派 run 和角色目录 |
-| `/project [set <绝对路径>\|reset]` | 查看或切换本频道的项目目录；切换需频道空闲 |
 | `/skills [list\|show <name>]` | 列出工作区 skills（含未通过内容扫描而未加载的，附原因），或查看单个 skill 的完整正文 |
 
 常用任务命令：
@@ -138,8 +137,6 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | 已记入忽略名单 | 墓碑化（tombstone） |
 | 工作日记 | journal |
 | 后台整理 | reflect |
-| 允许的根目录 | `projectAccess.allowedRoots` |
-| 隔离级别 | enforcement level |
 | 随时可用 / 空闲时可用 | 传输层 / 会话层命令 |
 
 Workspace skill 用 `/skills` 查看目录、用 `/skills show <name>` 查看正文，用 `/skill:<名称>` 直接调用。未知斜杠命令会被拒绝并提示 `/help`，不会因为拼写错误开启一个模型回合。

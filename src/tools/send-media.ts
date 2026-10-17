@@ -13,7 +13,7 @@ import { formatSize, MAX_INLINE_BINARY_BYTES } from "./truncate.js";
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 
 const sendMediaSchema = Type.Object({
-	path: Type.String({ description: "Local file path (relative to the current project root, or absolute)" }),
+	path: Type.String({ description: "Local file path (relative to the current working directory, or absolute)" }),
 	fileName: Type.Optional(
 		Type.String({ description: "Display name for the recipient; defaults to the file's own name" }),
 	),
@@ -42,7 +42,7 @@ export function createSendMediaTool(
 	options: SendMediaToolOptions,
 ): AgentTool<typeof sendMediaSchema> {
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
-	const securityContext = options.securityContext ?? { agentWorkspaceDir: process.cwd(), projectRoot: process.cwd() };
+	const securityContext = options.securityContext ?? { agentWorkspaceDir: process.cwd(), cwd: process.cwd() };
 
 	return {
 		name: "send_media",

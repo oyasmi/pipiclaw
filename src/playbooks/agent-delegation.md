@@ -40,7 +40,7 @@ order: 60
 
 ## 每次决定工作目录与写入边界
 
-省略 workingDirectory 默认当前频道的 ProjectRoot，条目文件没有默认目录。项目边界启用时显式目录也必须在项目内。
+省略 workingDirectory 默认主代理的 cwd，条目文件没有默认目录。委派代码仓库时显式传仓库路径。
 
 - 并行写分片各建独立 worktree，并显式传 workingDirectory；用完清理自己创建的 worktree。默认目录不会自动隔离。
 - runtime 只对声明 `mutates: write` 的委派提供排他写 lease；遇到冲突按错误中的持有者 runId 等待或重选工作目录。

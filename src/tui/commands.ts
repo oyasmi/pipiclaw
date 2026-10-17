@@ -40,7 +40,7 @@ export type DispatchOutcome =
 
 export interface DispatchDeps {
 	renderHelp(args?: string): string;
-	/** The stateless report commands (`/status /context /usage /events /tasks /subagents /project /skills`). */
+	/** The stateless report commands (`/status /context /usage /events /tasks /subagents /skills`). */
 	runReport(name: RuntimeCommandName, args: string): Promise<string>;
 }
 
@@ -66,7 +66,6 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 		case "events":
 		case "tasks":
 		case "subagents":
-		case "project":
 		case "skills":
 			return { kind: "reply", text: await deps.runReport(command.name, command.args) };
 		case "stop":

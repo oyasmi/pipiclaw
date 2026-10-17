@@ -6,7 +6,6 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
-import { assertWithinProjectBoundary } from "../subagents/dispatch.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
@@ -47,13 +46,6 @@ export interface SubAgentManageToolOptions {
 	 */
 	workspaceDir: string;
 	channelDir: string;
-	/**
-	 * The current project scope, so `follow_up` can re-check a resumed run's `workingDirectory`
-	 * against the boundary in effect *now* rather than trusting the one recorded at dispatch time
-	 * (review 2026-08-23 §3.1) — `/project` can move `workingDirectory` between the two.
-	 */
-	workingDirectory?: string;
-	projectBoundary?: "project" | "unbounded";
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	securityConfig?: SecurityConfig;
@@ -218,12 +210,6 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				throw new RecoverableToolError(taskLengthError);
 			}
 			const record = resolution.record;
-			// The initial dispatch validated `record.workingDirectory` against the project boundary
-			// in effect at the time (spec 043, D6.2); `/project` can move that boundary afterward, and
-			// this re-checks the *current* one before resuming a process there (review 2026-08-23 §3.1).
-			if (options.projectBoundary === "project" && options.workingDirectory) {
-				assertWithinProjectBoundary(record.workingDirectory, options.workingDirectory, record.workingDirectory);
-			}
 			const harness = resumableHarnessOf(record);
 			if (!harness) {
 				// Internal runs have no persisted transcript to resume — the isolated-context design

@@ -19,7 +19,7 @@ order: 20
 | 路径、URL、命令、联系人、id | channel memory，`type: reference` |
 | 今天发生了什么、定了什么、卡在哪 | journal，后台反思自动写 |
 | 未闭合工作的目标、状态、证据 | task 契约与循环日志 |
-| 机器安装、依赖、环境变量来源 | workspace `ENVIRONMENT.md`，受项目边界限制 |
+| 机器安装、依赖、环境变量来源 | workspace `ENVIRONMENT.md` |
 | 多次验证有效的跨任务流程 | workspace `skills/` |
 
 不把临时进度、猜测或计划存成永久 memory。频道记忆写入只走专用工具；`MEMORY.md` 是生成索引，journal 只由后台写。

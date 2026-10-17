@@ -323,7 +323,7 @@ export function createEditTool(fileStore: FileStore, options: EditToolOptions = 
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
-		projectRoot: process.cwd(),
+		cwd: process.cwd(),
 	};
 
 	// Per-tool-instance counter of consecutive byte-identical no-op edits, keyed by the exact

@@ -9,7 +9,6 @@ import { dirname, join, resolve } from "path";
 import { resolveActiveSessionFile } from "../channel/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
-import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import { isKnownCommandName, type RunnerBuiltInCommand, slashCommandName } from "../commands/catalog.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
@@ -30,8 +29,6 @@ import { runPromptWithFallback } from "../models/fallback.js";
 import { formatModelReference } from "../models/reference.js";
 import { defaultModel } from "../models/runtime.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
-import type { ProjectScope } from "../security/project-scope.js";
-import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { loadPipiclawSkills } from "../skills/loader.js";
@@ -72,13 +69,6 @@ export class ChannelRunner implements AgentRunner {
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
 	private readonly mediaSender?: MediaSender;
 	private readonly workspaceDir: string;
-	/**
-	 * Frozen for the lifetime of this runner generation (spec 043, D4.2): AgentSession, the
-	 * ResourceLoader, and every tool closure built in this constructor and in `createSessionRuntime`
-	 * (session-topology rebuilds only rebind the session, never the scope) all read this same value.
-	 * Changing project is a dispose-and-rebuild of the whole runner, not a field mutation.
-	 */
-	private readonly projectScope: ProjectScope;
 	/** Re-read per use, not captured once: an edited security.json takes effect without a restart. */
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
 	private readonly settingsManager: PipiclawSettingsManager;
@@ -116,20 +106,6 @@ export class ChannelRunner implements AgentRunner {
 		this.fileStore = deps.fileStore;
 		this.loadSecurityConfig = deps.loadSecurityConfig;
 		this.workspaceDir = resolve(dirname(channelDir));
-
-		// Resolve and freeze this generation's ProjectScope (spec 043, D2/D3/D4.2). A channel with
-		// no persisted selection gets the app default, materialized as its first selection right
-		// here. A selection that no longer resolves safely (deleted directory, re-pointed symlink,
-		// or a since-tightened allowlist) fails the whole runner closed rather than silently
-		// falling back to a different root (P7) — the fix is `/project set`/`reset` from a plain
-		// runtime command path, not a degraded-but-running channel; see project-scope-store.ts.
-		const securityConfigForScope = this.loadSecurityConfig();
-		const projectAccessResolution = resolveProjectAccessPolicy(securityConfigForScope.config, process.cwd());
-		const scopeOutcome = resolveProjectScope(channelDir, projectAccessResolution);
-		if (scopeOutcome.kind === "blocked") {
-			throw new Error(`[${channelId}] Cannot start channel: ${scopeOutcome.reason}`);
-		}
-		this.projectScope = scopeOutcome.scope;
 
 		// Initial skill summaries
 		const initialSkills = loadPipiclawSkills(channelDir);
@@ -206,7 +182,8 @@ export class ChannelRunner implements AgentRunner {
 			modelsConfigPath: this.modelsConfigPath,
 			onSessionEvent: this.onSessionEvent,
 			mediaSender: this.mediaSender,
-			projectScope: this.projectScope,
+			// Interim (spec 058 P1): the pre-058 default project root. P2 makes this the dot directory.
+			cwd: process.cwd(),
 			settingsManager: this.settingsManager,
 			loadSecurityConfig: this.loadSecurityConfig,
 			executor: this.executor,

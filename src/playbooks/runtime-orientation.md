@@ -31,9 +31,9 @@ DingTalk daemon 是长期宿主，负责 task driver、后台 job/委派完成�
 
 ## 文件地图与入口
 
-通用工具的相对路径和 shell cwd 以 **ProjectRoot** 为准。下表是位置示意；调用时使用已知的绝对路径，task 可用 `task_create` 返回的路径或 `<channelDir>/tasks/<id>.md`。当前项目由用户命令 `/project` 查看或切换。
+通用工具的相对路径和 shell cwd 以 daemon 的启动目录为准；当前 channel 目录的绝对路径见 `<runtime_turn_context>`。下表是位置示意；调用时使用已知的绝对路径，task 可用 `task_create` 返回的路径或 `<channelDir>/tasks/<id>.md`。
 
-项目边界下，通用文件工具只可访问项目及运行时例外：内置 playbook 只读、workspace `skills/` 可读写、当前 channel 可读且 `tasks/` 可写。例外仍受显式 deny 和符号链接规则约束；`bash` 不是绕过拒绝的入口。
+通用文件工具默认可访问 workspace、主目录和临时目录，内置 playbook 只读；显式 deny、敏感路径和符号链接规则仍然生效，`bash` 不是绕过拒绝的入口。
 
 | 位置 | 内容 | 入口 / 所有者 |
 |---|---|---|
@@ -43,10 +43,10 @@ DingTalk daemon 是长期宿主，负责 task driver、后台 job/委派完成�
 | workspace `skills/` | 可复用程序性知识 | `skill` 列出/加载，通用 `write` / `edit` 创建和更新 |
 | workspace `sub-agents/` | 委派角色 | 目录在 system prompt；由部署者修改，模型不能 write/edit 角色文件 |
 | workspace `events/` | 调度事件 | 聊天侧 `event_manage` 管理 |
-| workspace `ENVIRONMENT.md` / `CHANNELS.md` | 机器事实 / 频道索引 | `read` / `edit`，受项目边界限制；CHANNELS 只有主题列可补写，其余由 runtime 重建 |
+| workspace `ENVIRONMENT.md` / `CHANNELS.md` | 机器事实 / 频道索引 | `read` / `edit`；CHANNELS 只有主题列可补写，其余由 runtime 重建 |
 | channel `memory/<name>.md` | 一条 durable fact | `read` 正文；写入用 `memory_save` / `memory_forget`，保证串行写入和索引同步 |
 | channel `MEMORY.md` / `journal/YYYY-MM-DD.md` | 生成索引 / 每日记录 | 索引由 runtime 重建，journal 只由后台反思写；查日志用 `memory_search` 或按日期 `read` |
 | channel `tasks/<id>.md` / `<id>.jsonl` | 契约 / 循环日志 | 聊天建档和管理；循环用 `task_step_end`，历史用 `task_log`；改契约正文用 `edit` |
 | channel `log.jsonl` / `context.jsonl` | 原始对话冷存储 | `session_search` |
 
-机器安装、环境变量来源和仓库外配置变更记在 `ENVIRONMENT.md`，不写密钥值。项目边界挡住 workspace 文件时，用该位置的专用工具；没有可用入口就说明需要用户提供哪些事实，不猜内容或换文件冒充。
+机器安装、环境变量来源和仓库外配置变更记在 `ENVIRONMENT.md`，不写密钥值。path guard 挡住某个文件时，用该位置的专用工具；没有可用入口就说明需要用户提供哪些事实，不猜内容或换文件冒充。

@@ -106,10 +106,8 @@ export interface SubAgentToolOptions {
 	buildWorkerTools: BuildWorkerTools;
 	executor: Executor;
 	fileStore: FileStore;
-	/** Host checkout used as the sub-agent's cwd. Defaults to process.cwd(). */
+	/** Default working directory for a run: the parent's cwd. Defaults to process.cwd(). */
 	workingDirectory?: string;
-	/** Mirrors the parent channel's ProjectScope.boundary onto the sub-agent's own tool set (spec 043, D6.2). */
-	projectBoundary?: "project" | "unbounded";
 	getCurrentModel: () => Model<Api>;
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;

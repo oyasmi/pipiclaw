@@ -343,7 +343,7 @@ pipiclaw tui --print "总结今天的进展"  # 一次性，prompt 走命令行�
 | `--plain` | 即使在 TTY 下也强制使用纯文本前端（不进入全屏 UI）。 |
 | `--version` / `--help` | 打印版本 / 帮助。 |
 
-**命令**：交互模式支持运行时命令 `/help` `/stop` `/status` `/usage` `/events` `/tasks` `/subagents` `/project` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前频道记忆。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
+**命令**：交互模式支持运行时命令 `/help` `/stop` `/status` `/usage` `/events` `/tasks` `/subagents` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前频道记忆。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
 
 非 TTY（管道 / 重定向）或 `--print` 会自动使用纯文本前端；真实终端下使用带滚动记录、状态行、斜杠命令补全的富界面。
 
@@ -832,6 +832,12 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 - `taskDigest` 与 `taskDriver` 两段整体
 
 行为上的关键常量仍然写在对应章节里（后台维护间隔见 `docs/memory.md`，任务驱动节奏见本文"内建任务驱动器"一节），只是不再作为可调项。
+
+`security.json` 的 `projectAccess` 也已退役（spec 058）：项目边界与 `/project` 命令整体删除。留在文件里不会导致启动失败，启动时会打印一条 warning：
+
+```
+security.json: projectAccess: retired key ignored: project scope was removed; the dot directory is now the working directory
+```
 
 ### 在 Pipiclaw 中暂时不要依赖的 pi-mono 字段（Fields From pi-mono That You Should Not Rely On in Pipiclaw）
 

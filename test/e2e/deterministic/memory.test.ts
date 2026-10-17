@@ -20,10 +20,10 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		return users.at(-1)?.content ?? "";
 	};
 
-	it("M2: memory_search delivers journal evidence to the provider across a project boundary", async () => {
+	it("M2: memory_search delivers journal evidence to the provider", async () => {
 		// Regression: the tool advertised journal search but never passed journals to searchMemory.
 		// Mutation check: omit journal.days in memory-manage.ts; the tool-message assertion fails.
-		harness = await createDeterministicHarness({ projectAccess: true });
+		harness = await createDeterministicHarness();
 		mkdirSync(join(harness.channelDir, "journal"), { recursive: true });
 		writeFileSync(
 			join(harness.channelDir, "journal", "2020-01-02.md"),

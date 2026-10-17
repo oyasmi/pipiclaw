@@ -743,3 +743,19 @@ daemon 启动时，在任何服务启动之前做旧布局检测。发现以下�
 - mutation check：去掉 `allocateConversation` 外层的锁，"分配会等待"变红；让陈旧判定恒为 false，"回收陈旧锁"变红。
 
 e2e：56 → 56。
+
+### P1 删除 project
+
+**交付**：删除 `channel/project-scope-store.ts`、`security/project-scope.ts`、`channel/commands.ts`（只剩 `/project`，整个文件删除）及其测试；`SecurityRuntimeContext` 改为 `{ agentWorkspaceDir, cwd?, homeDir? }`；path-guard 删除 `boundary: "project"` 分支和三个运行时例外（`isWithinProjectRoot`、`isAgentWorkspaceSkillsAccess`、`isChannelDirAccess`），相对路径基准改为 `ctx.cwd`；`security.json` 的 `projectAccess` 加载时报退役 warn 后忽略（`docs/configuration-reference.md`、`docs/security.md` 已登记）；`tools/index.ts` 的 `projectScope` 换成 `cwd`；委派删除 `projectBoundary` 与 `assertWithinProjectBoundary`（`dispatch.ts` 的 realpath 规范化保留）；`/project` 从 catalog、router、TUI 删除。
+
+**偏差与决定**：
+
+- **P1 的临时 cwd 用进程启动目录，而不是 plan 写的"频道目录"**。pi 会把 cwd 追加进 system prompt 的尾部，cwd 一旦等于 `workspace/<channelId>/`，频道 id 就进了 system prompt：`system-prompt.test.ts` 当场变红，它守的是 spec 048 的约定（频道身份只走每回合上下文，system prompt 在频道之间共享，以便复用 prompt cache）。改用 `process.cwd()`，也就是没有 `project.json` 的频道原本的默认值，闸门和约定都保住。P2 起 cwd 是 `dots/<dot>`，路径里没有频道 id，那条断言照常成立。P1 不单独上线，这个临时状态不会被用户看到。
+- **router 上下文里只服务 `/project` 的字段一并删除**：`actor`、`runningJobLines`、`onScopeChanged`。TUI 里只为 `/project` 换 runner 而存在的 `createRunnerSlot` 代理也删了。
+- **`subagent-manage.ts` 的 `workingDirectory` 选项一并删除**：它唯一的用途是 follow_up 时重做项目边界检查。
+- **e2e A19 的越界目标**：没有项目边界以后，"越界"指的是不在默认允许根（workspace、home、临时目录）之内。用例改为写 `/srv/pipiclaw-e2e-guard/out.txt`：它不在系统拒绝前缀里，拒绝来自允许根检查本身。mutation check：让 `pathAllowedByDefaults` 恒为 true，用例变红（模型收不到拒绝，也没有审计）。
+- 第 11 步的检索结果剩下这些，都是正当的：两处文档对退役键的说明、`security/config.ts` 对退役键的检查、`~/projects/` 之类的示例路径、记忆类型 `project`。
+
+**用例数**：单测 969 → 943（−26），全部是被删除机制的测试：`project-commands` 5、`runtime-project-scope-store` 9、`security-project-scope` 6、path-guard 的 `boundary="project"` 3、委派的项目边界 1、follow_up 重查项目边界 1、`commands-subcommands` 里自动生成的 `/project` 用例 1。`security-config` 的诊断用例扩展为同时覆盖退役键（用例数不变）。
+
+e2e：56 → 55（−1）：第二个 A19（"`/project set` 在忙碌时被拒绝"）删除，P3 改写为 `/dot bind` 后补回。

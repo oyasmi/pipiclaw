@@ -941,14 +941,14 @@ describe("sub-agent working directory", () => {
 		expect(delegatedTask).toContain(`Working directory: ${checkout}`);
 	});
 
-	it("uses the canonical checkout after admitting an in-project symlink", async () => {
+	it("uses the canonical checkout after admitting a symlinked working directory", async () => {
 		const root = createTempWorkspace();
 		const workspaceDir = join(root, "agent-workspace");
 		const channelDir = join(workspaceDir, "dm_123");
-		const projectRoot = join(root, "project");
-		const nested = join(projectRoot, "nested");
+		const baseDir = join(root, "checkout");
+		const nested = join(baseDir, "nested");
 		const outside = join(root, "outside");
-		const alias = join(projectRoot, "alias");
+		const alias = join(baseDir, "alias");
 		mkdirSync(channelDir, { recursive: true });
 		mkdirSync(nested, { recursive: true });
 		mkdirSync(outside, { recursive: true });
@@ -970,8 +970,7 @@ describe("sub-agent working directory", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			workingDirectory: projectRoot,
-			projectBoundary: "project",
+			workingDirectory: baseDir,
 			channelDir,
 			runtimeContext: { workspaceDir, channelId: "dm_123" },
 			createWorker: (config) => {
@@ -1013,52 +1012,5 @@ describe("sub-agent working directory", () => {
 				workingDirectory: join(workspaceDir, "nope"),
 			}),
 		).rejects.toThrow(/is not an existing directory/);
-	});
-
-	it("boundary=project: rejects a requested workingDirectory outside the project root (D6.2)", async () => {
-		const root = createTempWorkspace();
-		const workspaceDir = join(root, "agent-workspace");
-		const channelDir = join(workspaceDir, "dm_123");
-		const projectRoot = join(root, "project");
-		const outsideDir = join(root, "elsewhere");
-		mkdirSync(channelDir, { recursive: true });
-		mkdirSync(join(projectRoot, "nested"), { recursive: true });
-		mkdirSync(outsideDir, { recursive: true });
-		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
-			executor: fakeExecutor,
-			fileStore: createFileStore(),
-			getCurrentModel: () => model,
-			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
-			workspaceDir,
-			workingDirectory: projectRoot,
-			projectBoundary: "project",
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
-			createWorker: () =>
-				new FakeWorker((_input, worker) => {
-					const message = createAssistantMessage("Done.");
-					worker.state.messages = [message];
-					worker.emit({ type: "message_end", message });
-				}),
-		});
-
-		await expect(
-			tool.execute("wd-call-3", {
-				systemPrompt: "Explore.",
-				task: "Look around.",
-				workingDirectory: outsideDir,
-			}),
-		).rejects.toThrow(/must be inside the project root/);
-
-		// A subdirectory of the project root is still fine.
-		await expect(
-			tool.execute("wd-call-4", {
-				systemPrompt: "Explore.",
-				task: "Look around.",
-				workingDirectory: join(projectRoot, "nested"),
-			}),
-		).resolves.toBeDefined();
 	});
 });

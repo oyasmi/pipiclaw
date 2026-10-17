@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { parseProjectCommand } from "../src/channel/commands.js";
 import { BUILT_IN_COMMANDS, type CommandSubSpec, formatBusyHint, SESSION_COMMANDS } from "../src/commands/catalog.js";
 import { parseEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
@@ -23,7 +22,6 @@ const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
 	tasks: parseTasksCommand,
 	events: parseEventsCommand,
 	subagents: parseSubagentsCommand,
-	project: parseProjectCommand,
 	skills: parseSkillsCommand,
 };
 
@@ -50,9 +48,6 @@ const EXPECTED_EXAMPLES: Record<string, unknown> = {
 	"/subagents output run_a1b2c3": { action: "output", ref: "run_a1b2c3" },
 	"/subagents cancel run_a1b2c3": { action: "cancel", ref: "run_a1b2c3" },
 	"/subagents roles builder-hard": { action: "roles", name: "builder-hard" },
-	"/project": { action: "show" },
-	"/project set /home/me/projects/foo": { action: "set", path: "/home/me/projects/foo" },
-	"/project reset": { action: "reset" },
 	"/skills": { action: "list" },
 	"/skills show release-checklist": { action: "show", name: "release-checklist" },
 };

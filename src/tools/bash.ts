@@ -32,10 +32,9 @@ const BASH_LOG_RETENTION = 40;
 const TAIL_FROM_SPILL_BYTES = DEFAULT_MAX_BYTES * 4;
 
 /**
- * Where the "full output" spill file for a command goes. Under `<channelDir>/logs/` on the main
- * path, which the model's `read` can open under both `boundary: "project"` and `unbounded` — a
- * `/tmp/...` pointer is unreadable under `boundary: "project"` (fix plan §2.2). Sub-agents get no
- * channel dir, so they fall back to the OS temp dir as before.
+ * Where the "full output" spill file for a command goes: under `<channelDir>/logs/` on the main
+ * path, next to the rest of the agent's files (fix plan §2.2). Sub-agents get no channel dir, so
+ * they fall back to the OS temp dir as before.
  */
 function getSpillFilePath(channelDir: string | undefined): string {
 	const id = randomBytes(8).toString("hex");
@@ -223,7 +222,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
-		projectRoot: process.cwd(),
+		cwd: process.cwd(),
 	};
 	if (options.channelDir) {
 		void pruneBashLogs(options.channelDir);

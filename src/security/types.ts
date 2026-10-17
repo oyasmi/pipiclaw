@@ -26,17 +26,6 @@ export interface SecurityConfig {
 		logBlocked: boolean;
 		logFile?: string;
 	};
-	/**
-	 * Absent (no `projectAccess` key in `security.json` at all) is a distinct, meaningful state
-	 * from present-with-omitted-fields: absent is the upgrade-compat path (`ProjectScope.boundary`
-	 * stays `"unbounded"`, `/project set` is disabled); present means the operator has opted into
-	 * project boundaries (spec 043, D3.2). See `src/security/project-scope.ts` for the resolved,
-	 * canonicalized policy this raw section feeds into.
-	 */
-	projectAccess?: {
-		defaultRoot?: string;
-		allowedRoots?: string[];
-	};
 }
 
 /**
@@ -50,30 +39,14 @@ export const SECURITY_CONFIG_TOP_LEVEL_KEYS = [
 	"pathGuard",
 	"networkGuard",
 	"audit",
-	"projectAccess",
 ] as const satisfies readonly (keyof SecurityConfig)[];
 const _securityConfigKeysComplete: AssertNoMissingKeys<SecurityConfig, typeof SECURITY_CONFIG_TOP_LEVEL_KEYS> = true;
 void _securityConfigKeysComplete;
 
 export interface SecurityRuntimeContext {
 	agentWorkspaceDir: string;
-	projectRoot?: string;
-	/**
-	 * `"project"`: generic file tools are bounded to `projectRoot`; `security.json`'s configured
-	 * `readAllow`/`writeAllow` can narrow within it but never widen past it (spec 043, D6.2).
-	 * `"unbounded"` (the default when omitted, for backward compat): today's global pathGuard
-	 * defaults — `agentWorkspaceDir` + temp + `homeDir`.
-	 */
-	boundary?: "project" | "unbounded";
-	/**
-	 * The channel's own directory (`<agentWorkspaceDir>/<channelId>`), when the caller is bound to
-	 * one. It lives under `agentWorkspaceDir`, so it only matters under `boundary: "project"`,
-	 * where it carries the channel's continuity across project switches (spec 043, D5) and would
-	 * otherwise fall outside every allowed root. Omit it for callers that are not channel-bound —
-	 * a sub-agent, for one, gets channel state through its injected context blocks, not by reading
-	 * the channel's files.
-	 */
-	channelDir?: string;
+	/** Base for relative paths — the dot directory for a dot-bound caller; `process.cwd()` when omitted. */
+	cwd?: string;
 	homeDir?: string;
 }
 

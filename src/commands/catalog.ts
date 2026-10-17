@@ -3,8 +3,7 @@
  * examples, plus the parsing and usage/help rendering built on top of them.
  *
  * It lives in its own domain, not in `src/agent/`, because the catalog describes commands handled
- * in three different layers — the runtime (`/tasks`, `/events`, `/subagents`, `/project`,
- * `/skills`), the agent session (`/model`, `/compact`, `/new`) and memory (`/memory`) — and is read
+ * in three different layers — the runtime (`/tasks`, `/events`, `/subagents`, `/skills`), the agent session (`/model`, `/compact`, `/new`) and memory (`/memory`) — and is read
  * by all of them plus the TUI. Only the catalog and the reply shape are shared: each *handler*
  * still lives in the layer that owns the state it touches (`runtime/*-commands.ts`,
  * `memory/commands.ts`, `agent/session/command-extension.ts`). This file has no imports at all, so nothing
@@ -25,7 +24,6 @@ export type BuiltInCommandName =
 	| "usage"
 	| "context"
 	| "subagents"
-	| "project"
 	| "skills";
 
 /** The five transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
@@ -81,7 +79,7 @@ export interface CommandSpec {
 	/**
 	 * True for the built-ins `ChannelRunner.handleBuiltinCommand` handles directly (help/stop/
 	 * steer/followup/context); false for the stateless runtime reports (events/tasks/status/
-	 * usage/subagents/project) dispatched through `runRuntimeCommand`. Meaningful only within
+	 * usage/subagents/skills) dispatched through `runRuntimeCommand`. Meaningful only within
 	 * `BUILT_IN_COMMANDS`.
 	 */
 	runnerHandled?: boolean;
@@ -261,24 +259,6 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		],
 	},
 	{
-		name: "project",
-		argumentHint: "[set <absolute-path>|reset]",
-		description: "查看或切换本频道的项目目录（读写文件与执行命令的工作目录）；set/reset 需频道空闲",
-		// The read form answers like /status; set/reset validate idleness themselves and reply
-		// with a plain error instead of blocking the built-in-command dispatch path.
-		availableWhileBusy: true,
-		subcommands: [
-			{ name: "show", description: "查看当前频道的项目目录与访问边界（默认动作，可省略）", example: "/project" },
-			{
-				name: "set",
-				args: "<absolute-path>",
-				description: "切换项目目录（需频道空闲，且目录在允许的根目录内）",
-				example: "/project set /home/me/projects/foo",
-			},
-			{ name: "reset", description: "切回默认项目目录", example: "/project reset" },
-		],
-	},
-	{
 		name: "skills",
 		argumentHint: "[list|show <name>]",
 		description: "列出工作区 skills（含未加载及原因），或查看单个 skill 的完整正文",
@@ -418,7 +398,7 @@ export function formatBusyHint(): string {
 
 /**
  * Renders a command's subcommand table as its `usage()` text — the single source `tasks/commands.ts`,
- * `events/commands.ts`, `subagents/commands.ts`, `channel/commands.ts`, and `memory/commands.ts` call
+ * `events/commands.ts`, `subagents/commands.ts`, and `memory/commands.ts` call
  * on a parse error, replacing five hand-written `usage()` bodies (review 2026-08-24 §3.1).
  */
 export function renderSubcommandUsage(name: string): string {

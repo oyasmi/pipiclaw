@@ -32,7 +32,9 @@ const globSchema = Type.Object({
 			'Glob pattern to match file paths against (e.g. "**/*.ts", "src/**/*.test.js"). A pattern with no "/" ' +
 			'matches the basename at any depth, so "*" and "*.ts" both search the whole tree; include a "/" to anchor the depth.',
 	}),
-	path: Type.Optional(Type.String({ description: "Directory to search in. Defaults to the workspace/project root." })),
+	path: Type.Optional(
+		Type.String({ description: "Directory to search in. Defaults to the current working directory." }),
+	),
 });
 
 export interface GlobToolOptions {
@@ -49,7 +51,7 @@ interface MatchedFile {
 /** Turn a path relative to the search root into an address `read` accepts unchanged. */
 function toReadableAddress(target: string, rel: string, securityContext: SecurityRuntimeContext): string {
 	const abs = join(target, ...rel.split("/"));
-	const root = securityContext.projectRoot;
+	const root = securityContext.cwd;
 	if (root) {
 		const fromRoot = relative(root, abs);
 		if (fromRoot && !fromRoot.startsWith("..") && !isAbsolute(fromRoot)) {
@@ -63,7 +65,7 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
-		projectRoot: process.cwd(),
+		cwd: process.cwd(),
 	};
 
 	return {
@@ -170,8 +172,8 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 			}
 
 			// Render each hit as an address `read` can take verbatim: a path relative to
-			// `target` alone is ambiguous (read resolves relative paths against projectRoot, not
-			// the search root), so emit a projectRoot-relative path when the hit is inside it and
+			// `target` alone is ambiguous (read resolves relative paths against the cwd, not
+			// the search root), so emit a cwd-relative path when the hit is inside it and
 			// an absolute path otherwise.
 			const page = ordered.slice(0, GLOB_MAX_RESULTS).map((rel) => toReadableAddress(target, rel, securityContext));
 			const footerParts: string[] = [];

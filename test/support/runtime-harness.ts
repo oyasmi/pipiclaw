@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import type { DingTalkBot } from "../../src/dingtalk/bot.js";
@@ -142,7 +142,7 @@ export interface DeterministicHarness {
 	sendWake(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/** Queue an internal wake on the real channel queue, as production dispatch does, and return. */
 	enqueueWake(text: string, overrides?: Partial<DingTalkEvent>): boolean;
-	/** Run an idle runtime command directly (`/project`, `/tasks` …), the TUI/busy path. */
+	/** Run an idle runtime command directly (`/tasks`, `/events` …), the TUI/busy path. */
 	runCommand(name: string, args?: string): Promise<string>;
 	/** Wait until no channel queue has pending/in-flight work and the runner is idle. */
 	waitForIdle(): Promise<void>;
@@ -158,9 +158,6 @@ export interface DeterministicHarness {
 	lastMainTurnRequest(): CapturedRequest | undefined;
 	/** Throws if the provider saw an unmatched request. Also checked after shutdown maintenance. */
 	assertNoUnmatchedRequests(): void;
-	/** When `projectAccess` was requested: two real dirs registered as allowed project roots. */
-	projectRootA?: string;
-	projectRootB?: string;
 	/** Contents of the security audit log, or "" if it does not exist yet. */
 	readAuditLog(): string;
 	shutdown(): Promise<void>;
@@ -177,8 +174,6 @@ export async function createDeterministicHarness(options?: {
 	registerSidecarDefaults?: boolean;
 	/** Transport default for a plain message that arrives mid-turn. Default: "followup". */
 	busyMessageDefault?: "steer" | "followup";
-	/** Configure `security.json` projectAccess with two allowed roots (A19 / `/project`). */
-	projectAccess?: boolean;
 	/** Enable the network guard and the `web_*` tools (A20). */
 	web?: boolean;
 	/** Start background services (durable dispatch, task driver, job sweep) — A16/A17. */
@@ -196,28 +191,14 @@ export async function createDeterministicHarness(options?: {
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
-	let projectRootA: string | undefined;
-	let projectRootB: string | undefined;
 	let securityJson: Record<string, unknown> | undefined;
 	let toolsJson: unknown;
-	if (options?.projectAccess) {
-		projectRootA = realpathSync(mkdtempSync(join(preHome, "proj-a-")));
-		projectRootB = realpathSync(mkdtempSync(join(preHome, "proj-b-")));
-		securityJson = {
-			pathGuard: { enabled: true },
-			commandGuard: { enabled: true },
-			networkGuard: { enabled: false },
-			audit: { logBlocked: true },
-			projectAccess: { defaultRoot: projectRootA, allowedRoots: [projectRootA, projectRootB] },
-		};
-	}
 	if (options?.web) {
 		securityJson = {
 			pathGuard: { enabled: true },
 			commandGuard: { enabled: true },
 			networkGuard: { enabled: true, allowedHosts: [], allowedCidrs: [] },
 			audit: { logBlocked: true },
-			...securityJson,
 		};
 		toolsJson = { tools: { web: { enable: true } } };
 	}
@@ -365,8 +346,6 @@ export async function createDeterministicHarness(options?: {
 		modelRequestCount: () => model.requests.length,
 		mainTurnRequests: () => model.requests.filter((r) => r.isMainTurn),
 		lastMainTurnRequest: () => [...model.requests].reverse().find((r) => r.isMainTurn),
-		projectRootA,
-		projectRootB,
 		readAuditLog(): string {
 			const path = join(home.workspaceDir, ".pipiclaw", "security.log");
 			return existsSync(path) ? readFileSync(path, "utf-8") : "";

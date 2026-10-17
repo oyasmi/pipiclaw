@@ -58,7 +58,7 @@ describe("glob tool read-guard backstop (batch 1.4)", () => {
 		const { DEFAULT_SECURITY_CONFIG } = await import("../src/security/config.js");
 		const tool = createGlobTool(fileStore, {
 			securityConfig: { ...DEFAULT_SECURITY_CONFIG, enabled: true },
-			securityContext: { agentWorkspaceDir: dir, projectRoot: dir },
+			securityContext: { agentWorkspaceDir: dir, cwd: dir },
 		});
 
 		const result = await tool.execute("call", { pattern: "*", path: dir });
@@ -81,7 +81,7 @@ describe("glob tool result addresses (batch 2.1)", () => {
 
 		const tool = createGlobTool(fileStore, {
 			securityConfig: { enabled: false } as never,
-			securityContext: { agentWorkspaceDir: dir, projectRoot: dir },
+			securityContext: { agentWorkspaceDir: dir, cwd: dir },
 		});
 		const result = await tool.execute("call", { pattern: "*.ts", path: join(dir, "nested") });
 		const address = text(result).split("\n")[0]?.trim();
@@ -94,7 +94,7 @@ describe("glob tool result addresses (batch 2.1)", () => {
 		writeFileSync(join(dir, "a.txt"), "x");
 		const tool = createGlobTool(fileStore, {
 			securityConfig: { enabled: false } as never,
-			securityContext: { agentWorkspaceDir: dir, projectRoot: dir },
+			securityContext: { agentWorkspaceDir: dir, cwd: dir },
 		});
 
 		await expect(tool.execute("call", { pattern: "*", path: join(dir, "nope") })).rejects.toThrow(/not found/i);

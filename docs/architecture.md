@@ -38,7 +38,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | 2 | `src/usage/` | 用量/成本账本（JSONL）与渲染 | `ledger.ts`、`render.ts`、`totals.ts` |
 | 2 | `src/tasks/` | 持久任务：任务说明、等待票、循环日志、预算、`/tasks`。调度与唤醒的衔接代码在 `runtime/task-*.ts`，这样本目录保持叶子 | `contract.ts`、`ticket.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`commands.ts` |
 | 2 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
-| 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态、`/project`。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts`、`project-scope-store.ts`、`commands.ts` |
+| 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts` |
 | 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、工具名单 | `details.ts`、`presentation.ts`、`names.ts` |
 | 4 | `src/config/` | `settings.json`、`tools.json` 的加载与校验 | `settings.ts`、`tools.ts` |
 | 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
@@ -199,7 +199,7 @@ sequenceDiagram
 | `log.jsonl` / `context.jsonl` | 冷存储：完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 工具检索 |
 | `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（含 actions/skipped/error；重复的相同跳过原因去重） | `review-log.ts` | 否，人工排查用 |
 
-工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于项目边界和 path guard，因此“管理员拥有”不是 OS 级只读保证。频道 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
+工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于 path guard，因此“管理员拥有”不是 OS 级只读保证。频道 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
 
 ### 6.2 记忆的进与出
 
@@ -335,7 +335,6 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │       ├── log.jsonl  context.jsonl  .channel-meta.json
 │       ├── active-session.json     # 当前聊天 session 指针；无指针时用 context.jsonl
 │       ├── <session>.jsonl         # /new 等操作创建的聊天会话
-│       ├── project.json           # 当前频道的项目目录选择
 │       ├── subagent-runs.jsonl     # 委派执行摘要
 │       ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
 │       └── tasks/

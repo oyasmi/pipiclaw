@@ -18,7 +18,7 @@ function registryContext(): ToolBuildContext {
 		executor: { exec: async () => ({ stdout: "", stderr: "", code: 1 }) },
 		fileStore: createFileStore(),
 		securityConfig: DEFAULT_SECURITY_CONFIG,
-		securityContext: { agentWorkspaceDir: "/tmp/ws", projectRoot: "/tmp/ws" },
+		securityContext: { agentWorkspaceDir: "/tmp/ws", cwd: "/tmp/ws" },
 		channelId: "dm_1",
 		channelDir: "/tmp/ws/dm_1",
 		workspaceDir: "/tmp/ws",

@@ -54,7 +54,7 @@ export async function listWorkspaceSkills(options: {
 	const guardConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const guardContext = options.securityContext ?? {
 		agentWorkspaceDir: options.workspaceDir,
-		projectRoot: options.workspaceDir,
+		cwd: options.workspaceDir,
 	};
 	let names: string[];
 	try {
@@ -141,7 +141,7 @@ export async function loadWorkspaceSkillFile(
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: options.workspaceDir,
-		projectRoot: options.workspaceDir,
+		cwd: options.workspaceDir,
 	};
 	const target = await checkPathGuard(rawPath, "read", securityConfig, securityContext, {
 		tool: "skill",

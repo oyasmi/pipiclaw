@@ -112,7 +112,7 @@ describe("path guard access to bundled playbooks", () => {
 		return {
 			agentWorkspaceDir: workspaceDir,
 			homeDir,
-			projectRoot: workspaceDir,
+			cwd: workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,
 		};
 	}

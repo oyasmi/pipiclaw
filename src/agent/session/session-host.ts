@@ -38,7 +38,6 @@ import { getApiKeyForModel } from "../../models/api-keys.js";
 import { findExactModelReferenceMatch, hasKnownModelPricing } from "../../models/reference.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../../models/runtime.js";
 import type { LoadedSecurityConfig } from "../../security/config.js";
-import type { ProjectScope } from "../../security/project-scope.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../../shared/config-diagnostic.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { isRecord } from "../../shared/type-guards.js";
@@ -109,12 +108,8 @@ export interface SessionHostDeps {
 	modelsConfigPath: string;
 	onSessionEvent?: (event: unknown, channelId: string) => void;
 	mediaSender?: MediaSender;
-	/**
-	 * Frozen for the lifetime of this runner generation (spec 043, D4.2): AgentSession, the
-	 * ResourceLoader, and every tool closure built here (session-topology rebuilds only rebind the
-	 * session, never the scope) all read this same value.
-	 */
-	projectScope: ProjectScope;
+	/** The agent's working directory: SDK session and resource-loader cwd, and the tools' relative-path base. */
+	cwd: string;
 	settingsManager: PipiclawSettingsManager;
 	/** Re-read per use, not captured once: an edited security.json takes effect without a restart. */
 	loadSecurityConfig: () => LoadedSecurityConfig;
@@ -142,7 +137,7 @@ export class SessionHost {
 	private readonly modelsConfigPath: string;
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
 	private readonly mediaSender?: MediaSender;
-	private readonly projectScope: ProjectScope;
+	private readonly cwd: string;
 	private readonly settingsManager: PipiclawSettingsManager;
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
 	private readonly executor: Executor;
@@ -202,7 +197,7 @@ export class SessionHost {
 		this.modelsConfigPath = deps.modelsConfigPath;
 		this.onSessionEvent = deps.onSessionEvent;
 		this.mediaSender = deps.mediaSender;
-		this.projectScope = deps.projectScope;
+		this.cwd = deps.cwd;
 		this.settingsManager = deps.settingsManager;
 		this.loadSecurityConfig = deps.loadSecurityConfig;
 		this.executor = deps.executor;
@@ -492,7 +487,7 @@ export class SessionHost {
 
 	private createResourceLoader(): ResourceLoader {
 		return new DefaultResourceLoader({
-			cwd: this.projectScope.projectRoot,
+			cwd: this.cwd,
 			agentDir: this.appHomeDir,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			extensionFactories: [
@@ -558,7 +553,7 @@ export class SessionHost {
 
 	private createAgentSessionServices(resourceLoader: ResourceLoader): AgentSessionServices {
 		return {
-			cwd: this.projectScope.projectRoot,
+			cwd: this.cwd,
 			agentDir: this.appHomeDir,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			modelRuntime: this.modelRuntime,
@@ -626,7 +621,7 @@ export class SessionHost {
 			agent,
 			sessionManager,
 			settingsManager: sessionSettingsManager,
-			cwd: this.projectScope.projectRoot,
+			cwd: this.cwd,
 			modelRuntime: this.modelRuntime,
 			resourceLoader,
 			baseToolsOverride: Object.fromEntries(tools.map((tool) => [tool.name, tool])),
@@ -696,7 +691,7 @@ export class SessionHost {
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
-			projectScope: this.projectScope,
+			cwd: this.cwd,
 			channelDir: this.channelDir,
 			channelId: this.channelId,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,

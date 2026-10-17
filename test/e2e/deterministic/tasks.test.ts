@@ -34,7 +34,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		// Regression: bootstrap snapshotted the old wake before installing the brief; the provider
 		// missed the contract, guide path and recovery source. Mutation checks: moving context creation
 		// before brief installation, or removing task_recovery, makes the provider-input checks fail.
-		harness = await createDeterministicHarness({ projectAccess: true });
+		harness = await createDeterministicHarness();
 		harness.model.script.route({
 			name: "create",
 			when: (r) => r.isMainTurn && r.lastUserText.includes("seed-task"),
@@ -66,7 +66,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		);
 		// Upgrade compatibility: bind an old independent task session with a completed tool.
 		const taskSession = join(tasksDir(), ".sessions", `${taskId}.jsonl`);
-		seedLegacySession("task", taskSession, harness.projectRootA!);
+		seedLegacySession("task", taskSession, process.cwd());
 		await parkTask(harness.channelDir, taskId, ticket);
 		await expireTicket(harness.channelDir, taskId);
 		const entry = (await readActiveTasks(tasksDir())).find((task) => task.id === taskId)!;

@@ -7,7 +7,6 @@ import { renderContextReport } from "../src/agent/prompt/manifest.js";
 import { renderStatus } from "../src/agent/status-render.js";
 import { renderTurnErrorReply } from "../src/agent/turn/turn-error.js";
 import type { AgentRunner } from "../src/agent/types.js";
-import { handleProjectCommand } from "../src/channel/commands.js";
 import { BUILT_IN_COMMANDS, formatBusyHint, renderBuiltInHelp, SESSION_COMMANDS } from "../src/commands/catalog.js";
 import { handleEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
@@ -233,7 +232,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		}
 	});
 
-	it("keeps /memory, /events, /skills and /project in shape", async () => {
+	it("keeps /memory, /events and /skills in shape", async () => {
 		const channelDir = tempDir();
 		const workspaceDir = tempDir();
 		const appHomeDir = tempDir();
@@ -295,19 +294,6 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		expectUserCopyShape(
 			"/skills (empty)",
 			await handleSkillsCommand({ args: "", workspaceDir: tempDir(), appHomeDir }),
-		);
-
-		expectUserCopyShape(
-			"/project",
-			await handleProjectCommand({
-				args: "",
-				channelId: "dm_1",
-				channelDir,
-				appHomeDir,
-				actor: "dingtalk-command",
-				isBusy: () => false,
-				listActiveBlockers: () => [],
-			}),
 		);
 	});
 

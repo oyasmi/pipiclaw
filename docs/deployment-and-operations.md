@@ -197,7 +197,6 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 | `<channel>/log.jsonl` | 原始运行日志 |
 | `<channel>/context.jsonl` 与 session JSONL | 聊天会话冷存储；当前文件由 `active-session.json` 指定，无指针时用 `context.jsonl` |
 | `<channel>/active-session.json` | 当前聊天会话指针，`/new` 后更新 |
-| `<channel>/project.json` | 本频道持久化的项目目录选择 |
 | `<channel>/tasks/<id>.md` 与 `<id>.jsonl` | 任务契约、循环日志；关闭后移入 `tasks/archive/` |
 | `<channel>/tasks/.sessions/` | 独立任务会话（每任务一份） |
 | `<channel>/subagent-runs.jsonl` | 子代理执行摘要 |

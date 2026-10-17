@@ -98,7 +98,7 @@ pipiclaw tui
 pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
 ```
 
-看到模型实际回复才表示调用链路已经跑通；`pipiclaw tui --help` 或 `/model` 只能证明 CLI 或模型目录可见。正式工作前可用 `/project` 确认当前项目目录。如需接入企业网关、本地模型或指定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
+看到模型实际回复才表示调用链路已经跑通；`pipiclaw tui --help` 或 `/model` 只能证明 CLI 或模型目录可见。如需接入企业网关、本地模型或指定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
 
 ### 3. 接入钉钉
 

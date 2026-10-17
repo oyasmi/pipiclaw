@@ -25,11 +25,7 @@ function makeOptions(subagentInlineEnabled: boolean) {
 		getAvailableModels: () => [model],
 		resolveApiKey: async () => "test-key",
 		workspaceDir: "/repo",
-		projectScope: {
-			projectRoot: process.cwd(),
-			boundary: "unbounded" as const,
-			sandbox: { level: "application" as const, provider: "pipiclaw-path-guard", summary: "" },
-		},
+		cwd: process.cwd(),
 		channelDir: "/repo/dm_1",
 		channelId: "dm_1",
 		getSubAgentDiscovery: () => ({ directory: "/repo/sub-agents", warnings: [], agents: [] }),

@@ -19,7 +19,7 @@ describe("tool security (guard runs before the executor)", () => {
 		const executor = new RecordingExecutor();
 		const tool = createBashTool(executor, {
 			securityConfig: DEFAULT_SECURITY_CONFIG,
-			securityContext: { agentWorkspaceDir: workspaceDir, homeDir: workspaceDir, projectRoot: workspaceDir },
+			securityContext: { agentWorkspaceDir: workspaceDir, homeDir: workspaceDir, cwd: workspaceDir },
 		});
 
 		await expect(tool.execute("call", { command: "rm -rf /" })).rejects.toThrow("Command blocked");
@@ -38,7 +38,7 @@ describe("tool security (guard runs before the executor)", () => {
 		const fileStore = new RecordingFileStore();
 		const tool = createReadTool(executor, fileStore, {
 			securityConfig: DEFAULT_SECURITY_CONFIG,
-			securityContext: { agentWorkspaceDir: workspaceDir, homeDir, projectRoot: workspaceDir },
+			securityContext: { agentWorkspaceDir: workspaceDir, homeDir, cwd: workspaceDir },
 		});
 
 		await expect(tool.execute("call", { path: join(homeDir, ".ssh", "id_rsa") })).rejects.toThrow("Path blocked");
@@ -58,7 +58,7 @@ describe("tool security (guard runs before the executor)", () => {
 		await expect(
 			writeContent(fileStore, join(homeDir, ".ssh", "authorized_keys"), "changed", undefined, {
 				securityConfig: DEFAULT_SECURITY_CONFIG,
-				securityContext: { agentWorkspaceDir: workspaceDir, homeDir, projectRoot: workspaceDir },
+				securityContext: { agentWorkspaceDir: workspaceDir, homeDir, cwd: workspaceDir },
 			}),
 		).rejects.toThrow("Path blocked");
 		expect(fileStore.calls).toEqual([]);

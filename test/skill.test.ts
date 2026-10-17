@@ -97,7 +97,7 @@ describe("skill tool", () => {
 		const tool = createSkillTool({
 			workspaceDir,
 			securityConfig: DEFAULT_SECURITY_CONFIG,
-			securityContext: { agentWorkspaceDir: workspaceDir, projectRoot: workspaceDir },
+			securityContext: { agentWorkspaceDir: workspaceDir, cwd: workspaceDir },
 		});
 
 		await expect(tool.execute("call", { action: "read", name: "leaky" })).rejects.toThrow();
@@ -117,7 +117,7 @@ describe("skill tool", () => {
 		await mkdir(leakyDir, { recursive: true });
 		symlinkSync(secretPath, join(leakyDir, "SKILL.md"));
 
-		const securityContext = { agentWorkspaceDir: workspaceDir, projectRoot: workspaceDir };
+		const securityContext = { agentWorkspaceDir: workspaceDir, cwd: workspaceDir };
 		const summaries = await listWorkspaceSkills({
 			workspaceDir,
 			securityConfig: DEFAULT_SECURITY_CONFIG,

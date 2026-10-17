@@ -15,7 +15,7 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 | 私聊 | `dm_{staffId}` | 按发送者隔离 |
 | 群聊 | `group_{conversationId}` | 按群隔离 |
 
-你和同事分别私聊同一个实例，各自是独立通道；同一个群里的所有成员共享一个群通道。正常会话、记忆和检索入口不会跨频道混用，workspace 根目录的 `MEMORY.md` 则是共享知识。这是应用层状态隔离，不是 OS 级文件隔离：未启用项目边界时，通用文件工具或 shell 仍可能访问运行账号可读的其他频道目录。强隔离应使用独立项目边界、账号或容器。
+你和同事分别私聊同一个实例，各自是独立通道；同一个群里的所有成员共享一个群通道。正常会话、记忆和检索入口不会跨频道混用，workspace 根目录的 `MEMORY.md` 则是共享知识。这是应用层状态隔离，不是 OS 级文件隔离：通用文件工具或 shell 仍可能访问运行账号可读的其他频道目录。强隔离应使用独立账号或容器。
 
 ## 并发模型（Concurrency Model）
 
@@ -49,14 +49,14 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 
 需要并行实现时，先为每个写 run 创建独立 `git worktree`，再分别传入不同的 `workingDirectory`。写锁只避免 Pipiclaw 自己同时派发两个声明写入的角色；外部进程、其他用户或未如实声明的角色仍可能在同一目录写入。
 
-### 跨通道共享项目目录
+### 跨通道共享代码目录
 
-channel 隔离的是会话状态，不会自动复制或锁住项目 checkout。两个 channel 可以同时指向同一个 project root；此时两个主智能体执行的 `write`、`edit`、`bash` 或 Git 操作可能作用于同一棵目录。上面的委派写锁不覆盖主智能体自己的工具调用，因此不能把 channel 隔离理解成项目文件的事务隔离。
+channel 隔离的是会话状态，不会自动复制或锁住项目 checkout。两个 channel 可以同时在同一个代码仓库里工作；此时两个主智能体执行的 `write`、`edit`、`bash` 或 Git 操作可能作用于同一棵目录。上面的委派写锁不覆盖主智能体自己的工具调用，因此不能把 channel 隔离理解成项目文件的事务隔离。
 
 如果多个群或私聊可能同时交办写代码任务，建议按风险从低到高选择：
 
 - 约定同一时刻只有一个 channel 对共享 checkout 做写操作；
-- 为并行任务创建独立 Git worktree，并在 `security.json` 的 `projectAccess` 允许后，让各 channel 通过 `/project set <absolute-path>` 选择各自目录；
+- 为并行任务创建独立 Git worktree，让各 channel 用绝对路径（委派时用 `workingDirectory`）在各自的 worktree 里工作；
 - 按团队或项目拆分 Pipiclaw 实例，并使用彼此独立的 workspace 和 checkout。
 
 ## 资源占用与已知瓶颈（Footprint and Known Bottlenecks）

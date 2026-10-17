@@ -43,7 +43,7 @@ POSIX 环境；Windows 请使用 WSL2。
 | `models.json` | 模型与供应商定义（`baseUrl`、`api`、`models[]`） | 接入新网关或新模型时变 |
 | `settings.json` | **产品意图**：默认模型、fallback、模块开关、日志级别 | 调口味时变 |
 | `tools.json` | **能力**：哪些工具存在（web、tasks、rtk、bashInterceptor） | 决定"助手能做什么"时变 |
-| `security.json` | **策略**：命令/路径/网络守卫与项目边界 | 收紧或放开权限时变 |
+| `security.json` | **策略**：命令/路径/网络守卫 | 收紧或放开权限时变 |
 
 两条由此推出的规则，可以省掉很多翻文档的时间：
 

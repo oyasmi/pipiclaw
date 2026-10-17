@@ -373,7 +373,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 					}
 					default: {
 						// Every remaining BuiltInCommandName is a stateless report (events/tasks/status/usage/
-						// context/subagents/project), narrowed to RuntimeCommandName by TS after the four
+						// context/subagents/skills), narrowed to RuntimeCommandName by TS after the four
 						// cases above. Busy has no sendCommandReply-style retry semantics, so `/context` is
 						// answered here like the rest instead of the runner-handled path idle uses for it
 						// (see the IDLE_RUNTIME_COMMAND_NAMES comment in bootstrap.ts).

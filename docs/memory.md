@@ -13,10 +13,10 @@ Pipiclaw 的记忆是**三件东西**：频道记忆库（一条事实一个文�
 |---|---|---|---|
 | 频道记忆 | `<channelId>/memory/*.md`，一条一文件，生成的 `<channelId>/MEMORY.md` 是索引 | `memory_save` / 后台反思 pass / 人手编辑 | 索引在**会话首轮**（含 `/new` 之后、压缩之后）整份注入 `<memory_bootstrap>`；装不下时按类型分层，见下 |
 | 日志 | `<channelId>/journal/YYYY-MM-DD.md`，按天追加 | 只有后台反思 pass 写 | 首轮注入当天尾部；更早的日期用 `memory_search` 或 `/memory journal <date>` 查 |
-| 共享背景 | `workspace/MEMORY.md` | 管理员维护；是否可由通用文件工具写取决于项目边界 | 首轮按完整 H2 段落和预算注入 |
+| 共享背景 | `workspace/MEMORY.md` | 管理员维护；通用文件工具能否写入由 path guard 决定 | 首轮按完整 H2 段落和预算注入 |
 | 环境记录 | `workspace/ENVIRONMENT.md` | 管理员或获准的文件工具 | 不自动注入，需要时读取 |
 
-频道记忆、日志和检索入口按频道绑定，workspace 层则由所有频道共享。这阻止正常记忆流程把私聊内容带进群聊；它不是 OS 级文件隔离。默认无项目边界时，通用文件工具仍可能访问同一运行账号可读的其他目录；严格隔离需要配置项目边界并使用独立账号或容器。频道的定义见 [scaling-and-concurrency.md](./scaling-and-concurrency.md#会话隔离模型session-isolation-model)。
+频道记忆、日志和检索入口按频道绑定，workspace 层则由所有频道共享。这阻止正常记忆流程把私聊内容带进群聊；它不是 OS 级文件隔离。通用文件工具仍可能访问同一运行账号可读的其他目录；严格隔离需要使用独立账号或容器。频道的定义见 [scaling-and-concurrency.md](./scaling-and-concurrency.md#会话隔离模型session-isolation-model)。
 
 文件都在 `${PIPICLAW_HOME:-~/.pipiclaw}/workspace/` 下：共享层在根目录，频道层在 `<channelId>/`。频道记忆文件可以直接用编辑器打开改——下次读到的就是改后的版本，索引会在下一次写入时重建。
 
@@ -60,7 +60,7 @@ updated: 2026-09-04
 - `workspace/MEMORY.md`：团队背景、术语、长期约定。
 - `ENVIRONMENT.md`：机器上装了什么、重要环境变量从哪来、仓库之外改过什么配置。不放密钥值、不放聊天摘要。
 
-Pipiclaw 不会自动把频道记忆升格到这里。项目边界启用时，通用文件工具通常无法写这两个文件；未启用时，能否写入由 path guard 和运行账号权限决定。因此“管理员维护”是内容所有权约定，不是强制只读保证。需要强边界时见[安全指南](./security.md)。
+Pipiclaw 不会自动把频道记忆升格到这里。通用文件工具能否写入这两个文件由 path guard 和运行账号权限决定。因此“管理员维护”是内容所有权约定，不是强制只读保证。需要强边界时见[安全指南](./security.md)。
 
 与之相对，频道级的 `memory/*.md` 可以 `read`，但**不要用文件工具直接改**——写入一律通过对话让 agent 走 `memory_save` / `memory_forget`，或者你自己用 `/memory forget`。
 

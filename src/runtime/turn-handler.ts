@@ -10,7 +10,6 @@ import { createFreshActiveSession } from "../channel/active-session-store.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import type { ChannelIndex } from "../channel/channel-index.js";
 import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
-import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
 	formatMissingQueueMessage,
@@ -23,8 +22,6 @@ import type { BusyMessageMode } from "../dingtalk/config.js";
 import type { BusyMessageResult, DingTalkBotPort, DingTalkHandler, StopOutcome } from "../dingtalk/handler.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
-import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
-import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { readActiveTasks } from "../tasks/contract.js";
@@ -203,19 +200,11 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 				.then(async () => {
 					try {
 						const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
-						const access = resolveProjectAccessPolicy(
-							loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config,
-							process.cwd(),
-						);
-						const scope = resolveProjectScope(channelDir, access);
-						if (scope.kind === "blocked") {
-							throw new Error(scope.reason);
-						}
 
 						// The empty session file and active pointer are committed before the old
 						// generation is touched. A filesystem failure therefore leaves the live
 						// session authoritative and retryable.
-						const result = await createFreshActiveSession(channelDir, scope.scope.projectRoot);
+						const result = await createFreshActiveSession(channelDir, process.cwd());
 						const oldRunner = channelRunners.get(event.channelId);
 						if (oldRunner) {
 							channelRunners.delete(event.channelId);
@@ -281,25 +270,11 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 				{
 					channelId,
 					paths: options.paths,
-					actor: "dingtalk-command",
 					version: cliVersion,
 					startedAt,
 					peekRunner: () => channelRunners.get(channelId),
 					getRunner: () => getRunner(channelId),
 					runManager: getRuns().get(channelId),
-					runningJobLines: () => getJobs().runningLines(channelId),
-					// D4.2: dispose the cached runner so the next access rebuilds it under the new scope.
-					// The active-session ref is untouched — same session, new project root.
-					onScopeChanged: async () => {
-						const runner = channelRunners.get(channelId);
-						channelRunners.delete(channelId);
-						await runner?.dispose().catch((err) => {
-							log.logWarn("runtime.runner.dispose_failed", "Runner dispose after /project failed", {
-								channelId: channelId,
-								reason: errorMessage(err),
-							});
-						});
-					},
 					dispatchTask: async (id) => {
 						const channelDir = getChannelDir(options.paths.workspaceDir, channelId);
 						const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
