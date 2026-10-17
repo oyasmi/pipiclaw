@@ -2,7 +2,9 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
-## Unreleased
+## [0.9.4] - 2026-10-17
+
+Includes everything in [0.9.4-beta.2](#094-beta2---2026-10-13) below (user-facing copy overhaul, faster and more robust delegation, enforced source layering), plus the following.
 
 ### Added
 
