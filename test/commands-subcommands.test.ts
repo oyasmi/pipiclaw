@@ -8,7 +8,7 @@ import { localDayKey } from "../src/shared/local-time.js";
 import { parseSkillsCommand } from "../src/skills/commands.js";
 import { parseSubagentsCommand } from "../src/subagents/commands.js";
 import { parseTasksCommand } from "../src/tasks/commands.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
 /**
  * Review 2026-08-24 §1.1/§3.1: `/help` advertised `/tasks stats` for months after the parser
@@ -95,10 +95,10 @@ describe("command subcommand examples round-trip through their parser", () => {
 					if (args.startsWith("journal")) {
 						await appendJournalEntries(dotDir, localDayKey(), ["01:23 memory journal route sentinel"]);
 					}
-					const result = await handleMemoryCommand({ channelId: "dm_1", dotDir, args });
+					const result = await handleMemoryCommand({ conversation: testConversation(dotDir), args });
 					switch (args.trim().split(/\s+/)[0]) {
 						case "status":
-							expect(result).toContain("频道条目：`1`");
+							expect(result).toContain("记忆条目：`1`");
 							break;
 						case "list":
 							expect(result).toContain("deploy-window-thursday");

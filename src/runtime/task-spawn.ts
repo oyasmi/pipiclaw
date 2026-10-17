@@ -7,12 +7,12 @@ import { taskStateLabel } from "../tasks/frontmatter.js";
 import { archivedTaskPath, taskPath, tasksDir } from "../tasks/store.js";
 
 export interface TaskSpawnerOptions {
-	/** The channel's directory under the workspace. */
-	getChannelDir: (channelId: string) => string;
+	/** The event's dot directory: the instance is created in its `tasks/`. */
+	getDotDir: (dot: string) => string;
 	/** Wake the driver so the new instance's first step is queued promptly. */
 	nudge: () => void;
-	/** Direct, non-LLM message to the channel — used for the "previous instance still running" receipt. */
-	notify: (channelId: string, text: string) => Promise<unknown>;
+	/** Direct, non-LLM receipt to the event's channel, through the dot's binding guard (D7). */
+	notify: (dot: string, channelId: string, text: string) => Promise<unknown>;
 }
 
 /**
@@ -33,7 +33,7 @@ export function createTaskSpawner(
 	options: TaskSpawnerOptions,
 ): (request: SpawnTaskRequest) => Promise<SpawnTaskResult> {
 	return async (request) => {
-		const dotDir = options.getChannelDir(request.channelId);
+		const dotDir = options.getDotDir(request.dot);
 		const id = `${request.eventName}-${instanceStamp(request.occurrence)}`;
 
 		if (existsSync(taskPath(dotDir, id)) || existsSync(archivedTaskPath(dotDir, id))) {
@@ -47,6 +47,7 @@ export function createTaskSpawner(
 			const state = `${taskStateLabel(active.fields.state)}${active.fields.paused ? "，已暂停" : ""}`;
 			await options
 				.notify(
+					request.dot,
 					request.channelId,
 					`⚠️ 周期任务 \`${request.eventName}\` 本次（${instanceStamp(request.occurrence)}）未启动：上一个实例 \`${active.id}\` 仍未结束（${state}）。\n查看：\`/tasks show ${active.id}\``,
 				)

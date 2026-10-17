@@ -10,7 +10,7 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempChannel = useTempDirs("pipiclaw-memory-manage-");
 
 function makeOptions(dotDir: string, overrides: Record<string, unknown> = {}) {
-	return { channelId: "dm_1", dotDir, workspaceDir: dotDir, ...overrides };
+	return { channelId: "dm_1", dot: "news", dotDir, workspaceDir: dotDir, ...overrides };
 }
 const makeSave = (dir: string, o: Record<string, unknown> = {}) => createMemorySaveTool(makeOptions(dir, o) as never);
 const makeSearch = (dir: string, o: Record<string, unknown> = {}) =>
@@ -137,16 +137,17 @@ describe("memory tools", () => {
 			{ op: "add", name: "home-address", description: "User's home address is 5 Main St", source: "agent" },
 		]);
 		const tool = makeForget(dotDir, {
-			channelMemoryQueue: {
-				run: <T>(channelId: string, job: () => Promise<T>) => {
-					seen.push(channelId);
+			memoryQueue: {
+				run: <T>(target: { dot: string }, job: () => Promise<T>) => {
+					seen.push(target.dot);
 					return job();
 				},
 			},
 		});
 		const { details } = await run(tool, { name: "home-address" });
 		expect(details).toMatchObject({ forgotten: true, name: "home-address" });
-		expect(seen).toEqual(["dm_1"]);
+		// INV-8: the queue key is the dot, so every channel of the dot serializes on one queue.
+		expect(seen).toEqual(["news"]);
 		expect(await listMemoryEntries(dotDir)).toHaveLength(0);
 
 		const log = readFileSync(getMemoryReviewLogPath(dotDir), "utf-8").trim();

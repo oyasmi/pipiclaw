@@ -107,7 +107,7 @@ describe("commitActiveSessionRef", () => {
 		const outsideDir = makeTempDir();
 		const manager = SessionManager.open(join(outsideDir, "other.jsonl"), outsideDir);
 
-		await expect(commitActiveSessionRef(dotDir, manager)).rejects.toThrow(/channel directory/);
+		await expect(commitActiveSessionRef(dotDir, manager)).rejects.toThrow(/conversation directory/);
 
 		const handle = { getSessionFile: () => undefined, getSessionId: () => "x" };
 		await expect(commitActiveSessionRef(dotDir, handle)).rejects.toThrow(/no backing file/);

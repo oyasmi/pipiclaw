@@ -78,10 +78,16 @@ function unknownNote(summary: UsageSummary): string | null {
 	return parts.length > 0 ? `（另有 ${parts.join("，")}，未计入以上合计）` : null;
 }
 
-async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId: string): Promise<string> {
-	const [global, channel] = await Promise.all([
+/** Whose spend `/usage` reports: the asking channel's dot, with that channel's share of it. */
+export interface UsageScope {
+	dot: string;
+	channelId: string;
+}
+
+async function renderWindow(window: UsageWindow, ledger: UsageLedger, scope: UsageScope): Promise<string> {
+	const [global, dot] = await Promise.all([
 		ledger.summarize({ since: window.since, until: window.until }),
-		ledger.summarize({ since: window.since, until: window.until, channelId }),
+		ledger.summarize({ since: window.since, until: window.until, dot: scope.dot }),
 	]);
 
 	const lines: string[] = [`**${window.title}**`];
@@ -92,16 +98,21 @@ async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId:
 
 	// Tokens are reported next to cost because a local or pricing-less model bills nothing while
 	// still consuming context — "$0.0000" alone would read as "nothing happened".
-	let channelLine = `- 本频道：${money(channel.totalCost)} · ${tokens(channel.totalTokens)}`;
-	const channelKinds = renderKindBreakdown(channel);
-	if (channelKinds) {
-		channelLine += ` · ${channelKinds}`;
+	// Tasks and delegations belong to the dot, so spend is reported for the dot as a whole; the
+	// asking channel's share is shown only when other channels share the dot.
+	let dotLine = `- 本 dot（\`${scope.dot}\`）：${money(dot.totalCost)} · ${tokens(dot.totalTokens)}`;
+	const dotKinds = renderKindBreakdown(dot);
+	if (dotKinds) {
+		dotLine += ` · ${dotKinds}`;
 	}
-	const channelUnknown = unknownNote(channel);
-	if (channelUnknown) {
-		channelLine += channelUnknown;
+	if (Object.keys(dot.byChannel).length > 1) {
+		dotLine += ` · 其中本频道 ${money(dot.byChannel[scope.channelId] ?? 0)}`;
 	}
-	lines.push(channelLine);
+	const dotUnknown = unknownNote(dot);
+	if (dotUnknown) {
+		dotLine += dotUnknown;
+	}
+	lines.push(dotLine);
 
 	const channelCount = Object.keys(global.byChannel).length;
 	let globalLine = `- 全局：${money(global.totalCost)} · ${tokens(global.totalTokens)}，覆盖 ${channelCount} 个频道`;
@@ -119,11 +130,11 @@ async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId:
 
 export async function renderUsageReport(
 	ledger: UsageLedger,
-	channelId: string,
+	scope: UsageScope,
 	mode: UsageQueryMode,
 	now: Date,
 ): Promise<string> {
 	const windows = usageWindows(mode, now);
-	const rendered = await Promise.all(windows.map((window) => renderWindow(window, ledger, channelId)));
+	const rendered = await Promise.all(windows.map((window) => renderWindow(window, ledger, scope)));
 	return `**用量**\n\n${rendered.join("\n\n")}`;
 }

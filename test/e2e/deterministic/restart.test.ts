@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getDefaultChannelMemoryQueue } from "../../../src/memory/channel-maintenance-queue.js";
+import { getDotMemoryQueue } from "../../../src/memory/dot-memory-queue.js";
 import {
 	createDeterministicHarness,
 	type DeterministicHarness,
@@ -20,8 +20,8 @@ describe("E2E deterministic: restart & persistence", () => {
 		// existing context.jsonl and the post-restart turn branches from root — its
 		// entry's parentId no longer chains onto the pre-restart assistant message.
 		harness = await createDeterministicHarness({
-			seed: ({ dotDir }) => {
-				seedLegacySession("branch", join(dotDir, "context.jsonl"), dotDir);
+			seed: ({ dotDir, conversationDir }) => {
+				seedLegacySession("branch", join(conversationDir, "context.jsonl"), dotDir);
 			},
 		});
 		harness.model.script.route({ name: "t", when: (r) => r.isMainTurn, respond: [reply.text("好的")], repeat: true });
@@ -35,7 +35,7 @@ describe("E2E deterministic: restart & persistence", () => {
 		expect(history).toContain("KEPT_HISTORY");
 		expect(history).toContain("BRANCH_ANSWER");
 		expect(history).not.toContain("DISCARDED_ANSWER");
-		const sessionFile = join(harness.dotDir, "context.jsonl");
+		const sessionFile = join(harness.conversationDir, "context.jsonl");
 		const before = readFileSync(sessionFile, "utf-8").trim().split("\n");
 		const sessionId = JSON.parse(before[0]).id as string;
 		const lastPreRestartId = JSON.parse(before.at(-1)!).id as string;
@@ -58,8 +58,8 @@ describe("E2E deterministic: restart & persistence", () => {
 		await harness.shutdown();
 		for (const name of ["fork", "interrupted", "azure"]) {
 			harness = await createDeterministicHarness({
-				seed: ({ dotDir, homeDir }) => {
-					seedLegacySession(name, join(dotDir, "context.jsonl"), dotDir);
+				seed: ({ dotDir, conversationDir, homeDir }) => {
+					seedLegacySession(name, join(conversationDir, "context.jsonl"), dotDir);
 					if (name === "azure") {
 						const modelsPath = join(homeDir, "models.json");
 						const models = JSON.parse(readFileSync(modelsPath, "utf8"));
@@ -100,13 +100,14 @@ describe("E2E deterministic: restart & persistence", () => {
 			expect(JSON.stringify(legacy.messages)).toContain(name === "fork" ? "FIXTURE_SUMMARY" : "OLD_HISTORY");
 			if (name === "fork")
 				expect(
-					JSON.parse(readFileSync(join(harness.dotDir, "context.jsonl"), "utf8").split("\n")[0]!).parentSession,
+					JSON.parse(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8").split("\n")[0]!)
+						.parentSession,
 				).toBe("/fixture/branch.jsonl");
 			if (name === "azure") {
 				expect(legacy.model).toBe("fixture-deployment");
 				expect(legacy.raw.reasoning_effort).toBe("medium");
 			}
-			const entries = readFileSync(join(harness.dotDir, "context.jsonl"), "utf8");
+			const entries = readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8");
 			if (name === "interrupted") expect(entries).toContain("INTERRUPTED_INPUT");
 			else if (name === "azure") expect(entries).toContain('"provider":"azure-openai-responses"');
 			if (name !== "azure") await harness.shutdown();
@@ -159,7 +160,7 @@ describe("E2E deterministic: restart & persistence", () => {
 			gate.release();
 		}
 		// Drain the actual channel maintenance queue: provider arrival alone precedes persistence.
-		await getDefaultChannelMemoryQueue().run(harness.channelId, async () => {});
+		await getDotMemoryQueue().run(harness, async () => {});
 
 		expect(readFileSync(join(harness.dotDir, "MEMORY.md"), "utf-8")).not.toContain(secret);
 		const memoryDir = join(harness.dotDir, "memory");

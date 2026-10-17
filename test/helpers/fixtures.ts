@@ -59,3 +59,42 @@ export function setupChannelFiles(
 		writeFileSync(join(dir, "HISTORY.md"), content.history, "utf-8");
 	}
 }
+
+/**
+ * A (dot, channel) pairing on disk for unit tests (spec 058): `dotDir` is the dot, the
+ * conversation directory lives inside it as `conversations/<conversation>/`.
+ */
+export function testConversation(
+	dotDir: string,
+	overrides: { dot?: string; channelId?: string; conversation?: string } = {},
+): import("../../src/dot/types.js").DotConversation {
+	const conversation = overrides.conversation ?? "dm-1";
+	const conversationDir = join(dotDir, "conversations", conversation);
+	mkdirSync(conversationDir, { recursive: true });
+	return {
+		dot: overrides.dot ?? "news",
+		dotDir,
+		channelId: overrides.channelId ?? "dm_1",
+		conversation,
+		conversationDir,
+	};
+}
+
+/**
+ * Bind `channelId` to `dot` in a workspace the runtime is about to load (creating the dot and the
+ * conversation when needed) — what `/dot new` + `/dot bind` leave on disk.
+ */
+export async function bindTestChannel(
+	workspaceDir: string,
+	channelId: string,
+	dot = "news",
+): Promise<import("../../src/dot/types.js").DotConversation> {
+	const registry = await import("../../src/dot/registry.js");
+	await registry.createDot(workspaceDir, dot, new Date());
+	const kind = channelId === "tui" ? "tui" : channelId.startsWith("group_") ? "group" : "dm";
+	const conversation = await registry.allocateConversation(workspaceDir, dot, channelId, kind, new Date());
+	const bindings = await registry.loadBindings(workspaceDir);
+	bindings.bindings[channelId] = { dot, boundAt: new Date().toISOString() };
+	await registry.writeBindings(workspaceDir, bindings);
+	return conversation;
+}

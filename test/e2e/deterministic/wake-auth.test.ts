@@ -134,7 +134,7 @@ describe("E2E deterministic: wake authenticity", () => {
 		// Park on the run that was actually dispatched, then release it so it settles and wakes.
 		await childGate.arrived;
 		const runId = harness.runtime.runs
-			.get(harness.channelId)
+			.get(harness.dot)
 			.list()
 			.find((record) => record.taskId === taskId)!.runId;
 		await parkTask(harness.dotDir, taskId, { kind: "work", refs: [runId], by: "2099-01-01T00:00:00+08:00" });

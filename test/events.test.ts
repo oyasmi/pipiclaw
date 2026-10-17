@@ -122,8 +122,14 @@ function createWatcher(
 	},
 	historyPath?: string,
 	spawnTask?: EventsWatcherOptions["spawnTask"],
+	isBound: EventsWatcherOptions["isBound"] = () => true,
 ): EventsWatcher {
-	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig, { historyPath, spawnTask });
+	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig, {
+		dot: "news",
+		isBound,
+		historyPath,
+		spawnTask,
+	});
 }
 
 function readHistory(historyPath: string): Array<Record<string, unknown>> {
@@ -272,6 +278,7 @@ describe("EventsWatcher", () => {
 			expect(bot.events).toHaveLength(0);
 			expect(spawnTask).toHaveBeenCalledWith({
 				eventName: "weekly",
+				dot: "news",
 				channelId: "dm_1",
 				template: expect.objectContaining({ title: "Weekly report" }),
 				occurrence,
@@ -415,6 +422,7 @@ describe("EventsWatcher", () => {
 		expect(bot.events).toHaveLength(1);
 		expect(bot.events[0]).toMatchObject({
 			channelId: "dm_42",
+			dot: "news",
 			user: "EVENT",
 			// Periodic wakes carry the [SILENT] contract in their trigger, not the system prompt (spec 026 §7.3).
 			text: "[EVENT:periodic.json:periodic:0 3 * * 0] run maintenance This is a periodic runtime wake. If it produces no user-visible change or result, reply with exactly [SILENT].",
@@ -426,6 +434,29 @@ describe("EventsWatcher", () => {
 		expect(history.some((entry) => entry.action === "deleted" && entry.result === "ok")).toBe(true);
 		expect(history[0]?.ts).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*[+-]\d{2}:\d{2}$/));
 		expect(String(history[0]?.ts)).not.toContain("Z");
+		expect(history[0]?.dot).toBe("news");
+
+		// Spec 058, D8: once the delivery channel is no longer bound to this dot, the occurrence is
+		// skipped — nothing dispatched to a channel that now belongs to another dot (or to none).
+		const unboundBot = new FakeBot(true);
+		const unbound = createWatcher(
+			dir,
+			unboundBot,
+			createMockExecutor(),
+			undefined,
+			historyPath,
+			undefined,
+			() => false,
+		);
+		writeFileSync(filePath, "{}");
+		await getEventsWatcherPrivateApi(unbound).execute(
+			filename,
+			{ type: "periodic", channelId: "dm_42", text: "run maintenance", schedule: "0 3 * * 0" },
+			false,
+		);
+		await unbound.flush();
+		expect(unboundBot.events).toHaveLength(0);
+		expect(readHistory(historyPath).at(-1)).toMatchObject({ action: "skipped", reason: "channel_not_bound" });
 	});
 
 	describe("admission gate (spec 031, D4)", () => {
@@ -520,7 +551,7 @@ describe("EventsWatcher", () => {
 			writeFileSync(join(dir, "reminder.json"), "{}");
 			await reminderApi.execute("reminder.json", definition, false);
 			await reminderApi.execute("reminder.json", definition, false);
-			expect(reminderBot.events[0]?.dispatchId).toBe("event:reminder:2026-07-20T09:00:00+08:00");
+			expect(reminderBot.events[0]?.dispatchId).toBe("event:news:reminder:2026-07-20T09:00:00+08:00");
 			expect(reminderBot.events[1]?.dispatchId).toBe(reminderBot.events[0]?.dispatchId);
 
 			// Periodics instead key on the occurrence, so occurrences stay distinct.
@@ -530,8 +561,8 @@ describe("EventsWatcher", () => {
 			writeFileSync(join(dir, "sweep.json"), "{}");
 			await sweepApi.execute("sweep.json", periodic, false, new Date("2026-07-20T09:00:00Z"));
 			await sweepApi.execute("sweep.json", periodic, false, new Date("2026-07-20T10:00:00Z"));
-			expect(sweepBot.events[0]?.dispatchId).toBe("event:sweep:2026-07-20T09:00:00.000Z");
-			expect(sweepBot.events[1]?.dispatchId).toBe("event:sweep:2026-07-20T10:00:00.000Z");
+			expect(sweepBot.events[0]?.dispatchId).toBe("event:news:sweep:2026-07-20T09:00:00.000Z");
+			expect(sweepBot.events[1]?.dispatchId).toBe("event:news:sweep:2026-07-20T10:00:00.000Z");
 		});
 
 		it("delivers one occurrence once across both the outbox retry and restart recovery paths", async () => {
@@ -556,7 +587,7 @@ describe("EventsWatcher", () => {
 				new FakeBot() as unknown as DingTalkBot,
 				createMockExecutor(),
 				undefined,
-				{ dispatch: (event) => service.dispatch(event) },
+				{ dot: "news", isBound: () => true, dispatch: (event) => service.dispatch(event) },
 			);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 			const definition = {
@@ -601,6 +632,8 @@ describe("EventsWatcher", () => {
 		const beforeStart = new Date(Date.now() - 60_000);
 		utimesSync(filePath, beforeStart, beforeStart);
 		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot, createMockExecutor(), undefined, {
+			dot: "news",
+			isBound: () => true,
 			dispatch: async () => {
 				throw new Error("ENOSPC: no space left on device");
 			},

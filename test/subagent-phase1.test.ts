@@ -291,16 +291,16 @@ ${"x".repeat(16001)}`,
 });
 
 describe("sub-agent runtime context", () => {
-	it("points a slash-bearing group channel at the escaped directory it actually lives in", () => {
+	it("points a delegation at the dot directory, never at a path built from the channel id", () => {
 		// Both lines are consumed by a host process we do not control: the external agent reads
 		// the prompt and opens these paths itself. A raw id here sends it to a directory that
 		// has never existed.
 		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
-		const escaped = "/workspace/root/group_cidYDhGqxhJOzS7VDv__eDInUw==";
+		const dotDir = "/workspace/root/dots/news";
 		const task = buildSubAgentTask(
 			"Check the work.",
 			{ name: "verifier" },
-			{ workspaceDir: "/workspace/root", channelId },
+			{ workspaceDir: "/workspace/root", dot: "news", dotDir, channelId },
 			[],
 			{
 				runId: "run_abc123",
@@ -311,22 +311,29 @@ describe("sub-agent runtime context", () => {
 			},
 		);
 
-		expect(task).toContain(`Channel directory: ${escaped}`);
-		expect(task).toContain(`${escaped}/tasks/t-1.md`);
+		// Spec 058, D16: the task lives in the dot; no path is ever derived from the channel id.
+		expect(task).toContain(`Dot directory: ${dotDir}`);
+		expect(task).toContain(`${dotDir}/tasks/t-1.md`);
 		expect(task).not.toContain(`${channelId}/tasks`);
 	});
 
 	it("scopes a verify bound to a Work Item to that item, not the whole DoD", () => {
 		// Holding a W2 check to every DoD item fails it for the items still in progress.
 		const envelope = (item?: string) =>
-			buildSubAgentTask("Check it.", { name: "checker" }, { workspaceDir: "/ws", channelId: "dm_1" }, [], {
-				runId: "run_v",
-				purpose: "verify",
-				taskId: "t-1",
-				item,
-				workingDirectory: "/checkout",
-				artifactDir: "/checkout/.artifacts/run_v",
-			});
+			buildSubAgentTask(
+				"Check it.",
+				{ name: "checker" },
+				{ workspaceDir: "/ws", dot: "news", dotDir: "/ws/dm_1", channelId: "dm_1" },
+				[],
+				{
+					runId: "run_v",
+					purpose: "verify",
+					taskId: "t-1",
+					item,
+					workingDirectory: "/checkout",
+					artifactDir: "/checkout/.artifacts/run_v",
+				},
+			);
 		expect(envelope("W2")).toContain("Work Item W2 in /ws/dm_1/tasks/t-1.md");
 		expect(envelope("W2")).not.toContain("every DoD item");
 		expect(envelope()).toContain("verify every DoD item");
@@ -344,7 +351,7 @@ describe("sub-agent tool", () => {
 		);
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dm_123", dotDir),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -352,7 +359,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					delegatedTask = input;
@@ -407,7 +414,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			boundTaskId: "lead",
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
@@ -445,6 +452,8 @@ describe("sub-agent tool", () => {
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [makeSubAgentConfig()]),
 			runtimeContext: {
 				workspaceDir: "/workspace/root",
+				dot: "news",
+				dotDir: "/workspace/root/dots/news",
 				channelId: "dm_123",
 			},
 			createWorker: () =>
@@ -520,6 +529,8 @@ describe("sub-agent tool", () => {
 			]),
 			runtimeContext: {
 				workspaceDir: "/workspace/root",
+				dot: "news",
+				dotDir: "/workspace/root/dots/news",
 				channelId: "dm_123",
 			},
 			createWorker: () =>
@@ -558,7 +569,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			getSubAgentModelReference: () => "openai/gpt-4o",
 			createWorker: (config) => {
 				usedModel = config.subAgent.model;
@@ -594,7 +605,7 @@ describe("sub-agent artifact contract (D4)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () => new FakeWorker(respond),
 		});
 	}
@@ -678,7 +689,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					callCount++;
@@ -728,7 +739,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			// Real, tiny wall clock: exercises the actual setTimeout/clearTimeout path without
 			// the flakiness of mixing fake timers with the real fs I/O prepareRunContext does.
 			convergenceWallClockMs: 20,
@@ -790,7 +801,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					callCount++;
@@ -850,7 +861,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					started = true;
@@ -883,7 +894,7 @@ describe("sub-agent working directory", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					const message = createAssistantMessage("Done.");
@@ -916,7 +927,7 @@ describe("sub-agent working directory", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: (config) => {
 				const worker = new FakeWorker(async (input, self) => {
 					delegatedTask = input;
@@ -972,7 +983,7 @@ describe("sub-agent working directory", () => {
 			workspaceDir,
 			workingDirectory: baseDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: (config) => {
 				// Simulate a symlink swap after admission. The worker must still receive the canonical
 				// directory captured before this callback, not the now-escaping alias.

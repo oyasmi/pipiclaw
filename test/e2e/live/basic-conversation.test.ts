@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRuntimeHarness, type E2ERuntimeHarness, getChannelFile } from "../../support/runtime-harness.js";
+import { createRuntimeHarness, type E2ERuntimeHarness, getConversationFile } from "../../support/runtime-harness.js";
 import { canRunE2E, getE2ESkipReason } from "../../support/setup.js";
 
 const describeE2E = canRunE2E() ? describe : describe.skip;
@@ -37,8 +37,8 @@ describeE2E("E2E: basic conversation", () => {
 		};
 		await harness.assertResolvedModel(declared.defaultModel);
 
-		const logPath = getChannelFile(harness, "log.jsonl");
-		const contextPath = getChannelFile(harness, "context.jsonl");
+		const logPath = getConversationFile(harness, "log.jsonl");
+		const contextPath = getConversationFile(harness, "context.jsonl");
 		expect(existsSync(logPath)).toBe(true);
 		expect(existsSync(contextPath)).toBe(true);
 		expect(readFileSync(logPath, "utf-8")).toContain("已经收到");

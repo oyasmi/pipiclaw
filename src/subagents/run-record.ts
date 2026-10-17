@@ -205,7 +205,8 @@ export interface RunNotice {
 	silentMs?: number;
 }
 
-export type RunNotifier = (channelId: string, notice: RunNotice) => void | Promise<void>;
+/** Sends a notice to the run's own channel; `dot` lets the runtime refuse a channel bound elsewhere (D7). */
+export type RunNotifier = (dot: string, channelId: string, notice: RunNotice) => void | Promise<void>;
 
 /** D10.2: per-channel cap on concurrently running delegation runs. */
 export const MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL = 6;

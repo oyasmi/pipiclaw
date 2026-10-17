@@ -42,7 +42,7 @@ describe("E2E deterministic: internal sub-agent chain", () => {
 		expect(harness.deliveries.some((d) => (d.text ?? "").includes("A16_FIRST 子代理已结束"))).toBe(true);
 
 		// Run record persisted and marked settled.
-		const runsDir = join(harness.homeDir, "state", "subagent-runs", harness.channelId);
+		const runsDir = join(harness.homeDir, "state", "subagent-runs", harness.dot);
 		const records = readdirSync(runsDir).filter((f) => f.endsWith(".json"));
 		expect(records.length).toBeGreaterThan(0);
 		const record = JSON.parse(readFileSync(join(runsDir, records[0]), "utf-8"));

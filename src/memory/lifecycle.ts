@@ -9,11 +9,12 @@ import type {
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import type { DotConversation } from "../dot/types.js";
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { clipTextByPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
+import { type DotMemoryQueue, getDotMemoryQueue } from "./dot-memory-queue.js";
 import {
 	type MemoryActivityEvent,
 	readMemoryMaintenanceState,
@@ -83,8 +84,8 @@ export function boundCompactionMessages(
 }
 
 export interface MemoryLifecycleOptions {
-	channelId: string;
-	dotDir: string;
+	/** The conversation whose session this lifecycle reflects; its memory lands in the dot. */
+	conversation: DotConversation;
 	workspaceDir: string;
 	appHomeDir?: string;
 	getMessages: () => AgentMessage[];
@@ -92,19 +93,19 @@ export interface MemoryLifecycleOptions {
 	getModel: () => Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	recordMemoryActivity?: (event: MemoryActivityEvent) => Promise<void> | void;
-	channelMemoryQueue?: ChannelMemoryQueue;
+	memoryQueue?: DotMemoryQueue;
 }
 
 export class MemoryLifecycle {
 	private durableDirty = false;
 	private durableRevision = 0;
 	private lastDurableConsolidationRevision = 0;
-	private readonly channelMemoryQueue: ChannelMemoryQueue;
+	private readonly memoryQueue: DotMemoryQueue;
 	// Tracks the detached new-session reflect run so shutdown/tests can await it.
 	private backgroundNewSessionReflect: Promise<void> = Promise.resolve();
 
 	constructor(private options: MemoryLifecycleOptions) {
-		this.channelMemoryQueue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
+		this.memoryQueue = options.memoryQueue ?? getDotMemoryQueue();
 	}
 
 	createExtensionFactory(): ExtensionFactory {
@@ -159,7 +160,7 @@ export class MemoryLifecycle {
 	}
 
 	private runDurableMemoryJobSerial<T>(job: () => Promise<T>): Promise<T> {
-		return this.channelMemoryQueue.run(this.options.channelId, job);
+		return this.memoryQueue.run(this.options.conversation, job);
 	}
 
 	// Any unconsolidated durable activity since the last checkpoint, regardless of whether it
@@ -176,13 +177,13 @@ export class MemoryLifecycle {
 	private logReflectResult(reason: ConsolidationReason, result: ReflectRunResult): void {
 		if (result.skipped) {
 			log.logEvent("debug", "memory.reflect.skipped", "No meaningful snapshot", {
-				ctx: { channelId: this.options.channelId },
+				ctx: { channelId: this.options.conversation.channelId },
 				fields: { reason },
 			});
 			return;
 		}
 		log.logInfo(
-			`[${this.options.channelId}] Memory reflect finished (${reason}): added=${result.added.length} updated=${result.updated.length} deleted=${result.deleted.length} touched=${result.touched.length} journal+=${result.journalAppended}`,
+			`[${this.options.conversation.channelId}] Memory reflect finished (${reason}): added=${result.added.length} updated=${result.updated.length} deleted=${result.deleted.length} touched=${result.touched.length} journal+=${result.journalAppended}`,
 		);
 	}
 
@@ -194,15 +195,15 @@ export class MemoryLifecycle {
 		correlationId?: string;
 	}): Promise<void> {
 		try {
-			await appendMemoryReviewLog(this.options.dotDir, {
+			await appendMemoryReviewLog(this.options.conversation.dotDir, {
 				timestamp: formatLocalTime(),
-				channelId: this.options.channelId,
+				channelId: this.options.conversation.channelId,
 				...entry,
 			});
 		} catch (error) {
 			const message = errorMessage(error);
 			log.logWarn("memory.review_log.write_failed", "Memory review log write failed", {
-				channelId: this.options.channelId,
+				channelId: this.options.conversation.channelId,
 				reason: message,
 			});
 		}
@@ -238,7 +239,7 @@ export class MemoryLifecycle {
 	): Promise<void> {
 		try {
 			const maintenanceState = this.options.appHomeDir
-				? await readMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId)
+				? await readMemoryMaintenanceState(this.options.appHomeDir, this.options.conversation)
 				: undefined;
 			const lastEntryId = maintenanceState?.lastReflectedEntryId;
 			const sourceWindow =
@@ -255,18 +256,22 @@ export class MemoryLifecycle {
 							sourceKind: reason,
 							fallbackMessages: messageSnapshot,
 						});
-			log.logInfo(`[${this.options.channelId}] Memory reflect starting (${reason})`);
+			log.logInfo(`[${this.options.conversation.channelId}] Memory reflect starting (${reason})`);
 			const result = await runReflect({
-				channelId: this.options.channelId,
-				dotDir: this.options.dotDir,
+				channelId: this.options.conversation.channelId,
+				dotDir: this.options.conversation.dotDir,
 				workspaceDir: this.options.workspaceDir,
 				model: this.options.getModel(),
 				resolveApiKey: this.options.resolveApiKey,
 				messages: sourceWindow.messages,
-				usageContext: { channelId: this.options.channelId, correlationId: sourceWindow.windowId },
+				usageContext: {
+					channelId: this.options.conversation.channelId,
+					dot: this.options.conversation.dot,
+					correlationId: sourceWindow.windowId,
+				},
 			});
 			if (this.options.appHomeDir && sourceWindow.throughEntryId) {
-				await updateMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId, (current) => ({
+				await updateMemoryMaintenanceState(this.options.appHomeDir, this.options.conversation, (current) => ({
 					...current,
 					lastReflectedEntryId: sourceWindow.throughEntryId,
 					lastReflectAt: formatLocalTime(),
@@ -283,7 +288,7 @@ export class MemoryLifecycle {
 		} catch (error) {
 			const message = errorMessage(error);
 			log.logWarn("memory.reflect.failed", "Memory reflect failed", {
-				channelId: this.options.channelId,
+				channelId: this.options.conversation.channelId,
 				reason: message,
 				fields: { trigger: reason },
 			});
@@ -313,7 +318,7 @@ export class MemoryLifecycle {
 			if (!bounded.truncated) continue;
 			event.preparation[key] = bounded.messages;
 			log.logWarn("memory.compaction_input.bounded", "Oversized compaction input bounded", {
-				channelId: this.options.channelId,
+				channelId: this.options.conversation.channelId,
 				fields: {
 					key,
 					originalChars: bounded.originalChars,
@@ -354,7 +359,7 @@ export class MemoryLifecycle {
 		).catch((error) => {
 			const message = errorMessage(error);
 			log.logWarn("memory.reflect.rejected", "Background new-session reflect rejected", {
-				channelId: this.options.channelId,
+				channelId: this.options.conversation.channelId,
 				reason: message,
 			});
 		});
@@ -378,7 +383,7 @@ export class MemoryLifecycle {
 		const now = new Date();
 		const event: MemoryActivityEvent = {
 			kind,
-			channelId: this.options.channelId,
+			ref: this.options.conversation,
 			timestamp: formatLocalTime(now),
 		};
 		try {
@@ -386,7 +391,7 @@ export class MemoryLifecycle {
 		} catch (error) {
 			const message = errorMessage(error);
 			log.logWarn("memory.activity.record_failed", "Memory activity record failed", {
-				channelId: this.options.channelId,
+				channelId: this.options.conversation.channelId,
 				reason: message,
 			});
 		}

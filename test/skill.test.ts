@@ -46,7 +46,7 @@ describe("skill tool", () => {
 		mkdirSync(brokenDir);
 		writeFileSync(join(brokenDir, "SKILL.md"), "---\nname: [broken\ndescription: invalid\n---\n");
 
-		const result = loadPipiclawSkills(dotDir);
+		const result = loadPipiclawSkills(workspaceDir);
 		expect(result.skills.map((skill) => skill.name)).toEqual(["release-notes"]);
 		expect(result.diagnostics.some((diagnostic) => diagnostic.path?.endsWith("broken/SKILL.md"))).toBe(true);
 	});

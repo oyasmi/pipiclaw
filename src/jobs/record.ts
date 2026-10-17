@@ -30,6 +30,12 @@ export interface JobWakeContract {
 }
 
 export interface JobRecord extends JobSnapshot {
+	/**
+	 * The channel that started the job: its completion wake goes back there (spec 058, D7). Absent
+	 * only on records written before spec 058 that the migration did not reach; such a job settles
+	 * normally but has no channel to wake.
+	 */
+	channelId?: string;
 	pid: number;
 	/** Process-group id of the launched job, as `ps` reported it right after spawn. `setsid` makes
 	 *  the job its own session/group leader, so this normally equals `pid` — the precondition for a

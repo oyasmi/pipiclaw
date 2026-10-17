@@ -63,8 +63,10 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 	it("a held channel does not block another channel or leak its history into it", async () => {
 		// Catches a process-wide turn queue or session cache reused across channel ids.
 		// Mutation check: sharing the transport's channel queue across ids blocks the peer request.
-		harness = await createDeterministicHarness();
+		// Both channels share one dot (spec 058, D1): parallel turns and separate contexts must hold
+		// even though their memory, tasks and files are shared.
 		const otherChannel = "dm_isolated_peer";
+		harness = await createDeterministicHarness({ extraChannels: [{ channelId: otherChannel }] });
 		harness.model.script.route({
 			name: "turn",
 			when: (r) => r.isMainTurn,
@@ -90,7 +92,7 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 			peer.release();
 		}
 		await harness.waitForIdle();
-		const transcript = readFileSync(join(harness.workspaceDir, otherChannel, "context.jsonl"), "utf8");
+		const transcript = readFileSync(join(harness.dotDir, "conversations", "dm-2", "context.jsonl"), "utf8");
 		expect(transcript).toContain("CHANNEL_B_ONLY");
 		expect(transcript).not.toContain("CHANNEL_A_ONLY");
 	});
@@ -115,14 +117,14 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 			gate.release();
 		}
 		await harness.waitForIdle();
-		const ref = JSON.parse(readFileSync(getActiveSessionRefPath(harness.dotDir), "utf8"));
+		const ref = JSON.parse(readFileSync(getActiveSessionRefPath(harness.conversationDir), "utf8"));
 		await harness.restart();
 		await harness.sendUserMessage("FRESH_TURN");
 		const latest = harness.lastMainTurnRequest();
 		expect(latest?.lastUserText).toContain("FRESH_TURN");
 		expect(JSON.stringify(latest?.messages)).not.toMatch(/RETIRED_TURN|STALE_QUEUED/);
 		expect(harness.mainTurnRequests().some((r) => r.lastUserText.includes("STALE_QUEUED"))).toBe(false);
-		const persisted = readFileSync(join(harness.dotDir, ref.file), "utf8");
+		const persisted = readFileSync(join(harness.conversationDir, ref.file), "utf8");
 		expect(persisted).toContain("FRESH_TURN");
 		expect(persisted).not.toMatch(/RETIRED_TURN|STALE_QUEUED/);
 	});

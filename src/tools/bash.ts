@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { CommandTerminatedError, EXECUTOR_SHELL_IS_BASH, type Executor } from "../executor.js";
-import type { ChannelJobManager } from "../jobs/manager.js";
+import type { DotJobManager } from "../jobs/manager.js";
 import { formatBlockMessage, GuardBlockedError } from "../security/block-message.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
@@ -139,7 +139,7 @@ export interface BashToolOptions {
 	 * Present only on the main path when `tools.jobs.enabled` is on. Enables `async: true`
 	 * background execution. Absent on the sub-agent path, so sub-agents cannot background jobs.
 	 */
-	jobManager?: ChannelJobManager;
+	jobManager?: DotJobManager;
 	/**
 	 * Set inside a task's session. A background job started here belongs to this task, so the
 	 * runtime binds the id rather than asking the model to repeat it (and rejects a conflicting one
@@ -316,6 +316,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				const willNotify = notify ?? true;
 				const jobLabel = clipText(effectiveCommand, 60, { collapseWhitespace: true });
 				const job = await options.jobManager.start(effectiveCommand, jobLabel, effectiveTimeout, {
+					...(options.channelId ? { channelId: options.channelId } : {}),
 					signal,
 					notify: willNotify,
 					...(effectiveTaskId ? { taskId: effectiveTaskId } : {}),

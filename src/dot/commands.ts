@@ -7,16 +7,15 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { normalizeDotName } from "./paths.js";
-import type { ConversationKind, CreateDotOutcome, DotAvailability } from "./types.js";
+import type { CreateDotOutcome, DotAvailability } from "./types.js";
 
 type DotCommand = { action: "list" } | { action: "new"; name: string } | { action: "bind"; name: string };
 
 /** One channel bound to a dot, as `/dot list` shows it. */
 export interface DotListChannel {
 	channelId: string;
-	kind: ConversationKind | undefined;
-	/** From the channel index; absent when the channel was never named. */
-	name?: string;
+	/** Rendered by the caller (`channel/channel-id.ts`'s `formatChannelLabel`); dot never parses channel ids. */
+	label: string;
 }
 
 export interface DotListItem {
@@ -84,12 +83,6 @@ export function formatUnavailableDotReply(dot: string): string {
 	return `本频道绑定的 dot \`${dot}\` 当前不可用（目录缺失或 dot.json 有误），需要部署者在服务器上检查；也可以用 \`/dot bind <名字>\` 改绑到别的 dot。`;
 }
 
-function channelLabel(channel: DotListChannel): string {
-	if (channel.kind === "tui") return "终端";
-	if (!channel.name) return `\`${channel.channelId}\``;
-	return channel.kind === "group" ? `群「${channel.name}」` : `私聊「${channel.name}」`;
-}
-
 function renderList(items: DotListItem[]): string {
 	if (items.length === 0) {
 		return "暂无 dot。用 `/dot new <名字>` 创建一个，再用 `/dot bind <名字>` 绑定到本频道。";
@@ -102,7 +95,7 @@ function renderList(items: DotListItem[]): string {
 		} else if (item.channels.length === 0) {
 			lines.push(`${head}：未绑定频道，后台工作已暂停`);
 		} else {
-			lines.push(`${head}：${item.channels.map(channelLabel).join("、")}`);
+			lines.push(`${head}：${item.channels.map((channel) => channel.label).join("、")}`);
 		}
 	}
 	return capReply(lines.join("\n"), {

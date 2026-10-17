@@ -48,7 +48,7 @@ describe("web_fetch tool caching and pagination (batch 2.7)", () => {
 	});
 
 	it("pages a long page from one cached snapshot without refetching", async () => {
-		const body = "A".repeat(600) + "MIDDLE_MARK" + "B".repeat(600);
+		const body = `${"A".repeat(600)}MIDDLE_MARK${"B".repeat(600)}`;
 		runWebFetchMock.mockResolvedValueOnce(textOutput({}, body));
 		const tool = makeTool(dotDir);
 

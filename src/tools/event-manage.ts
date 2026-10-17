@@ -128,7 +128,9 @@ export interface EventManageRequest {
 }
 
 export interface EventManageToolOptions {
-	workspaceDir: string;
+	/** Events belong to the dot: they live in `<dotDir>/events/` (spec 058, D14). */
+	dotDir: string;
+	/** The current channel: a created event delivers here; only its own events can be changed. */
 	channelId: string;
 	commandGuardConfig: SecurityConfig["commandGuard"];
 }
@@ -140,9 +142,12 @@ function parseAction(action: string): EventManageAction {
 	throw new RecoverableToolError('Unsupported event action. Use "list", "show", "create", "update", or "delete".');
 }
 
-/** One line per event; unparseable files are listed and flagged so the model can still clean them up. */
-async function listOwnedEvents(options: EventManageToolOptions): Promise<EventManageListEntry[]> {
-	const dir = join(options.workspaceDir, "events");
+/**
+ * One line per event of this dot; unparseable files are listed and flagged so the model can still
+ * clean them up, and an event delivering to another of the dot's channels says so.
+ */
+async function listDotEvents(options: EventManageToolOptions): Promise<EventManageListEntry[]> {
+	const dir = join(options.dotDir, "events");
 	if (!existsSync(dir)) return [];
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".json")).sort();
 	const entries: EventManageListEntry[] = [];
@@ -155,11 +160,12 @@ async function listOwnedEvents(options: EventManageToolOptions): Promise<EventMa
 			entries.push({ name, parsed: false, line: `- ${name} ⚠ 无法解析：${errorMessage(error)}` });
 			continue;
 		}
-		if (event.channelId !== options.channelId) continue;
 		const when = event.type === "one-shot" ? `at ${event.at}` : event.schedule;
 		const pre = event.preAction ? " (preAction)" : "";
+		const elsewhere =
+			event.channelId === options.channelId ? "" : ` (delivers to ${event.channelId}; read-only here)`;
 		const text = clipText(describeEventPayload(event), 80, { collapseWhitespace: true });
-		entries.push({ name, parsed: true, line: `- ${name} [${event.type}] ${when}${pre} — ${text}` });
+		entries.push({ name, parsed: true, line: `- ${name} [${event.type}] ${when}${pre}${elsewhere} — ${text}` });
 	}
 	return entries;
 }
@@ -234,11 +240,7 @@ function validateDefinition(
 	return event;
 }
 
-async function readOwnedEvent(
-	eventPath: string,
-	name: string,
-	options: EventManageToolOptions,
-): Promise<ScheduledEvent> {
+async function readEvent(eventPath: string, name: string): Promise<ScheduledEvent> {
 	let existing: ScheduledEvent;
 	try {
 		existing = parseScheduledEventContent(await readFile(eventPath, "utf-8"), `${name}.json`);
@@ -246,8 +248,20 @@ async function readOwnedEvent(
 		const message = errorMessage(error);
 		throw new Error(`Existing event "${name}" could not be parsed (${message}); use /events to manage it directly.`);
 	}
+	return existing;
+}
+
+/** Changing an event rebinds its delivery channel to the caller's, so only the owning channel may. */
+async function readOwnedEvent(
+	eventPath: string,
+	name: string,
+	options: EventManageToolOptions,
+): Promise<ScheduledEvent> {
+	const existing = await readEvent(eventPath, name);
 	if (existing.channelId !== options.channelId) {
-		throw new RecoverableToolError(`Event "${name}" belongs to another channel and cannot be modified from here.`);
+		throw new RecoverableToolError(
+			`Event "${name}" delivers to another channel of this dot and cannot be modified from here.`,
+		);
 	}
 	return existing;
 }
@@ -263,8 +277,9 @@ export async function manageEvent(
 	request: EventManageRequest,
 ): Promise<EventManageResult> {
 	if (request.action === "list") {
-		const entries = await listOwnedEvents(options);
-		const notice = entries.length === 0 ? "本频道暂无定时事件。" : entries.map((entry) => entry.line).join("\n");
+		const entries = await listDotEvents(options);
+		const notice =
+			entries.length === 0 ? "No scheduled events in this dot." : entries.map((entry) => entry.line).join("\n");
 		return {
 			action: "list",
 			count: entries.length,
@@ -276,14 +291,14 @@ export async function manageEvent(
 	if (!request.name || request.name.trim().length === 0) {
 		throw new RecoverableToolError(`${request.action} requires a non-empty event name.`);
 	}
-	const { eventName, eventPath } = resolveEventPath(options.workspaceDir, request.name);
-	const eventsDir = join(options.workspaceDir, "events");
+	const { eventName, eventPath } = resolveEventPath(options.dotDir, request.name);
+	const eventsDir = join(options.dotDir, "events");
 
 	if (request.action === "show") {
 		if (!existsSync(eventPath)) {
 			throw new RecoverableToolError(`Event "${eventName}" does not exist. Use action "list" to see what's here.`);
 		}
-		const existing = await readOwnedEvent(eventPath, eventName, options);
+		const existing = await readEvent(eventPath, eventName);
 		return {
 			action: "show",
 			name: eventName,
@@ -331,7 +346,7 @@ export async function manageEvent(
 		}
 		if ((await countEventFiles(eventsDir)) >= MAX_EVENT_FILES) {
 			throw new RecoverableToolError(
-				`Too many event files (>= ${MAX_EVENT_FILES}) in workspace/events; clean up stale events before creating more.`,
+				`Too many event files (>= ${MAX_EVENT_FILES}) in this dot's events/; clean up stale events before creating more.`,
 			);
 		}
 	} else {

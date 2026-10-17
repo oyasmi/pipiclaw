@@ -33,12 +33,18 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 	async function writeTask(id: string, fields: Partial<TaskFrontmatter> = {}): Promise<void> {
 		await writeFile(
 			join(tasksDir, `${id}.md`),
-			renderTaskDocument({ state: "open", usage: createUsage(), ...fields }, BODY),
+			renderTaskDocument({ state: "open", channel: "dm_1", usage: createUsage(), ...fields }, BODY),
 		);
 	}
 
 	const run = (args: string, dispatchTask?: (id: string) => Promise<boolean>) =>
-		handleTasksCommand({ args, dotDir, dispatchTask });
+		handleTasksCommand({
+			args,
+			dotDir,
+			currentChannelId: "dm_1",
+			describeChannel: (channelId) => ({ label: `\`${channelId}\``, boundHere: true }),
+			dispatchTask,
+		});
 
 	it("pause/resume toggles only the paused marker, preserving the park", async () => {
 		await writeTask("weekly", {
@@ -103,12 +109,15 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 			'---\nstate: open\ncycle: {"id":"c-1"}\nschedule: 0 9 * * 1\n---\n# Old\n',
 		);
 		await writeTask("overdue", { state: "parked", ticket: { kind: "time", at: PAST, by: PAST } });
+		// Spec 058, D13: a task with no delivery channel is suspended forever unless someone sees it.
+		await writeTask("nowhere", { channel: undefined });
 		await writeTask("clean");
 
 		const report = await run("doctor");
 		expect(report).toContain("`broken`");
 		expect(report).toContain("`old`");
 		expect(report).toContain("`overdue`");
+		expect(report).toContain("`nowhere`");
 		// A healthy task produces no line at all: doctor is a diagnosis, not an inventory.
 		expect(report).not.toContain("clean");
 	});

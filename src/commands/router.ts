@@ -1,6 +1,7 @@
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
-import { getChannelDir } from "../channel/channel-paths.js";
+import type { ChannelDescription } from "../channel/channel-id.js";
+import type { DotConversation } from "../dot/types.js";
 import { handleEventsCommand } from "../events/commands.js";
 import { handleSkillsCommand } from "../skills/commands.js";
 import { handleSubagentsCommand } from "../subagents/commands.js";
@@ -27,8 +28,16 @@ export interface ReportCommandPaths {
 }
 
 export interface ReportCommandContext {
-	channelId: string;
+	/**
+	 * The asking channel's conversation in its dot. Reports exist only for a bound channel: an
+	 * unbound one is answered before routing (spec 058, D4), so this is never optional.
+	 */
+	conversation: DotConversation;
 	paths: ReportCommandPaths;
+	/** Names a delivery channel and says whether it is still bound to this dot. */
+	describeChannel: (channelId: string) => ChannelDescription;
+	/** Channels with a conversation in this dot, for `/events history` records older than spec 058. */
+	dotChannelIds: () => readonly string[];
 	version: string;
 	startedAt: number;
 	/** The channel's live runner, if one exists; never builds one. */
@@ -45,13 +54,26 @@ export async function runReportCommand(
 	name: RuntimeCommandName,
 	args: string,
 ): Promise<string> {
-	const { channelId, paths } = context;
-	const dotDir = getChannelDir(paths.workspaceDir, channelId);
+	const { conversation, paths } = context;
+	const { channelId, dot, dotDir } = conversation;
 	switch (name) {
 		case "events":
-			return handleEventsCommand({ args, workspaceDir: paths.workspaceDir, historyPath: paths.eventHistoryPath });
+			return handleEventsCommand({
+				args,
+				dot,
+				dotDir,
+				historyPath: paths.eventHistoryPath,
+				dotChannelIds: context.dotChannelIds(),
+				describeChannel: context.describeChannel,
+			});
 		case "tasks":
-			return handleTasksCommand({ args, dotDir, dispatchTask: context.dispatchTask });
+			return handleTasksCommand({
+				args,
+				dotDir,
+				currentChannelId: channelId,
+				describeChannel: context.describeChannel,
+				dispatchTask: context.dispatchTask,
+			});
 		case "status":
 			return renderStatus({
 				runner: context.peekRunner(),
@@ -59,7 +81,7 @@ export async function runReportCommand(
 				uptimeMs: Date.now() - context.startedAt,
 			});
 		case "usage":
-			return renderUsageReport(getUsageLedger(), channelId, parseUsageMode(args), new Date());
+			return renderUsageReport(getUsageLedger(), { dot, channelId }, parseUsageMode(args), new Date());
 		// Read-only prompt accounting; safe mid-turn.
 		case "context":
 			return context.getRunner().renderContextReport(args);

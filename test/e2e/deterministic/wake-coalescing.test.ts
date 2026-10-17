@@ -49,7 +49,7 @@ describe("E2E deterministic: completion-wake coalescing", () => {
 				r.isMainTurn && r.lastUserText.includes("A23_FANOUT") && r.messages.some((m) => m.role === "tool"),
 		});
 
-		const runsDir = join(harness.homeDir, "state", "subagent-runs", harness.channelId);
+		const runsDir = join(harness.homeDir, "state", "subagent-runs", harness.dot);
 		const settledRuns = (): Array<{ runId: string }> => {
 			let names: string[];
 			try {

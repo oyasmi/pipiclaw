@@ -5,7 +5,6 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getChannelDir } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import {
 	buildChannelIndexForBootstrap,
@@ -104,8 +103,9 @@ export function buildSubAgentTask(
 	const lines = [
 		`Runtime context:`,
 		`- Workspace root: ${runtimeContext.workspaceDir}`,
+		`- Dot: ${runtimeContext.dot}`,
+		`- Dot directory: ${runtimeContext.dotDir}`,
 		`- Channel id: ${runtimeContext.channelId}`,
-		`- Channel directory: ${getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId)}`,
 		`- Working directory: ${runContext.workingDirectory}`,
 		`- Artifact directory: ${runContext.artifactDir}`,
 		`- Your configured role: ${config.name}`,
@@ -129,9 +129,7 @@ function verificationTaskPath(
 	runtimeContext: SubAgentToolOptions["runtimeContext"],
 	runContext: SubAgentRunContext,
 ): string | undefined {
-	return runContext.taskId
-		? join(getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId), "tasks", `${runContext.taskId}.md`)
-		: undefined;
+	return runContext.taskId ? join(runtimeContext.dotDir, "tasks", `${runContext.taskId}.md`) : undefined;
 }
 
 /**

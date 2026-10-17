@@ -12,10 +12,6 @@ const DINGTALK_CHANNEL_ID_PATTERN = /^(dm|group)_[^\0]+$/;
 
 export type ChannelKind = "dm" | "group" | "tui";
 
-export function isChannelId(value: string): boolean {
-	return value === TUI_CHANNEL_ID || DINGTALK_CHANNEL_ID_PATTERN.test(value);
-}
-
 /** `dm_…` → `dm`, `group_…` → `group`, `tui` → `tui`; `undefined` for anything that is not a channel id. */
 export function channelKind(channelId: string): ChannelKind | undefined {
 	if (channelId === TUI_CHANNEL_ID) return "tui";
@@ -26,4 +22,22 @@ export function channelKind(channelId: string): ChannelKind | undefined {
 /** DingTalk's conversation type for a channel: `"2"` for a group, `"1"` otherwise. */
 export function conversationTypeOf(channelId: string): "1" | "2" {
 	return channelId.startsWith("group_") ? "2" : "1";
+}
+
+/**
+ * How a channel is named to a user (spec 053 copy): `群「名称」`, `私聊「昵称」`, `终端`, or the
+ * id itself when the channel index has no name for it. The one renderer behind `/dot`, `/tasks`
+ * and `/events`.
+ */
+export function formatChannelLabel(channelId: string, name: string | undefined): string {
+	const kind = channelKind(channelId);
+	if (kind === "tui") return "终端";
+	if (!name) return `\`${channelId}\``;
+	return kind === "group" ? `群「${name}」` : `私聊「${name}」`;
+}
+
+/** What a report needs to say about a delivery channel: its label, and whether it is still bound to this dot. */
+export interface ChannelDescription {
+	label: string;
+	boundHere: boolean;
 }

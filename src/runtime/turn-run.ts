@@ -7,7 +7,6 @@ import type { AgentRunner } from "../agent/types.js";
 import type { BootstrapPaths } from "../app/home.js";
 import { type ChannelContext, muteChannelContext } from "../channel/channel-context.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { ensureChannelDir } from "../channel/channel-paths.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
 	BUILT_IN_COMMANDS,
@@ -15,16 +14,19 @@ import {
 	isRunnerBuiltInCommand,
 	parseBuiltInCommand,
 	type RuntimeCommandName,
+	renderBuiltInHelp,
 	slashCommandName,
 } from "../commands/catalog.js";
 import { createDingTalkContext } from "../dingtalk/delivery.js";
 import type { DingTalkBotPort } from "../dingtalk/handler.js";
+import { formatUnavailableDotReply, formatUnboundChannelReply } from "../dot/commands.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
+import type { ChannelResolution } from "./dot-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { relativeImagePaths } from "./inbound-images.js";
 import { parseDriverTaskId } from "./task-driver.js";
@@ -46,6 +48,15 @@ const IDLE_RUNTIME_COMMAND_NAMES = new Set<string>(
 
 function isIdleRuntimeCommandName(name: string): name is Exclude<RuntimeCommandName, "context"> {
 	return IDLE_RUNTIME_COMMAND_NAMES.has(name);
+}
+
+/**
+ * A wake from an in-process producer rather than a person. Every production producer goes through
+ * durable dispatch (so carries a `dispatchId`) and stamps its `dot`; DingTalk inbound parsing sets
+ * neither. `isEvent` is the transport's own flag for its synthetic queue path.
+ */
+export function isSyntheticEvent(event: ChannelEvent, isEvent?: boolean): boolean {
+	return Boolean(isEvent) || event.dispatchId !== undefined || event.dot !== undefined;
 }
 
 /** One message or wake, written to the message archive (see `ChannelStore.logMessage`). */
@@ -70,7 +81,11 @@ export interface EventTurnDeps {
 	store: ChannelStore;
 	activeTasks: Set<Promise<void>>;
 	archiveIncomingMessage: (channelId: string, message: ArchivedMessage, contextLabel: string) => Promise<void>;
-	getRunner: (channelId: string) => AgentRunner;
+	/** The channel's runner; `undefined` when the channel is not bound to an available dot (no runner is built). */
+	getRunner: (channelId: string) => AgentRunner | undefined;
+	resolveChannel: (channelId: string) => ChannelResolution;
+	/** Events whose `reserveEvent` began a turn: a turn rejected at admission releases exactly these. */
+	reservedTurns: WeakSet<ChannelEvent>;
 	isShuttingDown: () => boolean;
 	getDurableDispatch: () => DurableDispatchService | undefined;
 	getJobs: () => JobRuntime;
@@ -114,7 +129,16 @@ export function createEventTurnRunner(
 	): Promise<{ taskId: string; brief: string } | undefined> => {
 		const taskId = parseDriverTaskId(event.text) ?? event.internalWake?.taskId;
 		if (!taskId) return undefined;
-		const dotDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
+		const { dot, dotDir } = runner.conversation;
+		// Admission already refused a wake for another dot (spec 058, D7); a task step bound to the
+		// wrong dot's session would run a task this runner does not own, so check once more.
+		if (event.dot !== dot) {
+			log.logWarn("taskdriver.step.dot_mismatch", "Task step refused: wake is not for this runner's dot", {
+				channelId: event.channelId,
+				fields: { taskId, eventDot: event.dot, runnerDot: dot },
+			});
+			return undefined;
+		}
 		try {
 			const brief = await buildTaskStepBrief({ dotDir, taskId });
 			if (!brief) return undefined;
@@ -131,10 +155,14 @@ export function createEventTurnRunner(
 	};
 
 	/** Deliver whatever the step asked to say, then hand the runner back to the chat session. */
-	const finishTaskStep = async (channelId: string, taskId: string, bot: DingTalkBotPort): Promise<void> => {
-		const dotDir = ensureChannelDir(options.paths.workspaceDir, channelId);
+	const finishTaskStep = async (
+		runner: AgentRunner,
+		channelId: string,
+		taskId: string,
+		bot: DingTalkBotPort,
+	): Promise<void> => {
 		try {
-			const notice = await consumeTaskNotice(dotDir, taskId);
+			const notice = await consumeTaskNotice(runner.conversation.dotDir, taskId);
 			if (notice) {
 				// runner.run closes its per-turn delivery context before returning. Sending through that
 				// closed context silently dropped successful task_step_end notifications (T-run-01).
@@ -153,7 +181,7 @@ export function createEventTurnRunner(
 				fields: { taskId },
 			});
 		}
-		await getRunner(channelId).bindChatSession();
+		await runner.bindChatSession();
 	};
 
 	/** Mutable state of one turn, shared by the steps below (the wake may be merged or rewritten mid-turn). */
@@ -176,6 +204,7 @@ export function createEventTurnRunner(
 		const durable = getDurableDispatch();
 		// Sampled synchronously, before any await: `/stop` after this point cleared the queued closures.
 		const stopEpoch = durable?.stopEpoch(inboundEvent.channelId) ?? 0;
+		deps.reservedTurns.delete(inboundEvent);
 		if (durable && !(await durable.markStarted(event.dispatchId))) {
 			// A stale delivery of a wake an earlier turn already absorbed and handled.
 			runner.endTurn();
@@ -261,13 +290,18 @@ export function createEventTurnRunner(
 	 * message never counts — only the producer-created `internalWake` envelope. Returns whether the
 	 * turn should still run.
 	 */
-	const verifyInternalWake = async (turn: TurnState, internalWake: NonNullable<ChannelEvent["internalWake"]>) => {
+	const verifyInternalWake = async (
+		turn: TurnState,
+		runner: AgentRunner,
+		internalWake: NonNullable<ChannelEvent["internalWake"]>,
+	) => {
 		const { event } = turn;
 		const { kind, resourceId, taskId: wakeTaskId } = internalWake;
+		const { dot, dotDir } = runner.conversation;
 		const claimed = await claimVerifiedWake(
 			event,
-			options.paths.workspaceDir,
-			kind === "job" ? getJobs().get(event.channelId) : getRuns().get(event.channelId),
+			dotDir,
+			kind === "job" ? getJobs().get(dot) : getRuns().get(dot),
 			options.wakeTransitionHooks?.[kind],
 		);
 		if (!claimed) {
@@ -308,7 +342,7 @@ export function createEventTurnRunner(
 				text: event.text,
 				isBot: false,
 				skipContextSync: Boolean(builtInCommand),
-				images: relativeImagePaths(options.paths.workspaceDir, event.channelId, event.images),
+				images: relativeImagePaths(runner.conversation.dotDir, event.images),
 			},
 			"user message",
 		);
@@ -342,7 +376,7 @@ export function createEventTurnRunner(
 			ctx: { channelId: event.channelId, userName: event.userName },
 			fields: { messageLength: event.text.length, source: backgroundOnly ? "event" : "message" },
 		});
-		if (event.internalWake && !(await verifyInternalWake(turn, event.internalWake))) return;
+		if (event.internalWake && !(await verifyInternalWake(turn, runner, event.internalWake))) return;
 		// Verified job/run wakes that activate a task are task steps too. Verification must happen
 		// first: routing directly from user-controlled wake text would grant task-only tools.
 		const taskStep = await prepareTaskStep(turn.event, runner);
@@ -356,7 +390,7 @@ export function createEventTurnRunner(
 		if (!backgroundOnly && !taskStep) ctx.primeCard(1500);
 		const result = await runner.run(ctx, store);
 		turn.mergedWakesHandled = result.stopReason !== "aborted" && result.stopReason !== "error";
-		if (taskStep) await finishTaskStep(turn.event.channelId, taskStep.taskId, bot);
+		if (taskStep) await finishTaskStep(runner, turn.event.channelId, taskStep.taskId, bot);
 
 		if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
 			log.logInfoEvent("agent.turn.stopped", "Turn stopped", { channelId: turn.event.channelId });
@@ -387,6 +421,34 @@ export function createEventTurnRunner(
 		getTaskDriver().nudge?.();
 	};
 
+	/** Release a turn `reserveEvent` began for an event that admission then refused. */
+	const releaseReservation = (event: ChannelEvent): void => {
+		if (!deps.reservedTurns.delete(event)) return;
+		getRunner(event.channelId)?.endTurn();
+	};
+
+	/**
+	 * A human message on a channel with no usable dot (D4): nothing is archived, no runner is built
+	 * and no model is called. `/help` still answers; everything else gets the one reason and the
+	 * next step.
+	 */
+	const replyWithoutDot = async (
+		event: ChannelEvent,
+		resolution: Exclude<ChannelResolution, { kind: "bound" }>,
+		bot: DingTalkBotPort,
+	): Promise<void> => {
+		const command = parseBuiltInCommand(event.text);
+		if (command?.name === "help") {
+			await bot.sendPlain(event.channelId, renderBuiltInHelp(command.args), { title: "/help", markdown: true });
+			return;
+		}
+		await bot.sendPlain(
+			event.channelId,
+			resolution.kind === "unbound" ? formatUnboundChannelReply() : formatUnavailableDotReply(resolution.dot),
+			{ markdown: true },
+		);
+	};
+
 	const runEventTurn = async (inboundEvent: ChannelEvent, bot: DingTalkBotPort, isEvent?: boolean): Promise<void> => {
 		if (isShuttingDown()) {
 			log.logInfoEvent("runtime.shutdown.event_ignored", "Event ignored during shutdown", {
@@ -395,7 +457,36 @@ export function createEventTurnRunner(
 			return;
 		}
 
+		const resolution = deps.resolveChannel(inboundEvent.channelId);
+		if (isSyntheticEvent(inboundEvent, isEvent)) {
+			// D7's authoritative check: a wake is admitted only while its channel is still bound to the
+			// dot it was produced for. Covers wakes queued before a restart, a rebind while queued, and
+			// records left from before the migration (which carry no dot at all).
+			if (!inboundEvent.dot || resolution.kind !== "bound" || resolution.conversation.dot !== inboundEvent.dot) {
+				log.logInfoEvent("dispatch.wake.dot_mismatch", "Wake dropped: channel not bound to the wake's dot", {
+					channelId: inboundEvent.channelId,
+					fields: {
+						dispatchId: inboundEvent.dispatchId,
+						wakeDot: inboundEvent.dot,
+						boundDot:
+							resolution.kind === "unbound"
+								? undefined
+								: resolution.kind === "bound"
+									? resolution.conversation.dot
+									: resolution.dot,
+					},
+				});
+				releaseReservation(inboundEvent);
+				await getDurableDispatch()?.markCompleted(inboundEvent.dispatchId);
+				return;
+			}
+		} else if (resolution.kind !== "bound") {
+			await replyWithoutDot(inboundEvent, resolution, bot);
+			return;
+		}
+
 		const runner = getRunner(inboundEvent.channelId);
+		if (!runner) return;
 		const turn = await admitTurn(inboundEvent, runner);
 		if (!turn) return;
 		const task = (async () => {

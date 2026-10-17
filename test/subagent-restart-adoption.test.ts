@@ -6,6 +6,7 @@ import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import { testDot } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spawns a process that exits immediately and resolves its pid once it has been reaped, so a
@@ -41,8 +42,9 @@ const leases: Array<{ leaseKey?: string; runId: string }> = [];
 function createManager(
 	channelId: string,
 	options: ConstructorParameters<typeof SubAgentRunManager>[1],
+	dotDir = "/tmp/pipiclaw-test-dot",
 ): SubAgentRunManager {
-	const manager = new SubAgentRunManager(channelId, options);
+	const manager = new SubAgentRunManager({ dot: testDot(channelId), dotDir }, options);
 	managers.add(manager);
 	return manager;
 }
@@ -157,7 +159,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// first→second transition: release the second daemon's process-local lease first.
 		secondDaemon.stop();
 		releaseWorkspaceLease(secondDaemon.get("run-adopt")?.leaseKey, "run-adopt");
-		const recordPath = join(stateDir, channelId, "run-adopt.json");
+		const recordPath = join(stateDir, testDot(channelId), "run-adopt.json");
 		const persisted = JSON.parse(readFileSync(recordPath, "utf-8"));
 		persisted.deadlineAt = Date.now() + 100;
 		writeFileSync(recordPath, `${JSON.stringify(persisted)}\n`, "utf-8");
@@ -444,7 +446,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			].join("\n")}\n`,
 		);
 
-		const firstDaemon = createManager(channelId, { stateDir });
+		const firstDaemon = createManager(channelId, { stateDir }, dotDir);
 		const lease = claimWorkspaceLease({ runId: "run-verify", channelId, workingDirectory: projectDir });
 		expect(lease.ok).toBe(true);
 		await firstDaemon.register({
@@ -475,7 +477,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 
 		firstDaemon.stop();
 		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-verify");
-		const secondDaemon = createManager(channelId, { stateDir });
+		const secondDaemon = createManager(channelId, { stateDir }, dotDir);
 		await secondDaemon.restore();
 
 		const record = secondDaemon.get("run-verify");

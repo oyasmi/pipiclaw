@@ -239,7 +239,8 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 		created.push("workspace/");
 	}
 
-	for (const dir of ["skills", "events", "sub-agents"]) {
+	// Events live per dot (spec 058, D14), so `dots/` replaces the old workspace `events/`.
+	for (const dir of ["skills", "dots", "sub-agents"]) {
 		const dirPath = join(paths.workspaceDir, dir);
 		if (!existsSync(dirPath)) {
 			mkdirSync(dirPath, { recursive: true });

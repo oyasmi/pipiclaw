@@ -34,10 +34,20 @@ import {
 } from "./store.js";
 import { describeTicketForUser } from "./ticket.js";
 
+/** What `/tasks` needs to say about a delivery channel (structurally `channel/channel-id.ts`'s `ChannelDescription`). */
+interface TaskChannelDescription {
+	label: string;
+	/** Still bound to this dot; false means the task is suspended (spec 058, D8). */
+	boundHere: boolean;
+}
+
 export interface HandleTasksCommandOptions {
 	args: string;
-	/** The channel directory; tasks live in `<dotDir>/tasks/`. */
+	/** The dot directory; tasks live in `<dotDir>/tasks/`. */
 	dotDir: string;
+	/** The channel the command was typed in: a task delivering elsewhere names its channel. */
+	currentChannelId: string;
+	describeChannel: (channelId: string) => TaskChannelDescription;
 	/** Optional immediate task wake, available in the long-lived DingTalk runtime. */
 	dispatchTask?: (id: string) => Promise<boolean>;
 }
@@ -137,8 +147,19 @@ function ticketSummary(entry: TaskLedgerEntry, now: number): string | undefined 
 	return ticket ? `${describeTicketForUser(ticket)}${backstopHint(ticket.by, now)}` : undefined;
 }
 
-function renderListLine(entry: TaskLedgerEntry, dotDir: string, now: number): string {
+/** The delivery-channel note for a task, or `undefined` when it delivers here and is live. */
+function deliveryNote(channel: string | undefined, options: HandleTasksCommandOptions): string | undefined {
+	if (!channel) return "已暂停：未指定投递频道";
+	const described = options.describeChannel(channel);
+	if (!described.boundHere) return `已暂停：投递频道未绑定到本 dot（${described.label}）`;
+	return channel === options.currentChannelId ? undefined : `投递到${described.label}`;
+}
+
+function renderListLine(entry: TaskLedgerEntry, options: HandleTasksCommandOptions, now: number): string {
+	const { dotDir } = options;
 	const bits = [`\`${entry.id}\` ${entry.title}`, taskStateLabel(entry.fields.state)];
+	const delivery = deliveryNote(entry.fields.channel, options);
+	if (delivery) bits.push(delivery);
 	if (entry.fields.paused) bits.push(`已暂停（${entry.fields.paused.reason}）`);
 	const ticket = ticketSummary(entry, now);
 	if (ticket) bits.push(ticket);
@@ -151,15 +172,16 @@ function renderListLine(entry: TaskLedgerEntry, dotDir: string, now: number): st
 	return `- ${bits.join(" · ")}`;
 }
 
-async function listTasks(dotDir: string): Promise<string> {
+async function listTasks(options: HandleTasksCommandOptions): Promise<string> {
 	const now = Date.now();
-	const entries = (await readActiveTasks(tasksDir(dotDir), now)).filter((entry) => !entry.fields.outcome);
+	const entries = (await readActiveTasks(tasksDir(options.dotDir), now)).filter((entry) => !entry.fields.outcome);
 	if (entries.length === 0) {
 		return "暂无进行中的任务。\n在对话里告诉我目标，并说明作为长程任务推进。";
 	}
-	const report = [`**任务（${entries.length}）**`, ...entries.map((entry) => renderListLine(entry, dotDir, now))].join(
-		"\n",
-	);
+	const report = [
+		`**任务（${entries.length}）**`,
+		...entries.map((entry) => renderListLine(entry, options, now)),
+	].join("\n");
 	return capReply(report, { nextStepHint: "用 `/tasks show <id>` 查看单个任务" }).text;
 }
 
@@ -178,7 +200,8 @@ function contractExcerpt(body: string, maxChars: number): { text: string; clippe
 	return { text: openFence ? `${head}\n\`\`\`` : head, clipped: true };
 }
 
-async function showTask(dotDir: string, idInput: string): Promise<string> {
+async function showTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+	const { dotDir } = options;
 	const id = normalizeTaskId(idInput);
 	const document = (await readStoredTask(dotDir, id, true)) ?? undefined;
 	if (!document) return notFound(id);
@@ -187,6 +210,15 @@ async function showTask(dotDir: string, idInput: string): Promise<string> {
 
 	const head: string[] = [`**任务 ${id}**`];
 	head.push(`- 状态：${taskStateLabel(document.fields.state)}`);
+	const channel = document.fields.channel;
+	if (!document.fields.outcome) {
+		const note = deliveryNote(channel, options);
+		head.push(
+			channel
+				? `- 投递频道（channel）：${options.describeChannel(channel).label}${note?.startsWith("已暂停") ? `（${note}）` : ""}`
+				: `- 投递频道：未指定（${note}）`,
+		);
+	}
 	if (document.fields.paused) {
 		const by = document.fields.paused.by === "user" ? "由你暂停" : "由系统暂停";
 		head.push(`- 已暂停（${by}）：${document.fields.paused.reason}`);
@@ -353,6 +385,21 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			);
 			continue;
 		}
+		if (!entry.fields.channel) {
+			problems.push(
+				issue(
+					`\`${entry.id}\` 没有投递频道（channel），已暂停`,
+					`在 \`${taskPath(options.dotDir, entry.id)}\` 的文件头加一行 \`channel: <频道 ID>\``,
+				),
+			);
+		} else if (!options.describeChannel(entry.fields.channel).boundHere) {
+			problems.push(
+				issue(
+					`\`${entry.id}\` 的投递频道没有绑定到本 dot，已暂停`,
+					"在那个频道里把它绑定回本 dot，或把文件头的 `channel:` 改成本 dot 已绑定的频道",
+				),
+			);
+		}
 		if (entry.legacy) {
 			problems.push(
 				issue(
@@ -373,7 +420,9 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	}
 
 	if (problems.length === 0) return `检查了 ${entries.length} 个任务，未发现问题。`;
-	return [`**任务体检（${problems.length} 项）**`, ...problems].join("\n");
+	return capReply([`**任务体检（${problems.length} 项）**`, ...problems].join("\n"), {
+		nextStepHint: "逐个修复后再运行 `/tasks doctor` 查看剩余的问题",
+	}).text;
 }
 
 export async function handleTasksCommand(options: HandleTasksCommandOptions): Promise<string> {
@@ -397,9 +446,9 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 async function dispatchTasksCommand(options: HandleTasksCommandOptions, command: TasksCommand): Promise<string> {
 	switch (command.action) {
 		case "list":
-			return await listTasks(options.dotDir);
+			return await listTasks(options);
 		case "show":
-			return await showTask(options.dotDir, command.id);
+			return await showTask(options, command.id);
 		case "log":
 			return await showTaskLog(options.dotDir, command.id);
 		case "archive":

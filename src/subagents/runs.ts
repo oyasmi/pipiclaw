@@ -1,7 +1,6 @@
 import { readdir, readFile, rename, rmdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { getChannelDir } from "../channel/channel-paths.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -11,11 +10,13 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
+import { redeemTicket } from "../tasks/store.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
 import { buildRunCompletionWake, WAKE_OUTPUT_TAIL_CHARS } from "./completion-wake.js";
 import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
 import { finalizeExternalRun } from "./external/settlement.js";
+import { runArchiveEntry, runLedgerEntry } from "./run-archive.js";
 import {
 	applyPendingSettlement,
 	createPendingSettlement,
@@ -53,11 +54,10 @@ import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLe
 type ProcessIdentity = "same" | "different" | "unknown";
 
 export interface RunManagerOptions {
-	/**
-	 * Root of the per-channel record directories (`<stateDir>/<escaped channelId>/`, escaped by
-	 * `getChannelDir`). Omit to skip persistence.
-	 */
+	/** Root of the per-dot record directories (`<stateDir>/<dot>/`). Omit to skip persistence. */
 	stateDir?: string;
+	/** Is a run's channel still bound to this dot (spec 058, D7)? Omitted (TUI, tests): always. */
+	isBoundTo?: (channelId: string, dot: string) => boolean;
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Best-effort out-of-band notice sink (see `RunNotice`). Never awaited by settlement or the
 	 *  progress tail — a slow or failing notifier must not delay either. */
@@ -82,9 +82,9 @@ async function unlinkIfPresent(path: string): Promise<void> {
 }
 
 /**
- * Per-channel manager for delegation runs — the single settlement/usage/wake authority for both
+ * Per-dot manager for delegation runs — the single settlement/usage/wake authority for both
  * internal sub-agents and (once wired) external harnesses (D7). Modeled directly on
- * `ChannelJobManager`; the two are not unified because a run's terminal status depends on a
+ * `DotJobManager`; the two are not unified because a run's terminal status depends on a
  * protocol verdict, not just process exit (D4), so the state machines genuinely differ.
  */
 export class SubAgentRunManager {
@@ -109,10 +109,16 @@ export class SubAgentRunManager {
 	private readonly internalProgressPacers = new Map<string, ProgressPacer>();
 	private readonly queue = createSerialQueue<string>();
 
+	/** `target` owns these runs; each run's own `channelId` is where it reports back. */
 	constructor(
-		private readonly channelId: string,
+		private readonly target: { dot: string; dotDir: string },
 		private readonly options: RunManagerOptions,
 	) {}
+
+	/** The completion wake's dispatch id — the only id `beginWakeConsumption` accepts for it. */
+	private wakeDispatchId(runId: string): string {
+		return `subagent:${this.target.dot}:${runId}:done`;
+	}
 
 	/** Release observation timers without cancelling dispatched work or its settlement. */
 	stop(): void {
@@ -122,10 +128,8 @@ export class SubAgentRunManager {
 	}
 
 	private recordDir(): string | undefined {
-		// `getChannelDir`, not a raw join: a DingTalk group id routinely contains `/`, which used
-		// to nest the records one directory deeper than the startup scan ever looked — so a
-		// restart silently abandoned every delegation run of every such channel.
-		return this.options.stateDir ? getChannelDir(this.options.stateDir, this.channelId) : undefined;
+		// The dot name is a validated path segment; a channel id never is (spec 058, INV-3).
+		return this.options.stateDir ? join(this.options.stateDir, this.target.dot) : undefined;
 	}
 
 	private recordPath(runId: string): string | undefined {
@@ -169,11 +173,11 @@ export class SubAgentRunManager {
 	}
 
 	/** Fire-and-forget: a notifier failure must never affect settlement or the progress tail. */
-	private emitNotice(notice: RunNotice): void {
+	private emitNotice(record: RunRecord, notice: RunNotice): void {
 		const notify = this.options.notify;
 		if (!notify) return;
 		void Promise.resolve()
-			.then(() => notify(this.channelId, notice))
+			.then(() => notify(this.target.dot, record.channelId, notice))
 			.catch((error) =>
 				log.logWarn("subagent.notice.failed", "Run notice failed", {
 					reason: errorMessage(error),
@@ -193,7 +197,7 @@ export class SubAgentRunManager {
 			harnessId: record.harness,
 			startedAt: record.processStartedAt ?? record.startedAt,
 			onProgress: (step) => {
-				this.emitNotice({
+				this.emitNotice(record, {
 					kind: "progress",
 					runId: record.runId,
 					agent: record.agent,
@@ -202,7 +206,7 @@ export class SubAgentRunManager {
 				});
 			},
 			onStall: (silentMs) => {
-				this.emitNotice({
+				this.emitNotice(record, {
 					kind: "stalled",
 					runId: record.runId,
 					agent: record.agent,
@@ -226,7 +230,7 @@ export class SubAgentRunManager {
 		let pacer = this.internalProgressPacers.get(runId);
 		if (!pacer) {
 			pacer = createProgressPacer(record.startedAt, (label) =>
-				this.emitNotice({
+				this.emitNotice(record, {
 					kind: "progress",
 					runId,
 					agent: record.agent,
@@ -353,8 +357,8 @@ export class SubAgentRunManager {
 					this.externalLaunches.delete(record.runId);
 					throw error;
 				}
-				if (record.taskId && record.dotDir) {
-					await logTaskDispatch(record.dotDir, record.taskId, {
+				if (record.taskId) {
+					await logTaskDispatch(this.target.dotDir, record.taskId, {
 						ref: record.runId,
 						item: record.item,
 						agent: record.agent,
@@ -463,7 +467,7 @@ export class SubAgentRunManager {
 		return this.queue.run(runId, async () => {
 			const record = this.runs.get(runId);
 			if (!record) return false;
-			const expected = `subagent:${record.channelId}:${runId}:done`;
+			const expected = this.wakeDispatchId(runId);
 			const eligible = record.settledAt !== undefined && record.taskId === taskId && dispatchId === expected;
 			const previousClaim = record.wakeClaimDispatchId;
 			if (!beginWakeClaim(record, eligible, dispatchId)) return false;
@@ -561,50 +565,11 @@ export class SubAgentRunManager {
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
-				this.options.ledger?.record({
-					channelId: record.channelId,
-					kind: "subagent",
-					model: record.model ?? "unknown",
-					label: record.label,
-					runId: record.runId,
-					taskId: record.taskId,
-					usage: {
-						input: input.usage.input,
-						output: input.usage.output,
-						cacheRead: input.usage.cacheRead,
-						cacheWrite: input.usage.cacheWrite,
-						total: input.usage.total,
-					},
-					cost: { ...input.usage.cost },
-					usageKnown: input.usageKnown,
-					costKnown: input.costKnown,
-				});
+				this.options.ledger?.record(runLedgerEntry(this.target.dot, record, input));
 				// Archive is an observability write, not a settlement fact — a full queue must not
 				// swallow the completion wake below (P0-2).
 				await this.options.store
-					?.logSubAgentRun(record.channelId, {
-						date: new Date().toISOString(),
-						toolCallId: record.runId,
-						label: record.label,
-						agent: record.agent,
-						source: record.source,
-						model: record.model ?? "unknown",
-						tools: record.tools,
-						turns: input.turns,
-						toolCalls: input.toolCalls,
-						durationMs: input.durationMs,
-						failed: input.status !== "completed",
-						failureReason: input.failureReason,
-						output: input.outputText.length > 16_000 ? input.outputText.slice(0, 16_000) : input.outputText,
-						outputTruncated: input.outputText.length > 16_000,
-						usage: { ...input.usage, cost: { ...input.usage.cost } },
-						runId: record.runId,
-						runtime: record.runtime,
-						harness: record.harness,
-						status: pending.status,
-						taskId: record.taskId,
-						artifactDir: record.artifactDir,
-					})
+					?.logSubAgentRun(this.target.dotDir, runArchiveEntry(record, input, pending.status))
 					.catch((error) => {
 						log.logWarn("subagent.archive.failed", "Run archive failed", {
 							reason: errorMessage(error),
@@ -618,7 +583,7 @@ export class SubAgentRunManager {
 			// budget and the outcome onto its log (the board's source), whether or not the run record
 			// is still around by the time the leader looks. Guarded by its own idempotency marker
 			// inside the same settlement lock, so a replay writes nothing twice.
-			if (!record.taskAccounted && record.taskId && record.dotDir) {
+			if (!record.taskAccounted && record.taskId) {
 				record.taskAccounted = true;
 				await this.creditOwningTask(record, input, outputSaved).catch((error) => {
 					log.logWarn("subagent.task_settle.log_failed", "Task credit for run failed", {
@@ -645,11 +610,10 @@ export class SubAgentRunManager {
 	 * block the completion wake.
 	 */
 	private async creditOwningTask(record: RunRecord, input: SettleInput, outputSaved: boolean): Promise<void> {
-		const dotDir = record.dotDir;
 		const taskId = record.taskId;
-		if (!dotDir || !taskId) return;
+		if (!taskId) return;
 		await logTaskSettlement(
-			dotDir,
+			this.target.dotDir,
 			taskId,
 			{
 				ref: record.runId,
@@ -676,7 +640,7 @@ export class SubAgentRunManager {
 		// caller was not already holding the result in the same tool call (`announce: true`, the same
 		// condition that gates the wake below). It reaches the channel in roughly the time the run
 		// itself took to settle, independent of the wake turn's own LLM latency on top of that.
-		this.emitNotice({
+		this.emitNotice(record, {
 			kind: "settled",
 			runId: record.runId,
 			agent: record.agent,
@@ -684,10 +648,21 @@ export class SubAgentRunManager {
 			durationMs: record.durationMs ?? 0,
 		});
 		if (!this.options.dispatch) return;
+		if (this.options.isBoundTo && !this.options.isBoundTo(record.channelId, this.target.dot)) {
+			await this.suppressWake(record);
+			return;
+		}
 		const siblingCount = Array.from(this.runs.values()).filter(
 			(other) => other.taskId === record.taskId && other.status === "running" && other.runId !== record.runId,
 		).length;
-		const event = buildRunCompletionWake({ record, outputText, outputSaved, siblingCount });
+		const event = buildRunCompletionWake({
+			dot: this.target.dot,
+			dispatchId: this.wakeDispatchId(record.runId),
+			record,
+			outputText,
+			outputSaved,
+			siblingCount,
+		});
 		// The `boolean` return value (queue-full/backpressure -> `false`) is deliberately not
 		// checked here, unlike the thrown-error case above: `DurableDispatchService.enqueueEvent`
 		// puts a rejected record back into `pending` rather than dropping it, and the 30s periodic
@@ -702,6 +677,29 @@ export class SubAgentRunManager {
 				fields: { runId: record.runId },
 			});
 			return;
+		}
+		record.wakeEnqueued = true;
+		await this.persist(record);
+	}
+
+	/**
+	 * Spec 058, D8: the run's channel left this dot, so the wake has no recipient. Settlement and the
+	 * task's settle record already happened; the wake is dropped (marker set, never replayed), and the
+	 * `work` ticket it would have redeemed is redeemed here via `redeemTicket`, so the suspended task
+	 * resumes as soon as its delivery channel is bound again.
+	 */
+	private async suppressWake(record: RunRecord): Promise<void> {
+		log.logInfoEvent("subagent.wake.suppressed", "Completion wake dropped: channel not bound to the run's dot", {
+			channelId: record.channelId,
+			fields: { runId: record.runId, dot: this.target.dot, taskId: record.taskId },
+		});
+		if (record.taskId) {
+			await redeemTicket(this.target.dotDir, record.taskId, (ticket) => ticket.kind === "work").catch((error) => {
+				log.logWarn("subagent.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
+					reason: errorMessage(error),
+					fields: { runId: record.runId, taskId: record.taskId },
+				});
+			});
 		}
 		record.wakeEnqueued = true;
 		await this.persist(record);

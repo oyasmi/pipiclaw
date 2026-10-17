@@ -6,7 +6,7 @@ import { getActiveSessionRefPath } from "../src/channel/active-session-store.js"
 import type { DingTalkBot } from "../src/dingtalk/bot.js";
 import type { DingTalkConfig } from "../src/dingtalk/config.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { bindTestChannel, useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-runtime-");
 
@@ -90,6 +90,7 @@ describe("createRuntimeContext", () => {
 	it("creates /new out of band and commits an empty active session", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
+		const conversation = await bindTestChannel(paths.workspaceDir, "dm_tester");
 		const bot = new FakeTestBot();
 		const runtime = await createRuntimeContext({
 			paths,
@@ -106,7 +107,8 @@ describe("createRuntimeContext", () => {
 
 		await runtime.handler.handleNewSession(createDmEvent("/new", "1000"), bot as unknown as DingTalkBot);
 
-		const refPath = getActiveSessionRefPath(join(paths.workspaceDir, "dm_tester"));
+		// `/new` resets this channel's conversation in its dot (spec 058, D16).
+		const refPath = getActiveSessionRefPath(conversation.conversationDir);
 		const ref = JSON.parse(readFileSync(refPath, "utf-8"));
 		expect(ref).toMatchObject({ version: 1, sessionId: expect.any(String), file: expect.stringMatching(/\.jsonl$/) });
 		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
@@ -118,6 +120,8 @@ describe("createRuntimeContext", () => {
 	it("starts the native task driver with the other runtime services", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
+		// Watchers are per active dot (spec 058, D6): one bound dot, one watcher.
+		await bindTestChannel(paths.workspaceDir, "dm_tester");
 		const bot = new FakeTestBot();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 		const memoryScheduler = { start: vi.fn(), stop: vi.fn() };
@@ -147,6 +151,8 @@ describe("createRuntimeContext", () => {
 	it("recovers when archiving an incoming message fails", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
+		// Bound, so the message actually reaches the archive (an unbound channel never archives).
+		await bindTestChannel(paths.workspaceDir, "dm_tester");
 		const bot = new FakeTestBot();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 
@@ -172,6 +178,7 @@ describe("createRuntimeContext", () => {
 		await runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 		await runtime.handler.handleEvent({ ...event, ts: "1001" }, bot as unknown as DingTalkBot);
 
+		expect(runtime.store.logMessage).toHaveBeenCalledTimes(2);
 		expect(bot.sendPlain).toHaveBeenCalledTimes(2);
 		await runtime.shutdown();
 	});

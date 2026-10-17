@@ -41,7 +41,8 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 
 		try {
 			await runTuiApp({
-				channel: "tui_e2e",
+				dot: "tui-e2e",
+				create: true,
 				print: true,
 				plain: true,
 				quiet: true,

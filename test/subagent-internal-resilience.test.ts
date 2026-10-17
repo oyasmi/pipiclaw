@@ -92,7 +92,7 @@ function makeTool(overrides: Partial<SubAgentToolOptions> & Pick<SubAgentToolOpt
 		resolveApiKey: async () => "test-key",
 		workspaceDir,
 		dotDir,
-		runtimeContext: { workspaceDir, channelId: "dm_123" },
+		runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 		retryBaseDelayMs: 1,
 		...overrides,
 	});

@@ -70,7 +70,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		await parkTask(harness.dotDir, taskId, ticket);
 		await expireTicket(harness.dotDir, taskId);
 		const entry = (await readActiveTasks(tasksDir())).find((task) => task.id === taskId)!;
-		await harness.sendWake(createTaskDriverEvent(harness.channelId, entry, Date.now()).text, {
+		await harness.sendWake(createTaskDriverEvent(harness.dot, harness.channelId, entry, Date.now()).text, {
 			user: "TASK_DRIVER",
 			userName: "TASK_DRIVER",
 		});
@@ -78,7 +78,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		expect(request?.tools).toContain("task_step_end");
 		expect(JSON.stringify(request?.messages)).toContain("TASK_TOOL_RESULT");
 		expect(readFileSync(taskSession, "utf8")).toContain("TASK_HISTORY");
-		expect(readFileSync(join(harness.dotDir, "context.jsonl"), "utf8")).not.toContain("TASK_HISTORY");
+		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).not.toContain("TASK_HISTORY");
 		for (const unavailable of ["task_create", "event_manage", "memory_save"]) {
 			expect(request?.tools).not.toContain(unavailable);
 		}
@@ -137,7 +137,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		// Wake it exactly as production does.
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId);
 		expect(entry).toBeDefined();
-		const driver = createTaskDriverEvent(harness.channelId, entry!, Date.now());
+		const driver = createTaskDriverEvent(harness.dot, harness.channelId, entry!, Date.now());
 		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
 
 		// A one-shot `done` archives the contract and leaves its loop log beside it.
@@ -185,7 +185,7 @@ describe("E2E deterministic: task lifecycle", () => {
 
 		await harness.sendUserMessage("帮我建个任务");
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId);
-		const driver = createTaskDriverEvent(harness.channelId, entry!, Date.now());
+		const driver = createTaskDriverEvent(harness.dot, harness.channelId, entry!, Date.now());
 		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
 
 		const requestsBefore = harness.modelRequestCount();
@@ -247,7 +247,7 @@ describe("E2E deterministic: task lifecycle", () => {
 
 		await harness.sendUserMessage("帮我建个带工作项的任务");
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId);
-		await harness.sendWake(createTaskDriverEvent(harness.channelId, entry!, Date.now()).text, {
+		await harness.sendWake(createTaskDriverEvent(harness.dot, harness.channelId, entry!, Date.now()).text, {
 			user: "TASK_DRIVER",
 			userName: "TASK_DRIVER",
 		});
@@ -277,7 +277,7 @@ describe("E2E deterministic: task lifecycle", () => {
 			// Publish an overdue persisted definition atomically, preserving its pre-boot mtime.
 			const pending = writeWorkspaceFile(harness, "events/weekly.pending", event(at));
 			utimesSync(pending, new Date(at), new Date(at));
-			renameSync(pending, join(harness.workspaceDir, "events", "weekly.json"));
+			renameSync(pending, join(harness.dotDir, "events", "weekly.json"));
 		};
 		const recorded = (action: EventHistoryAction, count: number) =>
 			waitForFileContent(
@@ -373,7 +373,7 @@ describe("E2E deterministic: task lifecycle", () => {
 			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
 		});
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId)!;
-		harness.enqueueWake(createTaskDriverEvent(harness.channelId, entry, Date.now()).text, {
+		harness.enqueueWake(createTaskDriverEvent(harness.dot, harness.channelId, entry, Date.now()).text, {
 			user: "TASK_DRIVER",
 			userName: "TASK_DRIVER",
 		});

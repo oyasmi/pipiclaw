@@ -3,9 +3,10 @@ import type { InboundImage } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import type { RunnerBuiltInCommand } from "../commands/catalog.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
+import type { DotConversation } from "../dot/types.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { ChannelJobManager } from "../jobs/manager.js";
+import type { DotJobManager } from "../jobs/manager.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
@@ -42,6 +43,8 @@ export interface TurnStatus {
 }
 
 export interface AgentRunner {
+	/** The (dot, channel) pairing this runner serves; fixed for the runner's lifetime. */
+	readonly conversation: DotConversation;
 	run(
 		ctx: ChannelContext,
 		store: ChannelStore,
@@ -241,9 +244,11 @@ export type ProgressEntryKind = "tool" | "thinking" | "error" | "assistant";
 export const MAX_USER_MESSAGE_CHARS = 12_000;
 
 export interface RunnerFactoryPaths {
-	jobManager: ChannelJobManager;
+	jobManager: DotJobManager;
 	runManager: SubAgentRunManager;
 	appHomeDir: string;
+	/** The shared workspace (`SOUL.md`, `skills/`, `sub-agents/` …); never derived from the dot directory. */
+	workspaceDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;
 	/**
@@ -259,6 +264,10 @@ export interface RunnerFactoryPaths {
 	 * Present enables the `send_media` tool; absent, the tool is not built.
 	 */
 	mediaSender?: MediaSender;
+	/** The channel's human name (群名 / 私聊对象), for the per-turn context; absent when unknown. */
+	describeChannel?: (channelId: string) => string | undefined;
+	/** A conversation directory's channel name, for labelling `session_search` hits. */
+	describeConversation?: (conversation: string) => string | undefined;
 }
 
 /**

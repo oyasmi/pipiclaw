@@ -121,6 +121,9 @@ export interface SubAgentToolOptions {
 	rtkEnabled?: boolean;
 	runtimeContext: {
 		workspaceDir: string;
+		/** The dot the delegating turn belongs to, and its directory (tasks, memory). */
+		dot: string;
+		dotDir: string;
 		channelId: string;
 	};
 	createWorker?: (config: {

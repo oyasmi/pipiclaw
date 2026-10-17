@@ -14,7 +14,7 @@ import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import * as atomicFile from "../src/shared/atomic-file.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readStoredTask } from "../src/tasks/store.js";
-import { configureSubAgentRuntime, getSubAgentRunManager } from "./helpers/background-runtime.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, testDot } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const tempDir = useTempDirs("pipiclaw-dispatch-");
@@ -34,6 +34,7 @@ function event(): DingTalkEvent {
 		text: "[EVENT:once] do work",
 		conversationId: "",
 		conversationType: "1",
+		dot: "news",
 	};
 }
 
@@ -82,7 +83,7 @@ describe("DurableDispatchService", () => {
 		}
 	});
 
-	it("persists a queue-rejected dispatch and later delivers it", async () => {
+	it("persists a queue-rejected dispatch and later delivers it, but refuses an event with no dot", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const received: DingTalkEvent[] = [];
 		let accept = false;
@@ -105,6 +106,13 @@ describe("DurableDispatchService", () => {
 		await service.drainOnce();
 		expect(received).toHaveLength(1);
 		expect(received[0]?.dispatchId).toBeTruthy();
+
+		// Spec 058, D7: a producer that forgot its dot is refused before anything is persisted —
+		// admission could never check such a wake against the channel's binding.
+		const before = readdirSync(stateDir).length;
+		await expect(service.dispatch({ ...event(), dot: undefined, ts: "456" })).resolves.toBe(false);
+		expect(readdirSync(stateDir)).toHaveLength(before);
+		expect(received).toHaveLength(1);
 	});
 
 	it("replays an expired lease after a restart and removes it only after completion", async () => {
@@ -224,7 +232,7 @@ describe("DurableDispatchService", () => {
 			},
 			{ announce: false },
 		);
-		const dispatchId = `subagent:${channelId}:run-redelivery:done`;
+		const dispatchId = `subagent:${testDot(channelId)}:run-redelivery:done`;
 		const wake: DingTalkEvent = {
 			...event(),
 			channelId,
@@ -247,7 +255,7 @@ describe("DurableDispatchService", () => {
 		await service.drainOnce(Date.now() + 11);
 		expect(delivered[1]?.text).toContain("[REDELIVERY:2]");
 
-		const claimed = await claimVerifiedWake(delivered[1]!, workspaceDir, manager);
+		const claimed = await claimVerifiedWake(delivered[1]!, dotDir, manager);
 		expect(claimed?.activated).toBe(true);
 		await claimed?.finish();
 		expect((await readStoredTask(dotDir, "T-redelivery"))?.fields.state).toBe("open");
@@ -461,7 +469,7 @@ describe("DurableDispatchService", () => {
 	});
 
 	it("keeps a dispatch id containing a channel-id slash on one flat file, so a fresh instance can still find it (R1)", async () => {
-		// DingTalk group ids are base64 and routinely contain `/` (channel-paths.ts); a business id
+		// DingTalk group ids are base64 and routinely contain `/` (channel/channel-id.ts); a business id
 		// derived from one used to become the filename verbatim, silently turning into a nested
 		// path a flat readdir (what drainOnce/cancelChannel actually do) can never see again.
 		const stateDir = join(tempDir(), "state", "dispatch");
@@ -528,6 +536,7 @@ describe("DurableDispatchService", () => {
 	// task step that is the model's English prompt and the `TASK_DRIVER` tag, sent to the user.
 	it("names the wake's task in the exhausted notice without forwarding the prompt or producer tag", () => {
 		const wake = createTaskDriverEvent(
+			"news",
 			"group_cid+a/b==",
 			{
 				id: "weekly-report",
@@ -571,6 +580,7 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 			conversationId: "",
 			conversationType: "1",
 			dispatchId: `subagent:${channelId}:${runId}:done`,
+			dot: "news",
 		};
 	}
 

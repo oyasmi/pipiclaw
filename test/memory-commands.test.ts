@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
 import { applyMemoryOps, listMemoryEntries } from "../src/memory/store.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-memory-commands-");
 
 async function run(dotDir: string, args: string, appHomeDir?: string) {
-	return handleMemoryCommand({ channelId: "dm_1", dotDir, appHomeDir, args });
+	return handleMemoryCommand({ conversation: testConversation(dotDir), appHomeDir, args });
 }
 
 describe("/memory list", () => {

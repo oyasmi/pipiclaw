@@ -5,7 +5,7 @@ import type { PipiclawSessionSearchSettings } from "../config/settings.js";
 import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { ChannelJobManager } from "../jobs/manager.js";
+import type { DotJobManager } from "../jobs/manager.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createBashTool } from "./bash.js";
@@ -50,6 +50,8 @@ export interface ToolBuildContext {
 	securityConfig: SecurityConfig;
 	securityContext: SecurityRuntimeContext;
 	channelId: string;
+	/** Main path only: the dot this tool set acts for; its name keys the memory queue (spec 058, INV-8). */
+	dot?: string;
 	dotDir: string;
 	workspaceDir: string;
 	/** Main set: `toolsConfig.tools.web`; sub-agent set: the sub-agent's own webConfig. */
@@ -61,21 +63,23 @@ export interface ToolBuildContext {
 	/** Gates the bash tool's rtk command optimizer (`tools.rtk.enabled`). Threaded to both sets. */
 	rtkEnabled?: boolean;
 	/**
-	 * Set by `buildToolSet` from `BuildToolSetOptions.forSubagent`. A sub-agent's `securityContext`
-	 * has no `dotDir` and may be project-bounded, so tools that would otherwise write into the
-	 * channel directory (bash/job output spill) must fall back to a neutral location for it.
+	 * Set by `buildToolSet` from `BuildToolSetOptions.forSubagent`. A sub-agent works in its own
+	 * working directory, so tools that would otherwise write into the dot directory (bash/job
+	 * output spill) fall back to a neutral location for it.
 	 */
 	forSubagent?: boolean;
 	/**
 	 * Present only on the main path. Enables bash `async` and the `job` tool.
 	 * The sub-agent set never supplies it, so sub-agents get neither.
 	 */
-	jobManager?: ChannelJobManager;
+	jobManager?: DotJobManager;
 	runManager?: SubAgentRunManager;
 	getCurrentModel?: () => Model<Api>;
 	getAvailableModels?: () => Model<Api>[];
 	resolveApiKey?: (model: Model<Api>) => Promise<string>;
 	getSessionSearchSettings?: () => PipiclawSessionSearchSettings;
+	/** Names a conversation directory of this dot after its channel, for `session_search` results. */
+	describeConversation?: (conversation: string) => string | undefined;
 	/**
 	 * Present only on the main path, and only when the driving transport can deliver
 	 * files. Gates the `send_media` tool; sub-agents never receive it.
@@ -119,6 +123,7 @@ function fileToolOptions(ctx: ToolBuildContext) {
 function memoryToolOptions(ctx: ToolBuildContext) {
 	return {
 		channelId: ctx.channelId,
+		dot: req(ctx.dot, "dot"),
 		dotDir: ctx.dotDir,
 		workspaceDir: ctx.workspaceDir,
 	};
@@ -221,7 +226,9 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		create: (ctx) =>
 			createSessionSearchTool({
 				channelId: ctx.channelId,
+				dot: ctx.dot,
 				dotDir: ctx.dotDir,
+				describeConversation: ctx.describeConversation,
 				getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
 				resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
 				getSessionSearchSettings: req(ctx.getSessionSearchSettings, "getSessionSearchSettings"),
@@ -248,7 +255,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "event_manage",
 		create: (ctx) =>
 			createEventManageTool({
-				workspaceDir: ctx.workspaceDir,
+				dotDir: ctx.dotDir,
 				channelId: ctx.channelId,
 				commandGuardConfig: ctx.securityConfig.commandGuard,
 			}),

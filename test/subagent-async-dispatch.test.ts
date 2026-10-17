@@ -7,7 +7,12 @@ import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/tools/subagent.js";
-import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	testDot,
+	testManagers,
+} from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
@@ -53,7 +58,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			// Tiny grace window; maxWallTimeSec (default 300s via inline systemPrompt path) stays
 			// far above it so the wall-clock budget timer cannot fire and confound the test.
 			syncGraceMs: 20,
@@ -124,7 +129,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		}
 
 		expect(dispatched).toHaveLength(1);
-		expect(dispatched[0]?.dispatchId).toBe(`subagent:dm_123:${runId}:done`);
+		expect(dispatched[0]?.dispatchId).toBe(`subagent:${testDot("dm_123")}:${runId}:done`);
 		expect(dispatched[0]?.text).toContain(`[SUBAGENT:${runId}]`);
 		expect(getSubAgentRunManager("dm_123").get(runId)?.status).toBe("completed");
 	});

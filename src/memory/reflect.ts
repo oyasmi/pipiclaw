@@ -92,7 +92,7 @@ export interface ReflectRunOptions {
 	/** The conversation window to reflect on (already extracted by the caller's source window). */
 	messages: AgentMessage[];
 	timeoutMs?: number;
-	usageContext?: { channelId: string; correlationId?: string };
+	usageContext?: { channelId: string; dot?: string; correlationId?: string };
 	/** Injectable for tests; defaults to today. */
 	today?: string;
 }

@@ -8,7 +8,12 @@ import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { launchExternalRun } from "../src/subagents/external/run.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
-import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	testDot,
+	testManagers,
+} from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spec 040, D1/D3/D4: the external-run orchestrator, driven with a fake `spawn` so the test
@@ -268,7 +273,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 
 		await probeStarted;
-		const recordPath = join(stateDir, channelId, "run-ext-handshake.json");
+		const recordPath = join(stateDir, testDot(channelId), "run-ext-handshake.json");
 		await waitFor(() => existsSync(recordPath));
 		const persisted = JSON.parse(readFileSync(recordPath, "utf-8")) as {
 			status?: string;

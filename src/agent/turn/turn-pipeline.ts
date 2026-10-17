@@ -7,6 +7,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ChannelContext } from "../../channel/channel-context.js";
 import type { InboundImage } from "../../channel/channel-event.js";
+import type { DotConversation } from "../../dot/types.js";
 import * as log from "../../log.js";
 import type { FallbackRunDeps } from "../../models/fallback.js";
 import { formatModelReference } from "../../models/reference.js";
@@ -18,7 +19,7 @@ import { MAX_USER_MESSAGE_CHARS, type RunState } from "../types.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
 import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import type { createRunQueue } from "./run-queue.js";
-import { buildFirstTurnMemoryBootstrap, buildTaskDigestForTurn, renderChannelTurnContext } from "./turn-context.js";
+import { buildFirstTurnMemoryBootstrap, buildTaskDigestForTurn, renderDotTurnContext } from "./turn-context.js";
 import { renderFallbackSwitch } from "./turn-error.js";
 import {
 	formatUserMessage,
@@ -55,9 +56,10 @@ export function createTurnProgress(): TurnProgress {
 }
 
 export interface TurnPipelineDeps {
-	channelId: string;
-	dotDir: string;
+	conversation: DotConversation;
 	workspaceDir: string;
+	/** The channel's human name for the capsule; absent when the channel index has none. */
+	describeChannel?: (channelId: string) => string | undefined;
 	host: SessionHost;
 	models: ModelSelection;
 	turnState: TurnStateMachine;
@@ -67,6 +69,7 @@ export interface TurnPipelineDeps {
 }
 
 export class TurnPipeline {
+	private readonly conversation: DotConversation;
 	private readonly channelId: string;
 	private readonly dotDir: string;
 	private readonly workspaceDir: string;
@@ -75,8 +78,9 @@ export class TurnPipeline {
 	private readonly turnState: TurnStateMachine;
 
 	constructor(private readonly deps: TurnPipelineDeps) {
-		this.channelId = deps.channelId;
-		this.dotDir = deps.dotDir;
+		this.conversation = deps.conversation;
+		this.channelId = deps.conversation.channelId;
+		this.dotDir = deps.conversation.dotDir;
 		this.workspaceDir = deps.workspaceDir;
 		this.host = deps.host;
 		this.models = deps.models;
@@ -121,7 +125,7 @@ export class TurnPipeline {
 		if (preserveRawInput) return "";
 		// Channel facts are turn-dynamic by design (spec 025 §7.3): keeping them out of the
 		// system prompt is what lets every channel in a workspace share one cached prefix.
-		const channelCapsuleText = renderChannelTurnContext(this.dotDir);
+		const channelCapsuleText = renderDotTurnContext(this.conversation, this.deps.describeChannel?.(this.channelId));
 
 		// The task digest reads the whole tasks/ directory and depends on nothing the memory
 		// bootstrap below produces, so it runs alongside it rather than queuing behind it.

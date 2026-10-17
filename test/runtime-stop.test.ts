@@ -7,7 +7,7 @@ import type { DingTalkBot } from "../src/dingtalk/bot.js";
 import type { DingTalkConfig } from "../src/dingtalk/config.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { createFakeSessionBinding, createFakeTurnState } from "./helpers/fake-turn-state.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { bindTestChannel, useTempDirs } from "./helpers/fixtures.js";
 
 const { createRunnerMock } = vi.hoisted(() => ({
 	createRunnerMock: vi.fn(),
@@ -122,6 +122,7 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
+		await bindTestChannel(paths.workspaceDir, "dm_tester");
 		bootstrapAppHome(paths);
 		const bot = new FakeTestBot();
 		const runtime = await createRuntimeContext({
@@ -204,6 +205,7 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
+		await bindTestChannel(paths.workspaceDir, "dm_tester");
 		bootstrapAppHome(paths);
 
 		const bot = new FakeTestBot();
@@ -286,9 +288,12 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
+		const conversation = await bindTestChannel(paths.workspaceDir, "dm_tester");
+		const { dotDir } = conversation;
+		Object.assign(runner, { conversation });
 		bootstrapAppHome(paths);
-		const taskPath = join(paths.workspaceDir, "dm_tester", "tasks", "long-run.md");
-		mkdirSync(join(paths.workspaceDir, "dm_tester", "tasks"), { recursive: true });
+		const taskPath = join(dotDir, "tasks", "long-run.md");
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
 		writeFileSync(taskPath, "---\nstate: open\n---\n\n# Long running task\n", "utf-8");
 
 		const bot = new FakeTestBot();
@@ -376,6 +381,7 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
+		await bindTestChannel(paths.workspaceDir, "dm_tester");
 		bootstrapAppHome(paths);
 
 		const bot = new FakeTestBot();

@@ -45,6 +45,7 @@ export interface SubAgentManageToolOptions {
 	 * only tightens what was already true rather than changing production behavior.
 	 */
 	workspaceDir: string;
+	dot: string;
 	dotDir: string;
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
@@ -309,7 +310,12 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			try {
 				const envelopedTask = buildFollowUpTask(
 					task,
-					{ workspaceDir: options.workspaceDir, channelId: options.channelId },
+					{
+						workspaceDir: options.workspaceDir,
+						dot: options.dot,
+						dotDir: options.dotDir,
+						channelId: options.channelId,
+					},
 					runContext,
 				);
 				const workspaceBaseline =

@@ -469,7 +469,6 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 
 			if (this.cards.hasCardUpdatedSince(channelId, cutoff)) continue;
 			this.cards.dropChannel(channelId);
-			this.conversations.evict(channelId);
 			this.queues.delete(channelId);
 			this.channelLastActiveAt.delete(channelId);
 		}

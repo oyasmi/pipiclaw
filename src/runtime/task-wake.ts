@@ -1,6 +1,6 @@
 /**
  * Claiming a background job's or delegation run's completion wake before it may reopen a parked
- * task (spec 040, D7/T9). Pure functions over an explicit `event`/`workspaceDir`/owner, with no
+ * task (spec 040, D7/T9). Pure functions over an explicit `event`/`dotDir`/owner, with no
  * dependency on `createRuntimeContext`'s closures.
  *
  * Trust comes from two things only: the producer-created `internalWake` envelope (DingTalk
@@ -10,10 +10,9 @@
  * carries.
  */
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { getChannelDir } from "../channel/channel-paths.js";
 import { readStoredTask, redeemTicket } from "../tasks/store.js";
 
-/** The slice of `ChannelJobManager` / `SubAgentRunManager` a wake claim needs. */
+/** The slice of `DotJobManager` / `SubAgentRunManager` a wake claim needs. */
 export interface WakeOwner {
 	beginWakeConsumption(id: string, taskId: string, dispatchId: string): Promise<boolean>;
 	finishWakeConsumption(id: string, dispatchId: string): Promise<void>;
@@ -56,7 +55,8 @@ async function isTaskActivelyDriven(dotDir: string, taskId: string): Promise<boo
  */
 export async function claimVerifiedWake(
 	event: ChannelEvent,
-	workspaceDir: string,
+	/** The admitted wake's dot directory — where the task it names lives. */
+	dotDir: string,
 	owner: WakeOwner,
 	hooks?: WakeTaskTransitionHooks,
 ): Promise<ClaimedWake | undefined> {
@@ -64,7 +64,6 @@ export async function claimVerifiedWake(
 	if (!wake || typeof event.dispatchId !== "string") return undefined;
 	if (!(await owner.beginWakeConsumption(wake.resourceId, wake.taskId, event.dispatchId))) return undefined;
 	const dispatchId = event.dispatchId;
-	const dotDir = getChannelDir(workspaceDir, event.channelId);
 	hooks?.beforeActivation?.();
 	const redeemed = await redeemTicket(dotDir, wake.taskId, (ticket) => ticket.kind === "work");
 	return {

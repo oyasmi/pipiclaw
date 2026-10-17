@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent, DingTalkHandler } from "../src/dingtalk/handler.js";
@@ -90,6 +90,7 @@ vi.mock("dingtalk-stream", () => ({
 }));
 
 import { DingTalkBot } from "../src/dingtalk/bot.js";
+import { ConversationMetaStore } from "../src/dingtalk/conversation-meta.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-dingtalk-");
@@ -131,7 +132,6 @@ function createBot(
 type PrivateBotApi = {
 	tokens: { accessToken: string | null; tokenExpiry: number; get(): Promise<string | null> };
 	conversations: {
-		convMeta: Map<string, unknown>;
 		get(channelId: string): { conversationId: string; conversationType: string; senderId: string } | null;
 		set(channelId: string, meta: { conversationId: string; conversationType: string; senderId: string }): void;
 	};
@@ -232,9 +232,10 @@ describe("dingtalk", () => {
 			bot,
 		);
 
-		const metadataPath = join(stateDir, "group_conv_group", ".channel-meta.json");
+		// Spec 058, D17: one file for every channel, keyed by channel id.
+		const metadataPath = join(stateDir, "dingtalk", "conversations.json");
 		expect(existsSync(metadataPath)).toBe(true);
-		expect(JSON.parse(readFileSync(metadataPath, "utf-8"))).toMatchObject({
+		expect(JSON.parse(readFileSync(metadataPath, "utf-8")).group_conv_group).toMatchObject({
 			conversationId: "conv_group",
 			conversationType: "2",
 			senderId: "staff_2",
@@ -737,34 +738,23 @@ describe("dingtalk", () => {
 		});
 	});
 
-	it("persists and reloads conversation metadata from disk, then reclaims idle per-channel caches", () => {
-		const { bot } = createBot();
+	it("persists conversation metadata, reloads it after a restart, writes only on change, and reclaims idle queues", () => {
+		const { bot, stateDir } = createBot();
 		const privateApi = getPrivateApi(bot);
+		const meta = { conversationId: "conv_1", conversationType: "1", senderId: "staff_1" };
 
-		privateApi.conversations.set("dm_staff_1", {
-			conversationId: "conv_1",
-			conversationType: "1",
-			senderId: "staff_1",
-		});
+		privateApi.conversations.set("dm_staff_1", meta);
+		// A fresh store — the next process — routes the channel from disk alone.
+		expect(new ConversationMetaStore({ stateDir }, () => {}).get("dm_staff_1")).toEqual(meta);
 
-		privateApi.conversations.convMeta.clear();
+		// D17: every inbound message calls set(); an unchanged entry must not rewrite the file.
+		const metadataPath = join(stateDir, "dingtalk", "conversations.json");
+		writeFileSync(metadataPath, JSON.stringify({ dm_staff_1: meta, marker: meta }));
+		privateApi.conversations.set("dm_staff_1", meta);
+		expect(JSON.parse(readFileSync(metadataPath, "utf-8")).marker).toEqual(meta);
 
-		expect(privateApi.conversations.get("dm_staff_1")).toEqual({
-			conversationId: "conv_1",
-			conversationType: "1",
-			senderId: "staff_1",
-		});
-
-		privateApi.conversations.set("dm_staff_1", {
-			conversationId: "conv_1",
-			conversationType: "1",
-			senderId: "staff_1",
-		});
 		privateApi.getQueue("dm_staff_1");
-
 		privateApi.cleanupIdleChannelCaches(Date.now() + 2 * 60 * 60 * 1000);
-
-		expect(privateApi.conversations.convMeta.has("dm_staff_1")).toBe(false);
 		expect(privateApi.queues.has("dm_staff_1")).toBe(false);
 	});
 

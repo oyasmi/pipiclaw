@@ -20,6 +20,7 @@ function registryContext(): ToolBuildContext {
 		securityConfig: DEFAULT_SECURITY_CONFIG,
 		securityContext: { agentWorkspaceDir: "/tmp/ws", cwd: "/tmp/ws" },
 		channelId: "dm_1",
+		dot: "news",
 		dotDir: "/tmp/ws/dm_1",
 		workspaceDir: "/tmp/ws",
 		webConfig: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: true },
@@ -257,7 +258,7 @@ describe("registry wiring", () => {
 				resolveApiKey: async () => "key",
 				workspaceDir: "/tmp/ws",
 				dotDir: "/tmp/ws/dm_1",
-				runtimeContext: { workspaceDir: "/tmp/ws", channelId: "dm_1" },
+				runtimeContext: { workspaceDir: "/tmp/ws", dot: "news", dotDir: "/tmp/ws/dm_1", channelId: "dm_1" },
 			}),
 			"subagent",
 		);

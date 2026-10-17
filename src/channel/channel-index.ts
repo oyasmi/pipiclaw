@@ -1,10 +1,10 @@
 /**
  * `workspace/CHANNELS.md` — the readable map of every channel this runtime knows.
  *
- * A channel's on-disk identity is its raw id (`group_cidYDhGqxhJOzS7VDv/eDInUw==`), which is
- * unreadable in a directory listing, in `/events` output and in the logs. This index gives
- * every id a name and a last-seen time in one place, so the operator browsing the workspace
- * and the agent asking "what other channels are there?" both have something to read.
+ * A channel's identity is its raw id (`group_cidYDhGqxhJOzS7VDv/eDInUw==`), which is unreadable
+ * in `/events` output and in the logs. This index gives every id a name, the dot it is bound to,
+ * and a last-seen time in one place, so the operator browsing the workspace and `/dot` both have
+ * something to read. It names channels; it is not how the runtime finds them (spec 058, D17).
  *
  * ## Maintenance contract
  *
@@ -20,23 +20,20 @@
  *   `close()` at shutdown.
  * - **What survives a rewrite**: every flush re-reads the file first, so the hand-written
  *   `主题` column — and any row for a channel this process never saw — is carried over
- *   verbatim. The runtime owns three columns; the fourth belongs to whoever edits it.
+ *   verbatim. The runtime owns four columns; the fifth belongs to whoever edits it. The `dot`
+ *   column is rendered from the live bindings, and a binding change is structural.
  *
  * The index is the durable store for channel names: the transport learns a name only while a
- * message is being handled, so nothing else outlives a restart. It fills in from the first
- * message in each channel rather than being seeded from disk — a channel *directory* name is
- * the escaped form of the id (`/` → `__`, see `channel-paths.ts`) and cannot be turned back
- * into one, so scanning the workspace would populate rows keyed by ids that do not exist.
+ * message is being handled, so nothing else outlives a restart.
  */
 
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { getChannelDirName, isChannelId } from "./channel-paths.js";
 
 export const CHANNELS_INDEX_FILENAME = "CHANNELS.md";
 
@@ -60,6 +57,8 @@ export interface ChannelObservation {
 export interface ChannelIndexEntry {
 	channelId: string;
 	name: string;
+	/** The dot the channel is bound to, as of the last rewrite; `""` when unbound. */
+	dot: string;
 	/** Local wall-clock time of the last human message, or `""` when never observed. */
 	lastMessageAt: string;
 	/** Hand-written; the runtime only ever copies it forward. */
@@ -67,8 +66,14 @@ export interface ChannelIndexEntry {
 }
 
 export interface ChannelIndex {
+	/** Read the names already on disk, so `nameOf` knows channels not seen since this process started. */
+	load(): Promise<void>;
+	/** The channel's name, from this process's observations or the file; `undefined` when never named. */
+	nameOf(channelId: string): string | undefined;
 	/** Record one inbound human message. Cheap and synchronous; writing is decided internally. */
 	note(observation: ChannelObservation): void;
+	/** A binding changed: rewrite now so the `dot` column is current (structural, not debounced). */
+	noteBindingChanged(): void;
 	/** Write pending changes now. No-op when nothing changed. */
 	flush(): Promise<void>;
 	/** Cancel the debounce timer and write one last time. */
@@ -77,14 +82,14 @@ export interface ChannelIndex {
 
 // === Rendering and parsing ===
 
-const HEADER_CELLS = ["频道 ID", "名称", "最近消息", "主题"];
+const HEADER_CELLS = ["频道 ID", "名称", "dot", "最近消息", "主题"];
 
 const FILE_HEADER = `# Channels
 
 <!--
 运行时自动维护的频道索引。
 
-- 「频道 ID」「名称」「最近消息」三列由运行时在收到消息时更新，手工改动会在下次重写时被覆盖。
+- 「频道 ID」「名称」「dot」「最近消息」四列由运行时维护，手工改动会在下次重写时被覆盖；「dot」是本频道当前绑定的 dot，用 \`/dot bind\` 修改。
 - 「主题」一列留给你（或 agent）填写，重写索引时原样保留 — 用一句话写清这个频道是干什么的。
 - 「最近消息」只统计真人消息，不含定时事件和任务驱动的后台唤醒，所以它能反映频道是否还活跃。
 - 行按最近消息时间倒序排列。
@@ -137,7 +142,7 @@ function isSeparatorRow(cells: string[]): boolean {
 export function renderChannelIndex(entries: ChannelIndexEntry[]): string {
 	const rows = entries.map(
 		(entry) =>
-			`| \`${escapeCell(entry.channelId)}\` | ${escapeCell(entry.name)} | ${escapeCell(entry.lastMessageAt)} | ${escapeCell(entry.topic)} |`,
+			`| \`${escapeCell(entry.channelId)}\` | ${escapeCell(entry.name)} | ${escapeCell(entry.dot)} | ${escapeCell(entry.lastMessageAt)} | ${escapeCell(entry.topic)} |`,
 	);
 	return [
 		FILE_HEADER,
@@ -155,7 +160,8 @@ export function renderChannelIndex(entries: ChannelIndexEntry[]): string {
  * separator) rather than by matching the id against a pattern: DingTalk conversation ids are
  * base64 and routinely contain `/` and `=`, so any shape check here would quietly discard real
  * channels. Anything unparseable is skipped instead of throwing — a mangled index must never
- * stop the runtime from recording the next message.
+ * stop the runtime from recording the next message. A four-cell row is the pre-058 layout (no
+ * `dot` column); it is read as such and gains the column on the next rewrite.
  */
 export function parseChannelIndex(content: string): ChannelIndexEntry[] {
 	const entries: ChannelIndexEntry[] = [];
@@ -168,91 +174,29 @@ export function parseChannelIndex(content: string): ChannelIndexEntry[] {
 		const channelId = cells[0]?.replace(/`/g, "").trim() ?? "";
 		if (!channelId || channelId === HEADER_CELLS[0] || seen.has(channelId)) continue;
 		seen.add(channelId);
+		const legacy = cells.length < HEADER_CELLS.length;
 		entries.push({
 			channelId,
 			name: cells[1] ?? "",
-			lastMessageAt: cells[2] ?? "",
-			topic: cells[3] ?? "",
+			dot: legacy ? "" : (cells[2] ?? ""),
+			lastMessageAt: (legacy ? cells[2] : cells[3]) ?? "",
+			topic: (legacy ? cells[3] : cells[4]) ?? "",
 		});
 	}
 	return entries;
 }
 
-// === Discovery ===
-
-/** Channel ids recorded in the index, i.e. every channel that has ever received a message. */
-export async function readChannelIndexIds(workspaceDir: string, options: DiscoverOptions = {}): Promise<string[]> {
-	try {
-		const content = await readFile(join(workspaceDir, CHANNELS_INDEX_FILENAME), "utf-8");
-		return parseChannelIndex(content)
-			.map((entry) => entry.channelId)
-			.filter(isChannelId);
-	} catch (error) {
-		if (options.strict && !isMissing(error)) throw error;
-		return [];
-	}
-}
-
-export interface DiscoverOptions {
-	/**
-	 * Throw on anything other than "does not exist" instead of reporting no channels. For the one-shot
-	 * migration, where an unreadable workspace must not look like an empty one.
-	 */
-	strict?: boolean;
-}
-
-function isMissing(error: unknown): boolean {
-	const code = (error as NodeJS.ErrnoException).code;
-	return code === "ENOENT" || code === "ENOTDIR";
-}
-
 /**
- * Every channel this workspace knows about, for the background workers that must visit
- * channels nobody has spoken to since the process started (memory maintenance, the task
- * driver). Live channels come from the caller's runner map; this covers the rest.
- *
- * The index is the accurate source — it stores real ids. Scanning the workspace root is the
- * fallback for a workspace that predates the index, and it is inherently lossy: a channel
- * *directory* is the escaped form of the id (`/` → `__`), which cannot be turned back into the
- * original. It is still kept alongside the index rather than only when the file is missing,
- * because the index fills in one channel at a time: on the first run after an upgrade the file
- * exists with a single row, and treating that as "the index has answers now" would drop every
- * other pre-existing channel until each of them happened to be spoken in. Directories whose
- * name is the escaped form of an already-indexed id are skipped, so a channel is never visited
- * twice under two spellings.
+ * The names in `CHANNELS.md`, read once — for a process that does not maintain the index (the TUI),
+ * so `/dot` and `/tasks` can still name channels.
  */
-export async function discoverWorkspaceChannelIds(
-	workspaceDir: string,
-	options: DiscoverOptions = {},
-): Promise<string[]> {
-	const channelIds = new Set(await readChannelIndexIds(workspaceDir, options));
-	const indexedDirNames = new Set([...channelIds].map(getChannelDirName));
+export async function loadChannelNames(workspaceDir: string): Promise<Map<string, string>> {
 	try {
-		const dirents = await readdir(workspaceDir, { withFileTypes: true });
-		for (const entry of dirents) {
-			// A directory id containing `__` may be an escaped group id (`/` → `__`). The
-			// workspace scan cannot recover the original id, which is required in task event
-			// templates. Background discovery keeps its historical best-effort behavior; a
-			// one-shot migration must stop instead of writing events to a fake channel id.
-			if (
-				options.strict &&
-				entry.isDirectory() &&
-				/^(dm|group)_/.test(entry.name) &&
-				entry.name.includes("__") &&
-				!indexedDirNames.has(entry.name)
-			) {
-				throw new Error(
-					`Cannot recover the real channel id for escaped workspace directory ${entry.name}; restore ${CHANNELS_INDEX_FILENAME} from backup before migration.`,
-				);
-			}
-			if (!entry.isDirectory() || indexedDirNames.has(entry.name) || !isChannelId(entry.name)) continue;
-			channelIds.add(entry.name);
-		}
-	} catch (error) {
-		// Outside strict mode a missing or unreadable workspace simply has no channels to report.
-		if (options.strict && !isMissing(error)) throw error;
+		const entries = parseChannelIndex(await readFile(join(workspaceDir, CHANNELS_INDEX_FILENAME), "utf-8"));
+		return new Map(entries.filter((entry) => entry.name).map((entry) => [entry.channelId, entry.name]));
+	} catch {
+		return new Map();
 	}
-	return [...channelIds].sort();
 }
 
 function entryTime(entry: Pick<ChannelIndexEntry, "lastMessageAt">): number {
@@ -281,6 +225,8 @@ function normalizeName(name: string | undefined): string {
 
 export interface CreateChannelIndexOptions {
 	workspaceDir: string;
+	/** The dot a channel is bound to right now, for the `dot` column. */
+	getBoundDot: (channelId: string) => string | undefined;
 	/** Override the timestamp-only debounce; tests use a short one. */
 	debounceMs?: number;
 }
@@ -291,6 +237,8 @@ export function createChannelIndex(options: CreateChannelIndexOptions): ChannelI
 	// Serialized so two flushes can never interleave their read-merge-write.
 	const queue = createSerialQueue<string>();
 	const observed = new Map<string, ObservedChannel>();
+	/** Names read from the file at `load`, for channels this process has not observed. */
+	const known = new Map<string, string>();
 	let dirty = false;
 	let closed = false;
 	let timer: NodeJS.Timeout | null = null;
@@ -332,12 +280,15 @@ export function createChannelIndex(options: CreateChannelIndexOptions): ChannelI
 				// An observation without a name (a DM from a nameless sender) must not erase a
 				// name the file already carries.
 				name: channel.name || existing?.name || "",
+				dot: "",
 				lastMessageAt: renderTimestamp(Math.max(channel.atMs, existing ? entryTime(existing) : 0)),
 				topic: existing?.topic ?? "",
 			});
 		}
 
-		return sortEntries([...byId.values()]);
+		return sortEntries(
+			[...byId.values()].map((entry) => ({ ...entry, dot: options.getBoundDot(entry.channelId) ?? "" })),
+		);
 	};
 
 	const flush = (): Promise<void> => {
@@ -363,6 +314,27 @@ export function createChannelIndex(options: CreateChannelIndexOptions): ChannelI
 	};
 
 	return {
+		async load(): Promise<void> {
+			try {
+				for (const entry of parseChannelIndex(await readFile(indexPath, "utf-8"))) {
+					if (entry.name) known.set(entry.channelId, entry.name);
+				}
+			} catch {
+				// No index yet: names fill in as channels speak.
+			}
+		},
+
+		nameOf(channelId: string): string | undefined {
+			return observed.get(channelId)?.name || known.get(channelId) || undefined;
+		},
+
+		noteBindingChanged(): void {
+			if (closed) return;
+			dirty = true;
+			cancelTimer();
+			void flush();
+		},
+
 		note(observation: ChannelObservation): void {
 			if (closed || !observation.channelId) return;
 			const name = normalizeName(observation.name);

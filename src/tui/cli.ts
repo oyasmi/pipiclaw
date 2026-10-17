@@ -8,7 +8,8 @@ import { runTuiApp } from "./app.js";
 export type ParsedTui =
 	| {
 			kind: "run";
-			channel?: string;
+			dot?: string;
+			create: boolean;
 			print: boolean;
 			quiet: boolean;
 			plain: boolean;
@@ -20,7 +21,8 @@ export type ParsedTui =
 
 /** Parse `pipiclaw tui` arguments (everything after the `tui` subcommand). */
 export function parseTuiArgs(args: string[]): ParsedTui {
-	let channel: string | undefined;
+	let dot: string | undefined;
+	let create = false;
 	let print = false;
 	let quiet = false;
 	let plain = false;
@@ -28,11 +30,15 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
-		if (arg === "--channel") {
-			channel = args[index + 1];
+		if (arg === "--dot") {
+			dot = args[index + 1];
 			index += 1;
-		} else if (arg.startsWith("--channel=")) {
-			channel = arg.slice("--channel=".length);
+		} else if (arg.startsWith("--dot=")) {
+			dot = arg.slice("--dot=".length);
+		} else if (arg === "--create") {
+			create = true;
+		} else if (arg === "--channel" || arg.startsWith("--channel=")) {
+			return { kind: "error", message: "--channel was replaced by --dot <name> (spec 058)." };
 		} else if (arg === "--print" || arg === "-p") {
 			print = true;
 		} else if (arg === "--quiet" || arg === "-q") {
@@ -52,7 +58,7 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 		}
 	}
 
-	return { kind: "run", channel, print, quiet, plain, positional };
+	return { kind: "run", dot, create, print, quiet, plain, positional };
 }
 
 function printTuiHelp(io: BootstrapIO): void {
@@ -61,20 +67,18 @@ function printTuiHelp(io: BootstrapIO): void {
 	io.log("Chat with the pipiclaw agent in the terminal, reusing the same config,");
 	io.log("memory and session as the DingTalk runtime.");
 	io.log("");
-	io.log("Resume: there is no /resume command — a channel resumes itself.");
-	io.log("Re-running with the same --channel restores the previous conversation");
-	io.log("automatically (context is persisted per channel); memory carries longer-");
-	io.log("term facts across sessions. Use --channel to continue any past conversation.");
+	io.log("The terminal opens one dot: its memory, tasks, events and files are the same");
+	io.log("ones its DingTalk channels use, while the terminal keeps its own conversation,");
+	io.log("which resumes automatically next time. A dot can be open here while the daemon");
+	io.log("serves it; only one terminal at a time per dot.");
 	io.log("");
 	io.log("Options:");
-	io.log("  --channel <id>            Channel to attach to (default: tui_local).");
-	io.log("                            Use dm_<staffId> to share a DingTalk conversation's memory.");
+	io.log("  --dot <name>              The dot to open (required)");
+	io.log("  --create                  Create the dot if it does not exist");
 	io.log("  --print, -p               One-shot: run [prompt] (or stdin), print the answer, exit");
 	io.log("  --plain                   Use the line-based frontend instead of the full-screen UI");
 	io.log("  --quiet, -q               Print only the final answer, no progress (implies --plain)");
 	io.log("  --version                 Print the version and exit");
-	io.log("");
-	io.log("Note: do not attach --channel to a DingTalk conversation the daemon is actively serving.");
 }
 
 async function readStdin(): Promise<string> {
@@ -108,7 +112,8 @@ export async function runTui(argv: string[], io: BootstrapIO = console): Promise
 	}
 
 	await runTuiApp({
-		channel: parsed.channel,
+		dot: parsed.dot,
+		create: parsed.create,
 		print: parsed.print,
 		quiet: parsed.quiet,
 		plain: parsed.plain,

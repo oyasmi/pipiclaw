@@ -38,7 +38,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | 2 | `src/usage/` | 用量/成本账本（JSONL）与渲染 | `ledger.ts`、`render.ts`、`totals.ts` |
 | 2 | `src/tasks/` | 持久任务：任务说明、等待票、循环日志、预算、`/tasks`。调度与唤醒的衔接代码在 `runtime/task-*.ts`，这样本目录保持叶子 | `contract.ts`、`ticket.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`commands.ts` |
 | 2 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
-| 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts` |
+| 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-id.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts` |
 | 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、工具名单 | `details.ts`、`presentation.ts`、`names.ts` |
 | 4 | `src/config/` | `settings.json`、`tools.json` 的加载与校验 | `settings.ts`、`tools.ts` |
 | 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
@@ -172,7 +172,7 @@ sequenceDiagram
 |---|---|---|---|
 | `ChannelQueue` | `dingtalk/channel-queue.ts`（由 dingtalk 传输消费） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
 | `RunQueue`（`createRunQueue`） | `agent/turn/run-queue.ts` | **一轮之内的出站投递调用**：进度/通知按序发往钉钉 API，错误只记日志不打断轮次 | 每轮 |
-| `ChannelMemoryQueue` | `memory/channel-maintenance-queue.ts` | **同一频道的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`/memory` 命令共用**进程级单例**，绝不能各自内联，否则几条路径会争写同一批记忆文件 | 每频道（跨子系统共享） |
+| `DotMemoryQueue` | `memory/dot-memory-queue.ts` | **同一 dot 的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`memory_save`、`/memory` 命令共用**进程级单例**，按 dot 名排队并持有 `.locks/memory.lock`（与 TUI 进程互斥），绝不能各自内联或按频道排队，否则同一 dot 的几个频道会争写同一批记忆文件（spec 058 INV-8） | 每 dot（跨子系统、跨进程共享） |
 | `ChannelStore.writeQueue` | `channel/store.ts` | `log.jsonl` 追加与轮转 | 每频道 |
 | `DurableDispatchService.queue` | `runtime/durable-dispatch.ts` | 外发箱记录的读写 | 每记录 id |
 | `SubAgentRunManager.queue` | `subagents/runs.ts` | 一个 run 的 register/settle/cancel：保证结算、记账、唤醒各只发生一次（三个幂等标记见下） | 每 runId（manager 本身每频道一个单例） |
@@ -262,7 +262,7 @@ flowchart LR
 
 TaskDriver 派发 `[TASK_STEP:<id>]` 合成消息（带任务 brief），走与用户消息相同的串行轮次管道；任务步骤在这个任务自己的会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
-spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不再读写任务文件。委派和后台作业在任务会话里自动绑定到任务，派发与结算由 `SubAgentRunManager` / `ChannelJobManager` 写进任务的循环日志（结算记录带上与完成唤醒相同的输出尾部），每一步的 brief 渲染成 `<task_board>`，上一步之后回来的结果另渲染成 `<task_results>`——brief 替换了唤醒文本，所以由它补上唤醒原本携带的内容。
+spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不再读写任务文件。委派和后台作业在任务会话里自动绑定到任务，派发与结算由 `SubAgentRunManager` / `DotJobManager` 写进任务的循环日志（结算记录带上与完成唤醒相同的输出尾部），每一步的 brief 渲染成 `<task_board>`，上一步之后回来的结果另渲染成 `<task_results>`——brief 替换了唤醒文本，所以由它补上唤醒原本携带的内容。
 
 spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每一步完整注入）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（`work` 票要求本任务当前有在途的委派或作业），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，连续第二次就停下并通知用户。验收不再是运行时门禁：`purpose: verify` 的结论（`VERDICT`）记录在看板上供负责人权衡，关闭任务只要求 DoD 全部勾选且没有在途的委派/作业。
 

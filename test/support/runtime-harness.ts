@@ -3,6 +3,8 @@ import { tmpdir } from "os";
 import { dirname, join } from "path";
 import type { DingTalkBot } from "../../src/dingtalk/bot.js";
 import type { DingTalkEvent } from "../../src/dingtalk/handler.js";
+import { allocateConversation, createDot, loadBindings, writeBindings } from "../../src/dot/registry.js";
+import type { DotConversation } from "../../src/dot/types.js";
 import { waitFor } from "../e2e/helpers/wait.js";
 import { type CapturedDelivery, E2EFakeDingTalkBot } from "./fake-bot.js";
 import { HarnessDingTalkBot } from "./harness-bot.js";
@@ -17,7 +19,10 @@ export interface E2ERuntimeHarness {
 	homeDir: string;
 	workspaceDir: string;
 	channelId: string;
+	/** The dot the channel is bound to (`e2e`), its directory, and the channel's conversation in it. */
+	dot: string;
 	dotDir: string;
+	conversationDir: string;
 	deliveries: CapturedDelivery[];
 	sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/**
@@ -30,8 +35,25 @@ export interface E2ERuntimeHarness {
 	shutdown(): Promise<void>;
 }
 
-function getChannelDirName(channelId: string): string {
-	return channelId.replaceAll("/", "__");
+/** The dot every harness channel is bound to unless a case asks for another one. */
+export const E2E_DOT = "e2e";
+
+/**
+ * What `/dot new` + `/dot bind` leave on disk, written before the runtime boots (spec 058):
+ * the dot (if new), the channel's conversation, and the binding.
+ */
+export async function bindChannelOnDisk(
+	workspaceDir: string,
+	channelId: string,
+	dot: string = E2E_DOT,
+): Promise<DotConversation> {
+	await createDot(workspaceDir, dot, new Date());
+	const kind = channelId === "tui" ? "tui" : channelId.startsWith("group_") ? "group" : "dm";
+	const conversation = await allocateConversation(workspaceDir, dot, channelId, kind, new Date());
+	const bindings = await loadBindings(workspaceDir);
+	bindings.bindings[channelId] = { dot, boundAt: new Date().toISOString() };
+	await writeBindings(workspaceDir, bindings);
+	return conversation;
 }
 
 export async function createRuntimeHarness(options?: {
@@ -46,7 +68,7 @@ export async function createRuntimeHarness(options?: {
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
 	const channelId = options?.channelId ?? "dm_e2e_user";
-	const dotDir = join(home.workspaceDir, getChannelDirName(channelId));
+	const { conversationDir, dotDir } = await bindChannelOnDisk(home.workspaceDir, channelId);
 	const fakeBot = new E2EFakeDingTalkBot();
 	const runtime = await createRuntimeContext({
 		paths: {
@@ -66,7 +88,7 @@ export async function createRuntimeHarness(options?: {
 			clientSecret: "e2e-client-secret",
 			robotCode: "e2e-client-id",
 			cardTemplateKey: "content",
-			stateDir: home.workspaceDir,
+			stateDir: join(home.homeDir, "state"),
 		},
 		registerSignalHandlers: false,
 		startServices: options?.startServices ?? false,
@@ -79,7 +101,9 @@ export async function createRuntimeHarness(options?: {
 		homeDir: home.homeDir,
 		workspaceDir: home.workspaceDir,
 		channelId,
+		dot: E2E_DOT,
 		dotDir,
+		conversationDir,
 		deliveries: fakeBot.deliveries,
 		async sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void> {
 			await runtime.handler.handleEvent(
@@ -130,7 +154,10 @@ export interface DeterministicHarness {
 	homeDir: string;
 	workspaceDir: string;
 	channelId: string;
+	/** The dot `channelId` is bound to (`e2e`), its directory, and the channel's conversation in it. */
+	dot: string;
 	dotDir: string;
+	conversationDir: string;
 	deliveries: CapturedDelivery[];
 	/** The in-process mock provider. Register routes on `model.script` before sending. */
 	model: import("./mock-provider/server.js").MockProvider;
@@ -138,7 +165,7 @@ export interface DeterministicHarness {
 	sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/** Enqueue a message but return immediately — for stacking messages during a `hold`. */
 	sendUserMessageNoWait(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
-	/** Deliver an internal wake (task driver / job / delegation), not a user message. */
+	/** Deliver an internal wake (task driver / job / delegation), not a user message. Stamped with `dot`. */
 	sendWake(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/** Queue an internal wake on the real channel queue, as production dispatch does, and return. */
 	enqueueWake(text: string, overrides?: Partial<DingTalkEvent>): boolean;
@@ -187,7 +214,9 @@ export async function createDeterministicHarness(options?: {
 	 *  tests need at least one model declaring vision support). */
 	visionModels?: Array<"mock-main" | "mock-fallback">;
 	/** Seed historical state before the first runtime is constructed. */
-	seed?: (paths: { homeDir: string; dotDir: string }) => void | Promise<void>;
+	seed?: (paths: { homeDir: string; dotDir: string; conversationDir: string }) => void | Promise<void>;
+	/** More channels bound before boot, each to `E2E_DOT` unless it names another dot. */
+	extraChannels?: Array<{ channelId: string; dot?: string }>;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
@@ -210,8 +239,11 @@ export async function createDeterministicHarness(options?: {
 		visionModels: options?.visionModels,
 	});
 	const channelId = options?.channelId ?? "dm_e2e_user";
-	const dotDir = join(home.workspaceDir, getChannelDirName(channelId));
-	await options?.seed?.({ homeDir: home.homeDir, dotDir });
+	const { conversationDir, dotDir } = await bindChannelOnDisk(home.workspaceDir, channelId);
+	for (const extra of options?.extraChannels ?? []) {
+		await bindChannelOnDisk(home.workspaceDir, extra.channelId, extra.dot);
+	}
+	await options?.seed?.({ homeDir: home.homeDir, dotDir, conversationDir });
 	const deliveries: CapturedDelivery[] = [];
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
@@ -220,7 +252,7 @@ export async function createDeterministicHarness(options?: {
 		clientSecret: "e2e-client-secret",
 		robotCode: "e2e-client-id",
 		cardTemplateKey: "content",
-		stateDir: home.workspaceDir,
+		stateDir: join(home.homeDir, "state"),
 		busyMessageDefault: options?.busyMessageDefault ?? "followup",
 	};
 	const paths = {
@@ -310,7 +342,9 @@ export async function createDeterministicHarness(options?: {
 		homeDir: home.homeDir,
 		workspaceDir: home.workspaceDir,
 		channelId,
+		dot: E2E_DOT,
 		dotDir,
+		conversationDir,
 		deliveries,
 		get runtime() {
 			return runtime;
@@ -326,11 +360,12 @@ export async function createDeterministicHarness(options?: {
 		async sendWake(text, overrides): Promise<void> {
 			// The durable-dispatch / task-driver path: an internal event, not a user
 			// message. `_isEvent = true` so background wakes get progressStyle "none".
-			await runtime.handler.handleEvent(buildEvent(text, overrides), bot as never, true);
+			// Every in-process producer stamps the dot it produced the wake for (D7).
+			await runtime.handler.handleEvent(buildEvent(text, { dot: E2E_DOT, ...overrides }), bot as never, true);
 			await waitForIdle();
 		},
 		enqueueWake(text, overrides): boolean {
-			return bot.enqueueEvent(buildEvent(text, overrides));
+			return bot.enqueueEvent(buildEvent(text, { dot: E2E_DOT, ...overrides }));
 		},
 		async runCommand(name, args = ""): Promise<string> {
 			// The direct idle-runtime-command path the TUI and the busy DingTalk switch use
@@ -392,12 +427,9 @@ export function writeWorkspaceSkill(
 	);
 }
 
-export function getChannelFile(harness: Pick<E2ERuntimeHarness, "dotDir">, filename: string): string {
-	return join(harness.dotDir, filename);
-}
-
-export function channelFileExists(harness: Pick<E2ERuntimeHarness, "dotDir">, filename: string): boolean {
-	return existsSync(getChannelFile(harness, filename));
+/** A file of the harness channel's conversation (`context.jsonl`, `log.jsonl` …). */
+export function getConversationFile(harness: Pick<E2ERuntimeHarness, "conversationDir">, filename: string): string {
+	return join(harness.conversationDir, filename);
 }
 
 /** Relocate the old writer's fixed cwd when installing a portable session fixture. */

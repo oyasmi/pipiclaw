@@ -4,14 +4,15 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDetachedMaintenanceCache, loadDetachedMaintenanceContext } from "../src/agent/maintenance-context.js";
 import { PipiclawSettingsManager } from "../src/config/settings.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-maintenance-context-");
 
 afterEach(() => vi.restoreAllMocks());
 
 function writeTranscript(dotDir: string): void {
-	const manager = SessionManager.open(join(dotDir, "context.jsonl"), dotDir);
+	const dir = testConversation(dotDir).conversationDir;
+	const manager = SessionManager.open(join(dir, "context.jsonl"), dir);
 	manager.appendMessage({ role: "user", content: "请记住我喜欢简洁回复", timestamp: Date.now() } as never);
 	manager.appendMessage({
 		role: "assistant",
@@ -37,8 +38,8 @@ describe("loadDetachedMaintenanceContext", () => {
 
 	function makeOptions(appHomeDir: string, dotDir: string) {
 		return {
-			channelId: "dm_cold",
-			dotDir,
+			conversation: testConversation(dotDir, { channelId: "dm_cold" }),
+			workspaceDir: appHomeDir,
 			authConfigPath: join(appHomeDir, "auth.json"),
 			modelsConfigPath: join(appHomeDir, "models.json"),
 			settingsManager: new PipiclawSettingsManager(appHomeDir),
@@ -50,7 +51,7 @@ describe("loadDetachedMaintenanceContext", () => {
 		await expect(loadDetachedMaintenanceContext(makeOptions(appHomeDir, makeTempDir()))).resolves.toBeNull();
 
 		const corruptDir = makeTempDir();
-		writeFileSync(join(corruptDir, "context.jsonl"), "not json at all\n{", "utf-8");
+		writeFileSync(join(testConversation(corruptDir).conversationDir, "context.jsonl"), "not json at all\n{", "utf-8");
 		await expect(loadDetachedMaintenanceContext(makeOptions(appHomeDir, corruptDir))).resolves.toBeNull();
 	});
 
@@ -62,7 +63,7 @@ describe("loadDetachedMaintenanceContext", () => {
 		const openSpy = vi.spyOn(SessionManager, "open");
 		const first = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, dotDir));
 		// The first load builds a full context from disk alone, without a runner.
-		expect(first?.channelId).toBe("dm_cold");
+		expect(first?.conversation.channelId).toBe("dm_cold");
 		expect(first?.messages().length).toBeGreaterThanOrEqual(2);
 		expect(first?.sessionEntries().length).toBeGreaterThanOrEqual(2);
 		expect(first?.model.id).toBeTruthy();
@@ -75,7 +76,8 @@ describe("loadDetachedMaintenanceContext", () => {
 			first?.sessionEntries().map((entry) => entry.id),
 		);
 
-		const manager = SessionManager.open(join(dotDir, "context.jsonl"), dotDir);
+		const dir = testConversation(dotDir).conversationDir;
+		const manager = SessionManager.open(join(dir, "context.jsonl"), dir);
 		const opensBeforeInvalidationRead = openSpy.mock.calls.length;
 		manager.appendMessage({ role: "user", content: "再补一句", timestamp: Date.now() } as never);
 		const third = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, dotDir));

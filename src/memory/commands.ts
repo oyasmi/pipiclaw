@@ -1,7 +1,8 @@
 import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
+import type { DotConversation } from "../dot/types.js";
 import { localDayKey } from "../shared/local-time.js";
-import { getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
+import { getDotMemoryQueue } from "./dot-memory-queue.js";
 import { buildChannelIndexForBootstrap, CHANNEL_INDEX_MAX_UNITS } from "./index-budget.js";
 import { listJournalDates, readJournalDay } from "./journal.js";
 import { readMemoryMaintenanceState } from "./maintenance-state.js";
@@ -19,13 +20,13 @@ import { hashMemoryContent } from "./tombstones.js";
 /**
  * Spec 050, D10: `/memory` is the no-LLM control surface — it must work even when the model or
  * the reflect pass is unavailable. `status` / `list` / `show` / `journal` are pure reads over
- * `store.ts` / `journal.ts`; `forget` is the one write, going through the same channel memory
+ * `store.ts` / `journal.ts`; `forget` is the one write, going through the same dot memory
  * queue as the tool and reflect so it never races them.
  */
 
 interface MemoryCommandOptions {
-	channelId: string;
-	dotDir: string;
+	/** The asking conversation: memory is read from its dot, maintenance state from it. */
+	conversation: DotConversation;
 	appHomeDir?: string;
 	args: string;
 }
@@ -39,7 +40,7 @@ function isMemoryType(value: string | undefined): value is MemoryType {
 }
 
 async function handleStatus(options: MemoryCommandOptions): Promise<string> {
-	const entries = await listMemoryEntries(options.dotDir);
+	const entries = await listMemoryEntries(options.conversation.dotDir);
 	const byType = new Map<MemoryType, number>(MEMORY_TYPE_ORDER.map((type) => [type, 0]));
 	for (const entry of entries) {
 		byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
@@ -51,13 +52,13 @@ async function handleStatus(options: MemoryCommandOptions): Promise<string> {
 	const tiered = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS);
 
 	const state = options.appHomeDir
-		? await readMemoryMaintenanceState(options.appHomeDir, options.channelId)
+		? await readMemoryMaintenanceState(options.appHomeDir, options.conversation)
 		: undefined;
 
 	return [
 		"**记忆状态**",
 		"",
-		`- 频道条目：\`${entries.length}\`（${MEMORY_TYPE_ORDER.map((type) => `${type} ${byType.get(type) ?? 0}`).join(" / ")}）`,
+		`- 记忆条目：\`${entries.length}\`（${MEMORY_TYPE_ORDER.map((type) => `${type} ${byType.get(type) ?? 0}`).join(" / ")}）`,
 		`- 观察期条目：\`${probationary.length}\`${probationary.length > 0 ? `（最早到期 \`${probationary[0].expires}\`）` : ""}`,
 		`- 文件头解析异常：\`${malformed.length}\`${malformed.length > 0 ? `（${malformed.map((e) => e.name).join("、")}）` : ""}`,
 		`- 上次后台整理：\`${state?.lastReflectAt ?? "从未"}\``,
@@ -69,12 +70,12 @@ async function handleList(options: MemoryCommandOptions, typeArg: string | undef
 	if (typeArg && !isMemoryType(typeArg)) {
 		return `未知的记忆类型 \`${typeArg}\`。可用类型：${MEMORY_TYPE_ORDER.join(", ")}。`;
 	}
-	const entries = await listMemoryEntries(options.dotDir);
+	const entries = await listMemoryEntries(options.conversation.dotDir);
 	const filtered = typeArg ? entries.filter((entry) => entry.type === typeArg) : entries;
 	if (filtered.length === 0) {
 		return typeArg
 			? `暂无 \`${typeArg}\` 类型的记忆。\n用 \`/memory list\` 查看全部。`
-			: "暂无生效的频道记忆。\n在对话里告诉我需要长期记住的事，我会保存下来。";
+			: "暂无生效的记忆。\n在对话里告诉我需要长期记住的事，我会保存下来。";
 	}
 	const lines = filtered.map((entry) => {
 		const marker = entry.body.trim() ? "（有正文）" : "";
@@ -88,7 +89,7 @@ async function handleList(options: MemoryCommandOptions, typeArg: string | undef
 
 async function handleShow(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
 	if (!name) return `缺少记忆名称。\n\n${renderUsage()}`;
-	const entry = await readMemoryEntry(options.dotDir, name);
+	const entry = await readMemoryEntry(options.conversation.dotDir, name);
 	if (!entry) return `未找到记忆 \`${name}\`。用 \`/memory list\` 查看可用名称。`;
 	// Frontmatter keys stay visible (the user sees them when opening the file), introduced by a
 	// Chinese label rather than shown bare (spec 053, D1).
@@ -103,19 +104,19 @@ async function handleShow(options: MemoryCommandOptions, name: string | undefine
 	if (entry.malformed) lines.push("- ⚠️ 文件头解析异常，以第一段作为描述");
 	lines.push("", entry.description);
 	if (entry.body.trim()) lines.push("", flattenMarkdownForChat(entry.body.trim()));
-	return capReply(lines.join("\n"), { nextStepHint: "完整内容在频道目录的 `memory/` 下" }).text;
+	return capReply(lines.join("\n"), { nextStepHint: "完整内容在 dot 目录的 `memory/` 下" }).text;
 }
 
 async function handleForget(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
 	if (!name) return `缺少记忆名称。\n\n${renderUsage()}`;
-	const entry = await readMemoryEntry(options.dotDir, name);
+	const entry = await readMemoryEntry(options.conversation.dotDir, name);
 	if (!entry) return `未找到记忆 \`${name}\`，未做任何改动。用 \`/memory list\` 查看可用名称。`;
-	await getDefaultChannelMemoryQueue().run(options.channelId, () =>
-		applyMemoryOps(options.dotDir, [{ op: "delete", name, reason: "/memory forget" }]),
+	await getDotMemoryQueue().run(options.conversation, () =>
+		applyMemoryOps(options.conversation.dotDir, [{ op: "delete", name, reason: "/memory forget" }]),
 	);
-	await appendMemoryReviewLog(options.dotDir, {
+	await appendMemoryReviewLog(options.conversation.dotDir, {
 		timestamp: new Date().toISOString(),
-		channelId: options.channelId,
+		channelId: options.conversation.channelId,
 		reason: "memory-forget",
 		actions: [{ op: "forget", name, contentHash: hashMemoryContent(entry.description) }],
 	}).catch(() => {});
@@ -127,9 +128,9 @@ async function handleJournal(options: MemoryCommandOptions, dateArg: string | un
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
 		return `日期格式应为 \`YYYY-MM-DD\`。\n\n${renderUsage()}`;
 	}
-	const content = await readJournalDay(options.dotDir, date);
+	const content = await readJournalDay(options.conversation.dotDir, date);
 	if (!content.trim()) {
-		const dates = await listJournalDates(options.dotDir);
+		const dates = await listJournalDates(options.conversation.dotDir);
 		const hint =
 			dates.length > 0
 				? `有记录的日期：${dates.slice(-10).join("、")}`

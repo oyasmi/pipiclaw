@@ -75,7 +75,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 				agents: [researcherRole],
 				warnings: [],
 			}),
-			runtimeContext: { workspaceDir, channelId: "dm_ext_envelope" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_ext_envelope" },
 		});
 
 		const result = await tool.execute("call-1", {
@@ -151,7 +151,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
-			runtimeContext: { workspaceDir, channelId: "dm_ext_no_memory" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_ext_no_memory" },
 		});
 
 		await tool.execute("call-no-memory", { agent: "scout", task: "Look around." });
@@ -187,7 +187,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
-			runtimeContext: { workspaceDir, channelId: "dm_ext_with_memory" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_ext_with_memory" },
 		});
 
 		await tool.execute("call-with-memory", { agent: "scout", task: "Look around." });
@@ -227,7 +227,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
-			runtimeContext: { workspaceDir, channelId: "dm_ext_invocation_context" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_ext_invocation_context" },
 		});
 
 		await tool.execute("call-invocation-context", { agent: "scout", task: "Look around." });
@@ -262,7 +262,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [checkerRole], warnings: [] }),
-			runtimeContext: { workspaceDir, channelId: "dm_ext_envelope_verify" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_ext_envelope_verify" },
 		});
 
 		await tool.execute("call-2", {

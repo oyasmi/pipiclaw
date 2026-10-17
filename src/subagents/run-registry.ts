@@ -1,42 +1,20 @@
 /**
- * The application's registry of per-channel run managers: lazy creation, the host-wide admission
- * count, startup restore across every persisted channel, and the daily garbage-collection timer.
+ * The application's registry of per-dot run managers: lazy creation, the host-wide admission
+ * count, startup restore across every persisted dot, and the daily garbage-collection timer.
  */
-import { mkdir, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { isChannelId } from "../channel/channel-paths.js";
+import { mkdir, readdir } from "node:fs/promises";
+import { getDotDir, isDotName } from "../dot/paths.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { parseRunRecord } from "./run-record.js";
 import { type RunManagerOptions, SubAgentRunManager } from "./runs.js";
 
-async function listRecordChannelIds(stateDir: string): Promise<string[]> {
-	const channelIds: string[] = [];
-	for (const entry of await readdir(stateDir, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const dir = join(stateDir, entry.name);
-		let channelId: string | undefined;
-		try {
-			for (const filename of (await readdir(dir)).filter((name) => name.endsWith(".json"))) {
-				channelId = parseRunRecord(await readFile(join(dir, filename), "utf-8"))?.channelId;
-				if (channelId) break;
-			}
-		} catch {
-			channelId = undefined;
-		}
-		const resolved = channelId && isChannelId(channelId) ? channelId : entry.name;
-		if (isChannelId(resolved)) channelIds.push(resolved);
-	}
-	return channelIds;
-}
-
-/** Owns this application's channel managers and their maintenance timer. */
-export function createSubAgentRuntime(options: RunManagerOptions = {}) {
-	const config = { ...options };
+/** Owns this application's dot managers and their maintenance timer. */
+export function createSubAgentRuntime(options: RunManagerOptions & { workspaceDir: string }) {
+	const { workspaceDir, ...config } = options;
 	const managers = new Map<string, SubAgentRunManager>();
 	let stopped = false;
 
-	/** Host-wide running count for the D10.2 admission check, summed across every known channel. */
+	/** Host-wide running count for the D10.2 admission check, summed across every known dot. */
 	function totalRunningSubAgentRuns(): number {
 		let total = 0;
 		for (const manager of managers.values()) {
@@ -82,37 +60,42 @@ export function createSubAgentRuntime(options: RunManagerOptions = {}) {
 		}
 	}
 
-	function get(channelId: string): SubAgentRunManager {
-		let manager = managers.get(channelId);
+	function get(dot: string): SubAgentRunManager {
+		let manager = managers.get(dot);
 		if (!manager) {
-			manager = new SubAgentRunManager(channelId, { ...config, runningCount: totalRunningSubAgentRuns });
-			managers.set(channelId, manager);
+			manager = new SubAgentRunManager(
+				{ dot, dotDir: getDotDir(workspaceDir, dot) },
+				{ ...config, runningCount: totalRunningSubAgentRuns },
+			);
+			managers.set(dot, manager);
 			if (stopped) manager.stop();
 		}
 		return manager;
 	}
 
 	/**
-	 * Re-adopt every channel's persisted runs at startup, settling any internal run still marked
-	 * `running` as `lost` (D10.3). Channels are discovered from the state directory itself, exactly
-	 * like `restoreChannelJobs` — but by reading the records rather than trusting directory names,
-	 * so a channel is adopted under the id the rest of the runtime can act on.
+	 * Re-adopt every dot's persisted runs at startup, settling any internal run still marked
+	 * `running` as `lost` (D10.3). Dots are the record directories themselves — a dot name *is* the
+	 * directory name — and restore does not depend on bindings (spec 058, D6): a run still going
+	 * when its dot went dormant still has an owner to adopt and settle it.
 	 */
 	async function restore(): Promise<number> {
 		const stateDir = config.stateDir;
 		if (!stateDir) return 0;
-		let channelIds: string[];
+		let dots: string[];
 		try {
 			await mkdir(stateDir, { recursive: true });
-			channelIds = await listRecordChannelIds(stateDir);
+			dots = (await readdir(stateDir, { withFileTypes: true }))
+				.filter((entry) => entry.isDirectory() && isDotName(entry.name))
+				.map((entry) => entry.name);
 		} catch (error) {
 			log.logWarn("subagent.scan.failed", "Persisted run scan failed", { reason: errorMessage(error) });
 			return 0;
 		}
 
 		let restored = 0;
-		for (const channelId of channelIds) {
-			restored += await get(channelId).restore();
+		for (const dot of dots) {
+			restored += await get(dot).restore();
 		}
 		// Reclaim stale runs once as a host-wide startup batch; subsequent batches run daily.
 		await collectGarbageAllChannels();

@@ -64,7 +64,7 @@ describeE2E("E2E: task lifecycle", () => {
 		// Use the exact wake text production sends, derived from the task file on disk.
 		const entry = (await readActiveTasks(join(harness.dotDir, "tasks"))).find((e) => e.id === taskId);
 		expect(entry, "task must exist before it can be resumed").toBeDefined();
-		const driverEvent = createTaskDriverEvent(harness.channelId, entry!, Date.now());
+		const driverEvent = createTaskDriverEvent(harness.dot, harness.channelId, entry!, Date.now());
 		await harness.sendUserMessage(driverEvent.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
 
 		// The DoD is trivially satisfiable in one step, so the model may legitimately drive

@@ -13,16 +13,16 @@ order: 20
 
 | 信息 | 落点 |
 |---|---|
-| 用户身份、长期偏好 | channel memory，`type: user` |
-| 工作纠正、反复踩过的坑 | channel memory，`type: feedback` |
-| 项目的稳定事实、决策、约束 | channel memory，`type: project` |
-| 路径、URL、命令、联系人、id | channel memory，`type: reference` |
+| 用户身份、长期偏好 | dot memory，`type: user` |
+| 工作纠正、反复踩过的坑 | dot memory，`type: feedback` |
+| 项目的稳定事实、决策、约束 | dot memory，`type: project` |
+| 路径、URL、命令、联系人、id | dot memory，`type: reference` |
 | 今天发生了什么、定了什么、卡在哪 | journal，后台反思自动写 |
 | 未闭合工作的目标、状态、证据 | task 契约与循环日志 |
 | 机器安装、依赖、环境变量来源 | workspace `ENVIRONMENT.md` |
 | 多次验证有效的跨任务流程 | workspace `skills/` |
 
-不把临时进度、猜测或计划存成永久 memory。频道记忆写入只走专用工具；`MEMORY.md` 是生成索引，journal 只由后台写。
+不把临时进度、猜测或计划存成永久 memory。dot 记忆写入只走专用工具（同一 dot 的各频道共享它）；`MEMORY.md` 是生成索引，journal 只由后台写。
 
 ## 明确记住、纠正与忘记
 
@@ -36,9 +36,9 @@ order: 20
 
 ## 找回并应用
 
-先看当前上下文和首轮索引；有相关 `(+)` 条目才读正文。索引不会每轮刷新，中途怀疑记过就 `memory_search`。它查频道 memory、workspace MEMORY 和最近的 journal；日志最多取最近 30 个日文件、每份末尾 64 KiB，超出时工具会给继续检索的路径。找更早记录用该路径定向 `grep` 或按日期 `read`，原始对话用 `session_search`。无命中不等于不存在。
+先看当前上下文和首轮索引；有相关 `(+)` 条目才读正文。索引不会每轮刷新，中途怀疑记过就 `memory_search`。它查 dot memory、workspace MEMORY 和最近的 journal；日志最多取最近 30 个日文件、每份末尾 64 KiB，超出时工具会给继续检索的路径。找更早记录用该路径定向 `grep` 或按日期 `read`，原始对话用 `session_search`。无命中不等于不存在。
 
-使用偏好前确认适用范围，再转成执行与验收的同一要求。例如“控制复杂度”可落为“新增依赖或持久状态必须说明本次必要性”，而不只是让执行者读一句口号。委派时把本轮适用要求同时给执行者和验收者；跨频道共享背景只由用户维护 workspace `MEMORY.md`。
+使用偏好前确认适用范围，再转成执行与验收的同一要求。例如“控制复杂度”可落为“新增依赖或持久状态必须说明本次必要性”，而不只是让执行者读一句口号。委派时把本轮适用要求同时给执行者和验收者；跨 dot 共享背景只由用户维护 workspace `MEMORY.md`。
 
 ## 自动学习与 skill 晋升
 

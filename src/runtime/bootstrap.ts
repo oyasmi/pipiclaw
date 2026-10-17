@@ -6,7 +6,7 @@
 import { join } from "path";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
-import { scanWorkspaceForInterruptedTurns } from "../agent/turn/turn-recovery.js";
+import { scanConversationsForInterruptedTurns } from "../agent/turn/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
 import {
 	BootstrapExitError,
@@ -21,14 +21,16 @@ import {
 } from "../app/home.js";
 import { prepareAppServices } from "../app/services.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
+import { formatChannelLabel } from "../channel/channel-id.js";
 import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
-import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
 import { ChannelStore } from "../channel/store.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
 import { DingTalkBot } from "../dingtalk/bot.js";
 import { type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import type { DingTalkHandler } from "../dingtalk/handler.js";
+import { assertNoLegacyLayout, StartupRefusal } from "../dot/legacy-layout.js";
+import { getDotDir } from "../dot/paths.js";
 import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
@@ -41,13 +43,14 @@ import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
+import { DotRuntime } from "./dot-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createShutdown } from "./shutdown.js";
 import { TaskDriver } from "./task-driver.js";
-import { migrateTasksToV5 } from "./task-migration.js";
 import { createTaskSpawner } from "./task-spawn.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { createTurnHandler } from "./turn-handler.js";
+import type { ArchivedMessage } from "./turn-run.js";
 
 export interface BootstrapOptions {
 	env?: NodeJS.ProcessEnv;
@@ -66,6 +69,8 @@ export interface AppContext {
 export interface RuntimeContext {
 	jobs: JobRuntime;
 	runs: SubAgentRuntime;
+	/** Bindings and active dots (spec 058, D6); exposed for the e2e harness and evals. */
+	dots: DotRuntime;
 	handler: DingTalkHandler;
 	store: ChannelStore;
 	/** Production driver instance, exposed so evals can invoke the real scan path. */
@@ -121,12 +126,12 @@ interface RuntimeContextOptions {
 	paths: BootstrapPaths;
 	dingtalkConfig: DingTalkConfig;
 	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
-	createEventsWatcher?: (
-		workspaceDir: string,
-		bot: DingTalkBot,
-		executor: Executor,
-		eventHistoryPath: string,
-	) => { start(): void; stop(): void; flush?(): Promise<void> };
+	/** Builds one dot's events watcher (tests pass an inert one). */
+	createEventsWatcher?: (target: { dot: string; dotDir: string }) => {
+		start(): void;
+		stop(): void;
+		flush?(): Promise<void>;
+	};
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
 	/** Background-job sweep cadence override (tests use a short one for timely completion wakes). */
@@ -154,10 +159,12 @@ interface RuntimeContextOptions {
 export async function createRuntimeContext(
 	options: RuntimeContextOptions,
 ): Promise<RuntimeContext & { bot: DingTalkBot }> {
+	// D21: nothing may start on top of the pre-dot layout.
+	assertNoLegacyLayout(options.paths);
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
-	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
-	const runtimeSettingsManager = options.settingsManager ?? new PipiclawSettingsManager(options.paths.appHomeDir);
+	const { workspaceDir, appHomeDir } = options.paths;
+	const runtimeSettingsManager = options.settingsManager ?? new PipiclawSettingsManager(appHomeDir);
 	log.configureLogging(runtimeSettingsManager.getLoggingSettings());
 	const startedAt = Date.now();
 	const cliVersion = readCliVersion();
@@ -166,25 +173,82 @@ export async function createRuntimeContext(
 	const activeTasks = new Set<Promise<void>>();
 	/** Channels with a `/stop` watchdog in flight, so a burst of `/stop` starts only one. */
 	const stopWatchdogs = new Set<string>();
-	// `workspace/CHANNELS.md`: names every channel id so the workspace, the logs and the agent
-	// stop dealing in `group_cid...`. Writes are debounced internally (see channel-index.ts).
-	const channelIndex: ChannelIndex = createChannelIndex({ workspaceDir: options.paths.workspaceDir });
 	let durableDispatch: DurableDispatchService | undefined;
 	let shuttingDown = false;
+	const executor = options.executor ?? createExecutor();
+	const dispatch = (event: ChannelEvent) => durableDispatch?.dispatch(event) ?? false;
+
+	// The one authority on bindings and active dots (spec 058, D6). `bot`, `taskDriver` and the
+	// spawner are resolved lazily by its callbacks: none of them runs before this function returns.
+	const dotRuntime: DotRuntime = new DotRuntime({
+		workspaceDir,
+		recover: async (conversations) => {
+			// Spec 043, D10 point 1: repair turns interrupted by the last shutdown/crash before any of
+			// these channels takes traffic — a dangling session would 400 against the provider on
+			// every attempt until a human ran /new.
+			const report = await scanConversationsForInterruptedTurns(conversations, {
+				api: defaultModel.api,
+				provider: defaultModel.provider,
+				model: defaultModel.id,
+			});
+			if (report.repaired.length > 0) {
+				log.logWarn("runtime.recovery.repaired", "Interrupted turns repaired on restart", {
+					fields: {
+						repaired: report.repaired.length,
+						scanned: report.scanned,
+						channels: report.repaired.map((r) => r.conversation.channelId),
+					},
+				});
+			}
+			if (report.blocked.length > 0) {
+				log.logWarn("runtime.recovery.blocked", "Channels with an unrecoverable session will refuse new turns", {
+					reason: report.blocked.map((b) => `${b.conversation.channelId}: ${b.reason}`).join("; "),
+				});
+			}
+		},
+		createWatcher: (target) =>
+			options.createEventsWatcher
+				? options.createEventsWatcher(target)
+				: createEventsWatcher({
+						...target,
+						isBound: (channelId) => dotRuntime.isBoundTo(channelId, target.dot),
+						bot,
+						executor,
+						commandGuardConfig: loadSecurityConfigWithDiagnostics(appHomeDir).config.commandGuard,
+						historyPath: options.paths.eventHistoryPath,
+						dispatch,
+						spawnTask: createTaskSpawner({
+							getDotDir: (dot) => getDotDir(workspaceDir, dot),
+							nudge: () => getTaskDriver().nudge?.(),
+							notify: (dot, channelId, text) => dotRuntime.sendFromDot(dot, channelId, text),
+						}),
+					}),
+		send: (channelId, text) => bot.sendPlain(channelId, text),
+	});
+	await dotRuntime.load();
+	const isBoundTo = (channelId: string, dot: string) => dotRuntime.isBoundTo(channelId, dot);
+
+	const store = new ChannelStore({
+		resolveArchiveDir: (channelId) => {
+			const resolution = dotRuntime.resolve(channelId);
+			return resolution.kind === "bound" ? resolution.conversation.conversationDir : undefined;
+		},
+	});
+	// `workspace/CHANNELS.md`: names every channel id (and shows its dot) so the workspace, the logs
+	// and `/dot` stop dealing in `group_cid...`. Writes are debounced internally.
+	const channelIndex: ChannelIndex = createChannelIndex({
+		workspaceDir,
+		getBoundDot: (channelId) => dotRuntime.boundDot(channelId),
+	});
+	await channelIndex.load();
+	const describeChannel = (dot: string, channelId: string) => ({
+		label: formatChannelLabel(channelId, channelIndex.nameOf(channelId)),
+		boundHere: dotRuntime.isBoundTo(channelId, dot),
+	});
 
 	const archiveIncomingMessage = async (
 		channelId: string,
-		message: {
-			date: string;
-			ts: string;
-			user: string;
-			userName?: string;
-			text: string;
-			isBot: boolean;
-			deliveryMode?: "steer" | "followUp";
-			skipContextSync?: boolean;
-			images?: string[];
-		},
+		message: ArchivedMessage,
 		contextLabel: string,
 	): Promise<void> => {
 		try {
@@ -198,9 +262,16 @@ export async function createRuntimeContext(
 		}
 	};
 
-	const getRunner = (channelId: string): AgentRunner => {
+	/**
+	 * The channel's runner, or `undefined` when it is not bound to an available dot — the runtime
+	 * never builds a runner (or a directory) for an unbound channel (INV-2).
+	 */
+	const getRunner = (channelId: string): AgentRunner | undefined => {
+		const resolution = dotRuntime.resolve(channelId);
+		if (resolution.kind !== "bound") return undefined;
+		const { conversation } = resolution;
 		const existing = channelRunners.get(channelId);
-		if (existing) {
+		if (existing && existing.conversation.dot === conversation.dot) {
 			// Re-insert to move this channel to the end (most-recently-used) of the Map's
 			// iteration order, which evictIdleRunnersOverCap relies on.
 			channelRunners.delete(channelId);
@@ -208,15 +279,20 @@ export async function createRuntimeContext(
 			return existing;
 		}
 
-		const dotDir = ensureChannelDir(options.paths.workspaceDir, channelId);
-		const runner = createRunner(channelId, dotDir, {
-			jobManager: jobs.get(channelId),
-			runManager: runs.get(channelId),
-			appHomeDir: options.paths.appHomeDir,
+		const runner = createRunner(conversation, {
+			jobManager: jobs.get(conversation.dot),
+			runManager: runs.get(conversation.dot),
+			appHomeDir,
+			workspaceDir,
 			authConfigPath: options.paths.authConfigPath,
 			modelsConfigPath: options.paths.modelsConfigPath,
 			settingsManager: runtimeSettingsManager,
 			onSessionEvent: options.observer,
+			describeChannel: (id) => channelIndex.nameOf(id),
+			describeConversation: (dir) => {
+				const owner = dotRuntime.channelOfConversation(conversation.dot, dir);
+				return owner ? formatChannelLabel(owner, channelIndex.nameOf(owner)) : undefined;
+			},
 			// The DingTalk bot is the media sender for this transport; enables `send_media`.
 			// `bot` is defined below in this same scope and initialized before any message
 			// (and thus any getRunner call) can arrive.
@@ -229,10 +305,7 @@ export async function createRuntimeContext(
 
 	const isShuttingDown = (): boolean => shuttingDown;
 	const getDurableDispatch = (): DurableDispatchService | undefined => durableDispatch;
-	// `executor`/`taskDriver` are declared further down this function (after `bot`, which the
-	// task driver's own `notify` needs) — these two closures resolve them lazily, the same way
-	// `getRunner` above already resolves `bot` before its own declaration: nothing here calls
-	// through them until long after the whole function has finished setting up.
+	// `jobs`/`runs`/`taskDriver` are declared further down; these closures resolve them lazily.
 	const getJobs = (): JobRuntime => jobs;
 	const getRuns = (): SubAgentRuntime => runs;
 	const getTaskDriver = (): TaskDriverLike => taskDriver;
@@ -247,6 +320,9 @@ export async function createRuntimeContext(
 		channelIndex,
 		archiveIncomingMessage,
 		getRunner,
+		resolveChannel: (channelId) => dotRuntime.resolve(channelId),
+		describeChannel,
+		dotChannelIds: (dot) => dotRuntime.conversationChannels(dot),
 		cliVersion,
 		startedAt,
 		isShuttingDown,
@@ -259,115 +335,78 @@ export async function createRuntimeContext(
 	const bot = options.createBot
 		? options.createBot(handler, options.dingtalkConfig)
 		: new DingTalkBot(handler, options.dingtalkConfig);
-	const dispatchStateDir = join(options.paths.appHomeDir, "state", "dispatch");
+	const dispatchStateDir = join(appHomeDir, "state", "dispatch");
 	durableDispatch = new DurableDispatchService({
 		stateDir: dispatchStateDir,
 		bot,
-		// A structured wake (job/subagent completion, task-driver) that keeps failing before it can
-		// ever mark itself complete would otherwise redeliver forever (30s tick, no backoff prior to
-		// this notice). Surface it once instead of looping silently; the record stays on disk for
-		// inspection until a human clears it.
+		// A structured wake that keeps failing before it can mark itself complete would otherwise
+		// redeliver forever. Surface it once instead of looping silently; the record stays on disk
+		// for inspection until a human clears it. Like every background notice, only to a channel
+		// still bound to the wake's dot (D7).
 		onExhausted: async (record) => {
 			log.logEvent("warn", "dispatch.exhausted", "Dispatch exhausted", {
 				ctx: { channelId: record.event.channelId },
 				details: record.event.text.slice(0, 500),
 				fields: { dispatchId: record.id, deliveries: record.deliveries, producer: record.event.user },
 			});
-			await bot.sendPlain(record.event.channelId, renderDispatchExhaustedNotice(record, dispatchStateDir));
+			if (record.event.dot) {
+				await dotRuntime.sendFromDot(
+					record.event.dot,
+					record.event.channelId,
+					renderDispatchExhaustedNotice(record, dispatchStateDir),
+				);
+			}
 		},
 	});
-	const executor = options.executor ?? createExecutor();
-	// Background jobs get their persistence root and their way to wake a channel before any turn
-	// can start one, then re-adopt whatever survived the last shutdown (spec 031, D6).
+	// Background jobs and delegation runs are owned per dot (spec 058, D15); their completion wakes
+	// pass the producer-side binding check before they are dispatched.
 	const jobs = createJobRuntime(executor, {
-		jobsStateDir: join(options.paths.appHomeDir, "state", "jobs"),
-		workspaceDir: options.paths.workspaceDir,
-		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
+		jobsStateDir: join(appHomeDir, "state", "jobs"),
+		workspaceDir,
+		dispatch,
+		isBoundTo,
 		...(options.jobSweepIntervalMs ? { sweepIntervalMs: options.jobSweepIntervalMs } : {}),
 	});
-	// Delegation runs get the same treatment (spec 040, D1/D7): persistence root, wake delivery,
-	// and the usage/archive authority, wired before any turn can start a run.
 	const runs = createSubAgentRuntime({
-		stateDir: join(options.paths.appHomeDir, "state", "subagent-runs"),
-		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
-		// P0-1/P1a: a best-effort out-of-band notice, independent of the completion wake — it reaches
-		// the channel in roughly the time the run itself takes, not the wake turn's own LLM latency
-		// on top of that. `notices: "off"` (settings.json) restores today's silent behavior.
-		notify: (channelId, notice) => {
+		stateDir: join(appHomeDir, "state", "subagent-runs"),
+		workspaceDir,
+		dispatch,
+		isBoundTo,
+		// A best-effort out-of-band notice, independent of the completion wake. `notices: "off"`
+		// (settings.json) restores the silent behavior.
+		notify: (dot, channelId, notice) => {
 			const level = runtimeSettingsManager.getDelegationSettings().notices;
 			if (level === "off") return;
 			if (level === "settled" && notice.kind === "progress") return;
 			const text = renderRunNotice(notice);
-			if (text) void bot.sendPlain(channelId, text);
+			if (text) void dotRuntime.sendFromDot(dot, channelId, text);
 		},
 		ledger: getUsageLedger(),
 		store,
 	});
 	// Admission (bot.start() below) must not open until every persisted job and run is back in
-	// memory: a message arriving mid-restore would see partial running-count/short-id/lease state,
-	// and durableDispatch's redelivery of a pending completion wake would find no record to claim.
-	// Spec 042 D11: `restoreChannelJobs` used to be a bare `void` while `restoreAllSubAgentRuns`
-	// was already awaited — the same admission race P0-1 closed for delegation runs was still open
-	// for background jobs.
+	// memory, and restore is independent of bindings (D6): a dormant dot's runs still settle.
 	await jobs.restore();
 	await runs.restore();
 	runs.start();
-	// Spec 043, D10 point 1: repair any turn interrupted by the last shutdown/crash before opening
-	// admission — a message routed to a still-dangling session would 400 against the provider on
-	// every attempt (F3) until a human ran /new. Runs before bot.start() for the same reason as
-	// the job/run restores above: admission must see a structurally legal session, not a partial one.
-	const recoveryReport = await scanWorkspaceForInterruptedTurns(options.paths.workspaceDir, {
-		api: defaultModel.api,
-		provider: defaultModel.provider,
-		model: defaultModel.id,
-	});
-	if (recoveryReport.repaired.length > 0) {
-		log.logWarn("runtime.recovery.repaired", "Interrupted turns repaired on restart", {
-			fields: {
-				repaired: recoveryReport.repaired.length,
-				scanned: recoveryReport.scanned,
-				channels: recoveryReport.repaired.map((r) => r.dotDir),
-			},
-		});
-	}
-	if (recoveryReport.blocked.length > 0) {
-		log.logWarn("runtime.recovery.blocked", "Channels with an unrecoverable session will refuse new turns", {
-			reason: recoveryReport.blocked.map((b) => `${b.dotDir}: ${b.reason}`).join("; "),
-		});
-	}
-	const eventsWatcher = options.createEventsWatcher
-		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
-		: createEventsWatcher(
-				options.paths.workspaceDir,
-				bot,
-				executor,
-				loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config.commandGuard,
-				options.paths.eventHistoryPath,
-				(event) => durableDispatch?.dispatch(event) ?? false,
-				createTaskSpawner({
-					getChannelDir: (channelId) => getChannelDir(options.paths.workspaceDir, channelId),
-					nudge: () => getTaskDriver().nudge?.(),
-					notify: (channelId, text) => bot.sendPlain(channelId, text),
-				}),
-			);
+	// Activation repairs each bound dot's conversations before its channels can take traffic.
+	await dotRuntime.activateBound();
+
 	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
 		? options.createMemoryMaintenanceScheduler()
 		: new MemoryMaintenanceScheduler({
-				appHomeDir: options.paths.appHomeDir,
-				workspaceDir: options.paths.workspaceDir,
-				getKnownChannelIds: () => channelRunners.keys(),
-				// Channels active this boot reuse their runner's in-memory context; every
-				// other discovered channel gets a lightweight disk-backed context instead
-				// of resurrecting a full ChannelRunner (session, tools, sub-agents) that
-				// would then sit in the runner cache forever.
-				getRuntimeContext: async (channelId) => {
-					const runner = channelRunners.get(channelId);
-					if (runner) {
+				appHomeDir,
+				getConversations: () => dotRuntime.boundConversations(),
+				// Conversations active this boot reuse their runner's in-memory context; every other one
+				// gets a lightweight disk-backed context instead of resurrecting a full runner.
+				getRuntimeContext: async (conversation) => {
+					const runner = channelRunners.get(conversation.channelId);
+					if (runner && runner.conversation.dot === conversation.dot) {
 						return runner.getMemoryMaintenanceContext();
 					}
 					return loadDetachedMaintenanceContext({
-						channelId,
-						dotDir: getChannelDir(options.paths.workspaceDir, channelId),
+						conversation,
+						workspaceDir,
 						authConfigPath: options.paths.authConfigPath,
 						modelsConfigPath: options.paths.modelsConfigPath,
 						settingsManager: runtimeSettingsManager,
@@ -385,22 +424,23 @@ export async function createRuntimeContext(
 	let cachedToolsStamp: string | undefined;
 	let cachedTasksEnabled = true;
 	const tasksToolEnabled = (): boolean => {
-		const stamp = fileStamp(getToolsConfigPath(options.paths.appHomeDir));
+		const stamp = fileStamp(getToolsConfigPath(appHomeDir));
 		if (stamp !== cachedToolsStamp) {
 			cachedToolsStamp = stamp;
-			cachedTasksEnabled = loadToolsConfig(options.paths.appHomeDir).tools.tasks.enabled;
+			cachedTasksEnabled = loadToolsConfig(appHomeDir).tools.tasks.enabled;
 		}
 		return cachedTasksEnabled;
 	};
 	const taskDriver = options.createTaskDriver
 		? options.createTaskDriver()
 		: new TaskDriver({
-				workspaceDir: options.paths.workspaceDir,
-				getKnownChannelIds: () => channelRunners.keys(),
+				getActiveDots: () => dotRuntime.activeDots(),
+				isBoundTo,
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
-				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
+				dispatch,
 				onDispatch: options.onTaskDriverDispatch,
-				notify: (receipt) => bot.sendPlain(receipt.channelId, receipt.text),
+				notify: (receipt) =>
+					receipt.dot ? dotRuntime.sendFromDot(receipt.dot, receipt.channelId, receipt.text) : false,
 				isEnabled: tasksToolEnabled,
 			});
 
@@ -408,7 +448,7 @@ export async function createRuntimeContext(
 		taskDriver,
 		getDurableDispatch,
 		memoryMaintenanceScheduler,
-		eventsWatcher,
+		eventsWatcher: dotRuntime,
 		runs,
 		jobs,
 		bot,
@@ -436,12 +476,7 @@ export async function createRuntimeContext(
 	}
 
 	if (startServices) {
-		// Convert supported v3 task files and their schedules (v4 beta files are skipped) before services rely
-		// on the v5 layout (spec 052, D12). Marker-gated and awaited: the pass writes event
-		// templates the watcher is about to load, so the services must not start underneath it.
-		// A failed or partial conversion throws and aborts startup: nothing may run on half-migrated state.
-		await migrateTasksToV5(options.paths.workspaceDir, join(options.paths.appHomeDir, "state"));
-		eventsWatcher.start();
+		dotRuntime.startServices();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();
 		durableDispatch.start();
@@ -452,6 +487,7 @@ export async function createRuntimeContext(
 		handler,
 		jobs,
 		runs,
+		dots: dotRuntime,
 		store,
 		bot,
 		taskDriver,
@@ -478,17 +514,25 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	}
 
 	const dingtalkConfig = loadConfig(paths, io);
-	dingtalkConfig.stateDir = paths.workspaceDir;
+	// Routing metadata lives in `state/dingtalk/conversations.json` (spec 058, D17).
+	dingtalkConfig.stateDir = join(paths.appHomeDir, "state");
 	const { settingsManager } = prepareAppServices(paths);
 
 	log.logStartup(paths.workspaceDir);
-	const runtime = await createRuntimeContext({
-		paths,
-		dingtalkConfig,
-		registerSignalHandlers,
-		startServices,
-		settingsManager,
-	});
+	let runtime: Awaited<ReturnType<typeof createRuntimeContext>>;
+	try {
+		runtime = await createRuntimeContext({
+			paths,
+			dingtalkConfig,
+			registerSignalHandlers,
+			startServices,
+			settingsManager,
+		});
+	} catch (error) {
+		if (!(error instanceof StartupRefusal)) throw error;
+		io.error(error.message);
+		throw new BootstrapExitError(1);
+	}
 
 	return {
 		bot: runtime.bot,

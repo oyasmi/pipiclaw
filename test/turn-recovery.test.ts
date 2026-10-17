@@ -1,13 +1,12 @@
-import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
 	planTurnRecovery,
 	recoverInterruptedTurn,
-	scanWorkspaceForInterruptedTurns,
+	scanConversationsForInterruptedTurns,
 } from "../src/agent/turn/turn-recovery.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-turn-recovery-");
 
@@ -183,37 +182,34 @@ describe("recoverInterruptedTurn", () => {
 	});
 });
 
-describe("scanWorkspaceForInterruptedTurns", () => {
-	it("repairs a dangling tool call in a channel dir and skips non-channel siblings", async () => {
-		const workspaceDir = makeTempDir();
-		const dotDir = join(workspaceDir, "dm_scan_1");
-		mkdirSync(dotDir, { recursive: true });
-		mkdirSync(join(workspaceDir, "skills"), { recursive: true });
-		mkdirSync(join(workspaceDir, "sub-agents"), { recursive: true });
+describe("scanConversationsForInterruptedTurns", () => {
+	it("repairs a dangling tool call in a bound conversation", async () => {
+		const conversation = testConversation(makeTempDir());
+		const dir = conversation.conversationDir;
 
-		const m = SessionManager.open(join(dotDir, "context.jsonl"), dotDir);
+		const m = SessionManager.open(join(dir, "context.jsonl"), dir);
 		appendUser(m);
 		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
 
-		const report = await scanWorkspaceForInterruptedTurns(workspaceDir, fallbackModel);
+		const report = await scanConversationsForInterruptedTurns([conversation], fallbackModel);
 
 		expect(report.scanned).toBe(1);
 		expect(report.repaired).toHaveLength(1);
-		expect(report.repaired[0].dotDir).toBe(dotDir);
+		expect(report.repaired[0].conversation).toBe(conversation);
 		expect(report.blocked).toHaveLength(0);
 
-		const reopened = SessionManager.open(join(dotDir, "context.jsonl"), dotDir);
+		const reopened = SessionManager.open(join(dir, "context.jsonl"), dir);
 		const last = reopened.getBranch().at(-1);
 		if (last?.type !== "message" || last.message.role !== "toolResult") throw new Error("unexpected shape");
 		expect(last.message.toolCallId).toBe("tc1");
 	});
 
-	it("reports a blocked channel without touching other channels", async () => {
-		const workspaceDir = makeTempDir();
-		const blockedDir = join(workspaceDir, "dm_scan_blocked");
-		const cleanDir = join(workspaceDir, "dm_scan_clean");
-		mkdirSync(blockedDir, { recursive: true });
-		mkdirSync(cleanDir, { recursive: true });
+	it("reports a blocked conversation without touching the others", async () => {
+		const dotDir = makeTempDir();
+		const blockedConversation = testConversation(dotDir, { conversation: "dm-1", channelId: "dm_blocked" });
+		const cleanConversation = testConversation(dotDir, { conversation: "dm-2", channelId: "dm_clean" });
+		const blockedDir = blockedConversation.conversationDir;
+		const cleanDir = cleanConversation.conversationDir;
 
 		const blocked = SessionManager.open(join(blockedDir, "context.jsonl"), blockedDir);
 		appendUser(blocked);
@@ -224,16 +220,19 @@ describe("scanWorkspaceForInterruptedTurns", () => {
 		appendUser(clean);
 		appendAssistant(clean, [{ type: "text", text: "done" }]);
 
-		const report = await scanWorkspaceForInterruptedTurns(workspaceDir, fallbackModel);
+		const report = await scanConversationsForInterruptedTurns(
+			[blockedConversation, cleanConversation],
+			fallbackModel,
+		);
 
 		expect(report.scanned).toBe(2);
 		expect(report.repaired).toHaveLength(0);
 		expect(report.blocked).toHaveLength(1);
-		expect(report.blocked[0].dotDir).toBe(blockedDir);
+		expect(report.blocked[0].conversation).toBe(blockedConversation);
 	});
 
-	it("returns an empty report for a workspace directory that doesn't exist", async () => {
-		const report = await scanWorkspaceForInterruptedTurns(join(makeTempDir(), "nope"), fallbackModel);
+	it("returns an empty report when no conversation is bound", async () => {
+		const report = await scanConversationsForInterruptedTurns([], fallbackModel);
 		expect(report).toEqual({ scanned: 0, repaired: [], blocked: [] });
 	});
 });

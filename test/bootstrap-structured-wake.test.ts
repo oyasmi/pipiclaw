@@ -6,6 +6,8 @@ import type { AgentRunner } from "../src/agent/types.js";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import type { DingTalkBot } from "../src/dingtalk/bot.js";
 import type { DingTalkEvent } from "../src/dingtalk/handler.js";
+import { getDotDir } from "../src/dot/paths.js";
+import { allocateConversation, createDot, writeBindings } from "../src/dot/registry.js";
 import type { Executor } from "../src/executor.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
@@ -90,8 +92,7 @@ function runner(): AgentRunner {
 	};
 }
 
-async function waitingTask(workspaceDir: string, channelId: string, taskId: string) {
-	const dotDir = join(workspaceDir, channelId);
+async function waitingTask(dotDir: string, taskId: string) {
 	await writeFile(join(dotDir, "tasks", `${taskId}.md`), renderTaskDocument({ state: "open" }, `# ${taskId}\n`));
 	return dotDir;
 }
@@ -118,8 +119,7 @@ async function parkOnResource(dotDir: string, taskId: string, resourceId: string
  *  this wake's own turn will ever look at the result. `readStoredTask` (non-archive-including,
  *  the same call `isTaskActivelyDriven` makes) cannot see it here, same as a task that never
  *  existed at all. */
-async function doneTask(workspaceDir: string, channelId: string, taskId: string) {
-	const dotDir = join(workspaceDir, channelId);
+async function doneTask(dotDir: string, taskId: string) {
 	await writeFile(
 		join(dotDir, "tasks", "archive", `${taskId}.md`),
 		renderTaskDocument(
@@ -134,8 +134,16 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 	const runtimePaths = paths();
 	bootstrapAppHome(runtimePaths);
 	const channelId = `dm_${name}`;
-	mkdirSync(join(runtimePaths.workspaceDir, channelId, "tasks", "archive"), { recursive: true });
-	const fakeRunner = runner();
+	// Spec 058: the channel must be bound to a dot before any turn can run in it.
+	await createDot(runtimePaths.workspaceDir, "news", new Date());
+	const conversation = await allocateConversation(runtimePaths.workspaceDir, "news", channelId, "dm", new Date());
+	await writeBindings(runtimePaths.workspaceDir, {
+		version: 1,
+		bindings: { [channelId]: { dot: "news", boundAt: new Date().toISOString() } },
+	});
+	const dotDir = getDotDir(runtimePaths.workspaceDir, "news");
+	mkdirSync(join(dotDir, "tasks", "archive"), { recursive: true });
+	const fakeRunner = Object.assign(runner(), { conversation });
 	createRunnerMock.mockReturnValue(fakeRunner);
 	const bot = new WakeBot();
 	const jobProbe = { id: "" };
@@ -156,7 +164,7 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 		createEventsWatcher: () => ({ start() {}, stop() {} }),
 		wakeTransitionHooks: hooks,
 	});
-	return { runtimePaths, channelId, fakeRunner, bot, runtime, jobProbe };
+	return { runtimePaths, channelId, dotDir, fakeRunner, bot, runtime, jobProbe };
 }
 
 async function createWake(
@@ -166,7 +174,7 @@ async function createWake(
 	dotDir?: string,
 ): Promise<DingTalkEvent> {
 	if (kind === "subagent") {
-		const manager = harness.runtime.runs.get(harness.channelId);
+		const manager = harness.runtime.runs.get("news");
 		const runId = `run-${taskId}`;
 		await manager.register({
 			runId,
@@ -203,8 +211,8 @@ async function createWake(
 			{ announce: true },
 		);
 	} else {
-		const manager = harness.runtime.jobs.get(harness.channelId);
-		harness.jobProbe.id = (await manager.start("true", "job", 60, { taskId })).id;
+		const manager = harness.runtime.jobs.get("news");
+		harness.jobProbe.id = (await manager.start("true", "job", 60, { taskId, channelId: harness.channelId })).id;
 		await manager.list();
 	}
 	const wake = harness.bot.events.at(-1);
@@ -223,7 +231,7 @@ describe("runtime structured wake delivery", () => {
 		for (const kind of ["job", "subagent"] as const) {
 			const harness = await createHarness(`duplicate_${kind}`);
 			const taskId = `T-duplicate-${kind}`;
-			const dotDir = await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId);
+			const dotDir = await waitingTask(harness.dotDir, taskId);
 			const wake = await createWake(harness, kind, taskId, dotDir);
 
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
@@ -268,7 +276,7 @@ describe("runtime structured wake delivery", () => {
 			};
 			const harness = await createHarness(`retry_${kind}`, { [kind]: { beforeActivation: fault } });
 			const taskId = `T-retry-${kind}`;
-			const dotDir = await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId);
+			const dotDir = await waitingTask(harness.dotDir, taskId);
 			const wake = await createWake(harness, kind, taskId, dotDir);
 			// The on-disk filename is percent-encoded (R1: a raw dispatch id can contain `/`, which
 			// would otherwise turn into a real subdirectory a flat scan can never see again).
@@ -299,7 +307,7 @@ describe("runtime structured wake delivery", () => {
 		for (const kind of ["job", "subagent"] as const) {
 			const harness = await createHarness(`done_${kind}`);
 			const taskId = `T-done-${kind}`;
-			await doneTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId);
+			await doneTask(harness.dotDir, taskId);
 			const wake = await createWake(harness, kind, taskId);
 
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
@@ -315,7 +323,7 @@ describe("runtime structured wake delivery", () => {
 		for (const kind of ["job", "subagent"] as const) {
 			const harness = await createHarness(`active_${kind}`);
 			const taskId = `T-active-${kind}`;
-			await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId);
+			await waitingTask(harness.dotDir, taskId);
 			// Simulate a sibling wake (K-way fan-out) having already redeemed the ticket: the task
 			// is open with nothing left to redeem, so this wake has nothing to add.
 			const wake = await createWake(harness, kind, taskId);
@@ -337,6 +345,7 @@ describe("runtime structured wake delivery", () => {
 			ts: "1",
 			conversationType: "1",
 			dispatchId: "subagent:presentation:run-x:done",
+			dot: "news",
 			presentation: "awaited",
 		};
 		await harness.runtime.handler.handleEvent(awaited, harness.bot as unknown as DingTalkBot, true);

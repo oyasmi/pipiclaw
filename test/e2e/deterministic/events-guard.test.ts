@@ -19,7 +19,7 @@ describe("E2E deterministic: event_manage guards", () => {
 		// Catches tool/SDK wiring that persists a self-trigger or bubbles a recoverable refusal
 		// to the user instead of returning it to the model. Domain-only validation cannot prove it.
 		harness = await createDeterministicHarness();
-		const eventsDir = join(harness.workspaceDir, "events");
+		const eventsDir = join(harness.dotDir, "events");
 
 		harness.model.script.route({
 			name: "immediate-attempt",
@@ -42,7 +42,7 @@ describe("E2E deterministic: event_manage guards", () => {
 			(message) => message.role === "tool",
 		);
 		expect(toolResult?.content.length).toBeGreaterThan(0);
-		const stored = readFileSync(join(harness.dotDir, "context.jsonl"), "utf8")
+		const stored = readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line))

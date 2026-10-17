@@ -3,8 +3,7 @@
 	"entry": [
 		"src/main.ts",
 		"src/index.ts",
-		"src/dot/*.ts",
-		"src/channel/channel-id.ts"
+		"src/dot/commands.ts"
 	],
 	"project": [
 		"src/**/*.ts"

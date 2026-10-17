@@ -5,9 +5,14 @@ import { recencyBoostByAge, tokenizeRecallText } from "./search.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
-export interface SearchChannelSessionsRequest {
+export interface SearchDotSessionsRequest {
 	channelId?: string;
+	/** Attributes the optional summarization's spend to the dot. */
+	dot?: string;
+	/** Every conversation in this dot is searched (spec 058, D12). */
 	dotDir: string;
+	/** A human name for a conversation directory (the channel's name), for labelling results. */
+	describeConversation?: (conversation: string) => string | undefined;
 	query: string;
 	roleFilter?: string[];
 	limit: number;
@@ -23,6 +28,9 @@ export interface SearchChannelSessionsRequest {
 export interface SessionSearchResult {
 	source: string;
 	path: string;
+	/** Which conversation of the dot the hit came from, and that channel's name when known. */
+	conversation?: string;
+	channel?: string;
 	when?: string;
 	role: SessionSearchRole;
 	score: number;
@@ -47,7 +55,7 @@ interface ScoredDocument {
 	exactHit: boolean;
 }
 
-const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = `You summarize current-channel transcript search hits for Pipiclaw.
+const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = `You summarize transcript search hits from one Pipiclaw dot's conversations.
 
 Return plain text only.
 
@@ -155,7 +163,7 @@ function windowAroundMatch(text: string, query: string, queryTokens: string[], m
 }
 
 async function summarizeHit(
-	request: SearchChannelSessionsRequest,
+	request: SearchDotSessionsRequest,
 	document: SessionSearchDocument,
 	query: string,
 	queryTokens: string[],
@@ -177,7 +185,7 @@ ${query}
 Transcript hit:
 ${fallback}`,
 			timeoutMs: request.timeoutMs,
-			usageContext: request.channelId ? { channelId: request.channelId } : undefined,
+			usageContext: request.channelId ? { channelId: request.channelId, dot: request.dot } : undefined,
 			parse: (text) => text.trim(),
 		});
 		return result.output || fallback;
@@ -187,7 +195,7 @@ ${fallback}`,
 }
 
 function toResult(
-	request: SearchChannelSessionsRequest,
+	request: SearchDotSessionsRequest,
 	document: SessionSearchDocument,
 	score: number,
 	matches: string[],
@@ -196,6 +204,9 @@ function toResult(
 	return {
 		source: document.source,
 		path: relative(request.dotDir, document.path) || document.path,
+		...(document.conversation
+			? { conversation: document.conversation, channel: request.describeConversation?.(document.conversation) }
+			: {}),
 		when: document.timestamp,
 		role: document.role,
 		score: Number(score.toFixed(3)),
@@ -247,7 +258,7 @@ async function getCachedCorpus(
 	return documents;
 }
 
-export async function searchChannelSessions(request: SearchChannelSessionsRequest): Promise<SessionSearchResponse> {
+export async function searchDotSessions(request: SearchDotSessionsRequest): Promise<SessionSearchResponse> {
 	const limit = clampInteger(request.limit, 1, 5);
 	const maxChunks = clampInteger(request.maxChunks, 1, 500);
 	const query = request.query.trim();

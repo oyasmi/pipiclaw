@@ -13,7 +13,12 @@ import {
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../src/tools/subagent.js";
-import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	testDot,
+	testManagers,
+} from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spec 040, D10.1: internal write runs now take the same workspace lease external runs will. */
@@ -75,7 +80,7 @@ function makeTool(workspaceDir: string, dotDir: string, channelId = "dm_lease") 
 		workspaceDir,
 		workingDirectory: workspaceDir,
 		dotDir,
-		runtimeContext: { workspaceDir, channelId },
+		runtimeContext: { workspaceDir, dot: "news", dotDir, channelId },
 		createWorker: () =>
 			new FakeWorker((_input, worker) => {
 				const message = createAssistantMessage("Done.");
@@ -105,7 +110,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const channelId = "dm_resolve_reject";
 		const dotDir = join(workspaceDir, channelId);
 		mkdirSync(dotDir, { recursive: true });
-		const manager = new SubAgentRunManager(channelId, {});
+		const manager = new SubAgentRunManager({ dot: testDot(channelId), dotDir: "/tmp/pipiclaw-test-dot" }, {});
 		const tool = createSubAgentInlineTool({
 			...testManagers(channelId),
 			executor: fakeExecutor,
@@ -117,7 +122,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			},
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId },
 			getRunManager: () => manager,
 		});
 
@@ -131,7 +136,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const channelId = "dm_channel_cap_reject";
 		const dotDir = join(workspaceDir, channelId);
 		mkdirSync(dotDir, { recursive: true });
-		const manager = new SubAgentRunManager(channelId, {});
+		const manager = new SubAgentRunManager({ dot: testDot(channelId), dotDir: "/tmp/pipiclaw-test-dot" }, {});
 		for (let index = 0; index < MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL; index++) {
 			await manager.register({
 				runId: `existing-${index}`,
@@ -155,7 +160,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId },
 			getRunManager: () => manager,
 		});
 
@@ -205,7 +210,10 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		mkdirSync(dotDir, { recursive: true });
 		const blockedStateDir = join(workspaceDir, "state-file");
 		writeFileSync(blockedStateDir, "not a directory");
-		const manager = new SubAgentRunManager(channelId, { stateDir: blockedStateDir });
+		const manager = new SubAgentRunManager(
+			{ dot: testDot(channelId), dotDir: "/tmp/pipiclaw-test-dot" },
+			{ stateDir: blockedStateDir },
+		);
 		const tool = createSubAgentInlineTool({
 			...testManagers(channelId),
 			executor: fakeExecutor,
@@ -215,7 +223,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId },
 			getRunManager: () => manager,
 		});
 
@@ -301,7 +309,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const dotDir = join(workspaceDir, channelId);
 		mkdirSync(join(dotDir, "tasks"), { recursive: true });
 		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n");
-		const manager = new SubAgentRunManager(channelId, {});
+		const manager = new SubAgentRunManager({ dot: testDot(channelId), dotDir: "/tmp/pipiclaw-test-dot" }, {});
 		let releasePrompt: (() => void) | undefined;
 		const tool = createSubAgentInlineTool({
 			...testManagers(channelId),
@@ -313,7 +321,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			workspaceDir,
 			workingDirectory: workspaceDir,
 			dotDir,
-			runtimeContext: { workspaceDir, channelId },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId },
 			getRunManager: () => manager,
 			createWorker: () =>
 				new FakeWorker(
@@ -384,7 +392,7 @@ describe("subagent tool: purpose=verify admission (D9)", () => {
 			workspaceDir,
 			dotDir,
 			getSubAgentDiscovery: () => discoverSubAgents(workspaceDir, [model]),
-			runtimeContext: { workspaceDir, channelId: "dm_lease" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_lease" },
 		});
 	}
 

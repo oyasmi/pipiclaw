@@ -16,7 +16,7 @@ export interface SidecarTask<T> {
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	/** Attributes this task's LLM spend to a channel in the usage ledger. */
-	usageContext?: { channelId: string; correlationId?: string };
+	usageContext?: { channelId: string; dot?: string; correlationId?: string };
 	/**
 	 * Optional one-shot repair hint. When `parse` fails on the first attempt, the
 	 * task is retried once with this text appended to the prompt, so a model that
@@ -116,6 +116,7 @@ function recordSidecarUsage(task: SidecarTask<unknown>, message: { usage?: Maybe
 	if (!usage || !usage.cost) return;
 	getUsageLedger().record({
 		channelId: task.usageContext?.channelId ?? "",
+		dot: task.usageContext?.dot,
 		kind: "sidecar",
 		model: formatModelReference(task.model),
 		label: task.name,

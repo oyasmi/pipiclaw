@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import * as log from "../log.js";
-import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
+import { type DotMemoryQueue, getDotMemoryQueue } from "../memory/dot-memory-queue.js";
 import { readJournalForSearch } from "../memory/journal.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { findNearDuplicateEntries, searchMemory } from "../memory/search.js";
@@ -20,7 +20,7 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 /**
- * Spec 050, D3: three tools, semantics narrowed. All three act only on the channel `memory/`
+ * Spec 050, D3: three tools, semantics narrowed. All three act only on the dot `memory/`
  * directory; workspace MEMORY.md is read-only to tools (D11).
  */
 
@@ -57,7 +57,7 @@ const memorySaveSchema = Type.Object({
 
 const memorySearchSchema = Type.Object({
 	query: Type.String({
-		description: "What to look for across this channel's memory, recent journal files, and workspace MEMORY.md.",
+		description: "What to look for across this dot's memory, recent journal files, and workspace MEMORY.md.",
 	}),
 });
 
@@ -69,9 +69,11 @@ const memoryForgetSchema = Type.Object({
 
 export interface MemoryManageToolOptions {
 	channelId: string;
+	/** The dot's name: the memory queue's key (spec 058, INV-8). */
+	dot: string;
 	dotDir: string;
 	workspaceDir: string;
-	channelMemoryQueue?: ChannelMemoryQueue;
+	memoryQueue?: DotMemoryQueue;
 }
 
 function textResult(text: string, details: Record<string, unknown>) {
@@ -99,7 +101,7 @@ interface MemoryToolClosures {
 }
 
 function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosures {
-	const queue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
+	const queue = options.memoryQueue ?? getDotMemoryQueue();
 
 	async function save(args: {
 		content: string;
@@ -127,11 +129,11 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		const replaces = args.replaces && args.replaces !== "none" ? args.replaces : undefined;
 
 		// The near-duplicate judgment ("read existing facts → decide → write") has to run inside the
-		// same per-channel critical section as the write, or two concurrent saves of the same fact
+		// same per-dot critical section as the write, or two concurrent saves of the same fact
 		// each see "no duplicate" and both add it. A `null` return means "blocked by near-duplicates,
 		// nothing written".
 		let similar: Awaited<ReturnType<typeof findNearDuplicateEntries>> = [];
-		const result = await queue.run(options.channelId, async () => {
+		const result = await queue.run(options, async () => {
 			// `replaces: "none"` is an explicit "both facts are true, keep both" waiver, so it skips
 			// the near-duplicate gate just like naming a real target does.
 			if (!args.replaces) {
@@ -165,7 +167,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 
 		if (result === null) {
 			throw new RecoverableToolError(
-				`Nothing was saved yet. This channel already stores ${similar.length} similar entr${similar.length === 1 ? "y" : "ies"}:\n` +
+				`Nothing was saved yet. This dot already stores ${similar.length} similar entr${similar.length === 1 ? "y" : "ies"}:\n` +
 					similar.map((entry) => `- ${entry.name}: ${entry.description}`).join("\n") +
 					'\nRe-issue the save with "replaces" set to the name this replaces, or to "none" if both facts are true at once.',
 			);
@@ -173,7 +175,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 
 		if (replaces && result.updated.length === 0 && result.missingTarget > 0) {
 			throw new RecoverableToolError(
-				`No memory named "${replaces}" exists in this channel. Check the name, or omit "replaces" to save a new entry.`,
+				`No memory named "${replaces}" exists in this dot. Check the name, or omit "replaces" to save a new entry.`,
 			);
 		}
 
@@ -182,12 +184,12 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		// rendered "Saved ... as `undefined`." and told the user a lie the model could not see.
 		if (replaces) {
 			await logMemorySave(options, replaces, "update");
-			return textResult(`Replaced channel memory \`${replaces}\`.`, { saved: true, name: replaces });
+			return textResult(`Replaced dot memory \`${replaces}\`.`, { saved: true, name: replaces });
 		}
 		const addedName = result.added[0];
 		if (addedName) {
 			await logMemorySave(options, addedName, "add");
-			return textResult(`Saved to channel memory as \`${addedName}\`.`, { saved: true, name: addedName });
+			return textResult(`Saved to dot memory as \`${addedName}\`.`, { saved: true, name: addedName });
 		}
 		if (result.skippedSecret > 0) {
 			return textResult(
@@ -197,7 +199,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		}
 		if (result.skippedTombstone > 0) {
 			return textResult(
-				`Not saved: "${content}" was explicitly forgotten in this channel and is still tombstoned. ` +
+				`Not saved: "${content}" was explicitly forgotten in this dot and is still tombstoned. ` +
 					"Confirm with the user that they want it back, then re-save (an explicit user save is allowed through), or reword it so it is not byte-for-byte the forgotten fact.",
 				{ saved: false, blockedReason: "tombstone" },
 			);
@@ -267,11 +269,11 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		}
 		const entry = await readMemoryEntry(options.dotDir, trimmed);
 		if (!entry) {
-			return textResult(`No memory named "${trimmed}" exists in this channel; nothing was removed.`, {
+			return textResult(`No memory named "${trimmed}" exists in this dot; nothing was removed.`, {
 				forgotten: false,
 			});
 		}
-		await queue.run(options.channelId, () =>
+		await queue.run(options, () =>
 			applyMemoryOps(options.dotDir, [{ op: "delete", name: trimmed, reason: "user forget" }]),
 		);
 		await appendMemoryReviewLog(options.dotDir, {
@@ -286,7 +288,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 			});
 		});
 		return textResult(
-			`Removed \`${trimmed}\` from channel memory. Its content is tombstoned against automatic replay; if the fact is stated again later it may be re-learned. Journal and session history are unchanged.`,
+			`Removed \`${trimmed}\` from dot memory. Its content is tombstoned against automatic replay; if the fact is stated again later it may be re-learned. Journal and session history are unchanged.`,
 			{ forgotten: true, name: trimmed },
 		);
 	}
@@ -300,7 +302,7 @@ export function createMemorySaveTool(options: MemoryManageToolOptions): AgentToo
 		name: "memory_save",
 		label: "memory_save",
 		description:
-			"Save a durable fact into this channel's memory when the user asks you to remember it. Not for transient task state — " +
+			"Save a durable fact into this dot's memory when the user asks you to remember it. Not for transient task state — " +
 			"keep in-progress work in a task (task_log) instead; the journal is written only by the background reflect pass.",
 		parameters: memorySaveSchema,
 		execute: async (_toolCallId: string, args) => save(args),
@@ -313,7 +315,7 @@ export function createMemorySearchTool(options: MemoryManageToolOptions): AgentT
 		name: "memory_search",
 		label: "memory_search",
 		description:
-			"Search this channel's stored memory, recent journal, and the workspace MEMORY.md on demand. The memory index is only " +
+			"Search this dot's stored memory, recent journal, and the workspace MEMORY.md on demand. The memory index is only " +
 			"injected at the start of a session, so use this when you suspect something was recorded since.",
 		parameters: memorySearchSchema,
 		execute: async (_toolCallId: string, args) => search(args),

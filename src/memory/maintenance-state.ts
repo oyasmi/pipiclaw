@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getChannelDirName } from "../channel/channel-paths.js";
+import type { DotConversation } from "../dot/types.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -17,11 +17,17 @@ export interface MemoryMaintenanceState {
 	failureBackoffUntil?: string | null;
 }
 
+/**
+ * Which conversation a maintenance state belongs to (spec 058, D12): reflect works one
+ * conversation at a time, so its dirty flag, idle clock and checkpoint are per conversation.
+ */
+export type MaintenanceStateRef = Pick<DotConversation, "dot" | "conversation" | "channelId">;
+
 export type MemoryActivityKind = "user-turn-started" | "tool-call" | "assistant-turn-completed" | "boundary";
 
 export interface MemoryActivityEvent {
 	kind: MemoryActivityKind;
-	channelId: string;
+	ref: MaintenanceStateRef;
 	timestamp: string;
 	eligibleAfter?: string;
 }
@@ -43,16 +49,13 @@ export function getMemoryMaintenanceStateDir(appHomeDir: string): string {
 	return join(appHomeDir, "state", "memory");
 }
 
-/**
- * One flat file per channel, named by the same escaped form directories use.
- *
- * The id goes into a filename here, and a DingTalk group id routinely contains `/`, so writing
- * it raw put the file in a subdirectory of the state dir — `group_a/b==.json`. Reads and writes
- * agreed, so nothing was lost, but {@link getMemoryMaintenanceStateDir}'s only listing walks the
- * top level: every such channel was invisible to the scheduler's state-derived discovery.
- */
-export function getMemoryMaintenanceStatePath(appHomeDir: string, channelId: string): string {
-	return join(getMemoryMaintenanceStateDir(appHomeDir), `${getChannelDirName(channelId)}.json`);
+/** `state/memory/<dot>/<conversation>.json`: both segments are validated names, never a channel id. */
+export function getMemoryMaintenanceStatePath(appHomeDir: string, ref: MaintenanceStateRef): string {
+	return join(getMemoryMaintenanceStateDir(appHomeDir), ref.dot, `${ref.conversation}.json`);
+}
+
+function refKey(ref: MaintenanceStateRef): string {
+	return `${ref.dot}/${ref.conversation}`;
 }
 
 function createDefaultState(channelId: string): MemoryMaintenanceState {
@@ -88,9 +91,10 @@ function normalizeState(channelId: string, value: unknown): MemoryMaintenanceSta
 
 export async function readMemoryMaintenanceState(
 	appHomeDir: string,
-	channelId: string,
+	ref: MaintenanceStateRef,
 ): Promise<MemoryMaintenanceState> {
-	const path = getMemoryMaintenanceStatePath(appHomeDir, channelId);
+	const { channelId } = ref;
+	const path = getMemoryMaintenanceStatePath(appHomeDir, ref);
 	try {
 		const raw = await readFile(path, "utf-8");
 		return normalizeState(channelId, JSON.parse(raw) as unknown);
@@ -102,6 +106,7 @@ export async function readMemoryMaintenanceState(
 		log.logWarn("memory.state.read_failed", "Memory maintenance state unreadable; rebuilding defaults", {
 			channelId: channelId,
 			reason: message,
+			fields: { dot: ref.dot, conversation: ref.conversation },
 		});
 		return createDefaultState(channelId);
 	}
@@ -109,13 +114,13 @@ export async function readMemoryMaintenanceState(
 
 export async function updateMemoryMaintenanceState(
 	appHomeDir: string,
-	channelId: string,
+	ref: MaintenanceStateRef,
 	update: (state: MemoryMaintenanceState) => MemoryMaintenanceState,
 ): Promise<MemoryMaintenanceState> {
-	const path = getMemoryMaintenanceStatePath(appHomeDir, channelId);
+	const path = getMemoryMaintenanceStatePath(appHomeDir, ref);
 	return stateUpdateQueue.run(path, async () => {
-		const current = await readMemoryMaintenanceState(appHomeDir, channelId);
-		const next = normalizeState(channelId, update(current));
+		const current = await readMemoryMaintenanceState(appHomeDir, ref);
+		const next = normalizeState(ref.channelId, update(current));
 		await writeFileAtomically(path, `${JSON.stringify(next, null, 2)}\n`);
 		return next;
 	});
@@ -153,7 +158,7 @@ export function applyMemoryActivityToState(
 	state: MemoryMaintenanceState,
 	event: MemoryActivityEvent,
 ): MemoryMaintenanceState {
-	return applyPendingActivityToState(state, event.channelId, mergeMemoryActivity(undefined, event));
+	return applyPendingActivityToState(state, event.ref.channelId, mergeMemoryActivity(undefined, event));
 }
 
 /**
@@ -173,8 +178,8 @@ export function applyMemoryActivityToState(
  */
 export interface MemoryActivityRecorder {
 	record(event: MemoryActivityEvent): void;
-	/** Write out buffered activity for one channel, or for all of them when `channelId` is omitted. */
-	flush(channelId?: string): Promise<void>;
+	/** Write out buffered activity for one conversation, or for all of them when `ref` is omitted. */
+	flush(ref?: MaintenanceStateRef): Promise<void>;
 }
 
 export const DEFAULT_ACTIVITY_FLUSH_DEBOUNCE_MS = 5_000;
@@ -183,70 +188,74 @@ export interface CreateMemoryActivityRecorderOptions {
 	appHomeDir: string;
 	/** Override the flush debounce; tests use a short one. */
 	debounceMs?: number;
-	onError?: (channelId: string, error: unknown) => void;
+	onError?: (ref: MaintenanceStateRef, error: unknown) => void;
 }
 
 export function createMemoryActivityRecorder(options: CreateMemoryActivityRecorderOptions): MemoryActivityRecorder {
 	const debounceMs = options.debounceMs ?? DEFAULT_ACTIVITY_FLUSH_DEBOUNCE_MS;
 	const pending = new Map<string, PendingMemoryActivity>();
+	const refs = new Map<string, MaintenanceStateRef>();
 	const timers = new Map<string, NodeJS.Timeout>();
-	/** The most recent write per channel, so `flush` can await work another caller started. */
+	/** The most recent write per conversation, so `flush` can await work another caller started. */
 	const inFlight = new Map<string, Promise<void>>();
 
-	const cancelTimer = (channelId: string): void => {
-		const timer = timers.get(channelId);
+	const cancelTimer = (key: string): void => {
+		const timer = timers.get(key);
 		if (timer) {
 			clearTimeout(timer);
-			timers.delete(channelId);
+			timers.delete(key);
 		}
 	};
 
-	const flushChannel = (channelId: string): Promise<void> => {
-		cancelTimer(channelId);
-		const delta = pending.get(channelId);
-		if (!delta) {
-			return inFlight.get(channelId) ?? Promise.resolve();
+	const flushConversation = (key: string): Promise<void> => {
+		cancelTimer(key);
+		const delta = pending.get(key);
+		const ref = refs.get(key);
+		if (!delta || !ref) {
+			return inFlight.get(key) ?? Promise.resolve();
 		}
 		// Cleared before the await so events arriving during the write start a fresh batch
 		// instead of being swallowed by this one.
-		pending.delete(channelId);
-		const write = updateMemoryMaintenanceState(options.appHomeDir, channelId, (state) =>
-			applyPendingActivityToState(state, channelId, delta),
+		pending.delete(key);
+		const write = updateMemoryMaintenanceState(options.appHomeDir, ref, (state) =>
+			applyPendingActivityToState(state, ref.channelId, delta),
 		)
 			.then(() => undefined)
 			.catch((error: unknown) => {
 				// Put the delta back so the counters are not silently lost; the next event (or
 				// flush) retries it, folded in front of anything buffered while this write ran.
-				pending.set(channelId, mergeBack(delta, pending.get(channelId)));
-				options.onError?.(channelId, error);
+				pending.set(key, mergeBack(delta, pending.get(key)));
+				options.onError?.(ref, error);
 			})
 			.finally(() => {
-				if (inFlight.get(channelId) === write) {
-					inFlight.delete(channelId);
+				if (inFlight.get(key) === write) {
+					inFlight.delete(key);
 				}
 			});
-		inFlight.set(channelId, write);
+		inFlight.set(key, write);
 		return write;
 	};
 
 	return {
 		record(event: MemoryActivityEvent): void {
-			pending.set(event.channelId, mergeMemoryActivity(pending.get(event.channelId), event));
-			if (timers.has(event.channelId)) {
+			const key = refKey(event.ref);
+			refs.set(key, event.ref);
+			pending.set(key, mergeMemoryActivity(pending.get(key), event));
+			if (timers.has(key)) {
 				return;
 			}
 			const timer = setTimeout(() => {
-				timers.delete(event.channelId);
-				void flushChannel(event.channelId);
+				timers.delete(key);
+				void flushConversation(key);
 			}, debounceMs);
 			// Buffered counters are never a reason to keep the process alive.
 			timer.unref?.();
-			timers.set(event.channelId, timer);
+			timers.set(key, timer);
 		},
 
-		async flush(channelId?: string): Promise<void> {
-			const channelIds = channelId ? [channelId] : new Set([...pending.keys(), ...inFlight.keys()]);
-			await Promise.all([...channelIds].map((id) => flushChannel(id)));
+		async flush(ref?: MaintenanceStateRef): Promise<void> {
+			const keys = ref ? [refKey(ref)] : new Set([...pending.keys(), ...inFlight.keys()]);
+			await Promise.all([...keys].map((key) => flushConversation(key)));
 		},
 	};
 }

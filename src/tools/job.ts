@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { ChannelJobManager } from "../jobs/manager.js";
+import type { DotJobManager } from "../jobs/manager.js";
 import type { JobSnapshot } from "../jobs/record.js";
 import { formatDuration } from "../shared/format.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -21,7 +21,7 @@ const jobSchema = Type.Object({
 });
 
 export interface JobToolOptions {
-	jobManager: ChannelJobManager;
+	jobManager: DotJobManager;
 }
 
 /** Total bytes of job output `op=poll` inlines across all finished jobs in one call. */

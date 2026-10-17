@@ -1,8 +1,8 @@
-import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { AssistantMessage, StopReason } from "@earendil-works/pi-ai";
 import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolveActiveSessionFile } from "../../channel/active-session-store.js";
+import type { DotConversation } from "../../dot/types.js";
 
 /**
  * Repairs a session branch left with a declared-but-unfulfilled tool call by a process that
@@ -198,54 +198,42 @@ export function recoverInterruptedTurn(
 	return { kind: "repaired", appendedToolResults: 0, appendedAbortedAssistant: true };
 }
 
-/** A workspace child directory belongs to a channel iff its name starts with one of these
- *  prefixes — matches `channel-paths.ts`'s `CHANNEL_ID_PATTERN` without needing to reverse its
- *  `/` → `__` escaping, and skips AgentWorkspace resource dirs (skills/, sub-agents/, events/…). */
-const CHANNEL_DIR_PREFIXES = ["dm_", "group_"];
-
-export interface WorkspaceRecoveryReport {
+export interface ConversationRecoveryReport {
 	scanned: number;
-	repaired: Array<{ dotDir: string; outcome: Extract<TurnRecoveryOutcome, { kind: "repaired" }> }>;
-	blocked: Array<{ dotDir: string; reason: string }>;
+	repaired: Array<{
+		conversation: DotConversation;
+		outcome: Extract<TurnRecoveryOutcome, { kind: "repaired" }>;
+	}>;
+	blocked: Array<{ conversation: DotConversation; reason: string }>;
 }
 
 /**
- * Daemon-startup half of D10: scans every channel directory under `workspaceDir` and repairs any
- * interrupted turn found, *before* the daemon accepts traffic (point 1). Each channel gets its own
- * fresh `SessionManager` here — safe because, at this point in startup, no `ChannelRunner` for any
- * of these channels has been constructed yet, so nothing else holds a competing in-memory instance
- * over the same file. `ChannelRunner`'s own constructor (D10 point 2) covers everything this scan
- * cannot: a channel created after this scan ran, and re-running the barrier is idempotent either way.
+ * Activation half of D10 (spec 058, D6): when a dot is activated — at daemon startup, or when it
+ * gains its first binding — every currently bound conversation in it is repaired *before* the
+ * channel can take traffic. Each conversation gets its own fresh `SessionManager`: safe because a
+ * conversation of a dormant dot has no `ChannelRunner` yet, so nothing else holds a competing
+ * in-memory instance over the same file. `ChannelRunner`'s own constructor (D10 point 2) covers
+ * everything this scan cannot, and re-running the barrier is idempotent either way.
  */
-export async function scanWorkspaceForInterruptedTurns(
-	workspaceDir: string,
+export async function scanConversationsForInterruptedTurns(
+	conversations: readonly DotConversation[],
 	fallbackModel: FallbackModelIdentity,
-): Promise<WorkspaceRecoveryReport> {
-	const report: WorkspaceRecoveryReport = { scanned: 0, repaired: [], blocked: [] };
-	let entries: Array<{ name: string; isDirectory(): boolean }>;
-	try {
-		entries = await readdir(workspaceDir, { withFileTypes: true });
-	} catch {
-		return report;
-	}
-
-	for (const entry of entries) {
-		if (!entry.isDirectory() || !CHANNEL_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) {
-			continue;
-		}
-		const dotDir = join(workspaceDir, entry.name);
+): Promise<ConversationRecoveryReport> {
+	const report: ConversationRecoveryReport = { scanned: 0, repaired: [], blocked: [] };
+	for (const conversation of conversations) {
+		const { conversationDir, dotDir } = conversation;
 		report.scanned++;
 		try {
-			const activeSessionFile = resolveActiveSessionFile(dotDir);
-			const sessionManager = SessionManager.open(join(dotDir, activeSessionFile), dotDir);
+			const activeSessionFile = resolveActiveSessionFile(conversationDir);
+			const sessionManager = SessionManager.open(join(conversationDir, activeSessionFile), conversationDir, dotDir);
 			const outcome = recoverInterruptedTurn(sessionManager, fallbackModel);
 			if (outcome.kind === "repaired") {
-				report.repaired.push({ dotDir, outcome });
+				report.repaired.push({ conversation, outcome });
 			} else if (outcome.kind === "blocked") {
-				report.blocked.push({ dotDir, reason: outcome.reason });
+				report.blocked.push({ conversation, reason: outcome.reason });
 			}
 		} catch (error) {
-			report.blocked.push({ dotDir, reason: error instanceof Error ? error.message : String(error) });
+			report.blocked.push({ conversation, reason: error instanceof Error ? error.message : String(error) });
 		}
 	}
 	return report;

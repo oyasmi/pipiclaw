@@ -1,8 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
-import { discoverMemoryMaintenanceChannels, MemoryMaintenanceScheduler } from "../src/memory/scheduler.js";
+import { MemoryMaintenanceScheduler } from "../src/memory/scheduler.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -17,55 +16,29 @@ function maintenanceSettings(enabled = true) {
 	};
 }
 
+/** Bound conversations of an active dot, as the runtime would inject them (spec 058, D12). */
+function conv(channelId: string) {
+	const index = channelId.slice(channelId.lastIndexOf("_") + 1);
+	return {
+		dot: "news",
+		dotDir: "/tmp/dots/news",
+		channelId,
+		conversation: `dm-${index}`,
+		conversationDir: `/tmp/dots/news/conversations/dm-${index}`,
+	};
+}
+
 afterEach(() => {
 	vi.useRealTimers();
 });
 
 describe("memory maintenance scheduler", () => {
-	it("discovers legal channels from workspace, state, and known ids", async () => {
-		const root = createTempDir();
-		const workspaceDir = join(root, "workspace");
-		const appHomeDir = join(root, "app");
-		mkdirSync(join(workspaceDir, "dm_workspace"), { recursive: true });
-		mkdirSync(join(workspaceDir, "events"), { recursive: true });
-		mkdirSync(join(appHomeDir, "state", "memory"), { recursive: true });
-		writeFileSync(join(appHomeDir, "state", "memory", "group_state.json"), "{}\n", "utf-8");
-		writeFileSync(join(appHomeDir, "state", "memory", "bad.json"), "{}\n", "utf-8");
-
-		await expect(
-			discoverMemoryMaintenanceChannels({
-				appHomeDir,
-				workspaceDir,
-				knownChannelIds: ["dm_known", "not_channel"],
-			}),
-		).resolves.toEqual(["dm_known", "dm_workspace", "group_state"]);
-	});
-
-	it("visits a slash-bearing group once, under the id the runtime can act on", async () => {
-		// The same channel is reachable three ways, and two of them can only name it by its
-		// escaped directory form. Without collapsing them, maintenance ran up to three times per
-		// tick on one channel — twice under an id no transport or runner map can resolve.
-		const root = createTempDir();
-		const workspaceDir = join(root, "workspace");
-		const appHomeDir = join(root, "app");
-		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
-		const escaped = "group_cidYDhGqxhJOzS7VDv__eDInUw==";
-		mkdirSync(join(workspaceDir, escaped), { recursive: true });
-		mkdirSync(join(appHomeDir, "state", "memory"), { recursive: true });
-		writeFileSync(join(appHomeDir, "state", "memory", `${escaped}.json`), "{}\n", "utf-8");
-
-		await expect(
-			discoverMemoryMaintenanceChannels({ appHomeDir, workspaceDir, knownChannelIds: [channelId] }),
-		).resolves.toEqual([channelId]);
-	});
-
 	it("does not request runtime context when disabled", async () => {
 		const root = createTempDir();
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir: join(root, "app"),
-			workspaceDir: join(root, "workspace"),
-			getKnownChannelIds: () => ["dm_1"],
+			getConversations: () => [conv("dm_1")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({ memoryMaintenance: maintenanceSettings(false) }),
@@ -78,13 +51,12 @@ describe("memory maintenance scheduler", () => {
 	it("reflects one channel per tick", async () => {
 		const root = createTempDir();
 		const appHomeDir = join(root, "app");
-		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({ ...state, dirty: true }));
-		await updateMemoryMaintenanceState(appHomeDir, "dm_2", (state) => ({ ...state, dirty: true }));
+		await updateMemoryMaintenanceState(appHomeDir, conv("dm_1"), (state) => ({ ...state, dirty: true }));
+		await updateMemoryMaintenanceState(appHomeDir, conv("dm_2"), (state) => ({ ...state, dirty: true }));
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir,
-			workspaceDir: join(root, "workspace"),
-			getKnownChannelIds: () => ["dm_1", "dm_2"],
+			getConversations: () => [conv("dm_1"), conv("dm_2")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({
@@ -102,13 +74,12 @@ describe("memory maintenance scheduler", () => {
 		const root = createTempDir();
 		const appHomeDir = join(root, "app");
 		for (const id of ["dm_1", "dm_2", "dm_3"]) {
-			await updateMemoryMaintenanceState(appHomeDir, id, (state) => ({ ...state, dirty: true }));
+			await updateMemoryMaintenanceState(appHomeDir, conv(id), (state) => ({ ...state, dirty: true }));
 		}
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir,
-			workspaceDir: join(root, "workspace"),
-			getKnownChannelIds: () => ["dm_1", "dm_2", "dm_3"],
+			getConversations: () => [conv("dm_1"), conv("dm_2"), conv("dm_3")],
 			getRuntimeContext,
 			isChannelActive: (channelId) => channelId === "dm_1",
 			getSettings: () => ({
@@ -120,7 +91,7 @@ describe("memory maintenance scheduler", () => {
 
 		await scheduler.runOnce();
 		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
-		expect(getRuntimeContext).toHaveBeenCalledWith("dm_2");
+		expect(getRuntimeContext).toHaveBeenCalledWith(conv("dm_2"));
 	});
 
 	it("skips channels with nothing due without requesting runtime context", async () => {
@@ -130,19 +101,18 @@ describe("memory maintenance scheduler", () => {
 
 		// dm_1 has already reflected within its interval and is clean: reflect could not possibly
 		// be due, so the cheap pre-check should skip it without touching the runtime.
-		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
+		await updateMemoryMaintenanceState(appHomeDir, conv("dm_1"), (state) => ({
 			...state,
 			dirty: false,
 			lastReflectAt: formatLocalTime(now),
 		}));
 		// dm_2 is dirty with no prior reflect, so it is a candidate.
-		await updateMemoryMaintenanceState(appHomeDir, "dm_2", (state) => ({ ...state, dirty: true }));
+		await updateMemoryMaintenanceState(appHomeDir, conv("dm_2"), (state) => ({ ...state, dirty: true }));
 
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir,
-			workspaceDir: join(root, "workspace"),
-			getKnownChannelIds: () => ["dm_1", "dm_2"],
+			getConversations: () => [conv("dm_1"), conv("dm_2")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({
@@ -152,7 +122,7 @@ describe("memory maintenance scheduler", () => {
 
 		await scheduler.runOnce(now);
 		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
-		expect(getRuntimeContext).toHaveBeenCalledWith("dm_2");
+		expect(getRuntimeContext).toHaveBeenCalledWith(conv("dm_2"));
 	});
 
 	it("starts and stops an idempotent interval regardless of the enabled setting", async () => {
@@ -162,8 +132,7 @@ describe("memory maintenance scheduler", () => {
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir: join(root, "app"),
-			workspaceDir: join(root, "workspace"),
-			getKnownChannelIds: () => ["dm_1"],
+			getConversations: () => [conv("dm_1")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({

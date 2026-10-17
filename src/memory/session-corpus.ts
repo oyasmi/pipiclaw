@@ -18,6 +18,8 @@ export interface SessionSearchDocument {
 	/** True when even the scan text was clipped: a keyword past this point cannot be found here. */
 	scanTruncated?: boolean;
 	sessionId?: string;
+	/** The conversation directory the document came from (`dm-1`, `group-2`, …). */
+	conversation?: string;
 }
 
 /**
@@ -29,6 +31,7 @@ export interface SessionSearchDocument {
 export const SESSION_SCAN_MAX_CHARS = 20_000;
 
 export interface BuildSessionCorpusOptions {
+	/** The dot whose conversations — every channel that has talked to it — form the corpus (spec 058, D12). */
 	dotDir: string;
 	maxFiles: number;
 	maxCharsPerDocument?: number;
@@ -273,39 +276,53 @@ async function parseJsonlFile(
 	return docs;
 }
 
-async function listChannelSessionJsonlFiles(dotDir: string, maxFiles: number): Promise<string[]> {
-	let names: string[];
+async function listConversations(dotDir: string): Promise<string[]> {
 	try {
-		names = await readdir(dotDir);
+		const entries = await readdir(join(dotDir, "conversations"), { withFileTypes: true });
+		return entries
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name)
+			.sort();
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") {
 			return [];
 		}
 		throw error;
 	}
+}
 
-	// Stat in parallel: this is one round trip per session file in the channel directory, and
-	// awaiting them one at a time made the corpus build scale with the file count rather than
-	// with the slowest stat.
-	const stated = await Promise.all(
-		names
-			.filter((name) => name.endsWith(".jsonl") && !IGNORED_JSONL_FILES.has(name))
-			.map(async (name) => {
-				const path = join(dotDir, name);
-				try {
-					const stats = await stat(path);
-					return stats.isFile() ? { path, mtimeMs: stats.mtimeMs } : null;
-				} catch {
-					return null;
-				}
-			}),
+async function listSessionJsonlFiles(
+	conversationDirs: Array<{ conversation: string; dir: string }>,
+	maxFiles: number,
+): Promise<Array<{ conversation: string; path: string }>> {
+	// Stat in parallel: one round trip per session file, and awaiting them one at a time made the
+	// corpus build scale with the file count rather than with the slowest stat.
+	const listed = await Promise.all(
+		conversationDirs.map(async ({ conversation, dir }) => {
+			try {
+				return (await readdir(dir))
+					.filter((name) => name.endsWith(".jsonl") && !IGNORED_JSONL_FILES.has(name))
+					.map((name) => ({ conversation, path: join(dir, name) }));
+			} catch {
+				return [];
+			}
+		}),
 	);
-	const candidates = stated.filter((entry): entry is { path: string; mtimeMs: number } => entry !== null);
-
-	return candidates
+	const stated = await Promise.all(
+		listed.flat().map(async (entry) => {
+			try {
+				const stats = await stat(entry.path);
+				return stats.isFile() ? { ...entry, mtimeMs: stats.mtimeMs } : null;
+			} catch {
+				return null;
+			}
+		}),
+	);
+	return stated
+		.filter((entry): entry is { conversation: string; path: string; mtimeMs: number } => entry !== null)
 		.sort((a, b) => b.mtimeMs - a.mtimeMs)
 		.slice(0, Math.max(0, maxFiles))
-		.map((entry) => entry.path);
+		.map(({ conversation, path }) => ({ conversation, path }));
 }
 
 export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Promise<SessionSearchDocument[]> {
@@ -313,18 +330,27 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 	const maxChars = options.maxCharsPerDocument ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
 	const maxDocuments = options.maxDocumentsTotal ?? DEFAULT_MAX_DOCUMENTS_TOTAL;
 	const docs: SessionSearchDocument[] = [];
-	const readPlan: Array<{ path: string; source: SessionSearchSource }> = [
-		{ path: join(options.dotDir, "context.jsonl"), source: "context" },
-		{ path: join(options.dotDir, "log.jsonl"), source: "log" },
-		{ path: join(options.dotDir, "log.jsonl.1"), source: "log" },
-	];
-
-	for (const path of await listChannelSessionJsonlFiles(options.dotDir, maxFiles)) {
-		readPlan.push({ path, source: "session" });
+	const conversationDirs = (await listConversations(options.dotDir)).map((conversation) => ({
+		conversation,
+		dir: join(options.dotDir, "conversations", conversation),
+	}));
+	const readPlan: Array<{ path: string; source: SessionSearchSource; conversation: string }> = [];
+	for (const { conversation, dir } of conversationDirs) {
+		readPlan.push(
+			{ path: join(dir, "context.jsonl"), source: "context", conversation },
+			{ path: join(dir, "log.jsonl"), source: "log", conversation },
+			{ path: join(dir, "log.jsonl.1"), source: "log", conversation },
+		);
+	}
+	for (const entry of await listSessionJsonlFiles(conversationDirs, maxFiles)) {
+		readPlan.push({ ...entry, source: "session" });
 	}
 
-	for (const item of readPlan.slice(0, maxFiles + 3)) {
-		docs.push(...(await parseJsonlFile(item.path, item.source, maxChars)));
+	for (const item of readPlan) {
+		for (const document of await parseJsonlFile(item.path, item.source, maxChars)) {
+			// Ids are `<file>:<line>`, and every conversation has its own `context.jsonl`.
+			docs.push({ ...document, id: `${item.conversation}/${document.id}`, conversation: item.conversation });
+		}
 		if (docs.length > maxDocuments * 2) {
 			break;
 		}
@@ -334,7 +360,7 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 	const seen = new Set<string>();
 	for (const document of docs) {
 		const identity = document.timestamp
-			? `${document.timestamp}\0${document.role}\0${document.text}`
+			? `${document.conversation}\0${document.timestamp}\0${document.role}\0${document.text}`
 			: `${document.source}\0${document.id}`;
 		if (seen.has(identity)) continue;
 		seen.add(identity);

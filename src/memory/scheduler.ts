@@ -1,25 +1,19 @@
-import { readdir } from "node:fs/promises";
-import { basename } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-// The channel index is a runtime-owned workspace artifact; the scheduler is one of its two
-// read-only consumers (see `discoverWorkspaceChannelIds`).
-import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
-import { dedupeChannelIdsByDirectory, isChannelId } from "../channel/channel-paths.js";
+import type { DotConversation } from "../dot/types.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
-import { getMemoryMaintenanceStateDir, readMemoryMaintenanceState } from "./maintenance-state.js";
+import { readMemoryMaintenanceState } from "./maintenance-state.js";
 import { type MemoryMaintenanceInput, resolveMemoryMaintenanceSettings } from "./maintenance-tuning.js";
 import { runReflectJob } from "./reflect-job.js";
 
 export interface MemoryMaintenanceRuntimeContext {
-	channelId: string;
-	dotDir: string;
+	conversation: DotConversation;
 	workspaceDir: string;
 	/**
-	 * Transcript accessors, not arrays: the scheduler visits a channel every tick but almost
+	 * Transcript accessors, not arrays: the scheduler visits a conversation every tick but almost
 	 * every tick is denied by a cheap schedule gate. Copying (and then scanning) the whole
 	 * transcript before that verdict was the entire steady-state cost of an idle daemon.
 	 */
@@ -32,9 +26,13 @@ export interface MemoryMaintenanceRuntimeContext {
 
 export interface MemoryMaintenanceSchedulerOptions {
 	appHomeDir: string;
-	workspaceDir: string;
-	getKnownChannelIds?: () => Iterable<string>;
-	getRuntimeContext: (channelId: string) => Promise<MemoryMaintenanceRuntimeContext | null>;
+	/**
+	 * The candidates (spec 058, D12): every conversation that is currently bound, in an active
+	 * dot. An unbound conversation already got its last reflect when its runner was disposed at
+	 * rebind, and a dormant dot does no background work.
+	 */
+	getConversations: () => DotConversation[];
+	getRuntimeContext: (conversation: DotConversation) => Promise<MemoryMaintenanceRuntimeContext | null>;
 	isChannelActive: (channelId: string) => boolean;
 	getSettings: () => { memoryMaintenance: MemoryMaintenanceInput };
 	intervalMs?: number;
@@ -54,11 +52,11 @@ const DEFAULT_TICK_INTERVAL_MS = 60_000;
  */
 async function mightReflectBeDue(input: {
 	appHomeDir: string;
-	channelId: string;
+	conversation: DotConversation;
 	settings: { memoryMaintenance: MemoryMaintenanceInput };
 	now: Date;
 }): Promise<boolean> {
-	const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
+	const state = await readMemoryMaintenanceState(input.appHomeDir, input.conversation);
 	return shouldRunReflect({
 		now: input.now,
 		state,
@@ -68,45 +66,10 @@ async function mightReflectBeDue(input: {
 	}).allowed;
 }
 
-/**
- * Channels with a maintenance state file — the ones nobody has spoken to since this process
- * started and which have no workspace directory yet. Like a directory listing, these names are
- * the escaped form of the id, so they are the least authoritative of the three sources below.
- */
-async function listStateChannels(appHomeDir: string): Promise<string[]> {
-	try {
-		const entries = await readdir(getMemoryMaintenanceStateDir(appHomeDir), { withFileTypes: true });
-		return entries
-			.filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-			.map((entry) => basename(entry.name, ".json"))
-			.filter(isChannelId);
-	} catch {
-		return [];
-	}
-}
-
-/**
- * Every channel maintenance should visit, most authoritative source first: the live runner map
- * holds real ids, `CHANNELS.md` does too, and the two directory listings can only offer escaped
- * names. Deduplicating by directory keeps one entry per channel, so a group whose id contains
- * `/` is maintained once — under an id the rest of the runtime can act on — rather than twice.
- */
-export async function discoverMemoryMaintenanceChannels(input: {
-	appHomeDir: string;
-	workspaceDir: string;
-	knownChannelIds?: Iterable<string>;
-}): Promise<string[]> {
-	return dedupeChannelIdsByDirectory([
-		...[...(input.knownChannelIds ?? [])].filter(isChannelId),
-		...(await discoverWorkspaceChannelIds(input.workspaceDir)),
-		...(await listStateChannels(input.appHomeDir)),
-	]);
-}
-
 export class MemoryMaintenanceScheduler {
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private running = false;
-	private nextChannelIndex = 0;
+	private nextIndex = 0;
 
 	constructor(private readonly options: MemoryMaintenanceSchedulerOptions) {}
 
@@ -143,50 +106,45 @@ export class MemoryMaintenanceScheduler {
 
 		this.running = true;
 		try {
-			const channelIds = await discoverMemoryMaintenanceChannels({
-				appHomeDir: this.options.appHomeDir,
-				workspaceDir: this.options.workspaceDir,
-				knownChannelIds: this.options.getKnownChannelIds?.(),
-			});
-			if (channelIds.length === 0) {
+			const conversations = this.options.getConversations();
+			if (conversations.length === 0) {
 				return;
 			}
-			// One channel per tick, round-robin: a reflect pass is an LLM call, and the first due
-			// channel is as good a place to spend it as any.
-			let selected: string | undefined;
-			let index = this.nextChannelIndex % channelIds.length;
-			for (let scanned = 0; scanned < channelIds.length && !selected; scanned++) {
-				const channelId = channelIds[index];
+			// One conversation per tick, round-robin: a reflect pass is an LLM call, and the first
+			// due conversation is as good a place to spend it as any.
+			let selected: DotConversation | undefined;
+			let index = this.nextIndex % conversations.length;
+			for (let scanned = 0; scanned < conversations.length && !selected; scanned++) {
+				const conversation = conversations[index];
 				if (
-					channelId &&
-					!this.options.isChannelActive(channelId) &&
-					(await mightReflectBeDue({ appHomeDir: this.options.appHomeDir, channelId, settings, now }))
+					conversation &&
+					!this.options.isChannelActive(conversation.channelId) &&
+					(await mightReflectBeDue({ appHomeDir: this.options.appHomeDir, conversation, settings, now }))
 				) {
-					selected = channelId;
+					selected = conversation;
 				}
-				index = (index + 1) % channelIds.length;
+				index = (index + 1) % conversations.length;
 			}
-			this.nextChannelIndex = index;
-			if (selected) await this.runChannelOnce(selected, now);
+			this.nextIndex = index;
+			if (selected) await this.runConversationOnce(selected, now);
 		} finally {
 			this.running = false;
 		}
 	}
 
-	private async runChannelOnce(channelId: string, now: Date): Promise<void> {
-		if (this.options.isChannelActive(channelId)) {
+	private async runConversationOnce(conversation: DotConversation, now: Date): Promise<void> {
+		if (this.options.isChannelActive(conversation.channelId)) {
 			return;
 		}
-		const context = await this.options.getRuntimeContext(channelId);
+		const context = await this.options.getRuntimeContext(conversation);
 		if (!context) {
 			return;
 		}
 		await runReflectJob({
 			appHomeDir: this.options.appHomeDir,
-			channelId,
-			dotDir: context.dotDir,
+			conversation: context.conversation,
 			workspaceDir: context.workspaceDir,
-			channelActive: this.options.isChannelActive(channelId),
+			channelActive: this.options.isChannelActive(conversation.channelId),
 			now,
 			settings: context.settings,
 			model: context.model,
