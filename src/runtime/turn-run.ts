@@ -429,8 +429,8 @@ export function createEventTurnRunner(
 
 	/**
 	 * A human message on a channel with no usable dot (D4): nothing is archived, no runner is built
-	 * and no model is called. `/help` still answers; everything else gets the one reason and the
-	 * next step.
+	 * and no model is called. `/help` still answers (and `/dot`, before this); everything else gets
+	 * the one reason and the next step.
 	 */
 	const replyWithoutDot = async (
 		event: ChannelEvent,
@@ -447,6 +447,19 @@ export function createEventTurnRunner(
 			resolution.kind === "unbound" ? formatUnboundChannelReply() : formatUnavailableDotReply(resolution.dot),
 			{ markdown: true },
 		);
+	};
+
+	const runDotCommand = async (event: ChannelEvent, args: string, bot: DingTalkBotPort): Promise<void> => {
+		const logCtx = { channelId: event.channelId, userName: event.userName };
+		log.logEvent("info", "runtime.command.started", "Executing command", { ctx: logCtx, fields: { command: "dot" } });
+		const response = await deps.runRuntimeCommand(event, "dot", args);
+		const delivered = await bot.sendPlain(event.channelId, response, { title: "/dot", markdown: true });
+		if (!delivered) {
+			log.logWarn("delivery.command_reply.failed", "Command reply delivery failed", {
+				channelId: event.channelId,
+				fields: { command: "dot", chars: response.length },
+			});
+		}
 	};
 
 	const runEventTurn = async (inboundEvent: ChannelEvent, bot: DingTalkBotPort, isEvent?: boolean): Promise<void> => {
@@ -480,9 +493,20 @@ export function createEventTurnRunner(
 				await getDurableDispatch()?.markCompleted(inboundEvent.dispatchId);
 				return;
 			}
-		} else if (resolution.kind !== "bound") {
-			await replyWithoutDot(inboundEvent, resolution, bot);
-			return;
+		} else {
+			// `/dot` runs outside any turn, bound or not: nothing is archived and no runner is built,
+			// so `/dot bind` sees this channel idle and the next queued message already resolves
+			// against the new binding (D5).
+			const command = parseBuiltInCommand(inboundEvent.text);
+			if (command?.name === "dot") {
+				releaseReservation(inboundEvent);
+				await runDotCommand(inboundEvent, command.args, bot);
+				return;
+			}
+			if (resolution.kind !== "bound") {
+				await replyWithoutDot(inboundEvent, resolution, bot);
+				return;
+			}
 		}
 
 		const runner = getRunner(inboundEvent.channelId);

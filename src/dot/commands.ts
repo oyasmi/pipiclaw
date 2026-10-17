@@ -7,7 +7,7 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { normalizeDotName } from "./paths.js";
-import type { CreateDotOutcome, DotAvailability } from "./types.js";
+import type { BindingsFile, CreateDotOutcome, DotAvailability, DotSummary } from "./types.js";
 
 type DotCommand = { action: "list" } | { action: "new"; name: string } | { action: "bind"; name: string };
 
@@ -43,8 +43,30 @@ export type BindOutcome =
 	| { kind: "unavailable"; dot: string }
 	| { kind: "invalid"; dot: string };
 
+/**
+ * `/dot list`'s rows: every dot on disk with the channels bound to it. `label` names a channel
+ * (the caller owns channel ids); `current` is the asking channel's dot.
+ */
+export function buildDotList(
+	dots: readonly DotSummary[],
+	bindings: BindingsFile["bindings"],
+	current: string | undefined,
+	label: (channelId: string) => string,
+): DotListItem[] {
+	return dots.map((summary) => ({
+		name: summary.name,
+		availability: summary.availability,
+		current: summary.name === current,
+		channels: Object.entries(bindings)
+			.filter(([, binding]) => binding.dot === summary.name)
+			.map(([channelId]) => ({ channelId, label: label(channelId) })),
+	}));
+}
+
 export interface DotCommandPort {
 	list(): Promise<DotListItem[]>;
+	/** Absolute path of `CHANNELS.md`, where a truncated `/dot list` sends the reader. */
+	channelIndexPath: string;
 	create(name: string): Promise<CreateDotOutcome>;
 	/** Absent in the TUI, which never writes bindings (D18). */
 	bind?(name: string): Promise<BindOutcome>;
@@ -83,13 +105,14 @@ export function formatUnavailableDotReply(dot: string): string {
 	return `本频道绑定的 dot \`${dot}\` 当前不可用（目录缺失或 dot.json 有误），需要部署者在服务器上检查；也可以用 \`/dot bind <名字>\` 改绑到别的 dot。`;
 }
 
-function renderList(items: DotListItem[]): string {
+/** `canBind` is false in the TUI, whose current dot is the one it opened, not one a channel is bound to. */
+function renderList(items: DotListItem[], channelIndexPath: string, canBind: boolean): string {
 	if (items.length === 0) {
 		return "暂无 dot。用 `/dot new <名字>` 创建一个，再用 `/dot bind <名字>` 绑定到本频道。";
 	}
 	const lines = ["**dot 列表**"];
 	for (const item of items) {
-		const head = `- \`${item.name}\`${item.current ? "（本频道）" : ""}`;
+		const head = `- \`${item.name}\`${item.current ? (canBind ? "（本频道）" : "（当前打开）") : ""}`;
 		if (item.availability !== "available") {
 			lines.push(`${head}：不可用（目录缺失或 dot.json 有误），需要部署者在服务器上检查`);
 		} else if (item.channels.length === 0) {
@@ -99,7 +122,7 @@ function renderList(items: DotListItem[]): string {
 		}
 	}
 	return capReply(lines.join("\n"), {
-		nextStepHint: "完整的绑定关系可以在服务器上的 `workspace/CHANNELS.md` 查看",
+		nextStepHint: `完整的绑定关系在 \`${channelIndexPath}\``,
 	}).text;
 }
 
@@ -161,7 +184,7 @@ export async function handleDotCommand(
 	try {
 		switch (command.action) {
 			case "list":
-				return renderList(await port.list());
+				return renderList(await port.list(), port.channelIndexPath, port.bind !== undefined);
 			case "new":
 				return renderCreate(await port.create(command.name), port.bind !== undefined);
 			case "bind":

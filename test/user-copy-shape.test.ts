@@ -8,6 +8,13 @@ import { renderStatus } from "../src/agent/status-render.js";
 import { renderTurnErrorReply } from "../src/agent/turn/turn-error.js";
 import type { AgentRunner } from "../src/agent/types.js";
 import { BUILT_IN_COMMANDS, formatBusyHint, renderBuiltInHelp, SESSION_COMMANDS } from "../src/commands/catalog.js";
+import {
+	type BindOutcome,
+	type DotCommandPort,
+	formatUnavailableDotReply,
+	formatUnboundChannelReply,
+	handleDotCommand,
+} from "../src/dot/commands.js";
 import { handleEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { applyMemoryOps } from "../src/memory/store.js";
@@ -241,7 +248,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		}
 	});
 
-	it("keeps /memory, /events and /skills in shape", async () => {
+	it("keeps /memory, /events, /skills and /dot in shape", async () => {
 		const dotDir = tempDir();
 		const workspaceDir = tempDir();
 		const appHomeDir = tempDir();
@@ -319,6 +326,44 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			"/skills (empty)",
 			await handleSkillsCommand({ args: "", workspaceDir: tempDir(), appHomeDir }),
 		);
+
+		const dots = Array.from({ length: 40 }, (_, index) => ({
+			name: `dot-${index}`,
+			availability: index % 7 === 3 ? ("invalid" as const) : ("available" as const),
+			current: index === 0,
+			channels: Array.from({ length: index % 4 }, (_, channel) => ({
+				channelId: `group_cid${index}${channel}`,
+				label: `群「${"投资成长".repeat(3)}${channel}」`,
+			})),
+		}));
+		const bindOutcomes: BindOutcome[] = [
+			{ kind: "bound", dot: "lab" },
+			{ kind: "bound", dot: "lab", previousDot: "news", previousDotDormant: true },
+			{ kind: "bound", dot: "lab", previousDot: "news", suspendedTasks: 2, suspendedEvents: 1 },
+			{ kind: "same", dot: "lab" },
+			{ kind: "busy", dot: "lab" },
+			{ kind: "unknown", dot: "lab" },
+			{ kind: "unavailable", dot: "lab" },
+			{ kind: "invalid", dot: "lab" },
+		];
+		const port = (bind: boolean, outcome?: BindOutcome): DotCommandPort => ({
+			list: async () => dots,
+			channelIndexPath: "/home/u/.pipiclaw/workspace/CHANNELS.md",
+			create: async (name) => ({ kind: "created", record: { version: 1, name, createdAt: "", conversations: {} } }),
+			...(bind ? { bind: async () => outcome ?? bindOutcomes[0] } : {}),
+		});
+		for (const args of ["", "list", "new lab", "bogus", "new"]) {
+			expectUserCopyShape(`/dot ${args}`, await handleDotCommand(args, port(true)));
+		}
+		expectUserCopyShape("/dot (empty)", await handleDotCommand("", { ...port(true), list: async () => [] }));
+		expectUserCopyShape("/dot (tui)", await handleDotCommand("", port(false)));
+		expectUserCopyShape("/dot new (tui)", await handleDotCommand("new lab", port(false)));
+		expectUserCopyShape("/dot bind (tui)", await handleDotCommand("bind lab", port(false)));
+		for (const outcome of bindOutcomes) {
+			expectUserCopyShape(`/dot bind ${outcome.kind}`, await handleDotCommand("bind lab", port(true, outcome)));
+		}
+		expectUserCopyShape("unbound channel", formatUnboundChannelReply());
+		expectUserCopyShape("unavailable dot", formatUnavailableDotReply("news"));
 	});
 
 	it("keeps /help, /status, /usage and /context in shape", async () => {

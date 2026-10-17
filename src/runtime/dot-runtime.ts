@@ -8,14 +8,26 @@
  * `bindings.json` is read once at startup and the in-memory copy is authoritative from then on
  * (D4); it is written back on every change, by this process only.
  */
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { channelKind } from "../channel/channel-id.js";
+import type { BindOutcome } from "../dot/commands.js";
 import { StartupRefusal } from "../dot/legacy-layout.js";
-import { getDotDir } from "../dot/paths.js";
-import { allocateConversation, findConversation, loadBindings, readDotRecord } from "../dot/registry.js";
-import type { BindingsFile, DotConversation, DotSummary } from "../dot/types.js";
+import { getDotDir, isDotName, normalizeDotName } from "../dot/paths.js";
+import {
+	allocateConversation,
+	createDot,
+	findConversation,
+	loadBindings,
+	readDotRecord,
+	writeBindings,
+} from "../dot/registry.js";
+import type { BindingsFile, CreateDotOutcome, DotConversation, DotSummary } from "../dot/types.js";
+import { parseScheduledEventContent } from "../events/parse.js";
 import * as log from "../log.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { readActiveTasks } from "../tasks/contract.js";
 
 export type ChannelResolution =
 	| { kind: "bound"; conversation: DotConversation }
@@ -37,6 +49,15 @@ export interface DotRuntimeOptions {
 	createWatcher: (target: { dot: string; dotDir: string }) => DotWatcher;
 	/** The transport's plain send, for background notices that pass the binding guard. */
 	send: (channelId: string, text: string) => Promise<boolean>;
+	/** Whether the channel has a turn in flight; `/dot bind` refuses then (D5 step 1). */
+	isChannelBusy: (channelId: string) => boolean;
+	/**
+	 * Drop the channel's cached runner and dispose it — its final reflect lands in the dot it was
+	 * bound to (D5 step 5). Called only after the new binding is on disk.
+	 */
+	releaseRunner: (channelId: string) => Promise<void>;
+	/** A binding changed (the channel index rewrites its dot column). */
+	onBindingChanged?: (channelId: string) => void;
 }
 
 export class DotRuntime {
@@ -47,6 +68,8 @@ export class DotRuntime {
 	private readonly watchers = new Map<string, DotWatcher>();
 	/** Activation and dormancy of one dot run in order, so interleaved calls settle on the last one. */
 	private readonly lifecycle = createSerialQueue<string>();
+	/** Binds are read-modify-writes of the one bindings file: one at a time, whichever channel asks. */
+	private readonly bindingWrites = createSerialQueue<string>();
 	private servicesStarted = false;
 
 	constructor(private readonly options: DotRuntimeOptions) {}
@@ -104,6 +127,11 @@ export class DotRuntime {
 	isBoundTo(channelId: string, dot: string): boolean {
 		const resolution = this.resolve(channelId);
 		return resolution.kind === "bound" && resolution.conversation.dot === dot;
+	}
+
+	/** The whole binding table, for `/dot list`. A copy: callers cannot change bindings through it. */
+	bindingTable(): BindingsFile["bindings"] {
+		return { ...this.bindings.bindings };
 	}
 
 	/** The dot a channel points at, available or not — for the channel index's dot column. */
@@ -204,6 +232,78 @@ export class DotRuntime {
 		await watcher.flush?.().catch(() => undefined);
 	}
 
+	/** `/dot new`: an empty dot, bound to nothing and therefore dormant (D5). */
+	create(name: string): Promise<CreateDotOutcome> {
+		return createDot(this.options.workspaceDir, normalizeDotName(name), new Date());
+	}
+
+	/** `/dot bind` from `channelId`, in D5's order. Throws only when the bindings write itself fails. */
+	bind(channelId: string, name: string): Promise<BindOutcome> {
+		return this.bindingWrites.run("bindings", () => this.bindNow(channelId, normalizeDotName(name)));
+	}
+
+	private async bindNow(channelId: string, dot: string): Promise<BindOutcome> {
+		const kind = channelKind(channelId);
+		if (!kind) throw new Error(`Not a channel id: ${channelId}`);
+		// 1. Validate. A dot that went missing or broken since startup is caught here, not later.
+		if (!isDotName(dot)) return { kind: "invalid", dot };
+		const summary = await readDotRecord(this.options.workspaceDir, dot);
+		if (summary.availability === "missing") return { kind: "unknown", dot };
+		if (!summary.record) return { kind: "unavailable", dot };
+		if (this.options.isChannelBusy(channelId)) return { kind: "busy", dot };
+		const previous = this.bindings.bindings[channelId]?.dot;
+		if (previous === dot) return { kind: "same", dot };
+		this.records.set(dot, summary);
+
+		// 2–4. Activate the target, give the channel its conversation there, then commit the binding.
+		// Until the write succeeds nothing has changed for the channel; a target activated only for
+		// this bind goes dormant again.
+		const now = new Date();
+		const wasActive = this.active.has(dot);
+		try {
+			await this.activate(dot);
+			await allocateConversation(this.options.workspaceDir, dot, channelId, kind, now);
+			await this.refreshRecord(dot);
+			const next: BindingsFile = {
+				...this.bindings,
+				bindings: { ...this.bindings.bindings, [channelId]: { dot, boundAt: now.toISOString() } },
+			};
+			await writeBindings(this.options.workspaceDir, next);
+			this.bindings = next;
+		} catch (error) {
+			if (!wasActive && this.boundChannelsOf(dot).length === 0) await this.deactivate(dot);
+			throw error;
+		}
+		log.logInfoEvent("dot.bound", "Channel bound to dot", { channelId, fields: { dot, previousDot: previous } });
+		this.options.onBindingChanged?.(channelId);
+
+		// 5. The old runner goes; a failure here cannot undo the committed binding.
+		try {
+			await this.options.releaseRunner(channelId);
+		} catch (error) {
+			log.logWarn("dot.bind.release_failed", "Releasing the previous runner after a bind failed", {
+				channelId,
+				reason: errorMessage(error),
+				fields: { dot, previousDot: previous },
+			});
+		}
+
+		// 6. The old dot: dormant if it lost its last channel, otherwise report what is now suspended.
+		if (!previous) return { kind: "bound", dot };
+		if (this.boundChannelsOf(previous).length === 0) {
+			await this.deactivate(previous);
+			return { kind: "bound", dot, previousDot: previous, previousDotDormant: true };
+		}
+		const suspended = await countDeliveringTo(getDotDir(this.options.workspaceDir, previous), channelId);
+		return {
+			kind: "bound",
+			dot,
+			previousDot: previous,
+			suspendedTasks: suspended.tasks,
+			suspendedEvents: suspended.events,
+		};
+	}
+
 	/** Start the event watchers of every active dot; later activations start theirs directly. */
 	startServices(): void {
 		this.servicesStarted = true;
@@ -234,4 +334,36 @@ export class DotRuntime {
 	async flush(): Promise<void> {
 		await Promise.all([...this.watchers.values()].map((watcher) => watcher.flush?.() ?? Promise.resolve()));
 	}
+}
+
+/**
+ * Open tasks and events in a dot whose delivery channel is `channelId` — what a rebind away from
+ * the dot suspends (D8). Read-only, and best effort: an unreadable file is simply not counted.
+ */
+async function countDeliveringTo(dotDir: string, channelId: string): Promise<{ tasks: number; events: number }> {
+	let tasks = 0;
+	try {
+		tasks = (await readActiveTasks(join(dotDir, "tasks"))).filter(
+			(entry) => entry.fields.channel === channelId,
+		).length;
+	} catch {
+		// No readable tasks directory: nothing suspended there.
+	}
+	let events = 0;
+	const eventsDir = join(dotDir, "events");
+	let filenames: string[] = [];
+	try {
+		filenames = (await readdir(eventsDir)).filter((filename) => filename.endsWith(".json"));
+	} catch {
+		// No events directory.
+	}
+	for (const filename of filenames) {
+		try {
+			const event = parseScheduledEventContent(await readFile(join(eventsDir, filename), "utf8"), filename);
+			if (event.channelId === channelId) events++;
+		} catch {
+			// An invalid definition never fires anyway.
+		}
+	}
+	return { tasks, events };
 }

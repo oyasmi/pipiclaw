@@ -22,15 +22,17 @@ import {
 import { prepareAppServices } from "../app/services.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import { formatChannelLabel } from "../channel/channel-id.js";
-import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
+import { CHANNELS_INDEX_FILENAME, type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ChannelStore } from "../channel/store.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
 import { DingTalkBot } from "../dingtalk/bot.js";
 import { type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import type { DingTalkHandler } from "../dingtalk/handler.js";
+import { buildDotList } from "../dot/commands.js";
 import { assertNoLegacyLayout, StartupRefusal } from "../dot/legacy-layout.js";
 import { getDotDir } from "../dot/paths.js";
+import { listDots } from "../dot/registry.js";
 import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
@@ -107,14 +109,25 @@ async function evictIdleRunnersOverCap(channelRunners: Map<string, AgentRunner>)
 	for (const [channelId, runner] of channelRunners) {
 		if (channelRunners.size <= MAX_CACHED_RUNNERS) break;
 		if (runner.isBusy()) continue;
-		channelRunners.delete(channelId);
-		await runner.dispose().catch((err) => {
-			log.logWarn("runtime.runner.evict_dispose_failed", "Evicted runner dispose failed", {
-				channelId: channelId,
-				reason: errorMessage(err),
-			});
-		});
+		await releaseCachedRunner(channelRunners, channelId);
 	}
+}
+
+/**
+ * Take a channel's runner out of the cache, then dispose it: the next message builds a fresh one
+ * from the channel's current binding. Used by LRU eviction and by `/dot bind` (spec 058, D5 step
+ * 5), whose final reflect writes into the dot the runner belonged to.
+ */
+async function releaseCachedRunner(channelRunners: Map<string, AgentRunner>, channelId: string): Promise<void> {
+	const runner = channelRunners.get(channelId);
+	if (!runner) return;
+	channelRunners.delete(channelId);
+	await runner.dispose().catch((err) => {
+		log.logWarn("runtime.runner.dispose_failed", "Released runner dispose failed", {
+			channelId: channelId,
+			reason: errorMessage(err),
+		});
+	});
 }
 
 /** The real `TaskDriver` class, or the minimal test-injectable shape `createTaskDriver` may
@@ -224,6 +237,9 @@ export async function createRuntimeContext(
 						}),
 					}),
 		send: (channelId, text) => bot.sendPlain(channelId, text),
+		isChannelBusy: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
+		releaseRunner: (channelId) => releaseCachedRunner(channelRunners, channelId),
+		onBindingChanged: () => channelIndex.noteBindingChanged(),
 	});
 	await dotRuntime.load();
 	const isBoundTo = (channelId: string, dot: string) => dotRuntime.isBoundTo(channelId, dot);
@@ -321,6 +337,18 @@ export async function createRuntimeContext(
 		archiveIncomingMessage,
 		getRunner,
 		resolveChannel: (channelId) => dotRuntime.resolve(channelId),
+		dotPort: (channelId) => ({
+			list: async () =>
+				buildDotList(
+					await listDots(workspaceDir),
+					dotRuntime.bindingTable(),
+					dotRuntime.boundDot(channelId),
+					(id) => formatChannelLabel(id, channelIndex.nameOf(id)),
+				),
+			channelIndexPath: join(workspaceDir, CHANNELS_INDEX_FILENAME),
+			create: (name) => dotRuntime.create(name),
+			bind: (name) => dotRuntime.bind(channelId, name),
+		}),
 		describeChannel,
 		dotChannelIds: (dot) => dotRuntime.conversationChannels(dot),
 		cliVersion,

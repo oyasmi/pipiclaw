@@ -15,12 +15,13 @@ import {
 	formatMissingQueueMessage,
 	formatNewSessionReply,
 	formatSteerQueued,
+	parseBuiltInCommand,
 	type RuntimeCommandName,
 } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
 import type { BusyMessageMode } from "../dingtalk/config.js";
 import type { BusyMessageResult, DingTalkBotPort, DingTalkHandler, StopOutcome } from "../dingtalk/handler.js";
-import { formatUnavailableDotReply, formatUnboundChannelReply } from "../dot/commands.js";
+import { type DotCommandPort, formatUnavailableDotReply, formatUnboundChannelReply } from "../dot/commands.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -68,6 +69,8 @@ export interface TurnHandlerDeps {
 	/** The channel's runner; `undefined` when it is not bound to an available dot — none is ever built then. */
 	getRunner: (channelId: string) => AgentRunner | undefined;
 	resolveChannel: (channelId: string) => ChannelResolution;
+	/** `/dot` as asked from `channelId` (spec 058, D5). */
+	dotPort: (channelId: string) => DotCommandPort;
 	/** Names a channel and says whether it is bound to `dot` — the asking channel's dot. */
 	describeChannel: (dot: string, channelId: string) => ChannelDescription;
 	/** Channels registered in a dot's `dot.json` (for `/events history`). */
@@ -93,6 +96,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 		archiveIncomingMessage,
 		getRunner,
 		resolveChannel,
+		dotPort,
 		describeChannel,
 		dotChannelIds,
 		cliVersion,
@@ -293,15 +297,26 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 			const { channelId } = event;
 			const resolution = resolveChannel(channelId);
 			if (resolution.kind !== "bound") {
-				return resolution.kind === "unbound"
-					? formatUnboundChannelReply()
-					: formatUnavailableDotReply(resolution.dot);
+				return runReportCommand(
+					{
+						kind: "unbound",
+						dotPort: dotPort(channelId),
+						refusal:
+							resolution.kind === "unbound"
+								? formatUnboundChannelReply()
+								: formatUnavailableDotReply(resolution.dot),
+					},
+					name,
+					args,
+				);
 			}
 			const { conversation } = resolution;
 			const { dot, dotDir } = conversation;
 			return runReportCommand(
 				{
+					kind: "bound",
 					conversation,
+					dotPort: dotPort(channelId),
 					paths: options.paths,
 					describeChannel: (target) => describeChannel(dot, target),
 					dotChannelIds: () => dotChannelIds(dot),
@@ -453,6 +468,8 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 			const resolution = resolveChannel(event.channelId);
 			if (resolution.kind !== "bound") return;
 			if (isSyntheticEvent(event) && event.dot !== resolution.conversation.dot) return;
+			// `/dot` runs outside any turn: `/dot bind` must see this channel idle (D5 step 1).
+			if (!isSyntheticEvent(event) && parseBuiltInCommand(event.text)?.name === "dot") return;
 			const runner = getRunner(event.channelId);
 			if (!runner) return;
 			runner.beginTurn(event.text);

@@ -21,10 +21,11 @@ import {
 import { prepareAppServices } from "../app/services.js";
 import { finalDeliveryOf, progressStyleOf } from "../channel/channel-context.js";
 import { formatChannelLabel, TUI_CHANNEL_ID } from "../channel/channel-id.js";
-import { loadChannelNames } from "../channel/channel-index.js";
+import { CHANNELS_INDEX_FILENAME, loadChannelNames } from "../channel/channel-index.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
+import { buildDotList } from "../dot/commands.js";
 import { assertNoLegacyLayout, StartupRefusal } from "../dot/legacy-layout.js";
 import { isDotName, normalizeDotName } from "../dot/paths.js";
 import { allocateConversation, createDot, listDots, loadBindings, readDotRecord } from "../dot/registry.js";
@@ -123,7 +124,6 @@ function safeUserName(): string {
 export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	const io = options.io ?? console;
 	const paths = options.paths ?? DEFAULT_BOOTSTRAP_PATHS;
-	const channelId = TUI_CHANNEL_ID;
 
 	// The pi-tui frontend owns stdout; the plain frontend prints only the final
 	// answer. Either way the human-readable console log sink would corrupt output,
@@ -156,6 +156,25 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		);
 		throw new BootstrapExitError(1);
 	}
+	try {
+		await runWithConversation(options, io, paths, conversation, settingsManager);
+	} finally {
+		// Interactive Ctrl-C exits through here (both frontends route it to the controller). A
+		// signal that kills the process — Ctrl-C under `--print`, a kill — leaves a stale lock that
+		// the next start reclaims (same host, dead pid).
+		await lock.handle.release();
+	}
+}
+
+async function runWithConversation(
+	options: TuiAppOptions,
+	io: BootstrapIO,
+	paths: BootstrapPaths,
+	conversation: DotConversation,
+	settingsManager: ReturnType<typeof prepareAppServices>["settingsManager"],
+): Promise<void> {
+	const channelId = TUI_CHANNEL_ID;
+	const { dot } = conversation;
 	const names = await loadChannelNames(paths.workspaceDir);
 	// Read once, for labels only: the TUI never writes bindings (D18).
 	const bindings = (await loadBindings(paths.workspaceDir).catch(() => undefined))?.bindings ?? {};
@@ -209,7 +228,17 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		runReport: (name, args) =>
 			runReportCommand(
 				{
+					kind: "bound",
 					conversation,
+					// The TUI lists and creates dots but never binds (D18): its port has no `bind`.
+					dotPort: {
+						list: async () =>
+							buildDotList(await listDots(paths.workspaceDir), bindings, dot, (id) =>
+								formatChannelLabel(id, names.get(id)),
+							),
+						channelIndexPath: join(paths.workspaceDir, CHANNELS_INDEX_FILENAME),
+						create: (name) => createDot(paths.workspaceDir, name, new Date()),
+					},
 					paths,
 					describeChannel: (id) => ({
 						label: formatChannelLabel(id, names.get(id)),
@@ -241,6 +270,5 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 			Promise.allSettled([store.close(), getUsageLedger().flush?.() ?? Promise.resolve(), flushSecurityLogs()]),
 		);
 		await waitForStorageFlush(log.flushLogging());
-		await lock.handle.release();
 	}
 }

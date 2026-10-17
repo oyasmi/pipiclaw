@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_COMMANDS, type CommandSubSpec, formatBusyHint, SESSION_COMMANDS } from "../src/commands/catalog.js";
+import { parseDotCommand } from "../src/dot/commands.js";
 import { parseEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
@@ -19,6 +20,7 @@ import { testConversation, useTempDirs } from "./helpers/fixtures.js";
  */
 
 const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
+	dot: parseDotCommand,
 	tasks: parseTasksCommand,
 	events: parseEventsCommand,
 	subagents: parseSubagentsCommand,
@@ -26,6 +28,9 @@ const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
 };
 
 const EXPECTED_EXAMPLES: Record<string, unknown> = {
+	"/dot": { action: "list" },
+	"/dot new research": { action: "new", name: "research" },
+	"/dot bind research": { action: "bind", name: "research" },
 	"/events list": { action: "list" },
 	"/events show weekly-review": { action: "show", name: "weekly-review" },
 	"/events delete weekly-review": { action: "delete", name: "weekly-review" },

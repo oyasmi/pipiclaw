@@ -1,6 +1,7 @@
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
 import type { ChannelDescription } from "../channel/channel-id.js";
+import { type DotCommandPort, handleDotCommand } from "../dot/commands.js";
 import type { DotConversation } from "../dot/types.js";
 import { handleEventsCommand } from "../events/commands.js";
 import { handleSkillsCommand } from "../skills/commands.js";
@@ -13,7 +14,7 @@ import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import type { RuntimeCommandName } from "./catalog.js";
 
 /**
- * The stateless report commands (`/events /tasks /status /usage /context /subagents /skills`) as
+ * The stateless report commands (`/dot /events /tasks /status /usage /context /subagents /skills`) as
  * one transport-neutral handler. The DingTalk runtime and the terminal TUI both route through it,
  * so a report cannot behave differently depending on where it was typed; each transport supplies
  * only what is genuinely its own (how to find its runner, whether a task can be woken immediately).
@@ -28,11 +29,10 @@ export interface ReportCommandPaths {
 }
 
 export interface ReportCommandContext {
-	/**
-	 * The asking channel's conversation in its dot. Reports exist only for a bound channel: an
-	 * unbound one is answered before routing (spec 058, D4), so this is never optional.
-	 */
+	kind: "bound";
+	/** The asking channel's conversation in its dot. */
 	conversation: DotConversation;
+	dotPort: DotCommandPort;
 	paths: ReportCommandPaths;
 	/** Names a delivery channel and says whether it is still bound to this dot. */
 	describeChannel: (channelId: string) => ChannelDescription;
@@ -49,11 +49,23 @@ export interface ReportCommandContext {
 	dispatchTask?: (taskId: string) => Promise<boolean>;
 }
 
+/**
+ * A channel with no usable dot (spec 058, D4): `/dot` is the one report it can run; every other
+ * name gets `refusal` — why there is no dot, and the next step.
+ */
+export interface UnboundCommandContext {
+	kind: "unbound";
+	dotPort: DotCommandPort;
+	refusal: string;
+}
+
 export async function runReportCommand(
-	context: ReportCommandContext,
+	context: ReportCommandContext | UnboundCommandContext,
 	name: RuntimeCommandName,
 	args: string,
 ): Promise<string> {
+	if (name === "dot") return handleDotCommand(args, context.dotPort);
+	if (context.kind === "unbound") return context.refusal;
 	const { conversation, paths } = context;
 	const { channelId, dot, dotDir } = conversation;
 	switch (name) {

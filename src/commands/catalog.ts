@@ -18,6 +18,7 @@ export type BuiltInCommandName =
 	| "steer"
 	| "followup"
 	| "stop"
+	| "dot"
 	| "events"
 	| "tasks"
 	| "status"
@@ -124,6 +125,23 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		examples: ["/followup 完成后再写一份简短的总结"],
 		availableWhileBusy: true,
 		runnerHandled: true,
+	},
+	{
+		name: "dot",
+		argumentHint: "[list|new <dot>|bind <dot>]",
+		description: "查看、创建 dot，把本频道绑定到一个 dot；未绑定的频道也能用",
+		// list/new answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
+		availableWhileBusy: true,
+		subcommands: [
+			{ name: "list", description: "列出所有 dot 和各自绑定的频道（默认动作，可省略）", example: "/dot" },
+			{ name: "new", args: "<dot>", description: "创建一个空 dot，不绑定任何频道", example: "/dot new research" },
+			{
+				name: "bind",
+				args: "<dot>",
+				description: "把本频道绑定到这个 dot，同时解除原来的绑定；回合进行中不能执行",
+				example: "/dot bind research",
+			},
+		],
 	},
 	{
 		name: "events",
