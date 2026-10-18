@@ -5,6 +5,7 @@ import { createUsage } from "../../src/tasks/budget.js";
 import { renderTaskDocument } from "../../src/tasks/contract.js";
 import type { TaskFrontmatter, TaskState } from "../../src/tasks/frontmatter.js";
 import type { Ticket } from "../../src/tasks/ticket.js";
+import { EVAL_CHANNEL_ID } from "../harness/layout.js";
 import type { TrialSetup } from "../harness/schema.js";
 
 /**
@@ -32,6 +33,8 @@ export async function writeTask(
 ): Promise<void> {
 	const fields: TaskFrontmatter = {
 		state: options.ticket ? "parked" : (options.state ?? "open"),
+		// Every task names its delivery channel (spec 058); one without it is suspended, never driven.
+		channel: EVAL_CHANNEL_ID,
 		ticket: options.ticket,
 		budget: options.budget,
 		usage: options.started ? createUsage() : undefined,
@@ -42,7 +45,7 @@ export async function writeTask(
 }
 
 /**
- * Seed one durable channel memory (spec 050): writes straight into `memory/<name>.md` and
+ * Seed one durable dot memory (spec 050): writes straight into `memory/<name>.md` and
  * regenerates the index, the same primitive `memory_save`/the reflect pass use — so a seeded
  * case sees the exact shape production writes, not a hand-rolled approximation.
  */
