@@ -22,6 +22,7 @@ function conv(channelId: string) {
 	return {
 		dot: "news",
 		dotDir: "/tmp/dots/news",
+		cwd: "/tmp/dots/news",
 		channelId,
 		conversation: `dm-${index}`,
 		conversationDir: `/tmp/dots/news/conversations/dm-${index}`,

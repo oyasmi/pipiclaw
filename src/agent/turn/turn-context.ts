@@ -28,7 +28,9 @@ import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "./task-digest.js";
 export function renderDotTurnContext(conversation: DotConversation, channelName: string | undefined): string {
 	return [
 		"<runtime_turn_context>",
-		`Dot: ${conversation.dot} — directory ${conversation.dotDir} (your working directory).`,
+		conversation.cwd === conversation.dotDir
+			? `Dot: ${conversation.dot} — directory ${conversation.dotDir} (your working directory).`
+			: `Dot: ${conversation.dot} — directory ${conversation.dotDir}. Your working directory is ${conversation.cwd}.`,
 		`This conversation: ${channelName ? `${formatChannelLabel(conversation.channelId, channelName)} ` : ""}(channel ${conversation.channelId}).`,
 		"The dot's `MEMORY.md` index, `memory/`, `journal/`, `tasks/` and `events/` live in the dot directory. Prefer the context supplied with this turn and the dot-bound tools; read those files directly only when you need detail they did not provide.",
 		"</runtime_turn_context>",
@@ -36,9 +38,10 @@ export function renderDotTurnContext(conversation: DotConversation, channelName:
 }
 
 /** Gated by the same master autonomy switch as the task_* tools and the TaskDriver. */
-export function buildTaskDigestForTurn(dotDir: string): Promise<string> {
+export function buildTaskDigestForTurn(dotDir: string, channelId: string): Promise<string> {
 	return buildTaskDigest({
 		dotDir,
+		channelId,
 		maxTasks: TASK_DIGEST_SETTINGS.maxTasks,
 		maxChars: TASK_DIGEST_SETTINGS.maxChars,
 		maxUnits: TASK_AGENDA_MAX_UNITS,

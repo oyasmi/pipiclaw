@@ -23,6 +23,12 @@ export interface DotRecord {
 	createdAt: string;
 	/** Append-only, keyed by channel id — the only place a channel id meets this dot's layout. */
 	conversations: Record<string, DotConversationRecord>;
+	/**
+	 * Optional absolute working directory for the agent (shell cwd, relative-path base, default
+	 * delegation directory). Absent means the dot directory itself. Memory, tasks, events and
+	 * every other piece of dot state stay in the dot directory regardless. Edited by hand (D9).
+	 */
+	cwd?: string;
 }
 
 export interface DotBinding {
@@ -40,6 +46,8 @@ export interface BindingsFile {
 export interface DotConversation {
 	dot: string;
 	dotDir: string;
+	/** Where the agent works: `dot.json`'s `cwd` when set, else `dotDir`. */
+	cwd: string;
 	channelId: string;
 	/** The conversation directory's name, e.g. `group-1`. */
 	conversation: string;

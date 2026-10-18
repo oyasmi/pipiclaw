@@ -59,7 +59,7 @@ export async function loadDetachedMaintenanceContext(
 	let cached = transcriptCache.get(contextFile);
 	if (!cached || cached.mtimeMs !== stats.mtimeMs || cached.size !== stats.size) {
 		try {
-			const sessionManager = SessionManager.open(contextFile, conversation.conversationDir, conversation.dotDir);
+			const sessionManager = SessionManager.open(contextFile, conversation.conversationDir, conversation.cwd);
 			cached = {
 				mtimeMs: stats.mtimeMs,
 				size: stats.size,

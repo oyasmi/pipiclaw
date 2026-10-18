@@ -73,7 +73,7 @@ function printTuiHelp(io: BootstrapIO): void {
 	io.log("serves it; only one terminal at a time per dot.");
 	io.log("");
 	io.log("Options:");
-	io.log("  --dot <name>              The dot to open (required)");
+	io.log("  --dot <name>              The dot to open (optional when exactly one dot exists)");
 	io.log("  --create                  Create the dot if it does not exist");
 	io.log("  --print, -p               One-shot: run [prompt] (or stdin), print the answer, exit");
 	io.log("  --plain                   Use the line-based frontend instead of the full-screen UI");

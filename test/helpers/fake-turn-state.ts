@@ -47,6 +47,7 @@ export function createFakeSessionBinding(
 	conversation: import("../../src/dot/types.js").DotConversation = {
 		dot: "news",
 		dotDir: "/tmp/dots/news",
+		cwd: "/tmp/dots/news",
 		channelId: "dm_1",
 		conversation: "dm-1",
 		conversationDir: "/tmp/dots/news/conversations/dm-1",

@@ -10,6 +10,7 @@ import { appendMemoryReviewLog } from "../src/memory/review-log.js";
 const CONVERSATION = {
 	dot: "news",
 	dotDir: "/tmp/dots/news",
+	cwd: "/tmp/dots/news",
 	channelId: "dm_123",
 	conversation: "dm-1",
 	conversationDir: "/tmp/dots/news/conversations/dm-1",

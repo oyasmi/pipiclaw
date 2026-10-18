@@ -233,7 +233,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 						// generation is touched. A filesystem failure therefore leaves the live
 						// session authoritative and retryable. `/new` resets only this channel's
 						// conversation in the dot.
-						const result = await createFreshActiveSession(conversation.conversationDir, conversation.dotDir);
+						const result = await createFreshActiveSession(conversation.conversationDir, conversation.cwd);
 						const oldRunner = channelRunners.get(event.channelId);
 						if (oldRunner) {
 							channelRunners.delete(event.channelId);

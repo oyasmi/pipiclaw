@@ -9,7 +9,7 @@
  * conversation kind (the format rules live in `channel/channel-id.ts`).
  */
 import { mkdir, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { withFileLock } from "../shared/file-lock.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -54,6 +54,9 @@ function invalidRecordReason(value: unknown, dirName: string): string | undefine
 	if (value.name !== dirName) return `dot.json name ${JSON.stringify(value.name)} does not match directory ${dirName}`;
 	if (typeof value.createdAt !== "string") return "dot.json createdAt is missing";
 	if (!isPlainObject(value.conversations)) return "dot.json conversations is not an object";
+	if (value.cwd !== undefined && (typeof value.cwd !== "string" || !isAbsolute(value.cwd))) {
+		return "dot.json cwd must be an absolute path";
+	}
 	const dirs = new Set<string>();
 	for (const [channelId, entry] of Object.entries(value.conversations)) {
 		if (!isPlainObject(entry) || typeof entry.dir !== "string" || !isConversationName(entry.dir)) {
@@ -156,7 +159,7 @@ export async function allocateConversation(
 				const record = summary.record;
 				const existing = record.conversations[channelId];
 				if (existing) {
-					return conversationOf(dot, dotDir, channelId, existing.dir);
+					return conversationOf(record, dotDir, channelId, existing.dir);
 				}
 				let next = 1;
 				for (const entry of Object.values(record.conversations)) {
@@ -170,7 +173,7 @@ export async function allocateConversation(
 					conversations: { ...record.conversations, [channelId]: { dir, createdAt: now.toISOString() } },
 				};
 				await writeJson(recordPath(dotDir), updated);
-				return conversationOf(dot, dotDir, channelId, dir);
+				return conversationOf(updated, dotDir, channelId, dir);
 			}),
 		{ timeoutMs: DOT_RECORD_LOCK_TIMEOUT_MS },
 	);
@@ -179,11 +182,18 @@ export async function allocateConversation(
 /** The conversation already registered for `channelId` in `record`, or `undefined`. Pure lookup. */
 export function findConversation(record: DotRecord, dotDir: string, channelId: string): DotConversation | undefined {
 	const entry = record.conversations[channelId];
-	return entry ? conversationOf(record.name, dotDir, channelId, entry.dir) : undefined;
+	return entry ? conversationOf(record, dotDir, channelId, entry.dir) : undefined;
 }
 
-function conversationOf(dot: string, dotDir: string, channelId: string, conversation: string): DotConversation {
-	return { dot, dotDir, channelId, conversation, conversationDir: getConversationDir(dotDir, conversation) };
+function conversationOf(record: DotRecord, dotDir: string, channelId: string, conversation: string): DotConversation {
+	return {
+		dot: record.name,
+		dotDir,
+		cwd: record.cwd ?? dotDir,
+		channelId,
+		conversation,
+		conversationDir: getConversationDir(dotDir, conversation),
+	};
 }
 
 function emptyBindings(): BindingsFile {

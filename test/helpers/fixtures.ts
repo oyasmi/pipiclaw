@@ -74,6 +74,7 @@ export function testConversation(
 	return {
 		dot: overrides.dot ?? "news",
 		dotDir,
+		cwd: dotDir,
 		channelId: overrides.channelId ?? "dm_1",
 		conversation,
 		conversationDir,

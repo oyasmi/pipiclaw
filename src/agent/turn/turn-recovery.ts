@@ -221,11 +221,11 @@ export async function scanConversationsForInterruptedTurns(
 ): Promise<ConversationRecoveryReport> {
 	const report: ConversationRecoveryReport = { scanned: 0, repaired: [], blocked: [] };
 	for (const conversation of conversations) {
-		const { conversationDir, dotDir } = conversation;
+		const { conversationDir, cwd } = conversation;
 		report.scanned++;
 		try {
 			const activeSessionFile = resolveActiveSessionFile(conversationDir);
-			const sessionManager = SessionManager.open(join(conversationDir, activeSessionFile), conversationDir, dotDir);
+			const sessionManager = SessionManager.open(join(conversationDir, activeSessionFile), conversationDir, cwd);
 			const outcome = recoverInterruptedTurn(sessionManager, fallbackModel);
 			if (outcome.kind === "repaired") {
 				report.repaired.push({ conversation, outcome });

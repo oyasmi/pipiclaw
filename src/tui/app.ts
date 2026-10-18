@@ -89,8 +89,17 @@ async function openDot(options: TuiAppOptions, paths: BootstrapPaths, io: Bootst
 		io.error(message);
 		throw new BootstrapExitError(1);
 	};
-	const name = normalizeDotName(options.dot ?? "");
-	if (!name) fail("Missing --dot <name>: the terminal opens one dot. Run `pipiclaw tui --help` for usage.");
+	let name = normalizeDotName(options.dot ?? "");
+	if (!name) {
+		// Without --dot, a home with exactly one usable dot opens it; anything else must be named.
+		const usable = (await listDots(paths.workspaceDir)).filter((dot) => dot.availability === "available");
+		if (usable.length !== 1) {
+			fail(
+				`Missing --dot <name>: the terminal opens one dot${usable.length > 1 ? ` (${usable.map((dot) => dot.name).join(", ")})` : ""}. Run \`pipiclaw tui --help\` for usage.`,
+			);
+		}
+		name = usable[0].name;
+	}
 	if (!isDotName(name)) {
 		fail(
 			`Invalid dot name "${name}": use 1-32 lowercase letters, digits or hyphens, not starting or ending with "-".`,

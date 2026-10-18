@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildDotList } from "../src/dot/commands.js";
@@ -51,6 +51,17 @@ describe("dot registry", () => {
 		expect([dm.conversation, group.conversation, dm2.conversation]).toEqual(["dm-1", "group-1", "dm-2"]);
 		expect(again).toEqual(group);
 		expect(group.conversationDir).toBe(join(getDotDir(workspace, "news"), "conversations", "group-1"));
+
+		// Working directory: the dot directory unless dot.json sets an absolute `cwd`; state stays put.
+		expect(dm.cwd).toBe(dm.dotDir);
+		const recordPath = join(dm.dotDir, "dot.json");
+		const record = JSON.parse(readFileSync(recordPath, "utf8"));
+		writeFileSync(recordPath, JSON.stringify({ ...record, cwd: "/srv/work" }));
+		const moved = await allocateConversation(workspace, "news", "dm_1", "dm", NOW);
+		expect([moved.cwd, moved.dotDir]).toEqual(["/srv/work", dm.dotDir]);
+		// Failure caught: a relative cwd would resolve against the daemon's own directory.
+		writeFileSync(recordPath, JSON.stringify({ ...record, cwd: "work" }));
+		await expect(allocateConversation(workspace, "news", "dm_1", "dm", NOW)).rejects.toThrow(/absolute/);
 	});
 
 	it("waits for another process holding dot-json.lock before allocating", async () => {

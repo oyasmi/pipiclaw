@@ -455,7 +455,7 @@ export class SessionHost {
 	 */
 	buildSystemPrompt(): PromptBuildResult {
 		const toolNames = this.currentTools.map((tool) => tool.name);
-		const resources = loadWorkspacePromptResources(this.workspaceDir);
+		const resources = loadWorkspacePromptResources(this.workspaceDir, this.conversation.dotDir);
 		this.lastWorkspaceResources = resources;
 		const build = buildPipiclawSystemPrompt({
 			tools: this.currentTools.map((tool) => ({

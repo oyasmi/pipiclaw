@@ -75,11 +75,6 @@ export interface DotCommandPort {
 	bind?(name: string): Promise<BindOutcome>;
 }
 
-export interface DotCommandContext {
-	/** The sender's staff id. Unused in v1; the entry point for the planned `admins` check (D22). */
-	senderId?: string;
-}
-
 /** Exported so `test/commands-subcommands.test.ts` can feed every broadcast example back through it. */
 export function parseDotCommand(args: string): DotCommand {
 	const parts = args.trim().split(/\s+/).filter(Boolean);
@@ -173,11 +168,7 @@ function renderBind(outcome: BindOutcome): string {
 	}
 }
 
-export async function handleDotCommand(
-	args: string,
-	port: DotCommandPort,
-	_context: DotCommandContext = {},
-): Promise<string> {
+export async function handleDotCommand(args: string, port: DotCommandPort): Promise<string> {
 	let command: DotCommand;
 	try {
 		command = parseDotCommand(args);

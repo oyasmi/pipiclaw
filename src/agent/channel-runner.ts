@@ -95,7 +95,7 @@ export class ChannelRunner implements AgentRunner {
 	private runState: RunState = createEmptyRunState();
 
 	constructor(conversation: DotConversation, paths: RunnerFactoryPaths, deps: RunnerDeps) {
-		const { channelId, dotDir, conversationDir } = conversation;
+		const { channelId, conversationDir } = conversation;
 		this.conversation = conversation;
 		this.channelId = channelId;
 		this.conversationDir = conversationDir;
@@ -117,10 +117,14 @@ export class ChannelRunner implements AgentRunner {
 
 		// Create session manager, opening whichever session this conversation's active-session ref
 		// (or the context.jsonl default, for a conversation that has never run a topology op) names
-		// (spec 043, D1). The cwd override is the dot directory: a session header written before
-		// spec 058 still names the old project root.
+		// (spec 043, D1). The cwd override is the dot's working directory: a session header written
+		// before spec 058 still names the old project root.
 		const activeSessionFile = resolveActiveSessionFile(conversationDir);
-		const sessionManager = SessionManager.open(join(conversationDir, activeSessionFile), conversationDir, dotDir);
+		const sessionManager = SessionManager.open(
+			join(conversationDir, activeSessionFile),
+			conversationDir,
+			conversation.cwd,
+		);
 
 		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact
 		// SessionManager instance, before anything else touches it — a second `open()` of the same
@@ -186,8 +190,8 @@ export class ChannelRunner implements AgentRunner {
 			modelsConfigPath: this.modelsConfigPath,
 			onSessionEvent: this.onSessionEvent,
 			mediaSender: this.mediaSender,
-			// The dot directory is the working directory (spec 058, D9).
-			cwd: dotDir,
+			// The working directory: the dot directory unless `dot.json` sets `cwd` (spec 058, D9).
+			cwd: conversation.cwd,
 			describeConversation: paths.describeConversation,
 			settingsManager: this.settingsManager,
 			loadSecurityConfig: this.loadSecurityConfig,

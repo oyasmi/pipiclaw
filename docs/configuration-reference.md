@@ -285,9 +285,9 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 记忆管理工具（`memory_save` / `memory_search` / `memory_forget`，恒开）
 
-三个工具让主 agent 按需 `memory_save`（存一条持久事实，一条记忆一个 `memory/<name>.md` 文件，写入后自动重建索引）、`memory_search`（在频道记忆、journal、workspace `MEMORY.md` 里按需查找，索引已在首轮整份注入，中途怀疑"以前可能记过"才用它）、`memory_forget`（按 `name` 精确删除，写入不含原文的 tombstone 防止后台反思复活，不走裸 edit）。`forget` 不清理原始 session/log 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台反思的竞态。核心能力，无开关、始终注册，只发给主 agent；`memory_save` 撞到相似已有条目（Jaccard 相似度）会先拒绝并要求带 `replaces` 二次调用。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
+三个工具让主 agent 按需 `memory_save`（存一条持久事实，一条记忆一个 `memory/<name>.md` 文件，写入后自动重建索引）、`memory_search`（在 dot 记忆、journal、workspace `MEMORY.md` 里按需查找，索引已在首轮整份注入，中途怀疑"以前可能记过"才用它）、`memory_forget`（按 `name` 精确删除，写入不含原文的 tombstone 防止后台反思复活，不走裸 edit）。`forget` 不清理原始 session/log 或历史归档；工具返回会明确说明这个边界。写操作都走以 dot 为键的记忆串行队列（跨进程另持 `memory.lock`），杜绝与后台反思的竞态。核心能力，无开关、始终注册，只发给主 agent；`memory_save` 撞到相似已有条目（Jaccard 相似度）会先拒绝并要求带 `replaces` 二次调用。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
 
-用户可用 `/memory status` 查看记忆条数、按类型分布、观察期条目、上次后台整理时间、索引是否超预算；`/memory list` 按 `name` 列出频道记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的工作日记；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
+用户可用 `/memory status` 查看记忆条数、按类型分布、观察期条目、上次后台整理时间、索引是否超预算；`/memory list` 按 `name` 列出 dot 记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的工作日记；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
 
 ### 出站附件工具（`send_media`，随渠道自动启用）
 
@@ -338,7 +338,7 @@ pipiclaw tui --dot news --print "总结今天的进展"  # 一次性，prompt �
 
 | 选项 | 说明 |
 |------|------|
-| `--dot <name>` | 要打开的 dot，必填。不检查它是否已绑定、daemon 是否在运行。dot 不存在时报错并列出已有的 dot。 |
+| `--dot <name>` | 要打开的 dot；只存在一个可用 dot 时可省略。不检查它是否已绑定、daemon 是否在运行。dot 不存在时报错并列出已有的 dot。 |
 | `--create` | dot 不存在时先创建它（与 `/dot new` 相同，不绑定任何频道）。 |
 | `--print`, `-p` | 一次性非交互模式：运行位置参数（或管道 stdin）作为唯一 prompt，打印最终答案后退出。 |
 | `--quiet`, `-q` | 纯文本模式下只输出最终答案（进度与提示写入 stderr 的部分被静音）。 |
@@ -1087,6 +1087,8 @@ web 工具的代理顺序是：
 
 定义助手是谁、说话风格如何、默认语言和回复偏好是什么。
 
+所有 dot 默认共用 workspace 的 `SOUL.md`。某个 dot 需要不同的身份时，在 `dots/<dot>/SOUL.md` 放一份：它存在且非空时**整份替换**（不合并）workspace 的同名文件，只对这个 dot 生效；`AGENTS.md` 同理，两者各自独立回退。修改在下一次建立会话时生效。
+
 适合放：
 
 - 默认用中文回复
@@ -1150,12 +1152,20 @@ web 工具的代理顺序是：
 
 ```text
 ~/.pipiclaw/workspace/dots/<dot>/                       # dot 级：记忆、任务、事件、委派记录、工作文件
-~/.pipiclaw/workspace/dots/<dot>/dot.json               # 名字与各频道的会话区登记
+~/.pipiclaw/workspace/dots/<dot>/dot.json               # 名字与各频道的会话区登记；可选 "cwd"（见下）
 ~/.pipiclaw/workspace/dots/<dot>/conversations/dm-1/    # 会话区级：某个频道的会话文件
 ~/.pipiclaw/workspace/dots/<dot>/conversations/group-1/
 ```
 
 会话区里是 `active-session.json`、会话 JSONL、`context.jsonl`、`log.jsonl`（及轮转的 `log.jsonl.1`）和 `last_prompt.json`；其余都在 dot 目录下。
+
+**把工作目录指到别处。** 默认情况下 dot 目录就是 agent 的工作目录（shell 的 cwd、相对路径的基准、委派默认的 `workingDirectory`）。dot 的工作文件需要放在别处（比如你的主目录或一个代码仓库）时，在 `dot.json` 里加一个绝对路径：
+
+```json
+{ "version": 1, "name": "main", "createdAt": "…", "conversations": { … }, "cwd": "/home/me" }
+```
+
+记忆、日记、任务、事件、会话和委派记录仍然放在 dot 目录里，只有"在哪里干活"变了；相对路径不是绝对路径时该 dot 不可用。daemon 只在启动时读取 `dot.json`，修改后需重启；TUI 下次打开即生效。路径守卫的允许范围不变（workspace、主目录、临时目录和你在 `security.json` 里加的目录）。
 
 常见文件：
 

@@ -31,14 +31,14 @@ DingTalk daemon 是长期宿主，负责 task driver、后台 job/委派完成�
 
 ## 文件地图与入口
 
-通用工具的相对路径和 shell cwd 以当前 dot 目录为准。一个 dot 可绑定多个频道：记忆、任务、事件和文件共享，各频道的对话上下文分开，别的频道说过的原话用 `session_search` 查。下表是位置示意；调用时使用已知的绝对路径，task 可用 `task_create` 返回的路径或 `<dot 目录>/tasks/<id>.md`。
+通用工具的相对路径和 shell cwd 以回合上下文给出的工作目录为准（默认是 dot 目录）。一个 dot 可绑定多个频道：记忆、任务、事件和文件共享，各频道的对话上下文分开，别的频道说过的原话用 `session_search` 查。下表是位置示意；调用时使用已知的绝对路径，task 可用 `task_create` 返回的路径或 `<dot 目录>/tasks/<id>.md`。
 
 通用文件工具默认可访问 workspace、主目录和临时目录，内置 playbook 只读；显式 deny、敏感路径和符号链接规则仍然生效，`bash` 不是绕过拒绝的入口。
 
 | 位置 | 内容 | 入口 / 所有者 |
 |---|---|---|
 | App home（默认 `~/.pipiclaw/`，可用 `PIPICLAW_HOME` 覆盖） | `channel.json` / `settings.json` / `tools.json` / `security.json`；`auth.json` / `models.json`；`state/` | 运维配置与运行状态；凭据配置按敏感信息处理 |
-| workspace `SOUL.md` / `AGENTS.md` | 身份与团队原则 | 注入 system prompt |
+| workspace `SOUL.md` / `AGENTS.md`（dot 目录里有同名文件则整份替换） | 身份与团队原则 | 注入 system prompt |
 | workspace `MEMORY.md` | 所有 dot 共享的背景 | 用户维护，首轮按预算注入；`memory_search` 可查 |
 | workspace `skills/` | 可复用程序性知识 | `skill` 列出/加载，通用 `write` / `edit` 创建和更新 |
 | workspace `sub-agents/` | 委派角色 | 目录在 system prompt；由部署者修改，模型不能 write/edit 角色文件 |
