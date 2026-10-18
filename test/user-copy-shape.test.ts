@@ -7,8 +7,14 @@ import { renderContextReport } from "../src/agent/prompt/manifest.js";
 import { renderStatus } from "../src/agent/status-render.js";
 import { renderTurnErrorReply } from "../src/agent/turn/turn-error.js";
 import type { AgentRunner } from "../src/agent/types.js";
-import { handleProjectCommand } from "../src/channel/commands.js";
 import { BUILT_IN_COMMANDS, formatBusyHint, renderBuiltInHelp, SESSION_COMMANDS } from "../src/commands/catalog.js";
+import {
+	type BindOutcome,
+	type DotCommandPort,
+	formatUnavailableDotReply,
+	formatUnboundChannelReply,
+	handleDotCommand,
+} from "../src/dot/commands.js";
 import { handleEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { applyMemoryOps } from "../src/memory/store.js";
@@ -28,7 +34,13 @@ import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";
 import type { UsageLedger } from "../src/usage/ledger.js";
 import { renderUsageReport } from "../src/usage/render.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { testConversation, useTempDirs } from "./helpers/fixtures.js";
+
+/** `/tasks` asked from `dm_1`; a task delivering to any other channel is shown as suspended. */
+const TASK_CHANNELS = {
+	currentChannelId: "dm_1",
+	describeChannel: (channelId: string) => ({ label: `\`${channelId}\``, boundHere: channelId === "dm_1" }),
+};
 
 /**
  * Spec 053 D13: the user-copy conventions (AGENTS.md "User-Facing Copy Conventions") pinned as
@@ -88,8 +100,8 @@ function expectUserCopyShape(label: string, text: string, options: ShapeOptions 
 	}
 }
 
-async function seedTasks(channelDir: string): Promise<void> {
-	const tasksDir = join(channelDir, "tasks");
+async function seedTasks(dotDir: string): Promise<void> {
+	const tasksDir = join(dotDir, "tasks");
 	await mkdir(join(tasksDir, "archive"), { recursive: true });
 	const longGoal = `${"把季度报表的每一张表都核对一遍，并记录差异。".repeat(40)}`;
 	const body = renderStandardTaskBody({
@@ -117,14 +129,14 @@ async function seedTasks(channelDir: string): Promise<void> {
 		);
 	}
 	for (let index = 0; index < 30; index++) {
-		await appendTaskLog(channelDir, "task-0", {
+		await appendTaskLog(dotDir, "task-0", {
 			kind: "dispatch",
 			ref: `run_${index}`,
 			item: `W${(index % 12) + 1}`,
 			agent: "builder",
 			purpose: index % 4 ? "work" : "verify",
 		});
-		await appendTaskLog(channelDir, "task-0", {
+		await appendTaskLog(dotDir, "task-0", {
 			kind: "settle",
 			ref: `run_${index}`,
 			item: `W${(index % 12) + 1}`,
@@ -133,7 +145,7 @@ async function seedTasks(channelDir: string): Promise<void> {
 			exitCode: index % 3 ? 0 : 1,
 			output: `/tmp/runs/run_${index}/output.md`,
 		});
-		await appendTaskLog(channelDir, "task-0", {
+		await appendTaskLog(dotDir, "task-0", {
 			kind: "step",
 			seq: index + 1,
 			outcome: index % 2 ? "park" : "continue",
@@ -200,13 +212,16 @@ function fakeRunManager(records: RunRecord[]): SubAgentRunManager {
 
 describe("user-facing copy shape (spec 053, D13)", () => {
 	it("keeps every /tasks report in shape and inside the budget", async () => {
-		const channelDir = tempDir();
-		await seedTasks(channelDir);
+		const dotDir = tempDir();
+		await seedTasks(dotDir);
 		for (const args of ["", "show task-0", "log task-0", "archive", "doctor", "show missing", "bogus"]) {
-			expectUserCopyShape(`/tasks ${args}`, await handleTasksCommand({ args, channelDir }));
+			expectUserCopyShape(`/tasks ${args}`, await handleTasksCommand({ args, dotDir, ...TASK_CHANNELS }));
 		}
 		// Empty state, too.
-		expectUserCopyShape("/tasks (empty)", await handleTasksCommand({ args: "", channelDir: tempDir() }));
+		expectUserCopyShape(
+			"/tasks (empty)",
+			await handleTasksCommand({ args: "", dotDir: tempDir(), ...TASK_CHANNELS }),
+		);
 	});
 
 	it("keeps every /subagents report in shape and inside the budget", async () => {
@@ -233,12 +248,12 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		}
 	});
 
-	it("keeps /memory, /events, /skills and /project in shape", async () => {
-		const channelDir = tempDir();
+	it("keeps /memory, /events, /skills and /dot in shape", async () => {
+		const dotDir = tempDir();
 		const workspaceDir = tempDir();
 		const appHomeDir = tempDir();
 		await applyMemoryOps(
-			channelDir,
+			dotDir,
 			Array.from({ length: 60 }, (_, index) => ({
 				op: "add" as const,
 				name: `fact-${index}`,
@@ -250,18 +265,22 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			})),
 		);
 		for (const args of ["status", "list", "list project", "show fact-1", "journal", "forget nope", "bogus"]) {
-			expectUserCopyShape(`/memory ${args}`, await handleMemoryCommand({ channelId: "dm_1", channelDir, args }));
+			expectUserCopyShape(
+				`/memory ${args}`,
+				await handleMemoryCommand({ conversation: testConversation(dotDir), args }),
+			);
 		}
 
-		mkdirSync(join(workspaceDir, "events"), { recursive: true });
+		const eventsDotDir = join(workspaceDir, "dots", "news");
+		mkdirSync(join(eventsDotDir, "events"), { recursive: true });
 		for (let index = 0; index < 50; index++) {
 			const event =
 				index % 7 === 0
 					? { type: "periodic", channelId: "dm_1", schedule: "* * * * *", text: "too often" }
 					: { type: "periodic", channelId: "dm_1", schedule: "0 9 * * 1", text: `周报 ${"内容".repeat(30)}` };
-			writeFileSync(join(workspaceDir, "events", `event-${index}.json`), JSON.stringify(event));
+			writeFileSync(join(eventsDotDir, "events", `event-${index}.json`), JSON.stringify(event));
 		}
-		writeFileSync(join(workspaceDir, "events", "broken.json"), "{ not json");
+		writeFileSync(join(eventsDotDir, "events", "broken.json"), "{ not json");
 		const historyPath = join(appHomeDir, "history.jsonl");
 		writeFileSync(
 			historyPath,
@@ -278,7 +297,18 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			).join("\n"),
 		);
 		for (const args of ["list", "show event-1", "history", "history event-1", "show nope", "bogus"]) {
-			expectUserCopyShape(`/events ${args}`, await handleEventsCommand({ args, workspaceDir, historyPath }));
+			expectUserCopyShape(
+				`/events ${args}`,
+				await handleEventsCommand({
+					args,
+					dot: "news",
+					dotDir: eventsDotDir,
+					historyPath,
+					dotChannelIds: ["dm_1"],
+					// Every other event delivers to an unbound channel: the suspended mark must fit too.
+					describeChannel: (channelId) => ({ label: `\`${channelId}\``, boundHere: channelId !== "dm_1" }),
+				}),
+			);
 		}
 
 		for (let index = 0; index < 30; index++) {
@@ -297,18 +327,43 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			await handleSkillsCommand({ args: "", workspaceDir: tempDir(), appHomeDir }),
 		);
 
-		expectUserCopyShape(
-			"/project",
-			await handleProjectCommand({
-				args: "",
-				channelId: "dm_1",
-				channelDir,
-				appHomeDir,
-				actor: "dingtalk-command",
-				isBusy: () => false,
-				listActiveBlockers: () => [],
-			}),
-		);
+		const dots = Array.from({ length: 40 }, (_, index) => ({
+			name: `dot-${index}`,
+			availability: index % 7 === 3 ? ("invalid" as const) : ("available" as const),
+			current: index === 0,
+			channels: Array.from({ length: index % 4 }, (_, channel) => ({
+				channelId: `group_cid${index}${channel}`,
+				label: `群「${"投资成长".repeat(3)}${channel}」`,
+			})),
+		}));
+		const bindOutcomes: BindOutcome[] = [
+			{ kind: "bound", dot: "lab" },
+			{ kind: "bound", dot: "lab", previousDot: "news", previousDotDormant: true },
+			{ kind: "bound", dot: "lab", previousDot: "news", suspendedTasks: 2, suspendedEvents: 1 },
+			{ kind: "same", dot: "lab" },
+			{ kind: "busy", dot: "lab" },
+			{ kind: "unknown", dot: "lab" },
+			{ kind: "unavailable", dot: "lab" },
+			{ kind: "invalid", dot: "lab" },
+		];
+		const port = (bind: boolean, outcome?: BindOutcome): DotCommandPort => ({
+			list: async () => dots,
+			channelIndexPath: "/home/u/.pipiclaw/workspace/CHANNELS.md",
+			create: async (name) => ({ kind: "created", record: { version: 1, name, createdAt: "", conversations: {} } }),
+			...(bind ? { bind: async () => outcome ?? bindOutcomes[0] } : {}),
+		});
+		for (const args of ["", "list", "new lab", "bogus", "new"]) {
+			expectUserCopyShape(`/dot ${args}`, await handleDotCommand(args, port(true)));
+		}
+		expectUserCopyShape("/dot (empty)", await handleDotCommand("", { ...port(true), list: async () => [] }));
+		expectUserCopyShape("/dot (tui)", await handleDotCommand("", port(false)));
+		expectUserCopyShape("/dot new (tui)", await handleDotCommand("new lab", port(false)));
+		expectUserCopyShape("/dot bind (tui)", await handleDotCommand("bind lab", port(false)));
+		for (const outcome of bindOutcomes) {
+			expectUserCopyShape(`/dot bind ${outcome.kind}`, await handleDotCommand("bind lab", port(true, outcome)));
+		}
+		expectUserCopyShape("unbound channel", formatUnboundChannelReply());
+		expectUserCopyShape("unavailable dot", formatUnavailableDotReply("news"));
 	});
 
 	it("keeps /help, /status, /usage and /context in shape", async () => {
@@ -342,7 +397,10 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		};
 		const ledger = { summarize: async () => summary } as unknown as UsageLedger;
 		for (const mode of ["default", "7d", "month"] as const) {
-			expectUserCopyShape(`/usage ${mode}`, await renderUsageReport(ledger, "dm_1", mode, new Date()));
+			expectUserCopyShape(
+				`/usage ${mode}`,
+				await renderUsageReport(ledger, { dot: "news", channelId: "dm_1" }, mode, new Date()),
+			);
 		}
 
 		const toolNames = Array.from(TOOL_NAMES);
@@ -375,12 +433,14 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			title: "周报",
 			fields: { state: "parked", usage: { ...createUsage(), steps: 60 } },
 			readable: true,
-			legacy: false,
 			runnable: true,
 			expired: false,
 		};
 		for (const breach of ["steps", "usd", undefined] as const) {
-			expectUserCopyShape(`stop receipt ${breach}`, taskStopReceipt("dm_1", entry, "已用满 60 步", 0, breach).text);
+			expectUserCopyShape(
+				`stop receipt ${breach}`,
+				taskStopReceipt("news", "dm_1", entry, "已用满 60 步", 0, breach).text,
+			);
 		}
 		for (const status of ["completed", "failed", "cancelled", "lost"] as const) {
 			expectUserCopyShape(
@@ -398,7 +458,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 				silentMs: 660_000,
 			}) ?? "",
 		);
-		const wake = createTaskDriverEvent("dm_1", entry, 0);
+		const wake = createTaskDriverEvent("news", "dm_1", entry, 0);
 		const record: DurableDispatchRecord = {
 			version: 1,
 			id: wake.dispatchId as string,

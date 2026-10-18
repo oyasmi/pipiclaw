@@ -39,8 +39,8 @@ export interface WebFetchToolOptions {
 	securityConfig: SecurityConfig;
 	workspaceDir: string;
 	channelId?: string;
-	/** Present on the main path; enables per-channel body caching + offset pagination. */
-	channelDir?: string;
+	/** Present on the main path; enables per-dot body caching + offset pagination. */
+	dotDir?: string;
 }
 
 /** Strip the untrusted-content banner that runWebFetch prepends, so the cached body is clean. */
@@ -122,7 +122,7 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 		description:
 			"Fetch a public URL and extract readable content. Returns text for HTML/JSON/text pages and image content " +
 			"blocks for images (binary downloads like PDFs are refused — download then read). Long pages are cached " +
-			"per channel as a snapshot; page through with offset (no refetch), or pass refresh:true for current content.",
+			"per dot as a snapshot; page through with offset (no refetch), or pass refresh:true for current content.",
 		parameters: webFetchSchema,
 		execute: async (
 			_toolCallId: string,
@@ -145,15 +145,15 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 			const displayMaxChars = request.maxChars;
 			const startOffset = offset && offset > 0 ? offset : 0;
 
-			// Cache is per-channel; when no channelDir is available (e.g. sub-agent path) fall back to a
+			// Cache is per-dot; when no dotDir is available (e.g. sub-agent path) fall back to a
 			// plain single-shot fetch with the requested maxChars. An `offset` here would otherwise be
 			// silently dropped -- the caller gets the first screen back with no way to tell "reached
 			// the end" from "pagination just doesn't work here" (fix plan §4.5), and can spin retrying
 			// the same offset forever.
-			if (!options.channelDir) {
+			if (!options.dotDir) {
 				if (startOffset > 0) {
 					throw new RecoverableToolError(
-						"This context does not support web_fetch pagination (no per-channel cache available); " +
+						"This context does not support web_fetch pagination (no per-dot cache available); " +
 							"offset is ignored here. Increase maxChars instead, or have the main agent fetch the page.",
 					);
 				}
@@ -171,9 +171,9 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 
 			const key = webCacheKey(url, request.extractMode);
 			if (refresh) {
-				await clearWebCacheEntry(options.channelDir, key);
+				await clearWebCacheEntry(options.dotDir, key);
 			} else {
-				const cached = await readWebCache(options.channelDir, key);
+				const cached = await readWebCache(options.dotDir, key);
 				if (cached) {
 					return windowResult(cached, url, startOffset, displayMaxChars, true);
 				}
@@ -217,7 +217,7 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 				contentType: result.details.contentType,
 				sourceTruncated: result.details.truncated === true,
 			};
-			await writeWebCache(options.channelDir, key, entry);
+			await writeWebCache(options.dotDir, key, entry);
 			return windowResult(entry, url, startOffset, displayMaxChars, false);
 		},
 	};

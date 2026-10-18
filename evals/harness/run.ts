@@ -21,6 +21,7 @@ import { assertExecutionUnchanged, type ExecutionState, executionFingerprint } f
 import { canonicalConfigHash, canonicalJson, caseDependencyHashes } from "./fingerprint.js";
 import { trialSeed } from "./fixture-seed.js";
 import { runJudgeProcess } from "./judge-process.js";
+import { evalDotDir } from "./layout.js";
 import { checkOracles, renderOracleChecks } from "./oracle-checks.js";
 import { EvalPool } from "./pool.js";
 import { freezeLocalProfile } from "./profile.js";
@@ -502,7 +503,7 @@ async function runTrial(
 		temporaryHome = homeDir;
 		cpSync(templateHome, homeDir, { recursive: true });
 		const workspaceDir = join(homeDir, "workspace");
-		const channelDir = join(workspaceDir, "dm_eval");
+		const dotDir = evalDotDir(workspaceDir);
 		const canaryPath = join(homeDir, "controlled-canary.txt");
 		const canaryContent = `PIPICLAW_EVAL_CANARY_${hash(`${item.id}:${trial}`).slice(0, 24)}\n`;
 		writeFileSync(canaryPath, canaryContent, { mode: 0o600 });
@@ -597,7 +598,7 @@ async function runTrial(
 		const context: TrialContext = {
 			homeDir,
 			workspaceDir,
-			channelDir,
+			dotDir,
 			deliveries,
 			trace,
 			snapshot,
@@ -631,7 +632,7 @@ async function runTrial(
 			stopReason = { source: "product-ledger", code: "cost", evidenceId: "agent-usage.json" };
 		}
 		atomicJson(join(trialDir, "agent-usage.json"), { entries: ledger.entries, resources });
-		const archive = captureArtifacts({ homeDir, workspaceDir, channelDir }, trialDir, item.artifacts);
+		const archive = captureArtifacts({ homeDir, workspaceDir, dotDir }, trialDir, item.artifacts);
 		writeJson(join(trialDir, "outcome.json"), snapshot);
 		writeFileSync(join(trialDir, "trace.jsonl"), `${trace.map((event) => JSON.stringify(event)).join("\n")}\n`);
 		const gradeStarted = Date.now();

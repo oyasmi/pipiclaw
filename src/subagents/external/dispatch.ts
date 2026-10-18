@@ -49,7 +49,7 @@ export async function dispatchExternalRun(input: {
 			runManager: input.runManager,
 			runId: runContext.runId,
 			channelId: options.runtimeContext.channelId,
-			channelDir: options.channelDir,
+			dotDir: options.dotDir,
 			label: runLabel,
 			agent: config.name,
 			source: config.source,

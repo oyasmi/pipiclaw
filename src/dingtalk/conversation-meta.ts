@@ -1,84 +1,104 @@
 /**
- * Per-channel conversation metadata (conversation id, DM vs group, sender): cached in memory and
- * persisted under the channel's state directory, so a card or plain message can be routed after a
- * restart or after the in-memory cache was reclaimed.
+ * DingTalk routing metadata per channel (conversation id, DM vs group, sender), so a card or plain
+ * message can be routed after a restart. One file for every channel, `state/dingtalk/
+ * conversations.json`, keyed by channel id (spec 058, D17): loaded once, kept in memory, and
+ * rewritten only when an entry actually changes. Unbound channels are recorded too, so a later
+ * binding can push to them.
  */
-import { existsSync, mkdirSync, readFileSync } from "fs";
-import { dirname, join } from "path";
-import { getChannelDir } from "../channel/channel-paths.js";
+import { readFileSync } from "fs";
+import { join } from "path";
 import * as log from "../log.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isPlainObject } from "../shared/type-guards.js";
 import type { ConversationMeta } from "./api.js";
 import type { DingTalkConfig } from "./config.js";
 
+function isNodeErrorCode(error: unknown, code: string): boolean {
+	return isPlainObject(error) && (error as { code?: unknown }).code === code;
+}
+
+function parseMeta(value: unknown): ConversationMeta | undefined {
+	if (!isPlainObject(value)) return undefined;
+	const { conversationId, conversationType, senderId } = value;
+	if (typeof conversationId !== "string" || typeof conversationType !== "string" || typeof senderId !== "string") {
+		return undefined;
+	}
+	if (!conversationId || !conversationType || !senderId) return undefined;
+	return { conversationId, conversationType, senderId };
+}
+
+function sameMeta(a: ConversationMeta | undefined, b: ConversationMeta): boolean {
+	return (
+		a !== undefined &&
+		a.conversationId === b.conversationId &&
+		a.conversationType === b.conversationType &&
+		a.senderId === b.senderId
+	);
+}
+
 export class ConversationMetaStore {
-	// Conversation metadata cache: channelId → metadata
-	private convMeta = new Map<string, ConversationMeta>();
+	private entries?: Map<string, ConversationMeta>;
+	/** The last write failed: memory holds entries the file does not, so the next `set` writes even if unchanged. */
+	private unsaved = false;
 
 	constructor(
+		/** `stateDir` is the app's `state/` directory; omit it to keep metadata in memory only. */
 		private config: Pick<DingTalkConfig, "stateDir">,
 		/** Marks the channel as recently used, so the idle-cache sweep leaves it alone. */
 		private touchChannel: (channelId: string) => void,
 	) {}
 
-	get(channelId: string): ConversationMeta | null {
-		this.touchChannel(channelId);
-		const cached = this.convMeta.get(channelId);
-		if (cached) return cached;
-
-		const metaPath = this.getPath(channelId);
-		if (!metaPath || !existsSync(metaPath)) {
-			return null;
-		}
-
-		try {
-			const parsed = JSON.parse(readFileSync(metaPath, "utf-8")) as Partial<ConversationMeta>;
-			if (!parsed.conversationId || !parsed.conversationType || !parsed.senderId) {
-				return null;
-			}
-
-			const meta: ConversationMeta = {
-				conversationId: parsed.conversationId,
-				conversationType: parsed.conversationType,
-				senderId: parsed.senderId,
-			};
-			this.convMeta.set(channelId, meta);
-			return meta;
-		} catch (err) {
-			log.logWarn("dingtalk.metadata.load_failed", "Conversation metadata load failed", {
-				channelId: channelId,
-				reason: errorMessage(err),
-			});
-			return null;
-		}
+	private get path(): string | undefined {
+		return this.config.stateDir ? join(this.config.stateDir, "dingtalk", "conversations.json") : undefined;
 	}
 
+	private load(): Map<string, ConversationMeta> {
+		if (this.entries) return this.entries;
+		const entries = new Map<string, ConversationMeta>();
+		const path = this.path;
+		if (path) {
+			try {
+				const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+				for (const [channelId, value] of Object.entries(isPlainObject(parsed) ? parsed : {})) {
+					const meta = parseMeta(value);
+					if (meta) entries.set(channelId, meta);
+				}
+			} catch (err) {
+				if (!isNodeErrorCode(err, "ENOENT")) {
+					log.logWarn("dingtalk.metadata.load_failed", "Conversation metadata load failed", {
+						reason: errorMessage(err),
+					});
+				}
+			}
+		}
+		this.entries = entries;
+		return entries;
+	}
+
+	get(channelId: string): ConversationMeta | null {
+		this.touchChannel(channelId);
+		return this.load().get(channelId) ?? null;
+	}
+
+	/** Called on every inbound message; writes only when the entry is new or changed. */
 	set(channelId: string, meta: ConversationMeta): void {
 		this.touchChannel(channelId);
-		this.convMeta.set(channelId, meta);
+		const entries = this.load();
+		if (sameMeta(entries.get(channelId), meta) && !this.unsaved) return;
+		entries.set(channelId, meta);
 
-		const metaPath = this.getPath(channelId);
-		if (!metaPath) return;
-
+		const path = this.path;
+		if (!path) return;
 		try {
-			mkdirSync(dirname(metaPath), { recursive: true });
-			writeFileAtomicallySync(metaPath, JSON.stringify(meta, null, 2));
+			writeFileAtomicallySync(path, `${JSON.stringify(Object.fromEntries(entries), null, 2)}\n`);
+			this.unsaved = false;
 		} catch (err) {
+			this.unsaved = true;
 			log.logWarn("dingtalk.metadata.persist_failed", "Conversation metadata persist failed", {
 				channelId: channelId,
 				reason: errorMessage(err),
 			});
 		}
-	}
-
-	/** Drop the in-memory entry only; the persisted file stays and is reloaded on demand. */
-	evict(channelId: string): void {
-		this.convMeta.delete(channelId);
-	}
-
-	private getPath(channelId: string): string | null {
-		if (!this.config.stateDir) return null;
-		return join(getChannelDir(this.config.stateDir, channelId), ".channel-meta.json");
 	}
 }

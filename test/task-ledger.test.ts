@@ -95,14 +95,4 @@ describe("readActiveTasks", () => {
 		const [entry] = await readActiveTasks(tasksDir, NOW.getTime());
 		expect(entry).toMatchObject({ id: "broken", runnable: true, readable: false });
 	});
-
-	it("never runs a file still carrying v3 lines, and flags it for /tasks doctor", async () => {
-		// An unconverted v3 task (here: disabled, asleep until 2099) must not start executing as a fresh v5 task.
-		await writeFile(
-			join(tasksDir, "old.md"),
-			"---\nstatus: sleeping\nenabled: false\nwake: 2099-01-01T08:00:00+08:00\nschedule: 0 9 * * 1\n---\n# Old\n",
-		);
-		const [entry] = await readActiveTasks(tasksDir, NOW.getTime());
-		expect(entry).toMatchObject({ id: "old", legacy: true, readable: true, runnable: false });
-	});
 });

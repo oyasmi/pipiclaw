@@ -61,7 +61,7 @@ describe("E2E deterministic: cancellation during internal backup-model resolutio
 		});
 		await current.sendUserMessageNoWait("E2E_CANCEL_FALLBACK 派一个读取助手");
 		await waiting;
-		const manager = current.runtime.runs.get(current.channelId);
+		const manager = current.runtime.runs.get(current.dot);
 		const run = manager.list().find((record) => record.status === "running")!;
 		expect(run).toBeDefined();
 		await manager.cancel(run.runId);

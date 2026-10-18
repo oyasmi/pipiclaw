@@ -7,6 +7,15 @@ import { boundCompactionMessages, MemoryLifecycle } from "../src/memory/lifecycl
 import { runReflect } from "../src/memory/reflect.js";
 import { appendMemoryReviewLog } from "../src/memory/review-log.js";
 
+const CONVERSATION = {
+	dot: "news",
+	dotDir: "/tmp/dots/news",
+	cwd: "/tmp/dots/news",
+	channelId: "dm_123",
+	conversation: "dm-1",
+	conversationDir: "/tmp/dots/news/conversations/dm-1",
+};
+
 const DEFAULT_REFLECT_RESULT = {
 	skipped: false,
 	condensed: false,
@@ -62,8 +71,7 @@ function createLifecycle(
 	recordMemoryActivity?: ConstructorParameters<typeof MemoryLifecycle>[0]["recordMemoryActivity"],
 ) {
 	return new MemoryLifecycle({
-		channelId: "dm_123",
-		channelDir: "/tmp/dm_123",
+		conversation: CONVERSATION,
 		workspaceDir: "/tmp",
 		getMessages: () => [{ role: "assistant", content: "live state" }] as never[],
 		getSessionEntries: () => [],
@@ -160,8 +168,7 @@ describe("MemoryLifecycle", () => {
 
 		const liveMessages = [{ role: "assistant", content: "current state" }] as never[];
 		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
+			conversation: CONVERSATION,
 			workspaceDir: "/tmp",
 			getMessages: () => liveMessages,
 			getSessionEntries: () => [],
@@ -195,7 +202,7 @@ describe("MemoryLifecycle", () => {
 
 		expect(recordMemoryActivity).toHaveBeenCalledTimes(2);
 		expect(recordMemoryActivity).toHaveBeenCalledWith(
-			expect.objectContaining({ kind: "assistant-turn-completed", channelId: "dm_123" }),
+			expect.objectContaining({ kind: "assistant-turn-completed", ref: CONVERSATION }),
 		);
 		expect(runReflect).not.toHaveBeenCalled();
 	});

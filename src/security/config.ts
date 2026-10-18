@@ -89,10 +89,16 @@ function mergeSecurityConfig(source: unknown, configPath: string, diagnostics: C
 	const pathGuard = isRecord(source.pathGuard) ? source.pathGuard : {};
 	const networkGuard = isRecord(source.networkGuard) ? source.networkGuard : {};
 	const audit = isRecord(source.audit) ? source.audit : {};
-	// Unlike the sections above, presence itself is meaningful (D3.2): a missing `projectAccess`
-	// key must stay `undefined`, not fall back to `{}`, so the resolver in project-scope.ts can
-	// tell "never configured" apart from "configured with defaults".
-	const projectAccess = isRecord(source.projectAccess) ? source.projectAccess : undefined;
+	// Retired by spec 058 (D9): project scope is gone and a dot's directory is the working
+	// directory. Warned about, then ignored — the same treatment as `RETIRED_SETTINGS_KEYS`.
+	if ("projectAccess" in source) {
+		pushInvalidSecurityDiagnostic(
+			diagnostics,
+			configPath,
+			"projectAccess",
+			"retired key ignored: project scope was removed; the dot directory is now the working directory",
+		);
+	}
 
 	if (networkGuard.maxRedirects !== undefined) {
 		const maxRedirects = networkGuard.maxRedirects;
@@ -157,12 +163,6 @@ function mergeSecurityConfig(source: unknown, configPath: string, diagnostics: C
 				typeof audit.logBlocked === "boolean" ? audit.logBlocked : DEFAULT_SECURITY_CONFIG.audit.logBlocked,
 			logFile: asOptionalString(audit.logFile),
 		},
-		projectAccess: projectAccess
-			? {
-					defaultRoot: asOptionalString(projectAccess.defaultRoot),
-					allowedRoots: asStringArray(projectAccess.allowedRoots),
-				}
-			: undefined,
 	};
 }
 

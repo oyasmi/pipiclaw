@@ -27,9 +27,9 @@ const meaningfulMessages = [
 	{ role: "assistant", content: [{ type: "text", text: "好的，已经记录。" }] },
 ] as never[];
 
-async function run(channelDir: string, workspaceDir = channelDir, today = "2026-09-04") {
+async function run(dotDir: string, workspaceDir = dotDir, today = "2026-09-04") {
 	return runReflect({
-		channelDir,
+		dotDir,
 		workspaceDir,
 		model: fakeModel,
 		resolveApiKey,
@@ -44,11 +44,11 @@ afterEach(() => {
 
 describe("reflect — skip conditions", () => {
 	it("skips (no LLM call) when the window has no meaningful exchange", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		scripted({ journal: [], ops: [], discarded: [] });
 		const result = await runReflect({
-			channelDir,
-			workspaceDir: channelDir,
+			dotDir,
+			workspaceDir: dotDir,
 			model: fakeModel,
 			resolveApiKey,
 			messages: [{ role: "user", content: "" }] as never[],
@@ -60,7 +60,7 @@ describe("reflect — skip conditions", () => {
 
 describe("reflect — write tier (D6)", () => {
 	it("writes a high-necessity, high-confidence add as durable", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		scripted({
 			journal: [],
 			ops: [
@@ -76,14 +76,14 @@ describe("reflect — write tier (D6)", () => {
 			],
 			discarded: [],
 		});
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.added).toEqual(["deploy-window-thursday"]);
-		const [entry] = await listMemoryEntries(channelDir);
+		const [entry] = await listMemoryEntries(dotDir);
 		expect(entry.expires).toBeUndefined();
 	});
 
 	it("writes a medium-necessity, high-confidence add as probationary with a 30-day deadline", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		scripted({
 			journal: [],
 			ops: [
@@ -97,14 +97,14 @@ describe("reflect — write tier (D6)", () => {
 			],
 			discarded: [],
 		});
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.added).toHaveLength(1);
-		const [entry] = await listMemoryEntries(channelDir);
+		const [entry] = await listMemoryEntries(dotDir);
 		expect(entry.expires).toBe("2026-10-04");
 	});
 
 	it("rejects an add below the write bar and rejects an update the same way", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		scripted({
 			journal: [],
 			ops: [
@@ -113,14 +113,14 @@ describe("reflect — write tier (D6)", () => {
 			],
 			discarded: [],
 		});
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.added).toEqual([]);
 		expect(result.rejected.length).toBeGreaterThanOrEqual(1);
 	});
 
 	it("only lets add reach probationary tier — a medium-confidence update is rejected outright", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [{ op: "add", name: "x", description: "old", source: "agent" }]);
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [{ op: "add", name: "x", description: "old", source: "agent" }]);
 		scripted({
 			journal: [],
 			ops: [
@@ -128,7 +128,7 @@ describe("reflect — write tier (D6)", () => {
 			],
 			discarded: [],
 		});
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.updated).toEqual([]);
 		expect(result.rejected).toHaveLength(1);
 	});
@@ -136,11 +136,9 @@ describe("reflect — write tier (D6)", () => {
 
 describe("reflect — per-run caps", () => {
 	it("caps add at 8 and delete at 3", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		for (let i = 0; i < 5; i++) {
-			await applyMemoryOps(channelDir, [
-				{ op: "add", name: `d${i}`, description: `old fact ${i}`, source: "agent" },
-			]);
+			await applyMemoryOps(dotDir, [{ op: "add", name: `d${i}`, description: `old fact ${i}`, source: "agent" }]);
 		}
 		const ops = [
 			...Array.from({ length: 10 }, (_, i) => ({
@@ -153,17 +151,17 @@ describe("reflect — per-run caps", () => {
 			...Array.from({ length: 5 }, (_, i) => ({ op: "delete", name: `d${i}`, confidence: 0.9, reason: "obsolete" })),
 		];
 		scripted({ journal: [], ops, discarded: [] });
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.added).toHaveLength(8);
 		expect(result.deleted).toHaveLength(3);
 		expect(result.rejected.length).toBeGreaterThanOrEqual(4);
 	});
 
 	it("relaxes the delete cap to 8 in condense mode", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		// Seed enough entries with long descriptions that the index exceeds its 1,400-unit budget.
 		for (let i = 0; i < 150; i++) {
-			await applyMemoryOps(channelDir, [
+			await applyMemoryOps(dotDir, [
 				{
 					op: "add",
 					name: `bulk-${i}`,
@@ -180,7 +178,7 @@ describe("reflect — per-run caps", () => {
 			reason: "condensed away",
 		}));
 		scripted({ journal: [], ops, discarded: [] });
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.condensed).toBe(true);
 		expect(result.deleted).toHaveLength(8);
 	});
@@ -188,27 +186,27 @@ describe("reflect — per-run caps", () => {
 
 describe("reflect — user-source protection", () => {
 	it("never deletes a user-saved entry, regardless of confidence", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [{ op: "add", name: "u", description: "user fact", source: "user" }]);
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [{ op: "add", name: "u", description: "user fact", source: "user" }]);
 		scripted({
 			journal: [],
 			ops: [{ op: "delete", name: "u", confidence: 0.99, reason: "seems wrong now" }],
 			discarded: [],
 		});
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.deleted).toEqual([]);
-		expect((await listMemoryEntries(channelDir)).map((e) => e.name)).toContain("u");
+		expect((await listMemoryEntries(dotDir)).map((e) => e.name)).toContain("u");
 	});
 
 	it("updates a user-saved entry only at confidence >= 0.95 with a user message in the window", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [{ op: "add", name: "u", description: "user fact", source: "user" }]);
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [{ op: "add", name: "u", description: "user fact", source: "user" }]);
 		scripted({
 			journal: [],
 			ops: [{ op: "update", name: "u", description: "revised", confidence: 0.9, necessity: "high", reason: "r" }],
 			discarded: [],
 		});
-		const rejected = await run(channelDir);
+		const rejected = await run(dotDir);
 		expect(rejected.updated).toEqual([]);
 
 		scripted({
@@ -216,14 +214,14 @@ describe("reflect — user-source protection", () => {
 			ops: [{ op: "update", name: "u", description: "revised", confidence: 0.97, necessity: "high", reason: "r" }],
 			discarded: [],
 		});
-		const accepted = await run(channelDir);
+		const accepted = await run(dotDir);
 		expect(accepted.updated).toEqual(["u"]);
 	});
 });
 
 describe("reflect — name resolution", () => {
 	it("downgrades an update naming an unknown entry into an add", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		scripted({
 			journal: [],
 			ops: [
@@ -238,7 +236,7 @@ describe("reflect — name resolution", () => {
 			],
 			discarded: [],
 		});
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.updated).toEqual([]);
 		expect(result.added).toHaveLength(1);
 	});
@@ -246,8 +244,8 @@ describe("reflect — name resolution", () => {
 
 describe("reflect — journal and touch", () => {
 	it("appends journal lines and clears expires on touched entries", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [
 			{ op: "add", name: "p", description: "probationary", source: "agent", expires: "2026-10-04" },
 		]);
 		scripted({
@@ -255,23 +253,23 @@ describe("reflect — journal and touch", () => {
 			ops: [{ op: "touch", names: ["p"] }],
 			discarded: [],
 		});
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.journalAppended).toBe(1);
 		expect(result.touched).toEqual(["p"]);
-		expect((await listMemoryEntries(channelDir))[0].expires).toBeUndefined();
+		expect((await listMemoryEntries(dotDir))[0].expires).toBeUndefined();
 	});
 });
 
 describe("reflect — deterministic pre-step", () => {
 	it("expires a lapsed probationary entry before the LLM call, without a tombstone", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [
+		const dotDir = createTempDir();
+		await applyMemoryOps(dotDir, [
 			{ op: "add", name: "old", description: "stale probation", source: "agent", expires: "2026-09-01" },
 		]);
 		scripted({ journal: [], ops: [], discarded: [] });
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.expiredProbation).toEqual(["old"]);
-		expect(await listMemoryEntries(channelDir)).toEqual([]);
+		expect(await listMemoryEntries(dotDir)).toEqual([]);
 
 		// re-adding the same description must not be blocked by a tombstone
 		scripted({
@@ -281,16 +279,16 @@ describe("reflect — deterministic pre-step", () => {
 			],
 			discarded: [],
 		});
-		const relearned = await run(channelDir);
+		const relearned = await run(dotDir);
 		expect(relearned.added).toHaveLength(1);
 	});
 });
 
 describe("reflect — malformed JSON tolerance", () => {
 	it("treats a missing ops/journal field as empty rather than throwing", async () => {
-		const channelDir = createTempDir();
+		const dotDir = createTempDir();
 		scripted({ discarded: [] });
-		const result = await run(channelDir);
+		const result = await run(dotDir);
 		expect(result.skipped).toBe(false);
 		expect(result.added).toEqual([]);
 		expect(result.journalAppended).toBe(0);

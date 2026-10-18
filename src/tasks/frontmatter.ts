@@ -39,6 +39,12 @@ export type TaskArchiveOutcome = "completed" | "cancelled";
 export interface TaskFrontmatter {
 	state: TaskState;
 	paused?: TaskPaused;
+	/**
+	 * The delivery channel: where every step, stop receipt and report of this task goes (spec 058,
+	 * D13). Plain text so a human can retarget it by hand. Missing, or not bound to this task's dot,
+	 * means the task is suspended — the driver leaves it frozen until the channel is bound again.
+	 */
+	channel?: string;
 	/** Present iff `state === "parked"` (INV-1). */
 	ticket?: Ticket;
 	usage?: TaskUsage;
@@ -54,8 +60,6 @@ export interface ParsedTaskFrontmatter {
 	fields: TaskFrontmatter;
 	/** false => the block could not be read at all; the task is surfaced rather than skipped. */
 	readable: boolean;
-	/** True when a v3 line (`status`, `control`, `schedule`…) is present — the file is not converted, so it never runs. */
-	legacy: boolean;
 }
 
 const STATES: readonly TaskState[] = ["open", "parked", "done"];
@@ -70,9 +74,7 @@ export function taskStateLabel(state: TaskState): string {
 	return STATE_LABELS[state] ?? state;
 }
 /** Fixed render order, so a diff of a task file reads the same way every time. */
-const FIELD_ORDER = ["state", "paused", "origin", "ticket", "usage", "budget"] as const;
-/** v3 frontmatter keys; their presence means the one-time conversion has not run on this file. */
-const LEGACY_KEYS = new Set(["status", "enabled", "control", "wake", "schedule"]);
+const FIELD_ORDER = ["state", "paused", "channel", "origin", "ticket", "usage", "budget"] as const;
 
 function parseJsonObject(raw: string): Record<string, unknown> | undefined {
 	try {
@@ -124,12 +126,11 @@ function parseBudget(raw: string): Partial<TaskBudget> | undefined {
  * ledger.
  */
 export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
-	if (!content.startsWith("---")) return { fields: { state: "open" }, readable: false, legacy: false };
+	if (!content.startsWith("---")) return { fields: { state: "open" }, readable: false };
 	const end = content.indexOf("\n---", 3);
-	if (end === -1) return { fields: { state: "open" }, readable: false, legacy: false };
+	if (end === -1) return { fields: { state: "open" }, readable: false };
 
 	const fields: TaskFrontmatter = { state: "open" };
-	let legacy = false;
 	let sawState = false;
 	for (const line of content.slice(3, end).split("\n")) {
 		const idx = line.indexOf(":");
@@ -158,6 +159,9 @@ export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
 			case "origin":
 				fields.origin = value || undefined;
 				break;
+			case "channel":
+				fields.channel = value || undefined;
+				break;
 			case "outcome":
 				if (value === "completed" || value === "cancelled") fields.outcome = value;
 				break;
@@ -165,14 +169,13 @@ export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
 				fields.closedAt = value || undefined;
 				break;
 			default:
-				if (LEGACY_KEYS.has(key)) legacy = true;
 				break;
 		}
 	}
 	if (fields.outcome) fields.state = "done";
 	// A file with no recognizable marker is not frontmatter we understand.
-	const readable = sawState || fields.outcome !== undefined || legacy;
-	return { fields: normalizeTaskFrontmatter(fields), readable, legacy };
+	const readable = sawState || fields.outcome !== undefined;
+	return { fields: normalizeTaskFrontmatter(fields), readable };
 }
 
 /**
@@ -200,6 +203,7 @@ export function renderTaskFrontmatter(fields: TaskFrontmatter): string {
 	if (document.outcome) {
 		lines.push(`outcome: ${document.outcome}`);
 		if (document.closedAt) lines.push(`closedAt: ${document.closedAt}`);
+		if (document.channel) lines.push(`channel: ${document.channel}`);
 		if (document.origin) lines.push(`origin: ${document.origin}`);
 		if (document.usage) lines.push(`usage: ${JSON.stringify(document.usage)}`);
 		lines.push("---");

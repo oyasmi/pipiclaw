@@ -14,6 +14,7 @@ import {
 	writeStoredTask,
 } from "../src/tasks/store.js";
 import type { Ticket } from "../src/tasks/ticket.js";
+import { spawnLockHolder } from "./helpers/lock-holder.js";
 
 const WORK_TICKET: Ticket = { kind: "work", refs: ["run_a"], by: "2099-01-01T00:00:00+08:00" };
 const STALE_TICKET: Ticket = { kind: "work", refs: ["run_a"], by: "2000-01-01T00:00:00+08:00" };
@@ -103,5 +104,23 @@ describe("resumeTask", () => {
 		expect(resumed?.fields.paused).toBeUndefined();
 		expect(resumed?.fields.ticket).toBeUndefined();
 		expect(resumed?.fields.usage?.expired).toBe(0);
+	});
+});
+
+describe("cross-process task mutation (spec 058, D6)", () => {
+	it("waits while another process holds the task's lock", async () => {
+		// Failure caught: withTaskMutation serializing only in-process would let a TUI's /tasks and
+		// the daemon's driver rewrite the same task file from stale reads.
+		const holder = await spawnLockHolder(join(dir, ".locks", "task-T.lock"));
+		let settled = false;
+		const parked = parkTask(dir, "T", WORK_TICKET).finally(() => {
+			settled = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(settled).toBe(false);
+		expect((await readStoredTask(dir, "T"))?.fields.state).toBe("open");
+		await holder.release();
+		await parked;
+		expect((await readStoredTask(dir, "T"))?.fields.state).toBe("parked");
 	});
 });

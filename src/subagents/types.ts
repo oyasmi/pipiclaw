@@ -91,7 +91,7 @@ export interface WorkerToolRequest {
 	securityConfig: SecurityConfig;
 	securityContext: SecurityRuntimeContext;
 	channelId: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
@@ -106,15 +106,13 @@ export interface SubAgentToolOptions {
 	buildWorkerTools: BuildWorkerTools;
 	executor: Executor;
 	fileStore: FileStore;
-	/** Host checkout used as the sub-agent's cwd. Defaults to process.cwd(). */
+	/** Default working directory for a run: the parent's cwd. Defaults to process.cwd(). */
 	workingDirectory?: string;
-	/** Mirrors the parent channel's ProjectScope.boundary onto the sub-agent's own tool set (spec 043, D6.2). */
-	projectBoundary?: "project" | "unbounded";
 	getCurrentModel: () => Model<Api>;
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
-	channelDir: string;
+	dotDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	/** `settings.subagentModel` (spec 032 D5); null/undefined means unset. */
 	getSubAgentModelReference?: () => string | null;
@@ -123,6 +121,9 @@ export interface SubAgentToolOptions {
 	rtkEnabled?: boolean;
 	runtimeContext: {
 		workspaceDir: string;
+		/** The dot the delegating turn belongs to, and its directory (tasks, memory). */
+		dot: string;
+		dotDir: string;
 		channelId: string;
 	};
 	createWorker?: (config: {

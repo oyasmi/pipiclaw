@@ -50,7 +50,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-1",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
 		const result = await tool.execute("call-1", { op: "list" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		expect(text).toContain("run-1");
@@ -112,7 +112,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-still-going",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
 		const result = await tool.execute("call-cap", { op: "list" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		const details = result.details as { runs: Array<{ runId: string }> };
@@ -139,7 +139,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-2",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
 		const result = await tool.execute("call-2", { op: "cancel", runId: "run-2" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		expect(text).toContain("lost");
@@ -178,7 +178,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-running",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
 		await expect(
 			tool.execute("call-4", { op: "follow_up", runId: "run-internal", task: "keep going" }),
 		).rejects.toThrow("does not support follow_up yet");
@@ -227,7 +227,7 @@ describe("subagent_manage tool", () => {
 			{ announce: false },
 		);
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
 		await expect(tool.execute("call-6", { op: "follow_up", runId: "run-5", task: "keep going" })).rejects.toThrow(
 			"cannot be resumed",
 		);
@@ -277,7 +277,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			channelDir: "/workspace/dm_manage_followup_ok",
+			dot: "news",
+			dotDir: "/workspace/dm_manage_followup_ok",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -331,89 +332,6 @@ describe("subagent_manage tool", () => {
 		expect(launchInput.artifactDir).toMatch(/^\/tmp\/checkout\/subagent-artifacts\/run_[a-z0-9]{6}$/);
 	});
 
-	// Review 2026-08-23 §3.1: the original dispatch validated `workingDirectory` against the
-	// boundary in effect at launch time; `/project` can move that boundary before a later follow_up.
-	it("follow_up is rejected when the recorded workingDirectory has fallen outside the current project boundary", async () => {
-		configureSubAgentRuntime({});
-		const channelId = `dm_manage_followup_boundary_${Date.now()}`;
-		const manager = getSubAgentRunManager(channelId);
-		await manager.register({
-			runId: "run-boundary",
-			channelId,
-			runtime: "external",
-			harness: "codex-cli",
-			agent: "builder",
-			label: "build",
-			source: "predefined",
-			tools: [],
-			purpose: "work",
-			workingDirectory: "/tmp/checkout-outside-project",
-			artifactDir: "/tmp/checkout-outside-project/subagent-artifacts/run-boundary",
-		});
-		await manager.settle(
-			"run-boundary",
-			{
-				status: "completed",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					total: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				usageKnown: true,
-				costKnown: false,
-				turns: 0,
-				toolCalls: 0,
-				durationMs: 0,
-				outputText: "Done.",
-				sessionId: "thread-abc",
-			},
-			{ announce: false },
-		);
-
-		const tool = createSubAgentManageTool({
-			channelId,
-			workspaceDir: "/workspace",
-			channelDir: "/workspace/dm_manage_followup_boundary",
-			workingDirectory: "/tmp/some-other-project-root",
-			projectBoundary: "project",
-			getSubAgentDiscovery: () => ({
-				directory: "/workspace/sub-agents",
-				warnings: [],
-				agents: [
-					{
-						name: "builder",
-						description: "builder role",
-						systemPrompt: "You build things.",
-						tools: [],
-						maxTurns: 24,
-						maxToolCalls: 48,
-						maxWallTimeSec: 1800,
-						bashTimeoutSec: 120,
-						contextMode: "isolated",
-						memory: "none",
-						paths: [],
-						source: "predefined",
-						runtime: "external",
-						harness: "codex-cli",
-						command: "codex exec",
-						mutates: "read",
-					},
-				],
-			}),
-		});
-
-		await expect(
-			tool.execute("call-boundary", {
-				op: "follow_up",
-				runId: "run-boundary",
-				task: "keep going",
-			}),
-		).rejects.toThrow("must be inside the project root");
-	});
-
 	it("follow_up is rejected when the role's harness changed since the original run (P1-2)", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
@@ -458,7 +376,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			channelDir: "/workspace/dm_manage",
+			dot: "news",
+			dotDir: "/workspace/dm_manage",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -540,7 +459,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			channelDir: "/workspace/dm_manage",
+			dot: "news",
+			dotDir: "/workspace/dm_manage",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -626,7 +546,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			channelDir: "/workspace/dm_manage_followup_verify_mutated",
+			dot: "news",
+			dotDir: "/workspace/dm_manage_followup_verify_mutated",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -728,7 +649,8 @@ describe("subagent_manage tool", () => {
 			return createSubAgentManageTool({
 				channelId,
 				workspaceDir: "/workspace",
-				channelDir: "/workspace/dm_manage_fp",
+				dot: "news",
+				dotDir: "/workspace/dm_manage_fp",
 				getSubAgentDiscovery: () => ({
 					directory: "/workspace/sub-agents",
 					warnings: [],

@@ -36,7 +36,7 @@ export function controlEvent(
 }
 
 export function controlFile(ctx: TrialContext, path: string, content: string): void {
-	const target = join(ctx.channelDir, path);
+	const target = join(ctx.dotDir, path);
 	mkdirSync(join(target, ".."), { recursive: true });
 	writeFileSync(target, content);
 }
@@ -189,7 +189,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 			failed: false,
 			output: token,
 		}));
-		controlFile(ctx, "subagent-runs.jsonl", runs.map((run) => JSON.stringify(run)).join("\n") + "\n");
+		controlFile(ctx, "subagent-runs.jsonl", `${runs.map((run) => JSON.stringify(run)).join("\n")}\n`);
 		for (const run of runs) {
 			controlEvent(ctx, "tool-call", "subagent", { agent: "eval-fragment" });
 			ctx.trace.at(-1)!.correlationId = run.runId;
@@ -232,7 +232,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		);
 		for (const name of ["incident.md", "legacy.md", "runtime.md"]) {
 			const correlationId = `research-${name}`;
-			controlEvent(ctx, "tool-call", "read", { path: `${ctx.channelDir}/research/${name}` });
+			controlEvent(ctx, "tool-call", "read", { path: `${ctx.dotDir}/research/${name}` });
 			ctx.trace.at(-1)!.correlationId = correlationId;
 			controlEvent(ctx, "tool-result", "read", { detail: `${name} authoritative fixture contents` });
 			ctx.trace.at(-1)!.correlationId = correlationId;

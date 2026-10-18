@@ -47,7 +47,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.
 
 由主智能体按 description 里的能力与成本挑执行器，通常不需要你点名条目；要指定时直接说条目名即可。
 
-外部委派会立刻返回 `runId`，完成时自动唤醒原频道。过程中可用 `/subagents` 查看，用 `/subagents cancel <runId>` 终止。不要为了等结果反复轮询或重复派发。
+外部委派会立刻返回 `runId`，完成时自动唤醒发起委派的频道（它已换绑到别的 dot 时不唤醒，结果仍保存在 run 记录里）。过程中可用 `/subagents` 查看，用 `/subagents cancel <runId>` 终止。不要为了等结果反复轮询或重复派发。
 
 > **运行入口边界**：完成唤醒、`state/subagent-runs/` 持久化和 daemon 重启对账由钉钉常驻 runtime 装配。TUI 可以发现和启动角色，但当前不会主动显示外部 run 的完成通知，也不会在退出后重新认领它；长时间外部委派请使用 daemon。
 
@@ -194,7 +194,7 @@ maxWallTimeSec: 5400
 |------|--------|------|
 | `agent` | - | 必填。`workspace/sub-agents/` 里某个已配置角色的名字（内置或外部） |
 | `task` | - | 必填。完整任务描述；子代理看不到主对话，目标/范围/路径/约束/验收方法都要写进来 |
-| `workingDirectory` | runtime 自身工作目录 | **每次委派都应显式传**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
+| `workingDirectory` | 当前 dot 目录（主代理的 cwd） | 委派代码仓库时**必须显式传仓库路径**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
 | `purpose` | `work` | `verify` 进入检查者协议；带 `taskId` 时按任务的 DoD 检查，再带 `item` 时只检查该工作项和它引用的 DoD |
 | `taskId` | - | 绑定任务台账；`purpose: verify` 要求它 |
 
@@ -209,7 +209,7 @@ maxWallTimeSec: 5400
 | `tools` | `read,bash` | 工具白名单 |
 | `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用 |
 | `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`，整组替换四个数值预算（见下） |
-| `context` | `none` | 上下文注入：`none`、`index`（`index` 追加 workspace 背景、频道记忆索引和当天日志尾部） |
+| `context` | `none` | 上下文注入：`none`、`index`（`index` 追加 workspace 背景、dot 记忆索引和当天日志尾部） |
 | `thinkingLevel` | `medium` | 推理强度 |
 | `mutates` | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；显式声明覆盖推定，`bash` 不参与推定 |
 | `workingDirectory` / `purpose` / `taskId` | 同上 | 同 `subagent` |
@@ -247,7 +247,7 @@ maxWallTimeSec: 5400
 
 内置委派遇到供应商的瞬时错误（429、overloaded、5xx、连接中断）会在原地重试，最多 3 次，退避 2/4/8 秒；仍然失败、或错误本身不可重试时，若配置了 `settings.json` 的 `fallbackModel`，会像主回合一样切到备用模型再试一次（上下文超长除外，换模型也解决不了）。切换会写进结果文本，用量记到实际回答的模型名下。墙钟预算照常约束整个过程。
 
-收到 "still running" 占位结果后：**不要轮询、不要重复派发，结束当前回合**；委派完成时 runtime 会自己唤醒本频道，带回结果与产物路径。想主动看进度用 `subagent_list` 或 `/subagents list`，不要用委派工具本身当轮询手段。
+收到 "still running" 占位结果后：**不要轮询、不要重复派发，结束当前回合**；委派完成时 runtime 会自己唤醒本频道，带回结果与产物路径。同一 dot 的其他频道发起的委派各自唤醒各自的频道。想主动看进度用 `subagent_list` 或 `/subagents list`，不要用委派工具本身当轮询手段。
 
 **多个结果一起到达时合并成一个回合**。频道正忙时陆续结束的聊天级委派与后台作业，它们的完成唤醒会在下一个唤醒回合里一次性交给模型（一回合最多 6 条），而不是每条各占一个完整回合。第一个结果仍然立刻唤醒，不会为了凑批而等待。task 内的委派唤醒不参与合并，它们有自己的认领路径（同一扇出里的兄弟唤醒在任务被重新打开后直接丢弃）。
 
@@ -265,7 +265,7 @@ maxWallTimeSec: 5400
 
 | 工具 / op | 语义 |
 |---|---|
-| `subagent_list` | 本频道 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况（零参数） |
+| `subagent_list` | 本 dot 的 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况（零参数） |
 | `subagent_run op=show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
 | `subagent_run op=cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
 | `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
@@ -281,7 +281,7 @@ maxWallTimeSec: 5400
 /subagents list [running|failed|all]  # 按状态筛选
 /subagents show <runId>         # 完整记录、实际 argv、stderr 尾部
 /subagents output <runId>       # 该 run 的文本产出（output.md 尾部）
-/subagents cancel <runId|all>   # 直接杀进程组 / abort，不经过模型；all 终止本频道所有在途 run
+/subagents cancel <runId|all>   # 直接杀进程组 / abort，不经过模型；all 终止本 dot 所有在途 run
 /subagents roles [name]         # 角色目录；带 name 查看单个角色详情（runtime、mutates、model、thinking、tools、预算、system prompt……）
 ```
 
@@ -319,11 +319,11 @@ maxWallTimeSec: 5400
 | `memory` | 含义 |
 |----|------|
 | `none` | 不注入额外记忆 |
-| `index` | 注入与主 agent 首轮相同的三段（workspace 共享背景 + channel 记忆索引 + 当天 journal 尾部），预算减半 |
+| `index` | 注入与主 agent 首轮相同的三段（workspace 共享背景 + dot 记忆索引 + 当天 journal 尾部），预算减半 |
 
-**默认值按 runtime 不同**：内置角色里 `contextMode: contextual` 隐含 `memory: index`；**外部角色的 `memory` 默认永远是 `none`，不跟随 `contextMode`**——一个只想要 `paths` 注入（`contextMode: contextual`，未写 `memory`）的外部角色不会因此意外开始把频道会话状态发给第三方进程。旧角色文件里写的 `session`/`relevant` 仍会被接受，discovery 时统一映射为 `index` 并给出一条退役提示，建议尽快改成 `index`。
+**默认值按 runtime 不同**：内置角色里 `contextMode: contextual` 隐含 `memory: index`；**外部角色的 `memory` 默认永远是 `none`，不跟随 `contextMode`**——一个只想要 `paths` 注入（`contextMode: contextual`，未写 `memory`）的外部角色不会因此意外开始把 dot 的记忆状态发给第三方进程。旧角色文件里写的 `session`/`relevant` 仍会被接受，discovery 时统一映射为 `index` 并给出一条退役提示，建议尽快改成 `index`。
 
-**这是一条真实的数据外发路径，如实说明**：显式声明 `memory: index` 的外部角色，会把 channel 记忆索引与当天 journal 片段写进发给外部进程的 stdin，交给第三方 CLI 及其背后的 API。这是一次显式、知情的选择，声明后 discovery 会给出一条提示级 warning 提醒这件事，`/subagents roles <name>` 也会展示当前生效的 `contextMode`/`memory` 并在非 `none` 时标出这条提示。
+**这是一条真实的数据外发路径，如实说明**：显式声明 `memory: index` 的外部角色，会把 dot 记忆索引与当天 journal 片段写进发给外部进程的 stdin，交给第三方 CLI 及其背后的 API。这是一次显式、知情的选择，声明后 discovery 会给出一条提示级 warning 提醒这件事，`/subagents roles <name>` 也会展示当前生效的 `contextMode`/`memory` 并在非 `none` 时标出这条提示。
 
 推荐搭配：
 
@@ -404,7 +404,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
 - 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。
 - `purpose: verify`：执行者拿到检查者协议（只判断、不修实现、最后一行 `VERDICT: PASS|FAIL`）。内置验证器结构性移除了 write/edit，但默认工具集仍含 `bash`，所以只有声明 `mutates: read` 且 `tools` 里也不含 `bash` 的角色才是结构性只读；外部验证器只能靠目标 CLI 自己的 sandbox（如 codex `--sandbox read-only`）做到只读。带 `item` 的检查只覆盖该工作项和它引用的 DoD 条目。所有写能力的 verifier 都先持有目标工作区独占 lease。运行时只记录这个结论（run 记录与所属任务的看板），**不是**关闭任务的门禁，也不做工作区快照或 attestation；运行失败或没有 VERDICT 行一律记为 FAIL。是否采信由主代理按风险对照真实产物、diff 和检查输出判断。
-- 带 `taskId` 的委派（任务会话里自动绑定，可再带上对应工作项 `item`）在派发和结算时写进 `<channel>/tasks/<id>.jsonl`，成本计入任务预算；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
+- 带 `taskId` 的委派（任务会话里自动绑定，可再带上对应工作项 `item`）在派发和结算时写进 `dots/<dot>/tasks/<id>.jsonl`，成本计入任务预算；普通运行摘要仍写 `dots/<dot>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
 > `verify` 不再以任务台账为前提；在任务里使用时的方法（看板、检查与返工裁决）见 [events-and-tasks.md](./events-and-tasks.md#团队看板与工作项) 和 `task-lead.md` playbook。
@@ -412,7 +412,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
 - 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但它会取写 lease 且无法保证没动过产物；不得修改被检查的实现或为了通过测试而修代码，PASS 也不能代替你核对真实产物。
 - 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
-- 给外部角色写 `memory: index` 却没意识到这会把频道记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
+- 给外部角色写 `memory: index` 却没意识到这会把 dot 记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
 - 改了外部角色的 `command`/`model`/`shell` 之后还指望 `follow_up` 能续接旧会话——指纹不匹配会被拒绝，需要改派新任务。
 
 ## 该看哪份文档

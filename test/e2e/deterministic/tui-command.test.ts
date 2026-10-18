@@ -1,6 +1,7 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDot } from "../../../src/dot/registry.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
 import { cleanupE2ETestHome, createDeterministicHome, type E2ETestHome } from "../../support/setup.js";
 
@@ -37,12 +38,15 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 
 	it("resolves a built-in slash command under --print without invoking the model", async () => {
 		const { runTuiApp } = await import("../../../src/tui/app.js");
-		const eventPath = join(home.workspaceDir, "events", "tui-probe.json");
+		// Events belong to the dot the terminal opens (spec 058, D14, D18).
+		await createDot(home.workspaceDir, "tui-e2e", new Date());
+		mkdirSync(join(home.workspaceDir, "dots", "tui-e2e", "events"), { recursive: true });
+		const eventPath = join(home.workspaceDir, "dots", "tui-e2e", "events", "tui-probe.json");
 		writeFileSync(
 			eventPath,
 			JSON.stringify({
 				type: "periodic",
-				channelId: "tui_e2e_builtin",
+				channelId: "tui",
 				text: "probe",
 				schedule: "0 9 * * 1",
 			}),
@@ -56,7 +60,7 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 
 		try {
 			await runTuiApp({
-				channel: "tui_e2e_builtin",
+				dot: "tui-e2e",
 				print: true,
 				plain: true,
 				quiet: true,

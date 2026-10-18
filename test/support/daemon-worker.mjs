@@ -16,7 +16,7 @@ const config = {
 	clientSecret: "e2e",
 	robotCode: "e2e",
 	cardTemplateKey: "content",
-	stateDir: workspaceDir,
+	stateDir: join(homeDir, "state"),
 };
 class CapturedBot extends DingTalkBot {
 	async start() {}
@@ -45,7 +45,7 @@ const runtime = await createRuntimeContext({
 	createBot: (handler) => new CapturedBot(handler, config),
 	createEventsWatcher: () => ({ start() {}, stop() {} }),
 });
-process.on("message", async ({ action, text, channelId, runId }) => {
+process.on("message", async ({ action, text, channelId, runId, dot = "e2e" }) => {
 	try {
 		let value;
 		if (action === "send") {
@@ -60,7 +60,8 @@ process.on("message", async ({ action, text, channelId, runId }) => {
 				conversationType: "1",
 			});
 		} else if (action === "record") {
-			value = runtime.runs.get(channelId).get(runId) ?? null;
+			// Runs are owned per dot (spec 058, D15); the record keeps its originating channel.
+			value = runtime.runs.get(dot).get(runId) ?? null;
 		} else {
 			throw new Error(`Unknown worker action: ${action}`);
 		}

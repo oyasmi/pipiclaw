@@ -265,11 +265,15 @@ TUI 的 `--help` 属于 CLI（部署者在 shell 里看），保持英文；TUI 
 | memory tombstone | 墓碑化 | 已记入忽略名单 | 后台整理不会再自动写回 |
 | reflect cursor | 游标 | （不展示） | 从 `/memory status` 移除 |
 | journal | 日志 | 工作日记 | `/memory journal` 描述"查看某天的工作日记" |
-| project allowed roots | 可选根 | 允许的根目录 | |
+| project allowed roots | 可选根 | 允许的根目录（spec 058 删除了项目边界，此行仅存档） | |
 | sandbox level | Enforcement | 隔离级别 | |
 | delegation run | 委派 run | 委派（以 `run_…` 指代具体一次） | `委派 run_a1 失败` |
 | transport / session commands | 传输层 / 会话层 | 随时可用 / 空闲时可用 | `/help` 分组 |
 | phase | 阶段 | （删除；v5 无此概念） | |
+| dot | dot | dot（不翻译；首次出现时解释为"一个独立的助手，拥有自己的记忆、任务和文件"）（spec 058 追加） | `本频道已绑定到 dot \`news\`。` |
+| binding | 绑定 | 绑定 / 换绑（spec 058 追加） | `/dot bind <名字>`；`本频道还没有绑定 dot。` |
+| delivery channel | 投递频道 | 投递频道（spec 058 追加） | `已暂停：投递频道未绑定到本 dot` |
+| dormant dot | 休眠 | 后台工作已暂停（spec 058 追加） | `/dot` 列表 `未绑定频道，后台工作已暂停` |
 
 统一句式：
 

@@ -30,7 +30,7 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		cleanupE2ETestHome(home.homeDir);
 	});
 
-	it("answers a one-shot prompt through the terminal channel and persists channel memory", async () => {
+	it("answers a one-shot prompt through the terminal channel and persists dot memory", async () => {
 		const { runTuiApp } = await import("../../../src/tui/app.js");
 
 		const chunks: string[] = [];
@@ -41,7 +41,8 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 
 		try {
 			await runTuiApp({
-				channel: "tui_e2e",
+				dot: "tui-e2e",
+				create: true,
 				print: true,
 				plain: true,
 				quiet: true,
@@ -58,9 +59,9 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		expect(output.toUpperCase(), getE2ESkipReason() ?? undefined).toContain("PONG");
 
 		// The terminal channel shares the DingTalk memory layout: workspace/<id>/.
-		const channelDir = join(home.workspaceDir, "tui_e2e");
-		expect(existsSync(join(channelDir, "SESSION.md"))).toBe(true);
-		const logPath = join(channelDir, "log.jsonl");
+		const dotDir = join(home.workspaceDir, "tui_e2e");
+		expect(existsSync(join(dotDir, "SESSION.md"))).toBe(true);
+		const logPath = join(dotDir, "log.jsonl");
 		expect(existsSync(logPath)).toBe(true);
 		// The incoming user message was archived, mirroring the DingTalk path.
 		expect(readFileSync(logPath, "utf-8")).toContain("PONG");

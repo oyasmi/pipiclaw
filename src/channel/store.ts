@@ -1,13 +1,13 @@
 /**
- * Per-channel message archive (`log.jsonl`): inbound messages, bot responses and delegation records,
- * with de-duplication, size rotation and a debounced flush.
+ * The message archive: each channel's `log.jsonl` (inbound messages, bot responses) in its
+ * conversation directory, and each dot's `subagent-runs.jsonl`, with de-duplication, size
+ * rotation and a debounced flush.
  */
-import { existsSync, mkdirSync } from "fs";
 import { writeFile } from "fs/promises";
 import { basename, dirname, join } from "path";
+import * as log from "../log.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { getChannelDir } from "./channel-paths.js";
 
 const MAX_LOG_SIZE_BYTES = 1_000_000;
 const DEDUPE_TTL_MS = 60_000;
@@ -24,7 +24,7 @@ export interface LoggedMessage {
 	deliveryMode?: "steer" | "followUp";
 	skipContextSync?: boolean;
 	/**
-	 * Paths of any images the user sent alongside `text` (spec 049), relative to the channel
+	 * Paths of any images the user sent alongside `text` (spec 049), relative to the dot
 	 * directory. Kept even for an image that never made it into the model's context (unsupported
 	 * format, oversized, model without vision support) — this is the only place that record
 	 * survives once the turn's `[图片N: ...]` marker has scrolled out of `HISTORY.md`.
@@ -33,7 +33,11 @@ export interface LoggedMessage {
 }
 
 export interface ChannelStoreConfig {
-	workingDir: string;
+	/**
+	 * Where a channel's archive goes right now (spec 058, D17): its conversation directory in the
+	 * dot it is bound to. `undefined` for an unbound channel, which is not archived at all.
+	 */
+	resolveArchiveDir: (channelId: string) => string | undefined;
 }
 
 interface ArchiveEnvelope {
@@ -80,14 +84,14 @@ export interface LoggedSubAgentRun {
 }
 
 export class ChannelStore {
-	private workingDir: string;
+	private readonly resolveArchiveDir: ChannelStoreConfig["resolveArchiveDir"];
 	private recentlyLogged = new Map<string, number>();
 	private cleanupTimer: NodeJS.Timeout | null = null;
 	private archiveAppender: JsonlAppender;
 	private closed = false;
 
 	constructor(config: ChannelStoreConfig) {
-		this.workingDir = config.workingDir;
+		this.resolveArchiveDir = config.resolveArchiveDir;
 		this.archiveAppender = createJsonlAppender({
 			pathFor: (_now, record) => (record as ArchiveEnvelope).filePath,
 			recordForWrite: (record) => (record as ArchiveEnvelope).value,
@@ -102,34 +106,23 @@ export class ChannelStore {
 				}
 			},
 		});
-
-		// Ensure working directory exists
-		if (!existsSync(this.workingDir)) {
-			mkdirSync(this.workingDir, { recursive: true });
-		}
-	}
-
-	/**
-	 * The archive path for a channel — resolved, not created.
-	 *
-	 * This used to call `ensureChannelDir`, i.e. a synchronous `mkdirSync` on the event loop for
-	 * every archived message. `logBotResponse` runs on every progress update of a streaming turn,
-	 * so that was a blocking syscall per progress tick. The appender's own `ensureDir` already
-	 * creates the directory before it writes, and memoizes it, so the mkdir here was pure
-	 * duplicated I/O.
-	 */
-	private channelArchiveDir(channelId: string): string {
-		return getChannelDir(this.workingDir, channelId);
 	}
 
 	/**
 	 * Log a message to the channel's log.jsonl raw archive.
 	 * This file is cold storage and is not proactively loaded into memory context.
-	 * Returns false if message was already logged (duplicate)
+	 * Returns false if the message was already logged (duplicate), or the channel is unbound.
 	 */
 	async logMessage(channelId: string, message: LoggedMessage): Promise<boolean> {
 		if (this.closed) {
 			throw new Error("Channel archive is closed. Retry after the runtime has restarted.");
+		}
+		// Resolved, not created: the appender's own `ensureDir` creates the directory before it
+		// writes, and memoizes it — a sync mkdir here would block on every progress update.
+		const archiveDir = this.resolveArchiveDir(channelId);
+		if (!archiveDir) {
+			log.logDebugEvent("channel.archive.skipped", "Archive skipped: channel not bound to a dot", { channelId });
+			return false;
 		}
 		const dedupeKey = `${channelId}:${message.ts}`;
 		const now = Date.now();
@@ -141,7 +134,7 @@ export class ChannelStore {
 			this.recentlyLogged.delete(dedupeKey);
 		}
 
-		const logPath = join(this.channelArchiveDir(channelId), "log.jsonl");
+		const logPath = join(archiveDir, "log.jsonl");
 
 		if (!message.date) {
 			message.date = formatLocalTime();
@@ -155,9 +148,13 @@ export class ChannelStore {
 		return true;
 	}
 
-	async logSubAgentRun(channelId: string, run: LoggedSubAgentRun): Promise<void> {
+	/**
+	 * Archive a settled run in the dot it ran in. Takes the dot directory rather than resolving the
+	 * channel: a run that settles after its channel was rebound still belongs to its own dot.
+	 */
+	async logSubAgentRun(dotDir: string, run: LoggedSubAgentRun): Promise<void> {
 		if (this.closed) return;
-		const logPath = join(this.channelArchiveDir(channelId), "subagent-runs.jsonl");
+		const logPath = join(dotDir, "subagent-runs.jsonl");
 		if (!this.archiveAppender.tryAppend({ filePath: logPath, value: run })) {
 			throw new Error("Sub-agent archive queue is full. Retry after pending log writes drain.");
 		}

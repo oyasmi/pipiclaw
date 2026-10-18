@@ -51,12 +51,15 @@ describe("security config", () => {
 		});
 	});
 
-	it("reports diagnostics for invalid json and invalid fields", () => {
+	it("reports diagnostics for invalid json, invalid fields and retired keys", () => {
 		const appHomeDir = makeTempDir();
 		writeFileSync(
 			join(appHomeDir, "security.json"),
 			JSON.stringify({
 				networkGuard: { maxRedirects: 0 },
+				// Spec 058 D9: an upgraded deployment still carrying the retired key must keep
+				// starting, with the key named in a warning and its value ignored.
+				projectAccess: { defaultRoot: "/srv/app", allowedRoots: ["/srv"] },
 			}),
 			"utf-8",
 		);
@@ -64,8 +67,12 @@ describe("security config", () => {
 		const loaded = loadSecurityConfigWithDiagnostics(appHomeDir);
 		expect(loaded.config).toEqual(DEFAULT_SECURITY_CONFIG);
 		expect(loaded.diagnostics.map((item) => item.message)).toEqual(
-			expect.arrayContaining([expect.stringContaining("networkGuard.maxRedirects: expected a positive integer")]),
+			expect.arrayContaining([
+				expect.stringContaining("networkGuard.maxRedirects: expected a positive integer"),
+				expect.stringContaining("projectAccess: retired key ignored"),
+			]),
 		);
+		expect(loaded.diagnostics.every((item) => item.severity === "warning")).toBe(true);
 
 		writeFileSync(join(appHomeDir, "security.json"), "{", "utf-8");
 		const invalidJson = loadSecurityConfigWithDiagnostics(appHomeDir);

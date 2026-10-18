@@ -52,7 +52,7 @@ This file stores stable workspace-level memory.
 
 - It is intended to be managed by a human administrator.
 - It is not automatically rewritten by normal runtime consolidation.
-- Store durable shared background here when it should apply across channels.
+- Store durable shared background here when it should apply across all dots.
 - Keep this file focused on stable facts, policies, and shared context, not transient conversation history.
 
 ## Shared Context
@@ -239,7 +239,8 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 		created.push("workspace/");
 	}
 
-	for (const dir of ["skills", "events", "sub-agents"]) {
+	// Events live per dot (spec 058, D14), so `dots/` replaces the old workspace `events/`.
+	for (const dir of ["skills", "dots", "sub-agents"]) {
 		const dirPath = join(paths.workspaceDir, dir);
 		if (!existsSync(dirPath)) {
 			mkdirSync(dirPath, { recursive: true });

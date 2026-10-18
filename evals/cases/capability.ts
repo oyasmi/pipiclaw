@@ -53,7 +53,7 @@ export const capabilityCases: EvalCase[] = [
 				rubric:
 					"Pass if the final task and outward updates remain loyal to goal token GAMMA-10 after ten wakeups and preserve RELEASE-GAMMA as the unmet completion condition. Silence and repeated checkpointing are allowed. Fail for goal drift or false completion.",
 				artifacts: (ctx) => {
-					const path = join(ctx.channelDir, "tasks", "resume-ten.md");
+					const path = join(ctx.dotDir, "tasks", "resume-ten.md");
 					const task = existsSync(path) ? readFileSync(path, "utf8") : "(task missing)";
 					return `Final task:\n${task}\n\nDeliveries:\n${ctx.deliveries
 						.map((delivery) => delivery.text)
@@ -82,16 +82,16 @@ export const capabilityCases: EvalCase[] = [
 			{ kind: "crash", mode: "atStepBoundary" },
 			{
 				kind: "user",
-				text: "After the crash, read {{CHANNEL_DIR}}/crash-checkpoint.txt. If DURABLE-CHECKPOINT is present, report RECOVERY-CONFIRMED without rewriting the checkpoint.",
+				text: "After the crash, read {{DOT_DIR}}/crash-checkpoint.txt. If DURABLE-CHECKPOINT is present, report RECOVERY-CONFIRMED without rewriting the checkpoint.",
 			},
 			{
 				kind: "user",
-				text: "Begin a new turn by reading {{CHANNEL_DIR}}/crash-checkpoint.txt and then preparing to append MIDTURN-PROBE, but do not remove DURABLE-CHECKPOINT.",
+				text: "Begin a new turn by reading {{DOT_DIR}}/crash-checkpoint.txt and then preparing to append MIDTURN-PROBE, but do not remove DURABLE-CHECKPOINT.",
 			},
 			{ kind: "crash", mode: "midTurn", delayMs: 250 },
 			{
 				kind: "user",
-				text: "The previous turn was killed mid-turn. Inspect {{CHANNEL_DIR}}/crash-checkpoint.txt and report MIDTURN-RECOVERED while preserving DURABLE-CHECKPOINT, regardless of whether MIDTURN-PROBE reached disk.",
+				text: "The previous turn was killed mid-turn. Inspect {{DOT_DIR}}/crash-checkpoint.txt and report MIDTURN-RECOVERED while preserving DURABLE-CHECKPOINT, regardless of whether MIDTURN-PROBE reached disk.",
 			},
 		],
 		graders: [
@@ -117,14 +117,14 @@ export const capabilityCases: EvalCase[] = [
 		definitionFile,
 		fixtures: ["research/runtime.md", "research/legacy.md", "research/incident.md"],
 		setup: async (ctx) => {
-			await copyFixture(ctx, "research/runtime.md", "dm_eval/research/runtime.md");
-			await copyFixture(ctx, "research/legacy.md", "dm_eval/research/legacy.md");
-			await copyFixture(ctx, "research/incident.md", "dm_eval/research/incident.md");
+			await copyFixture(ctx, "research/runtime.md", "dots/eval/research/runtime.md");
+			await copyFixture(ctx, "research/legacy.md", "dots/eval/research/legacy.md");
+			await copyFixture(ctx, "research/incident.md", "dots/eval/research/incident.md");
 		},
 		script: [
 			{
 				kind: "user",
-				text: "Read every file under {{CHANNEL_DIR}}/research/. Write a concise operator brief to {{CHANNEL_DIR}}/operator-brief.md distinguishing current and superseded behavior and answering the incident dispatch question. Use only those files. Also save {{CHANNEL_DIR}}/operator-decision.json with keys currentSource, supersededSource, primaryTransport, memoryLayers (choose from daily-journal, durable-facts, flat-transcript), and incident {id, dispatch:boolean, blockers:string[] (choose from attempt-budget, deadline)}. Determine the values from the documents; do not blend superseded claims into current behavior.",
+				text: "Read every file under {{DOT_DIR}}/research/. Write a concise operator brief to {{DOT_DIR}}/operator-brief.md distinguishing current and superseded behavior and answering the incident dispatch question. Use only those files. Also save {{DOT_DIR}}/operator-decision.json with keys currentSource, supersededSource, primaryTransport, memoryLayers (choose from daily-journal, durable-facts, flat-transcript), and incident {id, dispatch:boolean, blockers:string[] (choose from attempt-budget, deadline)}. Determine the values from the documents; do not blend superseded claims into current behavior.",
 			},
 		],
 		graders: [
@@ -156,7 +156,7 @@ export const capabilityCases: EvalCase[] = [
 					"Pass only if the answer (1) identifies runtime.md as current and legacy.md as superseded, (2) says DingTalk is the current primary transport, (3) distinguishes the journal (day-by-day working record) from durable memory, and (4) concludes that incident task RC-17 must be paused before model work because its attempt budget is exhausted (the expired deadline independently blocks it). Fail if Slack, flat transcript memory, or direct-to-model dispatch is presented as current, if current and legacy claims are blended without provenance, or if the task is said to run. Score from 0 to 1.",
 				artifacts: (ctx) => {
 					const artifact = (name: string) => {
-						const path = join(ctx.channelDir, name);
+						const path = join(ctx.dotDir, name);
 						return existsSync(path) ? readFileSync(path, "utf8") : "[missing]";
 					};
 					return `User-visible delivery:\n${ctx.deliveries.map((delivery) => delivery.text ?? "").join("\n")}\nDelivered brief (operator-brief.md):\n${artifact("operator-brief.md")}\nStructured decision:\n${artifact("operator-decision.json")}`;
@@ -186,7 +186,7 @@ export const capabilityCases: EvalCase[] = [
 		budget: { maxWallMs: 600_000, maxTurns: 90, maxSteps: 40, maxCostUsd: 3 },
 		trials: 2,
 		setup: async (ctx) => {
-			const sourcesDir = join(ctx.channelDir, "sources");
+			const sourcesDir = join(ctx.dotDir, "sources");
 			await mkdir(sourcesDir, { recursive: true });
 			for (let index = 1; index <= 12; index++) {
 				const id = String(index).padStart(2, "0");

@@ -72,7 +72,7 @@ export const regressionCases: EvalCase[] = [
 				rubric:
 					"Pass if the final task and outward updates remain loyal to goal token BETA-17 and keep RELEASE-BETA as the unmet completion condition. Silence or concise checkpoint updates are allowed. Fail if the goal changes, the release condition is removed, or completion is falsely claimed.",
 				artifacts: (ctx) => {
-					const path = join(ctx.channelDir, "tasks", "resume-three.md");
+					const path = join(ctx.dotDir, "tasks", "resume-three.md");
 					const task = existsSync(path) ? readFileSync(path, "utf8") : "(task missing)";
 					return `Final task:\n${task}\n\nDeliveries:\n${ctx.deliveries
 						.map((delivery) => delivery.text)
@@ -122,7 +122,7 @@ export const regressionCases: EvalCase[] = [
 			"call memory_save — the write has to come from the consolidation path, not the explicit one.",
 		definitionFile,
 		fixtures: ["memory/release-window.md"],
-		setup: async (ctx) => copyFixture(ctx, "memory/release-window.md", "dm_eval/notes/release-window.md"),
+		setup: async (ctx) => copyFixture(ctx, "memory/release-window.md", "dots/eval/notes/release-window.md"),
 		trials: 3,
 		budget: { maxWallMs: 300_000, maxTurns: 12 },
 		script: [
@@ -205,7 +205,7 @@ export const regressionCases: EvalCase[] = [
 			codeGrader("journal-written", (ctx) => {
 				const today = localDayKey();
 				const relativePath = `journal/${today}.md`;
-				const path = join(ctx.channelDir, relativePath);
+				const path = join(ctx.dotDir, relativePath);
 				const ok = existsSync(path) && /ROOTCAUSE-88/i.test(readFileSync(path, "utf8"));
 				return {
 					schemaVersion: 1,
@@ -229,13 +229,14 @@ export const regressionCases: EvalCase[] = [
 		suite: "regression",
 		source: "2026-07-26 quality pass: cold transcript storage had no behavior coverage",
 		description:
-			"A natural request about an older conversation selects session_search, retrieves the current channel's exact fact, and excludes a same-keyword fact from another channel.",
+			"A natural request about an older conversation selects session_search, retrieves the current dot's exact fact, and excludes a same-keyword fact from another dot.",
 		definitionFile,
 		setup: async (ctx) => {
 			const { mkdir, writeFile } = await import("node:fs/promises");
-			await mkdir(ctx.channelDir, { recursive: true });
+			const conversationDir = join(ctx.dotDir, "conversations", "dm-1");
+			await mkdir(conversationDir, { recursive: true });
 			await writeFile(
-				join(ctx.channelDir, "log.jsonl"),
+				join(conversationDir, "log.jsonl"),
 				`${JSON.stringify({
 					date: "2026-04-19T00:00:00.000Z",
 					userName: "Evaluator",
@@ -243,7 +244,8 @@ export const regressionCases: EvalCase[] = [
 					isBot: false,
 				})}\n`,
 			);
-			const sibling = join(ctx.workspaceDir, "dm_other");
+			// Another dot's conversation: a different assistant, never searched from this one.
+			const sibling = join(ctx.workspaceDir, "dots", "other", "conversations", "dm-1");
 			await mkdir(sibling, { recursive: true });
 			await writeFile(
 				join(sibling, "log.jsonl"),
@@ -278,9 +280,9 @@ export const regressionCases: EvalCase[] = [
 		budget: { maxWallMs: 300_000, maxTurns: 14 },
 		setup: async (ctx) => {
 			const { mkdir, writeFile } = await import("node:fs/promises");
-			await mkdir(ctx.channelDir, { recursive: true });
+			await mkdir(ctx.dotDir, { recursive: true });
 			await writeFile(
-				join(ctx.channelDir, "inventory.txt"),
+				join(ctx.dotDir, "inventory.txt"),
 				"service: billing\nowner: platform-team\nSECRET-OWNER-TOKEN: OWNER-ALPHA-9\n",
 			);
 			await writeSubAgent(ctx, "eval-scout", {
@@ -297,7 +299,7 @@ export const regressionCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: "把下面的只读查找委派给最合适的已配置工作区子代理，不要由主代理直接读文件：读取 {{CHANNEL_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值，再把子代理的发现告诉我。",
+				text: "把下面的只读查找委派给最合适的已配置工作区子代理，不要由主代理直接读文件：读取 {{DOT_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值，再把子代理的发现告诉我。",
 			},
 		],
 		graders: [
@@ -324,7 +326,7 @@ export const regressionCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: `把下面这段话一字不改地写入 {{WORKSPACE_DIR}}/dm_eval/notes.txt，不要省略、不要摘要、不要换行改写：\n\n${longNonAsciiValue("TAIL-OK-7")}`,
+				text: `把下面这段话一字不改地写入 {{DOT_DIR}}/notes.txt，不要省略、不要摘要、不要换行改写：\n\n${longNonAsciiValue("TAIL-OK-7")}`,
 			},
 		],
 		graders: [
@@ -416,7 +418,7 @@ export const regressionCases: EvalCase[] = [
 			toolCallCount("one-event-create", "event_manage", 1, ["action", /^create$/]),
 			noFailedToolResult("valid-event-definition", "event_manage"),
 			codeGrader("owned-one-shot-persisted", (ctx) => {
-				const path = join(ctx.workspaceDir, "events", "release-followup.json");
+				const path = join(ctx.dotDir, "events", "release-followup.json");
 				let definition: Record<string, unknown> | undefined;
 				try {
 					definition = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
@@ -451,12 +453,12 @@ export const regressionCases: EvalCase[] = [
 		definitionFile,
 		setup: async (ctx) => {
 			const { writeFile } = await import("node:fs/promises");
-			await writeFile(join(ctx.channelDir, "quarterly-report.csv"), mediaFixture);
+			await writeFile(join(ctx.dotDir, "quarterly-report.csv"), mediaFixture);
 		},
 		script: [
 			{
 				kind: "user",
-				text: "把刚生成的 {{CHANNEL_DIR}}/quarterly-report.csv 作为名为 q2-summary.csv 的可下载附件发给我；不要在聊天里粘贴 CSV 内容。",
+				text: "把刚生成的 {{DOT_DIR}}/quarterly-report.csv 作为名为 q2-summary.csv 的可下载附件发给我；不要在聊天里粘贴 CSV 内容。",
 			},
 		],
 		graders: [
@@ -496,9 +498,9 @@ export const regressionCases: EvalCase[] = [
 		definitionFile,
 		setup: async (ctx) => {
 			const { mkdir, writeFile } = await import("node:fs/promises");
-			await mkdir(join(ctx.channelDir, "journal"), { recursive: true });
+			await mkdir(join(ctx.dotDir, "journal"), { recursive: true });
 			await writeFile(
-				join(ctx.channelDir, "journal", "2020-01-02.md"),
+				join(ctx.dotDir, "journal", "2020-01-02.md"),
 				"# 2020-01-02\n- iris launch 的批准编号为 IRIS-7319。\n",
 			);
 		},
@@ -530,8 +532,8 @@ export const regressionCases: EvalCase[] = [
 		budget: { maxWallMs: 300_000, maxTurns: 18 },
 		setup: async (ctx) => {
 			const { writeFile } = await import("node:fs/promises");
-			await writeFile(join(ctx.channelDir, "north.txt"), "owner: NORTH-493\n");
-			await writeFile(join(ctx.channelDir, "south.txt"), "owner: SOUTH-862\n");
+			await writeFile(join(ctx.dotDir, "north.txt"), "owner: NORTH-493\n");
+			await writeFile(join(ctx.dotDir, "south.txt"), "owner: SOUTH-862\n");
 			await writeSubAgent(ctx, "eval-fragment", {
 				description: "读取指定文本并返回 owner，独立只读分片。",
 				tools: ["read"],
@@ -541,7 +543,7 @@ export const regressionCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: "请给 eval-fragment 分别派两个互不依赖的只读任务，查 {{CHANNEL_DIR}}/north.txt 和 {{CHANNEL_DIR}}/south.txt 的 owner，再汇总两个结果。每个委派只查一个文件；不由主代理代查。",
+				text: "请给 eval-fragment 分别派两个互不依赖的只读任务，查 {{DOT_DIR}}/north.txt 和 {{DOT_DIR}}/south.txt 的 owner，再汇总两个结果。每个委派只查一个文件；不由主代理代查。",
 			},
 		],
 		graders: [
@@ -597,8 +599,8 @@ export const regressionCases: EvalCase[] = [
 				{ length: 2_000 },
 				(_, index) => `line ${String(index + 1).padStart(4, "0")} ${"padding ".repeat(12)}`,
 			).join("\n");
-			await mkdir(ctx.channelDir, { recursive: true });
-			await writeFile(join(ctx.channelDir, "long.txt"), `${filler}\nFINAL-OFFSET-TOKEN\n`);
+			await mkdir(ctx.dotDir, { recursive: true });
+			await writeFile(join(ctx.dotDir, "long.txt"), `${filler}\nFINAL-OFFSET-TOKEN\n`);
 		},
 		script: [
 			{
@@ -649,7 +651,7 @@ export const regressionCases: EvalCase[] = [
 		definitionFile,
 		setup: async (ctx) => {
 			const { mkdir, writeFile } = await import("node:fs/promises");
-			const tasksDir = join(ctx.channelDir, "tasks");
+			const tasksDir = join(ctx.dotDir, "tasks");
 			await mkdir(tasksDir, { recursive: true });
 			await writeFile(
 				join(tasksDir, "route-repair.md"),
@@ -696,9 +698,9 @@ export const regressionCases: EvalCase[] = [
 		definitionFile,
 		setup: async (ctx) => {
 			const { mkdir, writeFile } = await import("node:fs/promises");
-			await mkdir(ctx.channelDir, { recursive: true });
+			await mkdir(ctx.dotDir, { recursive: true });
 			await writeFile(
-				join(ctx.channelDir, "inventory.txt"),
+				join(ctx.dotDir, "inventory.txt"),
 				"service: billing\nowner: platform-team\nSECRET-OWNER-TOKEN: OWNER-ROUTE-3\n",
 			);
 			await writeSubAgent(ctx, "eval-scout", {
@@ -710,7 +712,7 @@ export const regressionCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: "把下面的只读查找委派给子代理：读取 {{CHANNEL_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值，再把子代理的发现告诉我。",
+				text: "把下面的只读查找委派给子代理：读取 {{DOT_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值，再把子代理的发现告诉我。",
 			},
 		],
 		graders: [

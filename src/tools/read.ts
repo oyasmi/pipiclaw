@@ -128,7 +128,7 @@ export function createReadTool(
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
-		projectRoot: process.cwd(),
+		cwd: process.cwd(),
 	};
 
 	return {

@@ -5,17 +5,17 @@
  */
 import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdir } from "fs/promises";
-import { dirname, join, resolve } from "path";
+import { join } from "path";
 import { resolveActiveSessionFile } from "../channel/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
-import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import { isKnownCommandName, type RunnerBuiltInCommand, slashCommandName } from "../commands/catalog.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
+import type { DotConversation } from "../dot/types.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { ChannelJobManager } from "../jobs/manager.js";
+import type { DotJobManager } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
@@ -30,8 +30,6 @@ import { runPromptWithFallback } from "../models/fallback.js";
 import { formatModelReference } from "../models/reference.js";
 import { defaultModel } from "../models/runtime.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
-import type { ProjectScope } from "../security/project-scope.js";
-import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { loadPipiclawSkills } from "../skills/loader.js";
@@ -61,24 +59,19 @@ import {
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
-	private readonly jobManager: ChannelJobManager;
+	private readonly jobManager: DotJobManager;
 	private readonly runManager: SubAgentRunManager;
 	private readonly fileStore: FileStore;
+	readonly conversation: DotConversation;
 	private readonly channelId: string;
-	private readonly channelDir: string;
+	/** This channel's conversation directory inside the dot: sessions, active pointer, archive. */
+	private readonly conversationDir: string;
 	private readonly appHomeDir: string;
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
 	private readonly mediaSender?: MediaSender;
 	private readonly workspaceDir: string;
-	/**
-	 * Frozen for the lifetime of this runner generation (spec 043, D4.2): AgentSession, the
-	 * ResourceLoader, and every tool closure built in this constructor and in `createSessionRuntime`
-	 * (session-topology rebuilds only rebind the session, never the scope) all read this same value.
-	 * Changing project is a dispose-and-rebuild of the whole runner, not a field mutation.
-	 */
-	private readonly projectScope: ProjectScope;
 	/** Re-read per use, not captured once: an edited security.json takes effect without a restart. */
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
 	private readonly settingsManager: PipiclawSettingsManager;
@@ -101,9 +94,11 @@ export class ChannelRunner implements AgentRunner {
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
 
-	constructor(channelId: string, channelDir: string, paths: RunnerFactoryPaths, deps: RunnerDeps) {
+	constructor(conversation: DotConversation, paths: RunnerFactoryPaths, deps: RunnerDeps) {
+		const { channelId, conversationDir } = conversation;
+		this.conversation = conversation;
 		this.channelId = channelId;
-		this.channelDir = channelDir;
+		this.conversationDir = conversationDir;
 		this.appHomeDir = paths.appHomeDir;
 		this.authConfigPath = paths.authConfigPath;
 		this.modelsConfigPath = paths.modelsConfigPath;
@@ -115,30 +110,21 @@ export class ChannelRunner implements AgentRunner {
 		this.runManager = paths.runManager;
 		this.fileStore = deps.fileStore;
 		this.loadSecurityConfig = deps.loadSecurityConfig;
-		this.workspaceDir = resolve(dirname(channelDir));
-
-		// Resolve and freeze this generation's ProjectScope (spec 043, D2/D3/D4.2). A channel with
-		// no persisted selection gets the app default, materialized as its first selection right
-		// here. A selection that no longer resolves safely (deleted directory, re-pointed symlink,
-		// or a since-tightened allowlist) fails the whole runner closed rather than silently
-		// falling back to a different root (P7) — the fix is `/project set`/`reset` from a plain
-		// runtime command path, not a degraded-but-running channel; see project-scope-store.ts.
-		const securityConfigForScope = this.loadSecurityConfig();
-		const projectAccessResolution = resolveProjectAccessPolicy(securityConfigForScope.config, process.cwd());
-		const scopeOutcome = resolveProjectScope(channelDir, projectAccessResolution);
-		if (scopeOutcome.kind === "blocked") {
-			throw new Error(`[${channelId}] Cannot start channel: ${scopeOutcome.reason}`);
-		}
-		this.projectScope = scopeOutcome.scope;
+		this.workspaceDir = paths.workspaceDir;
 
 		// Initial skill summaries
-		const initialSkills = loadPipiclawSkills(channelDir);
+		const initialSkills = loadPipiclawSkills(this.workspaceDir);
 
-		// Create session manager, opening whichever session this channel's active-session ref
-		// (or the context.jsonl default, for a channel that has never run a topology op) names
-		// (spec 043, D1).
-		const activeSessionFile = resolveActiveSessionFile(channelDir);
-		const sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
+		// Create session manager, opening whichever session this conversation's active-session ref
+		// (or the context.jsonl default, for a conversation that has never run a topology op) names
+		// (spec 043, D1). The cwd override is the dot's working directory: a session header written
+		// before spec 058 still names the old project root.
+		const activeSessionFile = resolveActiveSessionFile(conversationDir);
+		const sessionManager = SessionManager.open(
+			join(conversationDir, activeSessionFile),
+			conversationDir,
+			conversation.cwd,
+		);
 
 		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact
 		// SessionManager instance, before anything else touches it — a second `open()` of the same
@@ -154,7 +140,7 @@ export class ChannelRunner implements AgentRunner {
 		if (recoveryOutcome.kind === "blocked") {
 			throw new Error(
 				`[${channelId}] Cannot start channel: session left in an unrecoverable state after a restart (${recoveryOutcome.reason}). ` +
-					`Back up ${join(channelDir, activeSessionFile)} on the host, move it aside, then use /new to start a fresh session.`,
+					`Back up ${join(conversationDir, activeSessionFile)} on the host, move it aside, then use /new to start a fresh session.`,
 			);
 		}
 		if (recoveryOutcome.kind === "repaired") {
@@ -170,9 +156,9 @@ export class ChannelRunner implements AgentRunner {
 		reportSettingsDiagnostics(this.settingsManager, this.channelId, this.appHomeDir);
 		this.memoryActivityRecorder = createMemoryActivityRecorder({
 			appHomeDir: this.appHomeDir,
-			onError: (channelId, error) =>
+			onError: (ref, error) =>
 				log.logWarn("memory.state.record_failed", "Memory maintenance state record failed", {
-					channelId: channelId,
+					channelId: ref.channelId,
 					reason: errorMessage(error),
 				}),
 		});
@@ -186,8 +172,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
-			channelId: this.channelId,
-			channelDir: this.channelDir,
+			conversation,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
 			getMessages: () => this.session.messages,
@@ -198,15 +183,16 @@ export class ChannelRunner implements AgentRunner {
 		});
 
 		this.host = new SessionHost({
-			channelId,
-			channelDir,
+			conversation,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
 			authConfigPath: this.authConfigPath,
 			modelsConfigPath: this.modelsConfigPath,
 			onSessionEvent: this.onSessionEvent,
 			mediaSender: this.mediaSender,
-			projectScope: this.projectScope,
+			// The working directory: the dot directory unless `dot.json` sets `cwd` (spec 058, D9).
+			cwd: conversation.cwd,
+			describeConversation: paths.describeConversation,
 			settingsManager: this.settingsManager,
 			loadSecurityConfig: this.loadSecurityConfig,
 			executor: this.executor,
@@ -221,9 +207,9 @@ export class ChannelRunner implements AgentRunner {
 			markStreaming: () => this.turnState.markStreaming(),
 		});
 		this.pipeline = new TurnPipeline({
-			channelId,
-			channelDir,
+			conversation,
 			workspaceDir: this.workspaceDir,
+			describeChannel: paths.describeChannel,
 			host: this.host,
 			models: this.models,
 			turnState: this.turnState,
@@ -231,8 +217,7 @@ export class ChannelRunner implements AgentRunner {
 			getRunState: () => this.runState,
 		});
 		this.turnFinisher = new TurnFinisher({
-			channelId,
-			channelDir,
+			conversation,
 			host: this.host,
 			models: this.models,
 			ledger: this.ledger,
@@ -313,8 +298,8 @@ export class ChannelRunner implements AgentRunner {
 			this.memoryLifecycle.noteUserTurnStarted();
 			const input = await this.pipeline.prepareUserInput(ctx);
 
-			// Ensure channel directory exists
-			await mkdir(this.channelDir, { recursive: true });
+			// Ensure the conversation directory (and with it the dot directory) exists.
+			await mkdir(this.conversationDir, { recursive: true });
 
 			const channelCapsule = await this.pipeline.gatherTurnContext(input.preserveRawInput, turn);
 			const assembled = assembleTurnPrompt({
@@ -448,8 +433,7 @@ export class ChannelRunner implements AgentRunner {
 		await this.host.ensureSessionReady();
 		this.settingsManager.reload();
 		return {
-			channelId: this.channelId,
-			channelDir: this.channelDir,
+			conversation: this.conversation,
 			workspaceDir: this.workspaceDir,
 			// Snapshot only when a maintenance job actually needs the transcript; most ticks
 			// stop at a schedule gate and never call these.
@@ -573,7 +557,7 @@ export class ChannelRunner implements AgentRunner {
 	/** Best-effort: a lost activity counter delays maintenance, it never breaks a turn. */
 	private async flushMemoryActivity(): Promise<void> {
 		try {
-			await this.memoryActivityRecorder.flush(this.channelId);
+			await this.memoryActivityRecorder.flush(this.conversation);
 		} catch (error) {
 			log.logWarn("memory.state.flush_failed", "Memory maintenance state flush failed", {
 				channelId: this.channelId,

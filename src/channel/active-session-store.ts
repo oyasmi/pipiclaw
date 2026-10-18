@@ -4,11 +4,11 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 
 /**
- * Points a channel at the one session file it currently considers active. Spec 043, D1.
+ * Points a conversation at the one session file it currently considers active. Spec 043, D1.
  *
  * Only the pointer is persisted here — never messages, branches, or project state. A missing ref
- * means "this channel has never run a session-topology operation"; it is interpreted as
- * `context.jsonl` (today's fixed name) rather than written eagerly, so a channel that never calls
+ * means "this conversation has never run a session-topology operation"; it is interpreted as
+ * `context.jsonl` (today's fixed name) rather than written eagerly, so a conversation that never calls
  * `/new`/fork/switch never gains an `active-session.json` at all.
  */
 export interface ActiveSessionRefV1 {
@@ -22,15 +22,15 @@ export interface ActiveSessionRefV1 {
 const REF_FILENAME = "active-session.json";
 const DEFAULT_SESSION_FILENAME = "context.jsonl";
 
-export function getActiveSessionRefPath(channelDir: string): string {
-	return join(channelDir, REF_FILENAME);
+export function getActiveSessionRefPath(conversationDir: string): string {
+	return join(conversationDir, REF_FILENAME);
 }
 
 /**
- * The ref's `file` is opened for append under `channelDir`, and the ref itself lives in a
+ * The ref's `file` is opened for append under `conversationDir`, and the ref itself lives in a
  * directory a chat participant can otherwise influence the contents of. Reject anything that
  * isn't a plain, single-segment `.jsonl` name so this can never be used to open or create a file
- * outside the channel directory.
+ * outside the conversation directory.
  */
 export function isValidSessionRefBasename(file: string): boolean {
 	return (
@@ -45,8 +45,8 @@ export function isValidSessionRefBasename(file: string): boolean {
 	);
 }
 
-function readActiveSessionRef(channelDir: string): ActiveSessionRefV1 | undefined {
-	const refPath = getActiveSessionRefPath(channelDir);
+function readActiveSessionRef(conversationDir: string): ActiveSessionRefV1 | undefined {
+	const refPath = getActiveSessionRefPath(conversationDir);
 	if (!existsSync(refPath)) {
 		return undefined;
 	}
@@ -76,23 +76,28 @@ function readActiveSessionRef(channelDir: string): ActiveSessionRefV1 | undefine
  * that doesn't exist yet. Materializing this before `SessionManager.open()` closes the delay
  * window described in spec 043 F4/D1.2 without touching SDK internals.
  */
-function materializeSessionFile(channelDir: string, file: string): void {
-	const target = join(channelDir, file);
+function materializeSessionFile(conversationDir: string, file: string): void {
+	const target = join(conversationDir, file);
 	if (!existsSync(target)) {
 		closeSync(openSync(target, "a"));
 	}
 }
 
 /**
- * Resolves which session file a channel should open (runner construction / restart), migrating a
- * channel with no ref to `context.jsonl` and materializing that file. Never writes the ref
+ * Resolves which session file a conversation should open (runner construction / restart), migrating a
+ * conversation with no ref to `context.jsonl` and materializing that file. Never writes the ref
  * itself — a missing ref stays missing until a session-topology operation commits one.
  */
-export function resolveActiveSessionFile(channelDir: string): string {
-	const ref = readActiveSessionRef(channelDir);
+export function resolveActiveSessionFile(conversationDir: string): string {
+	const ref = readActiveSessionRef(conversationDir);
 	const file = ref?.file ?? DEFAULT_SESSION_FILENAME;
-	materializeSessionFile(channelDir, file);
+	materializeSessionFile(conversationDir, file);
 	return file;
+}
+
+/** The session file a conversation would open, without creating anything — for read-only background work. */
+export function peekActiveSessionFile(conversationDir: string): string {
+	return readActiveSessionRef(conversationDir)?.file ?? DEFAULT_SESSION_FILENAME;
 }
 
 export interface SessionFileHandle {
@@ -108,15 +113,15 @@ export interface SessionFileHandle {
  * until this resolves (spec 043, D1.3) — on throw, nothing is written and the old ref (and thus
  * the old session) remains authoritative.
  */
-export async function commitActiveSessionRef(channelDir: string, session: SessionFileHandle): Promise<void> {
+export async function commitActiveSessionRef(conversationDir: string, session: SessionFileHandle): Promise<void> {
 	const sessionFile = session.getSessionFile();
 	if (!sessionFile) {
 		throw new Error("Cannot commit active-session ref: session has no backing file (not persisted).");
 	}
-	const resolvedDir = resolve(channelDir);
+	const resolvedDir = resolve(conversationDir);
 	const resolvedFile = resolve(sessionFile);
 	if (dirname(resolvedFile) !== resolvedDir) {
-		throw new Error(`Session file must live directly under the channel directory: ${sessionFile}`);
+		throw new Error(`Session file must live directly under the conversation directory: ${sessionFile}`);
 	}
 	const file = basename(resolvedFile);
 	if (!isValidSessionRefBasename(file)) {
@@ -128,11 +133,11 @@ export async function commitActiveSessionRef(channelDir: string, session: Sessio
 		sessionId: session.getSessionId(),
 		updatedAt: new Date().toISOString(),
 	};
-	await writeFileAtomically(getActiveSessionRefPath(channelDir), `${JSON.stringify(ref, null, 2)}\n`);
+	await writeFileAtomically(getActiveSessionRefPath(conversationDir), `${JSON.stringify(ref, null, 2)}\n`);
 }
 
 /**
- * Create a durable empty session and atomically make it active for a channel.
+ * Create a durable empty session and atomically make it active for a conversation.
  *
  * This deliberately does not touch a live AgentSession. It is the transport-level `/new`
  * primitive: a wedged provider request or compaction in the old runner cannot delay the
@@ -140,19 +145,19 @@ export async function commitActiveSessionRef(channelDir: string, session: Sessio
  * the active ref points at it, preserving the same file-before-pointer ordering as normal SDK
  * topology changes.
  */
-export async function createFreshActiveSession(channelDir: string, cwd: string): Promise<{ sessionId: string }> {
-	const provisional = SessionManager.create(cwd, channelDir);
+export async function createFreshActiveSession(conversationDir: string, cwd: string): Promise<{ sessionId: string }> {
+	const provisional = SessionManager.create(cwd, conversationDir);
 	const sessionFile = provisional.getSessionFile();
 	if (!sessionFile) {
 		throw new Error("Cannot create a new session: the SDK did not allocate a backing file.");
 	}
-	const resolvedDir = resolve(channelDir);
+	const resolvedDir = resolve(conversationDir);
 	const resolvedFile = resolve(sessionFile);
 	if (dirname(resolvedFile) !== resolvedDir) {
-		throw new Error(`New session file must live directly under the channel directory: ${sessionFile}`);
+		throw new Error(`New session file must live directly under the conversation directory: ${sessionFile}`);
 	}
-	materializeSessionFile(channelDir, basename(resolvedFile));
-	const durable = SessionManager.open(resolvedFile, channelDir, cwd);
-	await commitActiveSessionRef(channelDir, durable);
+	materializeSessionFile(conversationDir, basename(resolvedFile));
+	const durable = SessionManager.open(resolvedFile, conversationDir, cwd);
+	await commitActiveSessionRef(conversationDir, durable);
 	return { sessionId: durable.getSessionId() };
 }

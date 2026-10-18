@@ -6,6 +6,7 @@ import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import { testDot } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spawns a process that exits immediately and resolves its pid once it has been reaped, so a
@@ -41,8 +42,9 @@ const leases: Array<{ leaseKey?: string; runId: string }> = [];
 function createManager(
 	channelId: string,
 	options: ConstructorParameters<typeof SubAgentRunManager>[1],
+	dotDir = "/tmp/pipiclaw-test-dot",
 ): SubAgentRunManager {
-	const manager = new SubAgentRunManager(channelId, options);
+	const manager = new SubAgentRunManager({ dot: testDot(channelId), dotDir }, options);
 	managers.add(manager);
 	return manager;
 }
@@ -157,7 +159,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// first→second transition: release the second daemon's process-local lease first.
 		secondDaemon.stop();
 		releaseWorkspaceLease(secondDaemon.get("run-adopt")?.leaseKey, "run-adopt");
-		const recordPath = join(stateDir, channelId, "run-adopt.json");
+		const recordPath = join(stateDir, testDot(channelId), "run-adopt.json");
 		const persisted = JSON.parse(readFileSync(recordPath, "utf-8"));
 		persisted.deadlineAt = Date.now() + 100;
 		writeFileSync(recordPath, `${JSON.stringify(persisted)}\n`, "utf-8");
@@ -423,15 +425,12 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 	it("keeps a purpose=verify run's declared verdict and logs its settlement when it completes across a restart", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_verify_restart";
-		const channelDir = join(workspaceDir, channelId);
+		const dotDir = join(workspaceDir, channelId);
 		const stateDir = join(workspaceDir, "state");
-		const artifactDir = join(channelDir, "subagent-artifacts", "run-verify");
+		const artifactDir = join(dotDir, "subagent-artifacts", "run-verify");
 		mkdirSync(artifactDir, { recursive: true });
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
-		writeFileSync(
-			join(channelDir, "tasks", "ship.md"),
-			"---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n",
-		);
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
+		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n");
 		const projectDir = join(workspaceDir, "project");
 		mkdirSync(projectDir, { recursive: true });
 
@@ -447,7 +446,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			].join("\n")}\n`,
 		);
 
-		const firstDaemon = createManager(channelId, { stateDir });
+		const firstDaemon = createManager(channelId, { stateDir }, dotDir);
 		const lease = claimWorkspaceLease({ runId: "run-verify", channelId, workingDirectory: projectDir });
 		expect(lease.ok).toBe(true);
 		await firstDaemon.register({
@@ -463,7 +462,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			taskId: "ship",
 			workingDirectory: projectDir,
 			artifactDir,
-			channelDir,
+			dotDir,
 			leaseKey: lease.ok ? lease.leaseKey : undefined,
 			mutates: "write",
 		});
@@ -473,18 +472,18 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			deadlineAt: Date.now() + 60_000,
 			maxWallTimeSec: 60,
 			processStartedAt: Date.now(),
-			channelDir,
+			dotDir,
 		});
 
 		firstDaemon.stop();
 		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-verify");
-		const secondDaemon = createManager(channelId, { stateDir });
+		const secondDaemon = createManager(channelId, { stateDir }, dotDir);
 		await secondDaemon.restore();
 
 		const record = secondDaemon.get("run-verify");
 		expect(record?.status).toBe("completed");
 		expect(record?.verificationVerdict).toBe("pass");
-		const settled = (await readTaskLog(channelDir, "ship", { kinds: ["settle"] }))[0];
+		const settled = (await readTaskLog(dotDir, "ship", { kinds: ["settle"] }))[0];
 		expect(settled).toMatchObject({ ref: "run-verify", status: "completed", verdict: "pass" });
 		await resetTaskLogAppenders();
 	});

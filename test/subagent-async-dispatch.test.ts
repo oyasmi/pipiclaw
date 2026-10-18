@@ -7,7 +7,12 @@ import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/tools/subagent.js";
-import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	testDot,
+	testManagers,
+} from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
@@ -32,8 +37,8 @@ function sleep(ms: number): Promise<void> {
 describe("subagent tool: async dispatch past the sync grace window (spec 040, D2)", () => {
 	it("returns a dispatched placeholder once the grace window elapses, then wakes the channel once the run actually finishes", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];
 		configureSubAgentRuntime({
@@ -52,8 +57,8 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			// Tiny grace window; maxWallTimeSec (default 300s via inline systemPrompt path) stays
 			// far above it so the wall-clock budget timer cannot fire and confound the test.
 			syncGraceMs: 20,
@@ -124,7 +129,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		}
 
 		expect(dispatched).toHaveLength(1);
-		expect(dispatched[0]?.dispatchId).toBe(`subagent:dm_123:${runId}:done`);
+		expect(dispatched[0]?.dispatchId).toBe(`subagent:${testDot("dm_123")}:${runId}:done`);
 		expect(dispatched[0]?.text).toContain(`[SUBAGENT:${runId}]`);
 		expect(getSubAgentRunManager("dm_123").get(runId)?.status).toBe("completed");
 	});

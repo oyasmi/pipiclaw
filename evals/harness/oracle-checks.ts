@@ -6,6 +6,7 @@ import { buildPositiveContext } from "../controls/fixtures.js";
 import { atomicJson } from "./artifacts.js";
 import { caseHash } from "./cases.js";
 import { trialSeed } from "./fixture-seed.js";
+import { evalDotDir } from "./layout.js";
 import type { EvalCase, GradeResult, OracleCheckSummary, TrialContext } from "./schema.js";
 import { gradeTrial } from "./scoring.js";
 import { hash, hashFile } from "./util.js";
@@ -42,12 +43,12 @@ export function oracleFingerprint(item: EvalCase, root = process.cwd()): string 
 
 function context(homeDir: string): TrialContext {
 	const workspaceDir = join(homeDir, "workspace");
-	const channelDir = join(workspaceDir, "dm_eval");
-	mkdirSync(channelDir, { recursive: true });
+	const dotDir = evalDotDir(workspaceDir);
+	mkdirSync(dotDir, { recursive: true });
 	return {
 		homeDir,
 		workspaceDir,
-		channelDir,
+		dotDir,
 		trace: [],
 		deliveries: [],
 		snapshot: {

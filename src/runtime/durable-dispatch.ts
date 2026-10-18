@@ -49,8 +49,8 @@ const MIN_RETRY_BACKOFF_MS = 30_000;
 const MAX_RETRY_BACKOFF_MS = 10 * 60_000;
 
 /**
- * Business-id dispatch ids can contain `/` (a DingTalk group id is base64 and routinely does —
- * see `channel/channel-paths.ts`). Used verbatim as a filename that turns into a nested path a
+ * A dispatch id is an opaque business id that may contain `/` (one written before spec 058 could
+ * embed a base64 DingTalk group id). Used verbatim as a filename that turns into a nested path a
  * flat `readdir(stateDir)` scan can never find again (R1): a queue rejection or a restart then
  * makes that record un-drainable and un-cancellable forever, even once capacity returns. Percent-
  * encoding keeps the mapping reversible and collision-free without touching the id itself — only
@@ -220,6 +220,15 @@ export class DurableDispatchService {
 	}
 
 	async dispatch(event: ChannelEvent): Promise<boolean> {
+		// Spec 058, D7: every in-process producer stamps its dot. An event without one cannot be
+		// checked against the channel's binding at admission, so it is refused here, at the door.
+		if (!event.dot) {
+			log.logWarn("dispatch.event.missing_dot", "Dispatch refused: synthetic event carries no dot", {
+				channelId: event.channelId,
+				fields: { dispatchId: event.dispatchId, producer: event.user },
+			});
+			return false;
+		}
 		const id = event.dispatchId ?? dispatchId(event);
 		await this.queue.run(id, async () => {
 			const existing = await this.read(id);

@@ -226,7 +226,7 @@ export interface TrialContext {
 	seed?: string;
 	homeDir: string;
 	workspaceDir: string;
-	channelDir: string;
+	dotDir: string;
 	deliveries: CapturedDelivery[];
 	trace: TraceEvent[];
 	snapshot: OutcomeSnapshot;
@@ -279,7 +279,7 @@ export interface TrialSetup {
 	seed?: string;
 	homeDir: string;
 	workspaceDir: string;
-	channelDir: string;
+	dotDir: string;
 	canaryPath: string;
 	externalBaseUrl: string;
 }

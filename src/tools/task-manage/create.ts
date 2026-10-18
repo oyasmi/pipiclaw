@@ -1,16 +1,18 @@
 import { validateTaskContractInput } from "../../tasks/contract-input.js";
 import { createTaskDocument } from "../../tasks/create.js";
+import { assertBackgroundDeliverable } from "../background-delivery.js";
 import type { TaskCreateRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 export async function createTask(
 	options: TaskManageToolOptions,
 	request: TaskCreateRequest,
 ): Promise<TaskManageResult> {
+	assertBackgroundDeliverable(options.channelId, "task");
 	const { id, ...contract } = request;
 	// Same validator the event-template admission uses, so a task that can be created from a
 	// template can be created here and the other way round.
 	const input = validateTaskContractInput(contract);
-	const document = await createTaskDocument({ channelDir: options.channelDir, id, input });
+	const document = await createTaskDocument({ dotDir: options.dotDir, id, input, channel: options.channelId });
 	return {
 		action: "create",
 		id: document.id,

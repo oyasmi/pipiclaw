@@ -8,7 +8,7 @@ import { closeTaskDocument, describeTaskState, requiredField, tasksDir } from ".
 import type { TaskCloseRequest, TaskManageResult, TaskManageToolOptions, TaskUpdateRequest } from "./types.js";
 
 async function requireTask(options: TaskManageToolOptions, id: string) {
-	const document = await readStoredTask(options.channelDir, id);
+	const document = await readStoredTask(options.dotDir, id);
 	if (!document) {
 		throw new RecoverableToolError(`Task "${id}" does not exist; create it with task_create first.`);
 	}
@@ -80,6 +80,8 @@ export async function listTasks(options: TaskManageToolOptions): Promise<TaskMan
 		state: entry.fields.state,
 		paused: Boolean(entry.fields.paused),
 		ticket: entry.fields.ticket ? describeTicket(entry.fields.ticket) : undefined,
+		channel: entry.fields.channel,
+		deliversHere: entry.fields.channel === options.channelId,
 		steps: entry.fields.usage?.steps,
 		items: entry.items ? `${entry.items.done}/${entry.items.total}` : undefined,
 	}));

@@ -224,7 +224,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
-		projectRoot: process.cwd(),
+		cwd: process.cwd(),
 	};
 
 	return {
@@ -265,7 +265,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			const searchPath = path?.trim() || ".";
 			// Resolved once, then used for both the guard's judgment and the actual `grep` target
 			// (spec 044, D1.1): no separate `cwd` needed on the executor call, so there is no chance of
-			// the guard resolving against `projectRoot` while the shell actually runs against the
+			// the guard resolving against the tool `cwd` while the shell actually runs against the
 			// daemon's own cwd (F6).
 			const target = await checkPathGuard(searchPath, "read", securityConfig, securityContext, {
 				tool: "grep",

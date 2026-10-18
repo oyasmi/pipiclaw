@@ -39,9 +39,22 @@ export function createFakeTurnState() {
 	};
 }
 
-/** Inert defaults for the session-binding half of `AgentRunner`; spread first so a case can override. */
-export function createFakeSessionBinding() {
+/**
+ * Inert defaults for the session-binding half of `AgentRunner` (including its (dot, channel)
+ * pairing); spread first so a case can override.
+ */
+export function createFakeSessionBinding(
+	conversation: import("../../src/dot/types.js").DotConversation = {
+		dot: "news",
+		dotDir: "/tmp/dots/news",
+		cwd: "/tmp/dots/news",
+		channelId: "dm_1",
+		conversation: "dm-1",
+		conversationDir: "/tmp/dots/news/conversations/dm-1",
+	},
+) {
 	return {
+		conversation,
 		isCompacting: () => false,
 		interruptCompaction: () => false,
 		bindTaskSession: async (_taskId: string): Promise<void> => {},

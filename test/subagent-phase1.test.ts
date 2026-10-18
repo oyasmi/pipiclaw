@@ -291,16 +291,16 @@ ${"x".repeat(16001)}`,
 });
 
 describe("sub-agent runtime context", () => {
-	it("points a slash-bearing group channel at the escaped directory it actually lives in", () => {
+	it("points a delegation at the dot directory, never at a path built from the channel id", () => {
 		// Both lines are consumed by a host process we do not control: the external agent reads
 		// the prompt and opens these paths itself. A raw id here sends it to a directory that
 		// has never existed.
 		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
-		const escaped = "/workspace/root/group_cidYDhGqxhJOzS7VDv__eDInUw==";
+		const dotDir = "/workspace/root/dots/news";
 		const task = buildSubAgentTask(
 			"Check the work.",
 			{ name: "verifier" },
-			{ workspaceDir: "/workspace/root", channelId },
+			{ workspaceDir: "/workspace/root", dot: "news", dotDir, channelId },
 			[],
 			{
 				runId: "run_abc123",
@@ -311,22 +311,29 @@ describe("sub-agent runtime context", () => {
 			},
 		);
 
-		expect(task).toContain(`Channel directory: ${escaped}`);
-		expect(task).toContain(`${escaped}/tasks/t-1.md`);
+		// Spec 058, D16: the task lives in the dot; no path is ever derived from the channel id.
+		expect(task).toContain(`Dot directory: ${dotDir}`);
+		expect(task).toContain(`${dotDir}/tasks/t-1.md`);
 		expect(task).not.toContain(`${channelId}/tasks`);
 	});
 
 	it("scopes a verify bound to a Work Item to that item, not the whole DoD", () => {
 		// Holding a W2 check to every DoD item fails it for the items still in progress.
 		const envelope = (item?: string) =>
-			buildSubAgentTask("Check it.", { name: "checker" }, { workspaceDir: "/ws", channelId: "dm_1" }, [], {
-				runId: "run_v",
-				purpose: "verify",
-				taskId: "t-1",
-				item,
-				workingDirectory: "/checkout",
-				artifactDir: "/checkout/.artifacts/run_v",
-			});
+			buildSubAgentTask(
+				"Check it.",
+				{ name: "checker" },
+				{ workspaceDir: "/ws", dot: "news", dotDir: "/ws/dm_1", channelId: "dm_1" },
+				[],
+				{
+					runId: "run_v",
+					purpose: "verify",
+					taskId: "t-1",
+					item,
+					workingDirectory: "/checkout",
+					artifactDir: "/checkout/.artifacts/run_v",
+				},
+			);
 		expect(envelope("W2")).toContain("Work Item W2 in /ws/dm_1/tasks/t-1.md");
 		expect(envelope("W2")).not.toContain("every DoD item");
 		expect(envelope()).toContain("verify every DoD item");
@@ -336,23 +343,23 @@ describe("sub-agent runtime context", () => {
 describe("sub-agent tool", () => {
 	it("records a verifier's declared verdict on the run and on the task's log, with no attestation", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
 		writeFileSync(
-			join(channelDir, "tasks", "ship.md"),
+			join(dotDir, "tasks", "ship.md"),
 			"---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n\n## Work Items\n- [ ] W1 check it\n",
 		);
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dm_123", dotDir),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					delegatedTask = input;
@@ -379,23 +386,23 @@ describe("sub-agent tool", () => {
 			taskId: "ship",
 			verificationVerdict: "pass",
 		});
-		expect(delegatedTask).toContain(join(channelDir, "tasks", "ship.md"));
+		expect(delegatedTask).toContain(join(dotDir, "tasks", "ship.md"));
 		expect(delegatedTask).toContain("VERDICT: PASS or VERDICT: FAIL");
 		// Spec 052, D4/D6: the checker's verdict lands on the task's board source, bound to the item.
-		const records = await readTaskLog(channelDir, "ship", { kinds: ["dispatch", "settle"] });
+		const records = await readTaskLog(dotDir, "ship", { kinds: ["dispatch", "settle"] });
 		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
 		expect(records[0]).toMatchObject({ ref: result.details.runId, item: "W1", purpose: "verify" });
 		expect(records[1]).toMatchObject({ ref: result.details.runId, item: "W1", status: "completed", verdict: "pass" });
-		expect(existsSync(join(channelDir, ".verifications"))).toBe(false);
+		expect(existsSync(join(dotDir, ".verifications"))).toBe(false);
 		await resetTaskLogAppenders();
 	});
 
 	it("binds a delegation made inside a task session to that task, and rejects a foreign task or an unknown item", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(join(dotDir, "tasks"), { recursive: true });
 		writeFileSync(
-			join(channelDir, "tasks", "lead.md"),
+			join(dotDir, "tasks", "lead.md"),
 			"---\nstate: open\n---\n# Lead\n\n## DoD\n- [ ] ok\n\n## Work Items\n- [ ] W1 build\n",
 		);
 		const tool = createSubAgentInlineTool({
@@ -406,8 +413,8 @@ describe("sub-agent tool", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			boundTaskId: "lead",
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
@@ -428,8 +435,8 @@ describe("sub-agent tool", () => {
 
 	it("preserves partial output and injects minimal runtime context", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		let delegatedTask = "";
 		const workerFailure = "simulated worker failure";
 
@@ -441,10 +448,12 @@ describe("sub-agent tool", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [makeSubAgentConfig()]),
 			runtimeContext: {
 				workspaceDir: "/workspace/root",
+				dot: "news",
+				dotDir: "/workspace/root/dots/news",
 				channelId: "dm_123",
 			},
 			createWorker: () =>
@@ -479,16 +488,16 @@ describe("sub-agent tool", () => {
 		expect(delegatedTask).toContain("Inspect the current workspace and summarize the main risks.");
 	});
 
-	it("injects the workspace background, channel memory index, and journal for contextual sub-agents (spec 050, D12)", async () => {
+	it("injects the workspace background, dot memory index, and journal for contextual sub-agents (spec 050, D12)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		writeFileSync(
 			join(workspaceDir, "MEMORY.md"),
 			"# Workspace\n\n## Team\n\nThe fallback branch in src/core.ts must stay explicit.\n",
 			"utf-8",
 		);
-		await applyMemoryOps(channelDir, [
+		await applyMemoryOps(dotDir, [
 			{
 				op: "add",
 				name: "core-fallback-explicit",
@@ -497,7 +506,7 @@ describe("sub-agent tool", () => {
 				source: "agent",
 			},
 		]);
-		await appendJournalEntries(channelDir, localDayKey(), [
+		await appendJournalEntries(dotDir, localDayKey(), [
 			"09:00 earlier review found missing regression coverage around src/core.ts fallback behavior",
 		]);
 
@@ -510,7 +519,7 @@ describe("sub-agent tool", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [
 				makeSubAgentConfig({
 					contextMode: "contextual",
@@ -520,6 +529,8 @@ describe("sub-agent tool", () => {
 			]),
 			runtimeContext: {
 				workspaceDir: "/workspace/root",
+				dot: "news",
+				dotDir: "/workspace/root/dots/news",
 				channelId: "dm_123",
 			},
 			createWorker: () =>
@@ -546,8 +557,8 @@ describe("sub-agent tool", () => {
 
 	it("uses settings.subagentModel when neither the invocation nor a predefined agent names a model (D5)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		let usedModel: Model<Api> | undefined;
 		const tool = createSubAgentInlineTool({
 			...testManagers("dm_123"),
@@ -557,8 +568,8 @@ describe("sub-agent tool", () => {
 			getAvailableModels: () => [model, altModel],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			getSubAgentModelReference: () => "openai/gpt-4o",
 			createWorker: (config) => {
 				usedModel = config.subAgent.model;
@@ -582,7 +593,7 @@ describe("sub-agent tool", () => {
 describe("sub-agent artifact contract (D4)", () => {
 	function makeTool(
 		workspaceDir: string,
-		channelDir: string,
+		dotDir: string,
 		respond: (input: string, worker: FakeWorker) => Promise<void> | void,
 	) {
 		return createSubAgentInlineTool({
@@ -593,18 +604,18 @@ describe("sub-agent artifact contract (D4)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () => new FakeWorker(respond),
 		});
 	}
 
 	it("creates the artifact directory and tells the sub-agent where it is", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		let delegatedTask = "";
-		const tool = makeTool(workspaceDir, channelDir, (input, worker) => {
+		const tool = makeTool(workspaceDir, dotDir, (input, worker) => {
 			delegatedTask = input;
 			const message = createAssistantMessage("Done.");
 			worker.state.messages = [message];
@@ -629,10 +640,10 @@ describe("sub-agent artifact contract (D4)", () => {
 
 	it("truncates an over-budget reply but keeps the full text on disk", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		const longText = Array.from({ length: 2000 }, (_, i) => `word${i}`).join(" ");
-		const tool = makeTool(workspaceDir, channelDir, (_input, worker) => {
+		const tool = makeTool(workspaceDir, dotDir, (_input, worker) => {
 			const message = createAssistantMessage(longText);
 			worker.state.messages = [message];
 			worker.emit({ type: "message_end", message });
@@ -664,8 +675,8 @@ describe("sub-agent convergence turn (D6)", () => {
 
 	it("gives a tool-budget abort one tool-free turn to report its conclusions", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		let callCount = 0;
 		const seenInputs: string[] = [];
 		const tool = createSubAgentTool({
@@ -676,9 +687,9 @@ describe("sub-agent convergence turn (D6)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					callCount++;
@@ -715,8 +726,8 @@ describe("sub-agent convergence turn (D6)", () => {
 
 	it("reverts to the pre-convergence state when the convergence turn itself times out", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		let callCount = 0;
 		const tool = createSubAgentTool({
 			...testManagers("dm_123"),
@@ -726,9 +737,9 @@ describe("sub-agent convergence turn (D6)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			// Real, tiny wall clock: exercises the actual setTimeout/clearTimeout path without
 			// the flakiness of mixing fake timers with the real fs I/O prepareRunContext does.
 			convergenceWallClockMs: 20,
@@ -769,8 +780,8 @@ describe("sub-agent convergence turn (D6)", () => {
 	// the call at once and the run still finishes and wakes the channel with its result.
 	it("detaches on /stop mid-run, keeps running (including the convergence turn) and wakes with the result — spec 040 D2", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		let callCount = 0;
 		const controller = new AbortController();
 		const wakes: string[] = [];
@@ -788,9 +799,9 @@ describe("sub-agent convergence turn (D6)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					callCount++;
@@ -835,8 +846,8 @@ describe("sub-agent convergence turn (D6)", () => {
 
 	it("rejects immediately without launching when the signal is already aborted before the call starts", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
 		const controller = new AbortController();
 		controller.abort();
 		let started = false;
@@ -848,9 +859,9 @@ describe("sub-agent convergence turn (D6)", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
+			dotDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					started = true;
@@ -873,7 +884,7 @@ describe("sub-agent convergence turn (D6)", () => {
  * never added, so every run was pinned to the daemon's own cwd.
  */
 describe("sub-agent working directory", () => {
-	function makeTool(workspaceDir: string, channelDir: string, executor: Executor) {
+	function makeTool(workspaceDir: string, dotDir: string, executor: Executor) {
 		return createSubAgentInlineTool({
 			...testManagers("dm_123"),
 			executor,
@@ -882,8 +893,8 @@ describe("sub-agent working directory", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					const message = createAssistantMessage("Done.");
@@ -895,9 +906,9 @@ describe("sub-agent working directory", () => {
 
 	it("runs commands in the requested checkout and tells the sub-agent about it", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
+		const dotDir = join(workspaceDir, "dm_123");
 		const checkout = join(workspaceDir, "other-checkout");
-		mkdirSync(channelDir, { recursive: true });
+		mkdirSync(dotDir, { recursive: true });
 		mkdirSync(checkout, { recursive: true });
 		const seen: Array<{ command: string; cwd?: string }> = [];
 		const recording: Executor = {
@@ -915,8 +926,8 @@ describe("sub-agent working directory", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: (config) => {
 				const worker = new FakeWorker(async (input, self) => {
 					delegatedTask = input;
@@ -941,15 +952,15 @@ describe("sub-agent working directory", () => {
 		expect(delegatedTask).toContain(`Working directory: ${checkout}`);
 	});
 
-	it("uses the canonical checkout after admitting an in-project symlink", async () => {
+	it("uses the canonical checkout after admitting a symlinked working directory", async () => {
 		const root = createTempWorkspace();
 		const workspaceDir = join(root, "agent-workspace");
-		const channelDir = join(workspaceDir, "dm_123");
-		const projectRoot = join(root, "project");
-		const nested = join(projectRoot, "nested");
+		const dotDir = join(workspaceDir, "dm_123");
+		const baseDir = join(root, "checkout");
+		const nested = join(baseDir, "nested");
 		const outside = join(root, "outside");
-		const alias = join(projectRoot, "alias");
-		mkdirSync(channelDir, { recursive: true });
+		const alias = join(baseDir, "alias");
+		mkdirSync(dotDir, { recursive: true });
 		mkdirSync(nested, { recursive: true });
 		mkdirSync(outside, { recursive: true });
 		symlinkSync(nested, alias, "dir");
@@ -970,10 +981,9 @@ describe("sub-agent working directory", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			workingDirectory: projectRoot,
-			projectBoundary: "project",
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			workingDirectory: baseDir,
+			dotDir,
+			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
 			createWorker: (config) => {
 				// Simulate a symlink swap after admission. The worker must still receive the canonical
 				// directory captured before this callback, not the now-escaping alias.
@@ -1002,9 +1012,9 @@ describe("sub-agent working directory", () => {
 
 	it("rejects a working directory that does not exist", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
-		const tool = makeTool(workspaceDir, channelDir, fakeExecutor);
+		const dotDir = join(workspaceDir, "dm_123");
+		mkdirSync(dotDir, { recursive: true });
+		const tool = makeTool(workspaceDir, dotDir, fakeExecutor);
 
 		await expect(
 			tool.execute("wd-call-2", {
@@ -1013,52 +1023,5 @@ describe("sub-agent working directory", () => {
 				workingDirectory: join(workspaceDir, "nope"),
 			}),
 		).rejects.toThrow(/is not an existing directory/);
-	});
-
-	it("boundary=project: rejects a requested workingDirectory outside the project root (D6.2)", async () => {
-		const root = createTempWorkspace();
-		const workspaceDir = join(root, "agent-workspace");
-		const channelDir = join(workspaceDir, "dm_123");
-		const projectRoot = join(root, "project");
-		const outsideDir = join(root, "elsewhere");
-		mkdirSync(channelDir, { recursive: true });
-		mkdirSync(join(projectRoot, "nested"), { recursive: true });
-		mkdirSync(outsideDir, { recursive: true });
-		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
-			executor: fakeExecutor,
-			fileStore: createFileStore(),
-			getCurrentModel: () => model,
-			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
-			workspaceDir,
-			workingDirectory: projectRoot,
-			projectBoundary: "project",
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
-			createWorker: () =>
-				new FakeWorker((_input, worker) => {
-					const message = createAssistantMessage("Done.");
-					worker.state.messages = [message];
-					worker.emit({ type: "message_end", message });
-				}),
-		});
-
-		await expect(
-			tool.execute("wd-call-3", {
-				systemPrompt: "Explore.",
-				task: "Look around.",
-				workingDirectory: outsideDir,
-			}),
-		).rejects.toThrow(/must be inside the project root/);
-
-		// A subdirectory of the project root is still fine.
-		await expect(
-			tool.execute("wd-call-4", {
-				systemPrompt: "Explore.",
-				task: "Look around.",
-				workingDirectory: join(projectRoot, "nested"),
-			}),
-		).resolves.toBeDefined();
 	});
 });

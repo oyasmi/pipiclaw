@@ -4,6 +4,6 @@
 	"r3": {
 		"src/jobs/manager.ts": 1095,
 		"src/subagents/discovery.ts": 1040,
-		"src/subagents/runs.ts": 1173
+		"src/subagents/runs.ts": 1169
 	}
 }

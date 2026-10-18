@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { type DiscoverOptions, discoverWorkspaceChannelIds } from "../channel/channel-index.js";
-import { dedupeChannelIdsByDirectory, getChannelDir, isChannelId } from "../channel/channel-paths.js";
+import { conversationTypeOf } from "../channel/channel-id.js";
 import { type PipiclawTaskDriverSettings, TASK_DRIVER_SETTINGS } from "../config/settings.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
@@ -14,8 +13,13 @@ import { readTaskLog } from "../tasks/loop-log.js";
 import { expireTicket, pauseTask, redeemTicket } from "../tasks/store.js";
 
 export interface TaskDriverOptions {
-	workspaceDir: string;
-	getKnownChannelIds?: () => Iterable<string>;
+	/** The dots this driver scans — the active ones (spec 058, D6). A dormant dot's tasks are never touched. */
+	getActiveDots: () => ReadonlyArray<{ dot: string; dotDir: string }>;
+	/**
+	 * Whether a delivery channel is bound to a dot right now. A task whose `channel` is missing or
+	 * not bound to its own dot is suspended: frozen entirely, not merely undelivered (D8).
+	 */
+	isBoundTo: (channelId: string, dot: string) => boolean;
 	isChannelActive: (channelId: string) => boolean;
 	dispatch: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Optional observability hook. It runs after every production dispatch attempt. */
@@ -37,29 +41,13 @@ const MIN_SLEEP_MS = 250;
 /** A task dispatched this recently is assumed still in flight; do not queue it twice. */
 const REDISPATCH_GUARD_MS = 30_000;
 
-/**
- * Channels this driver should scan. Live ids come first so a channel discovered on disk under
- * its escaped directory name never displaces the real id the runner map already knows.
- */
-export async function discoverTaskChannels(
-	workspaceDir: string,
-	knownChannelIds: Iterable<string> = [],
-	options: DiscoverOptions = {},
-): Promise<string[]> {
-	return dedupeChannelIdsByDirectory([
-		...[...knownChannelIds].filter(isChannelId),
-		...(await discoverWorkspaceChannelIds(workspaceDir, options)),
-	]);
-}
-
-function attemptKey(channelId: string, taskId: string): string {
-	return `${channelId}\0${taskId}`;
+function attemptKey(dot: string, taskId: string): string {
+	return `${dot}\0${taskId}`;
 }
 
 function channelType(channelId: string): { type: ChannelEvent["type"]; conversationType: string } {
-	return channelId.startsWith("group_")
-		? { type: "group", conversationType: "2" }
-		: { type: "dm", conversationType: "1" };
+	const conversationType = conversationTypeOf(channelId);
+	return { type: conversationType === "2" ? "group" : "dm", conversationType };
 }
 
 /**
@@ -67,8 +55,8 @@ function channelType(channelId: string): { type: ChannelEvent["type"]; conversat
  * Each step is genuinely new work, so the dispatch moment disambiguates it; collapsing two steps
  * onto one durable record would silently drop the later one.
  */
-function stepDispatchId(channelId: string, entry: TaskLedgerEntry, nowMs: number): string {
-	return `task:${channelId}:${entry.id}:${nowMs}`;
+function stepDispatchId(dot: string, entry: TaskLedgerEntry, nowMs: number): string {
+	return `task:${dot}:${entry.id}:${nowMs}`;
 }
 
 /** The task a `[TASK_DRIVER:<id>]` dispatch text names, if it is one. */
@@ -76,7 +64,12 @@ export function parseDriverTaskId(text: string | undefined): string | undefined 
 	return /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(text ?? "")?.[1];
 }
 
-export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): ChannelEvent {
+export function createTaskDriverEvent(
+	dot: string,
+	channelId: string,
+	entry: TaskLedgerEntry,
+	nowMs: number,
+): ChannelEvent {
 	const repairOnly = !entry.readable;
 	const repair = repairOnly
 		? ` Task metadata is not readable; repair only the frontmatter in tasks/${entry.id}.md, then stop. ` +
@@ -104,7 +97,8 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 				: "Advance the next concrete step under the task's current goal, work items and acceptance state. ") +
 			"End the step with task_step_end (continue / park / done).",
 		ts: String(nowMs),
-		dispatchId: stepDispatchId(channelId, entry, nowMs),
+		dispatchId: stepDispatchId(dot, entry, nowMs),
+		dot,
 	};
 }
 
@@ -115,6 +109,7 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
  * how to resume with more of the dimension that ran out (spec 053, D6).
  */
 export function taskStopReceipt(
+	dot: string,
 	channelId: string,
 	entry: TaskLedgerEntry,
 	reason: string,
@@ -137,14 +132,21 @@ export function taskStopReceipt(
 		ts: String(nowMs),
 		// Keyed on the cause, not the moment: re-detecting the same stop before the user has acted
 		// must not queue a second identical receipt, while a different cause still does.
-		dispatchId: `task:${channelId}:${entry.id}:stop:${createHash("sha256").update(reason).digest("hex").slice(0, 12)}`,
+		dispatchId: `task:${dot}:${entry.id}:stop:${createHash("sha256").update(reason).digest("hex").slice(0, 12)}`,
+		dot,
 	};
+}
+
+/** A task the driver may touch this scan, with the delivery channel that made it eligible. */
+interface LiveTask {
+	entry: TaskLedgerEntry;
+	channelId: string;
 }
 
 /**
  * Native, ticket-driven scheduler for the persistent task ledger (spec 051, D9; spec 052).
  *
- * Three jobs, in this order per channel: redeem due `time` tickets, apply the backstop to expired
+ * Three jobs, in this order per dot: redeem due `time` tickets, apply the backstop to expired
  * ones, and queue one step for a runnable task. `work` and `ask` tickets are never polled — their
  * owners push them (a settling delegation or job, `/tasks reply`) — so the scan stays a cheap read
  * of a handful of frontmatters. Recurring work is not the driver's business: an event spawns a
@@ -162,17 +164,18 @@ export class TaskDriver {
 	private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
 	private loopActive = false;
 	private running = false;
-	private nextChannelIndex = 0;
+	private nextDotIndex = 0;
 	/** Absolute ms of the next moment worth waking for, recomputed each scan. */
 	private nextWakeMs: number | undefined;
 	/** Last dispatch time per task, so one in-flight step is not queued again on the next tick. */
 	private readonly lastDispatchMs = new Map<string, number>();
 	/**
-	 * Last task id dispatched per channel. Starting the search just after it gives every ready
-	 * task in a channel the same round-robin fairness an actively-progressing task would
-	 * otherwise monopolise.
+	 * Last task id dispatched per dot. Starting the search just after it gives every ready task in
+	 * a dot the same round-robin fairness an actively-progressing task would otherwise monopolise.
 	 */
 	private readonly lastDispatchedTaskId = new Map<string, string>();
+	/** Tasks currently suspended (D8), so the transition is logged once rather than every scan. */
+	private readonly suspended = new Set<string>();
 
 	constructor(private readonly options: TaskDriverOptions) {}
 
@@ -255,6 +258,7 @@ export class TaskDriver {
 
 	/** Stop one task and notify. Delivery failure is logged, never fatal: the durable stop already happened. */
 	private async notifyStop(
+		dot: string,
 		channelId: string,
 		entry: TaskLedgerEntry,
 		reason: string,
@@ -262,7 +266,7 @@ export class TaskDriver {
 		breach?: BudgetBreach,
 	): Promise<void> {
 		try {
-			await this.options.notify?.(taskStopReceipt(channelId, entry, reason, nowMs, breach));
+			await this.options.notify?.(taskStopReceipt(dot, channelId, entry, reason, nowMs, breach));
 		} catch (error) {
 			log.logWarn("taskdriver.receipt.failed", "Task stop receipt failed", {
 				channelId: channelId,
@@ -272,40 +276,36 @@ export class TaskDriver {
 	}
 
 	/**
-	 * Deterministic, zero-token maintenance for one channel: redeem due tickets and apply expiry
-	 * backstops. Runs whether or not the channel is busy — only model
-	 * dispatch is gated on an idle channel.
+	 * Deterministic, zero-token maintenance for one dot's live tasks: redeem due tickets and apply
+	 * expiry backstops. Runs whether or not the delivery channel is busy — only model dispatch is
+	 * gated on an idle channel.
 	 */
-	private async maintain(
-		channelDir: string,
-		channelId: string,
-		entries: TaskLedgerEntry[],
-		now: Date,
-	): Promise<boolean> {
+	private async maintain(dot: string, dotDir: string, entries: LiveTask[], now: Date): Promise<boolean> {
 		const nowMs = now.getTime();
 		let changed = false;
-		for (const entry of entries) {
+		for (const { entry, channelId } of entries) {
 			if (entry.fields.paused || entry.fields.state !== "parked") continue;
 			const ticket = entry.fields.ticket;
 			if (!ticket) continue;
 
 			// A due timer redeems into an open task.
 			if (entry.dueMs !== undefined && entry.dueMs <= nowMs) {
-				if (await redeemTicket(channelDir, entry.id, (current) => current.kind === ticket.kind)) changed = true;
+				if (await redeemTicket(dotDir, entry.id, (current) => current.kind === ticket.kind)) changed = true;
 				continue;
 			}
 
 			if (entry.expired) {
-				const expiry = await expireTicket(channelDir, entry.id);
+				const expiry = await expireTicket(dotDir, entry.id);
 				if (!expiry) continue;
 				changed = true;
 				if (expiry.outcome === "paused") {
 					log.logWarn("taskdriver.task.paused", "Task paused: ticket expired twice", {
 						channelId: channelId,
 						reason: expiry.ticket,
-						fields: { taskId: entry.id, cause: "ticket_expired" },
+						fields: { taskId: entry.id, dot, cause: "ticket_expired" },
 					});
 					await this.notifyStop(
+						dot,
 						channelId,
 						entry,
 						`等待条件一直未满足（${expiry.ticket}），已连续两次超过最晚检查时间`,
@@ -315,7 +315,7 @@ export class TaskDriver {
 					log.logInfoEvent("taskdriver.task.reopened", "Task reopened after its ticket expired", {
 						channelId: channelId,
 						reason: expiry.ticket,
-						fields: { taskId: entry.id },
+						fields: { taskId: entry.id, dot },
 					});
 				}
 				continue;
@@ -333,32 +333,59 @@ export class TaskDriver {
 	 * each step actually did, so "no progress" is an observed fact rather than a fingerprint
 	 * comparison a `echo x` could defeat.
 	 */
-	private async detectIdleLoop(
-		channelDir: string,
-		channelId: string,
-		entries: TaskLedgerEntry[],
-		nowMs: number,
-	): Promise<boolean> {
+	private async detectIdleLoop(dot: string, dotDir: string, entries: LiveTask[], nowMs: number): Promise<boolean> {
 		let paused = false;
-		for (const entry of entries) {
+		for (const { entry, channelId } of entries) {
 			const usage = entry.fields.usage;
 			if (!usage || usage.steps < IDLE_STEP_LIMIT) continue;
-			const steps = (await readTaskLog(channelDir, entry.id, { kinds: ["step"] })).slice(-IDLE_STEP_LIMIT);
+			const steps = (await readTaskLog(dotDir, entry.id, { kinds: ["step"] })).slice(-IDLE_STEP_LIMIT);
 			if (steps.length < IDLE_STEP_LIMIT) continue;
 			const idle = steps.every((record) => record.kind === "step" && record.tools.length === 0);
 			if (!idle) continue;
 			const reason = `连续 ${IDLE_STEP_LIMIT} 步没有任何工具调用，已停下等你确认`;
-			if (await pauseTask(channelDir, entry.id, { by: "runtime", reason })) {
+			if (await pauseTask(dotDir, entry.id, { by: "runtime", reason })) {
 				paused = true;
 				log.logWarn("taskdriver.task.paused", "Task paused: idle loop", {
 					channelId: channelId,
 					reason: reason,
-					fields: { taskId: entry.id, cause: "idle" },
+					fields: { taskId: entry.id, dot, cause: "idle" },
 				});
-				await this.notifyStop(channelId, entry, reason, nowMs);
+				await this.notifyStop(dot, channelId, entry, reason, nowMs);
 			}
 		}
 		return paused;
+	}
+
+	/**
+	 * The tasks of one dot the driver may touch at all (spec 058, D8): those whose delivery channel
+	 * is bound to this dot. Every other task — no `channel`, or a channel bound elsewhere or nowhere
+	 * — is frozen: no ticket redemption, no backstop, no budget or idle check, no step, no receipt.
+	 * Freezing reads nothing back into the file, so a rebound task resumes from exactly where it was.
+	 */
+	private liveTasks(dot: string, entries: TaskLedgerEntry[]): LiveTask[] {
+		const live: LiveTask[] = [];
+		for (const entry of entries) {
+			const key = attemptKey(dot, entry.id);
+			const channelId = entry.fields.channel;
+			if (channelId && this.options.isBoundTo(channelId, dot)) {
+				if (this.suspended.delete(key)) {
+					log.logInfoEvent("taskdriver.task.resumed", "Task resumed: delivery channel bound again", {
+						channelId,
+						fields: { taskId: entry.id, dot },
+					});
+				}
+				live.push({ entry, channelId });
+				continue;
+			}
+			if (!this.suspended.has(key)) {
+				this.suspended.add(key);
+				log.logInfoEvent("taskdriver.task.suspended", "Task suspended: delivery channel not bound to its dot", {
+					channelId,
+					fields: { taskId: entry.id, dot, reason: channelId ? "channel_not_bound" : "channel_missing" },
+				});
+			}
+		}
+		return live;
 	}
 
 	async runOnce(now = new Date()): Promise<void> {
@@ -369,104 +396,106 @@ export class TaskDriver {
 		this.running = true;
 		this.nextWakeMs = undefined;
 		try {
-			const channels = await discoverTaskChannels(this.options.workspaceDir, this.options.getKnownChannelIds?.());
-			if (channels.length === 0) {
+			const dots = this.options.getActiveDots();
+			if (dots.length === 0) {
 				this.lastDispatchMs.clear();
 				return;
 			}
 
 			const seen = new Set<string>();
-			const start = this.nextChannelIndex % channels.length;
+			const start = this.nextDotIndex % dots.length;
 			let dispatched = 0;
 			let lastDispatchOffset = -1;
-			for (let offset = 0; offset < channels.length; offset++) {
-				const channelId = channels[(start + offset) % channels.length];
-				if (!channelId) continue;
-				// `channelId` is the raw id, which for a DingTalk group routinely contains `/`;
-				// only `getChannelDir` folds it into the escaped directory name that exists on disk.
-				const channelDir = getChannelDir(this.options.workspaceDir, channelId);
-				let entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
-				for (const entry of entries) seen.add(attemptKey(channelId, entry.id));
+			for (let offset = 0; offset < dots.length; offset++) {
+				const target = dots[(start + offset) % dots.length];
+				if (!target) continue;
+				const { dot, dotDir } = target;
+				const tasksDir = join(dotDir, "tasks");
+				const readLive = async () => this.liveTasks(dot, await readActiveTasks(tasksDir, nowMs));
+				let live = await readLive();
+				for (const { entry } of live) seen.add(attemptKey(dot, entry.id));
 
-				if (await this.maintain(channelDir, channelId, entries, now)) {
-					entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
-				}
+				if (await this.maintain(dot, dotDir, live, now)) live = await readLive();
 
-				if (dispatched >= settings.maxDispatchesPerTick || this.options.isChannelActive(channelId)) continue;
+				if (dispatched >= settings.maxDispatchesPerTick) continue;
 
 				// A task that has already run out of budget must not spend one more model call to
 				// discover that (D6). Checked before dispatch, and paired with a receipt so the user
 				// learns why it stopped and what to type to give it more rope.
-				const budgeted: TaskLedgerEntry[] = [];
-				for (const entry of entries) {
+				const budgeted: LiveTask[] = [];
+				for (const task of live) {
+					const { entry, channelId } = task;
 					if (!entry.runnable) continue;
 					const status = checkBudget(entry.fields);
 					if (!status.breach || !status.reason) {
-						budgeted.push(entry);
+						budgeted.push(task);
 						continue;
 					}
-					if (await pauseTask(channelDir, entry.id, { by: "runtime", reason: status.reason })) {
+					if (await pauseTask(dotDir, entry.id, { by: "runtime", reason: status.reason })) {
 						log.logWarn("taskdriver.task.paused", "Task paused: budget exhausted", {
 							channelId: channelId,
 							reason: status.reason,
-							fields: { taskId: entry.id, cause: `budget_${status.breach}` },
+							fields: { taskId: entry.id, dot, cause: `budget_${status.breach}` },
 						});
-						await this.notifyStop(channelId, entry, status.reason, nowMs, status.breach);
+						await this.notifyStop(dot, channelId, entry, status.reason, nowMs, status.breach);
 					}
 				}
-				const idled = await this.detectIdleLoop(channelDir, channelId, budgeted, nowMs);
-				const ready = idled
-					? (await readActiveTasks(join(channelDir, "tasks"), nowMs)).filter((entry) => entry.runnable)
-					: budgeted;
-				const candidates = ready.filter((entry) => !entry.fields.paused);
+				const idled = await this.detectIdleLoop(dot, dotDir, budgeted, nowMs);
+				const ready = idled ? (await readLive()).filter(({ entry }) => entry.runnable) : budgeted;
+				// The busy check is per task: a dot's tasks may deliver to different channels.
+				const candidates = ready.filter(
+					({ entry, channelId }) => !entry.fields.paused && !this.options.isChannelActive(channelId),
+				);
 				if (candidates.length === 0) continue;
-				const lastId = this.lastDispatchedTaskId.get(channelId);
-				const lastIndex = lastId ? candidates.findIndex((candidate) => candidate.id === lastId) : -1;
+				const lastId = this.lastDispatchedTaskId.get(dot);
+				const lastIndex = lastId ? candidates.findIndex(({ entry }) => entry.id === lastId) : -1;
 				const rotated =
 					lastIndex >= 0
 						? [...candidates.slice(lastIndex + 1), ...candidates.slice(0, lastIndex + 1)]
 						: candidates;
 
-				const entry = rotated.find((candidate) => {
-					const previous = this.lastDispatchMs.get(attemptKey(channelId, candidate.id));
-					return previous === undefined || nowMs - previous >= REDISPATCH_GUARD_MS;
-				});
-				if (!entry) {
-					for (const candidate of rotated) {
-						const previous = this.lastDispatchMs.get(attemptKey(channelId, candidate.id));
-						if (previous !== undefined) this.noteHorizon(previous + REDISPATCH_GUARD_MS, nowMs);
+				// One step per delivery channel per pass: a dot's tasks may deliver to different channels,
+				// whose queues run independently, so one channel's step must not hold back another's.
+				// Tasks sharing a channel still take turns (D6 rotation).
+				const usedChannels = new Set<string>();
+				for (const { entry, channelId } of rotated) {
+					if (dispatched >= settings.maxDispatchesPerTick) break;
+					if (usedChannels.has(channelId)) continue;
+					const previous = this.lastDispatchMs.get(attemptKey(dot, entry.id));
+					if (previous !== undefined && nowMs - previous < REDISPATCH_GUARD_MS) {
+						this.noteHorizon(previous + REDISPATCH_GUARD_MS, nowMs);
+						continue;
 					}
-					continue;
-				}
-
-				const event = createTaskDriverEvent(channelId, entry, nowMs);
-				const accepted = await this.options.dispatch(event);
-				this.observeDispatch(event, accepted);
-				this.lastDispatchMs.set(attemptKey(channelId, entry.id), nowMs);
-				this.lastDispatchedTaskId.set(channelId, entry.id);
-				if (accepted) {
-					dispatched++;
-					lastDispatchOffset = offset;
-					log.logDebugEvent("taskdriver.step.enqueued", "Task step enqueued", {
-						channelId: channelId,
-						fields: { taskId: entry.id },
-					});
-				} else {
-					log.logWarn("taskdriver.step.enqueue_failed", "Task step not enqueued: channel queue unavailable", {
-						channelId: channelId,
-						fields: { taskId: entry.id },
-					});
+					usedChannels.add(channelId);
+					const event = createTaskDriverEvent(dot, channelId, entry, nowMs);
+					const accepted = await this.options.dispatch(event);
+					this.observeDispatch(event, accepted);
+					this.lastDispatchMs.set(attemptKey(dot, entry.id), nowMs);
+					this.lastDispatchedTaskId.set(dot, entry.id);
+					if (accepted) {
+						dispatched++;
+						lastDispatchOffset = offset;
+						log.logDebugEvent("taskdriver.step.enqueued", "Task step enqueued", {
+							channelId: channelId,
+							fields: { taskId: entry.id, dot },
+						});
+					} else {
+						log.logWarn("taskdriver.step.enqueue_failed", "Task step not enqueued: channel queue unavailable", {
+							channelId: channelId,
+							fields: { taskId: entry.id, dot },
+						});
+					}
 				}
 			}
 
 			for (const key of this.lastDispatchMs.keys()) {
 				if (!seen.has(key)) this.lastDispatchMs.delete(key);
 			}
-			const channelSet = new Set(channels);
-			for (const channelId of this.lastDispatchedTaskId.keys()) {
-				if (!channelSet.has(channelId)) this.lastDispatchedTaskId.delete(channelId);
+			const dotSet = new Set(dots.map((target) => target.dot));
+			for (const dot of this.lastDispatchedTaskId.keys()) {
+				if (!dotSet.has(dot)) this.lastDispatchedTaskId.delete(dot);
 			}
-			this.nextChannelIndex = (start + (lastDispatchOffset >= 0 ? lastDispatchOffset + 1 : 1)) % channels.length;
+			this.nextDotIndex = (start + (lastDispatchOffset >= 0 ? lastDispatchOffset + 1 : 1)) % dots.length;
 		} finally {
 			this.running = false;
 		}

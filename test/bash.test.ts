@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandTerminatedError, createExecutor } from "../src/executor.js";
-import { ChannelJobManager } from "../src/jobs/manager.js";
+import { DotJobManager } from "../src/jobs/manager.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 import { RecordingExecutor } from "./helpers/recording-executor.js";
@@ -106,7 +106,7 @@ describe("bash tool", () => {
 			}
 			return { code: 0, stdout: "", stderr: "" };
 		});
-		const jobManager = new ChannelJobManager("dm_1", executor);
+		const jobManager = new DotJobManager({ dot: "news" }, executor);
 		const tool = createBashTool(executor, { jobManager });
 
 		const result = await tool.execute("call", { command: "npm install", async: true });
@@ -120,7 +120,7 @@ describe("bash tool", () => {
 
 	it("preserves timeout semantics in async mode and refuses task jobs without a completion wake", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
-		const manager = new ChannelJobManager("dm_timeout", executor);
+		const manager = new DotJobManager({ dot: "news" }, executor);
 		const start = vi.spyOn(manager, "start").mockResolvedValue({
 			id: "job_probe",
 			label: "check",
@@ -254,10 +254,10 @@ describe("bash tool", () => {
 });
 
 describe("bash tool spill location and tail (batch 2.2 / 2.3, real executor)", () => {
-	it("writes the full-output spill under <channelDir>/logs/ so the model can read it back", async () => {
+	it("writes the full-output spill under <dotDir>/logs/ so the model can read it back", async () => {
 		// Mutation check: revert getSpillFilePath to always use tmpdir() and fullOutputPath is /tmp/...
-		const channelDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
-		const tool = createBashTool(createExecutor(), { channelDir });
+		const dotDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
+		const tool = createBashTool(createExecutor(), { dotDir });
 
 		// >50KB across many lines -> tail truncation, but well under the 10MB capture cap.
 		const result = await tool.execute("call", {
@@ -266,7 +266,7 @@ describe("bash tool spill location and tail (batch 2.2 / 2.3, real executor)", (
 		const details = result.details as { fullOutputPath?: string };
 
 		expect(details.fullOutputPath).toBeDefined();
-		expect(details.fullOutputPath?.startsWith(join(channelDir, "logs") + "/")).toBe(true);
+		expect(details.fullOutputPath?.startsWith(`${join(dotDir, "logs")}/`)).toBe(true);
 		expect(existsSync(details.fullOutputPath as string)).toBe(true);
 		expect(readFileSync(details.fullOutputPath as string, "utf-8")).toContain("row 4000");
 	});
@@ -275,8 +275,8 @@ describe("bash tool spill location and tail (batch 2.2 / 2.3, real executor)", (
 		// The executor's in-memory capture stops at 10MB; the naive path would tail *that head* and
 		// label it the end. Mutation check: drop the `captureTruncated` branch in buildOutputText
 		// and the assertion for "row 900000" fails (you get numbers near the 10MB mark instead).
-		const channelDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
-		const tool = createBashTool(createExecutor(), { channelDir });
+		const dotDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
+		const tool = createBashTool(createExecutor(), { dotDir });
 
 		const result = await tool.execute("call", {
 			// ~13MB, generated fast with awk so the test stays cheap.

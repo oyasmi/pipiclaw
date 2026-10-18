@@ -22,7 +22,7 @@ event 负责何时唤醒，task 承载有状态的项目。当前能做就直接
 
 ## 创建合法事件
 
-在**普通聊天侧**使用 `event_manage`；task 步骤没有该工具。它验证频道、时间、command guard 和总量。`definition` 是**类型化对象**（不是 JSON 字符串），频道由 runtime 绑定，不要写 channelId。改期前先 `action:"show"` 读回完整定义，`action:"update"` 整体替换。
+在**普通聊天侧**使用 `event_manage`；task 步骤没有该工具。它验证投递频道、时间、command guard 和总量。`definition` 是**类型化对象**（不是 JSON 字符串），投递频道由 runtime 绑定为当前频道，不要写 channelId。改期前先 `action:"show"` 读回完整定义，`action:"update"` 整体替换。
 
 一次提醒用 `type:"one-shot"` + `at`，至少提前 2 分钟、最多约 24.8 天；下面的 at 是示意，调用时换成未来的真实时间。`definition` 传下面这个对象（`event_manage {action:"create", name:"check-result", definition:<对象>}`）：
 
@@ -36,7 +36,7 @@ event 负责何时唤醒，task 承载有状态的项目。当前能做就直接
 {"type":"periodic","schedule":"0 9 * * 1","task":{"title":"周报","goal":"汇总上周仓库的合并与未决问题，生成周报发给用户。只读，不做写操作。","dod":"- [ ] 覆盖上周全部合并的 PR\n- [ ] 列出未决问题及负责人\n- [ ] 周报正文已在 report 中交付","items":[{"text":"收集上周合并记录"},{"text":"整理未决问题"}]}}
 ```
 
-`type:"periodic"` + `schedule` 用主机时区的五段 cron。普通事件最小间隔 30 分钟，带 preAction 时 5 分钟，全 workspace 最多 50 份事件文件。
+`type:"periodic"` + `schedule` 用主机时区的五段 cron。普通事件最小间隔 30 分钟，带 preAction 时 5 分钟，每个 dot 最多 50 份事件文件。
 
 ## preAction：外部条件传感器
 
@@ -50,7 +50,7 @@ event 负责何时唤醒，task 承载有状态的项目。当前能做就直接
 
 ## 维护
 
-事件名字不确定时先 list；已知名字直接操作。列表包含本频道可解析事件及无法解析的文件提示，后者归属未必可确认，不凭猜测删除。停用、闭环或改期时及时清理临时事件。
+事件名字不确定时先 list；已知名字直接操作。列表包含本 dot 的可解析事件（投递到别的频道的会标注，且只读）及无法解析的文件提示，后者归属未必可确认，不凭猜测删除。停用、闭环或改期时及时清理临时事件。
 
 超出 one-shot 范围的一次提醒可用 periodic 表达未来日期，但首次成功后必须删除，不能默认为永久重复。工具不可用且没有合法文件访问入口时告知用户，不绕过守卫。
 

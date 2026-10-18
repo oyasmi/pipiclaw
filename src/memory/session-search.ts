@@ -5,9 +5,14 @@ import { recencyBoostByAge, tokenizeRecallText } from "./search.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
-export interface SearchChannelSessionsRequest {
+export interface SearchDotSessionsRequest {
 	channelId?: string;
-	channelDir: string;
+	/** Attributes the optional summarization's spend to the dot. */
+	dot?: string;
+	/** Every conversation in this dot is searched (spec 058, D12). */
+	dotDir: string;
+	/** A human name for a conversation directory (the channel's name), for labelling results. */
+	describeConversation?: (conversation: string) => string | undefined;
 	query: string;
 	roleFilter?: string[];
 	limit: number;
@@ -23,6 +28,9 @@ export interface SearchChannelSessionsRequest {
 export interface SessionSearchResult {
 	source: string;
 	path: string;
+	/** Which conversation of the dot the hit came from, and that channel's name when known. */
+	conversation?: string;
+	channel?: string;
 	when?: string;
 	role: SessionSearchRole;
 	score: number;
@@ -47,7 +55,7 @@ interface ScoredDocument {
 	exactHit: boolean;
 }
 
-const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = `You summarize current-channel transcript search hits for Pipiclaw.
+const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = `You summarize transcript search hits from one Pipiclaw dot's conversations.
 
 Return plain text only.
 
@@ -155,7 +163,7 @@ function windowAroundMatch(text: string, query: string, queryTokens: string[], m
 }
 
 async function summarizeHit(
-	request: SearchChannelSessionsRequest,
+	request: SearchDotSessionsRequest,
 	document: SessionSearchDocument,
 	query: string,
 	queryTokens: string[],
@@ -177,7 +185,7 @@ ${query}
 Transcript hit:
 ${fallback}`,
 			timeoutMs: request.timeoutMs,
-			usageContext: request.channelId ? { channelId: request.channelId } : undefined,
+			usageContext: request.channelId ? { channelId: request.channelId, dot: request.dot } : undefined,
 			parse: (text) => text.trim(),
 		});
 		return result.output || fallback;
@@ -187,7 +195,7 @@ ${fallback}`,
 }
 
 function toResult(
-	request: SearchChannelSessionsRequest,
+	request: SearchDotSessionsRequest,
 	document: SessionSearchDocument,
 	score: number,
 	matches: string[],
@@ -195,7 +203,10 @@ function toResult(
 ): SessionSearchResult {
 	return {
 		source: document.source,
-		path: relative(request.channelDir, document.path) || document.path,
+		path: relative(request.dotDir, document.path) || document.path,
+		...(document.conversation
+			? { conversation: document.conversation, channel: request.describeConversation?.(document.conversation) }
+			: {}),
 		when: document.timestamp,
 		role: document.role,
 		score: Number(score.toFixed(3)),
@@ -205,7 +216,7 @@ function toResult(
 }
 
 interface CorpusCacheEntry {
-	channelDir: string;
+	dotDir: string;
 	maxFiles: number;
 	maxCharsPerChunk: number;
 	documents: SessionSearchDocument[];
@@ -216,16 +227,16 @@ const CORPUS_CACHE_TTL_MS = 30_000;
 const CORPUS_CACHE_MAX_CHANNELS = 8;
 const corpusCache = new Map<string, CorpusCacheEntry>();
 
-function corpusCacheKey(channelDir: string, maxFiles: number, maxCharsPerChunk: number): string {
-	return JSON.stringify([channelDir, maxFiles, maxCharsPerChunk]);
+function corpusCacheKey(dotDir: string, maxFiles: number, maxCharsPerChunk: number): string {
+	return JSON.stringify([dotDir, maxFiles, maxCharsPerChunk]);
 }
 
 async function getCachedCorpus(
-	channelDir: string,
+	dotDir: string,
 	maxFiles: number,
 	maxCharsPerChunk: number,
 ): Promise<SessionSearchDocument[]> {
-	const key = corpusCacheKey(channelDir, maxFiles, maxCharsPerChunk);
+	const key = corpusCacheKey(dotDir, maxFiles, maxCharsPerChunk);
 	const cached = corpusCache.get(key);
 	if (cached && Date.now() - cached.timestamp < CORPUS_CACHE_TTL_MS) {
 		corpusCache.delete(key);
@@ -234,12 +245,12 @@ async function getCachedCorpus(
 	}
 
 	const documents = await buildSessionCorpus({
-		channelDir,
+		dotDir,
 		maxFiles,
 		maxCharsPerDocument: maxCharsPerChunk,
 	});
 	corpusCache.delete(key);
-	corpusCache.set(key, { channelDir, maxFiles, maxCharsPerChunk, documents, timestamp: Date.now() });
+	corpusCache.set(key, { dotDir, maxFiles, maxCharsPerChunk, documents, timestamp: Date.now() });
 	if (corpusCache.size > CORPUS_CACHE_MAX_CHANNELS) {
 		const oldestKey = corpusCache.keys().next().value;
 		if (oldestKey) corpusCache.delete(oldestKey);
@@ -247,12 +258,12 @@ async function getCachedCorpus(
 	return documents;
 }
 
-export async function searchChannelSessions(request: SearchChannelSessionsRequest): Promise<SessionSearchResponse> {
+export async function searchDotSessions(request: SearchDotSessionsRequest): Promise<SessionSearchResponse> {
 	const limit = clampInteger(request.limit, 1, 5);
 	const maxChunks = clampInteger(request.maxChunks, 1, 500);
 	const query = request.query.trim();
 	const roleFilter = normalizeRoleFilter(request.roleFilter);
-	const documents = (await getCachedCorpus(request.channelDir, request.maxFiles, request.maxCharsPerChunk))
+	const documents = (await getCachedCorpus(request.dotDir, request.maxFiles, request.maxCharsPerChunk))
 		.filter((document) => roleFilter.size === 0 || roleFilter.has(document.role))
 		.sort(sortRecentDocuments)
 		.slice(0, maxChunks);

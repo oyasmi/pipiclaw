@@ -115,6 +115,14 @@ describe("workspace resources in the prompt", () => {
 		expect(build.text).toContain("Always run the tests.");
 		expect(build.text.match(/<workspace_identity/g)).toHaveLength(1);
 		expect(build.text.match(/<workspace_instructions/g)).toHaveLength(1);
+
+		// A dot's own SOUL.md replaces the workspace one whole; its missing AGENTS.md falls back.
+		const dotDir = makeTempDir();
+		writeFileSync(join(dotDir, "SOUL.md"), "I serve the investment group.");
+		const own = loadWorkspacePromptResources(workspaceDir, dotDir);
+		expect(own.soul?.path).toBe(join(dotDir, "SOUL.md"));
+		expect(own.soul?.content).toBe("I serve the investment group.");
+		expect(own.agents?.path).toBe(join(workspaceDir, "AGENTS.md"));
 	});
 
 	it("injects SOUL and AGENTS whole under their unit budgets, clips only just over, and never lets one shrink the other", () => {

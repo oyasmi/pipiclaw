@@ -2,7 +2,7 @@
 
 ## Project
 
-Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-works/pi-coding-agent`. It adds AI Card streaming, layered memory, scheduled work, per-channel workspaces, and unified delegation to internal agents or external Claude Code, Codex CLI, and custom executors.
+Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-works/pi-coding-agent`. It adds AI Card streaming, layered memory, scheduled work, dots (named assistants that DingTalk channels and the TUI bind to), and unified delegation to internal agents or external Claude Code, Codex CLI, and custom executors.
 
 ## Core Structure
 
@@ -10,25 +10,26 @@ A module is a path under `src/`. Dependencies run strictly downward through the 
 
 | Layer | Module | Path | Owns | May import | Typical files |
 |---|---|---|---|---|---|
-| 0 | `shared` | `src/shared/` | small helpers with no domain knowledge | — | `serial-queue.ts`, `atomic-file.ts`, `text-utils.ts` |
+| 0 | `shared` | `src/shared/` | small helpers with no domain knowledge | — | `serial-queue.ts`, `atomic-file.ts`, `file-lock.ts`, `text-utils.ts` |
 | 0 | `commands` | `src/commands/catalog.ts`, `reply-limits.ts` | the slash-command catalog and the reply length budget | — | `catalog.ts`, `reply-limits.ts` |
 | 1 | `foundation` | `src/log.ts`, `paths.ts`, `executor.ts`, `file-store.ts` | process-wide logging and paths, plus the host I/O ports (`Executor` for commands, `FileStore` for file contents, spec 044) | shared | the four files named |
-| 2 | `security` | `src/security/` | command, path and network guards, project scope, audit log | layers 0–1 | `command-guard.ts`, `path-guard.ts`, `network.ts`, `logger.ts` |
+| 2 | `security` | `src/security/` | command, path and network guards, audit log | layers 0–1 | `command-guard.ts`, `path-guard.ts`, `network.ts`, `logger.ts` |
 | 2 | `usage` | `src/usage/` | usage ledger, usage rendering, `UsageTotals` | layers 0–1 | `ledger.ts`, `render.ts`, `totals.ts` |
 | 2 | `tasks` | `src/tasks/` | the one-off task project: contract, waiting tickets, loop log, budget, `/tasks`. Scheduling and wake wiring live in `runtime/task-*.ts` so this module stays a leaf | layers 0–1 | `contract.ts`, `ticket.ts`, `loop-log.ts`, `bound-work.ts`, `commands.ts` |
+| 2 | `dot` | `src/dot/` | the dot: a named, explicitly created assistant that owns memory, tasks, events and working files (spec 058); `dot.json`, `dots/bindings.json`, conversation allocation, `/dot` parsing and rendering. Never parses a channel id | layers 0–1 | `types.ts`, `paths.ts`, `registry.ts`, `commands.ts` |
 | 2 | `playbooks` | `src/playbooks/` | read-only runtime playbooks shipped with the package | layers 0–1 | `catalog.ts`, `*.md` |
-| 3 | `channel` | `src/channel/` | the transport-neutral channel domain: the delivery and event contracts, identity, persisted state, `/project` | layers 0–1, security | `channel-context.ts`, `channel-event.ts`, `channel-index.ts`, `store.ts`, `commands.ts` |
+| 3 | `channel` | `src/channel/` | the transport-neutral channel domain: the delivery and event contracts, the channel-id format, the channel index, persisted state | layers 0–1, security, dot | `channel-context.ts`, `channel-event.ts`, `channel-id.ts`, `channel-index.ts`, `store.ts` |
 | 3 | `tools-contract` | `src/tools/contract/` | tool-result `details` contract, how a tool call is shown, the tool-name lists | layers 0–1, security | `details.ts`, `presentation.ts`, `names.ts` |
 | 4 | `config` | `src/config/` | `settings.json` and `tools.json` loading and validation | layers 0–1, channel (types only) | `settings.ts`, `tools.ts` |
 | 5 | `models` | `src/models/` | model references, the model runtime, API keys, backup-model fallback | layers 0–1, config | `reference.ts`, `runtime.ts`, `fallback.ts` |
 | 5 | `web` | `src/web/` | search and fetch clients, extraction | layers 0–1, security, config | `client.ts`, `search.ts`, `fetch.ts` |
 | 5 | `skills` | `src/skills/` | workspace skill loading, validation, reading, `/skills` | layers 0–1, security | `loader.ts`, `workspace.ts`, `validation.ts`, `commands.ts` |
-| 6 | `memory` | `src/memory/` | channel memory, daily journal, the reflect pass, session search, `/memory` | layers 0–1, channel, config, models, usage | `store.ts`, `reflect.ts`, `scheduler.ts`, `commands.ts` |
-| 6 | `events` | `src/events/` | scheduled and sensor events: definitions, validation, the file watcher, `/events`. Never touches task files (spec 052, INV-8) | layers 0–1, channel, security, tasks | `types.ts`, `parse.ts`, `watcher.ts`, `validation.ts`, `commands.ts` |
-| 7 | `jobs` | `src/jobs/` | background shell jobs | layers 0–1, channel, tasks | `manager.ts`, `launch.ts`, `record.ts` |
-| 7 | `subagents` | `src/subagents/` | role discovery, delegation dispatch, internal and external execution, run lifecycle, leases, `/subagents`. `discovery.ts` is a registered over-long exception: do not grow it | layers 0–1, security, usage, tasks, channel, config, models, memory, tools-contract | `dispatch.ts`, `runs.ts`, `internal/run.ts`, `external/dispatch.ts`, `discovery.ts` |
+| 6 | `memory` | `src/memory/` | dot memory (queued per dot), daily journal, the reflect pass, session search, `/memory` | layers 0–1, dot, channel, config, models, usage | `store.ts`, `reflect.ts`, `scheduler.ts`, `commands.ts` |
+| 6 | `events` | `src/events/` | scheduled and sensor events: definitions, validation, the file watcher, `/events`. Never touches task files (spec 052, INV-8) | layers 0–1, dot, channel, security, tasks | `types.ts`, `parse.ts`, `watcher.ts`, `validation.ts`, `commands.ts` |
+| 7 | `jobs` | `src/jobs/` | background shell jobs | layers 0–1, dot, channel, tasks | `manager.ts`, `launch.ts`, `record.ts` |
+| 7 | `subagents` | `src/subagents/` | role discovery, delegation dispatch, internal and external execution, run lifecycle, leases, `/subagents`. `discovery.ts` is a registered over-long exception: do not grow it | layers 0–1, security, usage, tasks, dot, channel, config, models, memory, tools-contract | `dispatch.ts`, `runs.ts`, `internal/run.ts`, `external/dispatch.ts`, `discovery.ts` |
 | 8 | `tools` | `src/tools/` (not `contract/`) | the tools handed to the model: schemas, validation, calls into domain code, `content`/`details` | layers 0–7 | `registry.ts`, `subagent.ts`, `job.ts`, `memory-manage.ts` |
-| 9 | `agent` | `src/agent/` | per-channel orchestration: the SDK session, one turn, prompts, session commands | layers 0–8 | `channel-runner.ts`, `session/session-host.ts`, `turn/turn-pipeline.ts`, `prompt/` |
+| 9 | `agent` | `src/agent/` | per-(dot, channel) orchestration: the SDK session, one turn, prompts, session commands | layers 0–8 | `channel-runner.ts`, `session/session-host.ts`, `turn/turn-pipeline.ts`, `prompt/` |
 | 10 | `commands-router` | `src/commands/router.ts` | the one dispatch point for stateless report commands, shared by both transports | layers 0–9 | `router.ts` |
 | 10 | `app` | `src/app/` | the process shell: app-home scaffolding, CLI args, shared services, LLM proxy, `pipiclaw auth` | layers 0–9 | `home.ts`, `services.ts`, `proxy.ts`, `auth-command.ts` |
 | 11 | `dingtalk` | `src/dingtalk/` | the DingTalk Stream transport: connection, AI cards, media, inbound routing, `channel.json` | layers 0–10 | `bot.ts`, `handler.ts`, `cards.ts`, `connection.ts`, `delivery.ts`, `config.ts` |
@@ -43,8 +44,9 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 ## Runtime Model
 
 - App-level files: `channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`
-- Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `ENVIRONMENT.md`, `skills/`, `events/`, `sub-agents/`
-- Channel-level files: `memory/<name>.md` + generated `MEMORY.md` index, `journal/YYYY-MM-DD.md`, `tasks/<id>.md` (contract) + `tasks/<id>.jsonl` (loop log) + `tasks/.sessions/` (one agent session per task), delegation records/artifacts, `log.jsonl`, `context.jsonl`
+- Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `ENVIRONMENT.md`, `CHANNELS.md` (generated channel index), `skills/`, `sub-agents/`, `dots/bindings.json` (channel id → dot, the only binding record)
+- Dot-level files (`dots/<dot>/`, spec 058): `dot.json`, `memory/<name>.md` + generated `MEMORY.md` index, `journal/YYYY-MM-DD.md`, `tasks/<id>.md` (contract, with its delivery `channel`) + `tasks/<id>.jsonl` (loop log) + `tasks/.sessions/` (one agent session per task), `events/`, delegation records/artifacts, working files. The dot directory is the agent's cwd. A dot is created explicitly (`/dot new`, `pipiclaw tui --dot <x> --create`) — nothing creates one implicitly, and an unbound channel never reaches a model
+- Conversation-level files (`dots/<dot>/conversations/<kind>-<n>/`, one per channel that has talked to the dot): session JSONL files, `active-session.json`, `context.jsonl`, `log.jsonl`, `last_prompt.json`. A channel id is an address, never a path segment
 - `memory/<name>.md` is one durable fact per file (frontmatter metadata); `MEMORY.md` is generated from it — never hand-edited
 - `journal/YYYY-MM-DD.md` is the day-by-day working record, written only by the background reflect pass
 - `log.jsonl`, rotated logs, and `context.jsonl` are cold storage, not normal working memory; access them through `session_search` when needed
@@ -115,7 +117,7 @@ e2e hard rules:
 - Every tool error or truncation output must carry a next-step instruction the model can act on directly (e.g. "Use offset=N to continue", "use the grep tool instead") — errors steer the model rather than just reporting failure
 - Reject a bad tool call with `RecoverableToolError` (`src/shared/recoverable-error.ts`) when the model can fix it alone — a missing field, an unknown id, an illegal transition. Throw a plain `Error` only when the user must act or know: a guard refusal, an approval gate, corrupt state, a real fault. Only plain errors reach the user's chat, so the test is "can the model resolve this alone?", not "how severe is it?"
 - A tool result's `details` is the runtime's channel (the model reads `content`). `buildToolSet` stamps `kind` from the registration name and that stamp is authoritative — a `kind` written inside a tool is redundant and cannot override it, so the discriminator can never drift from the tool it names. New tools need only return their own fields
-- Keep `SubAgentRunManager` the sole owner of settlement, usage, leases, and completion wake; preserve its idempotency markers
+- Keep `SubAgentRunManager` the sole owner of settlement, usage, leases, and completion wake; preserve its idempotency markers. Run and job managers are per dot; a completion wake goes back to the channel that started the work, and only while that channel is still bound to the dot
 - A task parks only on a ticket produced by `resolveTicket`, and every ticket carries a runtime-derived backstop. Never write `ticket` frontmatter directly, and never add a resumption path that bypasses `redeemTicket` — "parked with nothing that can wake it" is the one failure spec 051 exists to make unrepresentable
 - Task steps run in the task's own session and are silent by default; only `task_step_end`'s `report` (and the deterministic runtime receipts) reach the channel
 - A task is a one-off project the model leads; recurring or scheduled work is an event with a `task` template that spawns an instance per occurrence (spec 052). Verification is the leader's judgement: a `VERDICT` is recorded information, never a runtime gate
@@ -148,7 +150,7 @@ Shape rules:
 
 - Node.js target is `>= 22.19.0`
 - A slash command has three parts, each in a fixed place: the catalog entry in `commands/catalog.ts`, the handler in the domain that owns the state (`<domain>/commands.ts`), and — for a stateless report — one case in `commands/router.ts`, which both transports share. Session commands (`/model`, `/compact`, …) live in `agent/session/command-extension.ts`. Adding a `/foo` report means touching exactly those three files
-- Event administration commands (`/events list|show|delete|history`, `events/commands.ts`) must stay path-confined to `workspace/events/` and event history
+- Event administration commands (`/events list|show|delete|history`, `events/commands.ts`) must stay path-confined to the dot's `events/` and event history
 - The package version lives in `package.json` and the top-level package entry in `package-lock.json`
 - Web tools are configured through app-level `tools.json`; security policy is configured through app-level `security.json`
 - Workspace skills live only under `workspace/skills/`; do not add channel-scoped skill directories

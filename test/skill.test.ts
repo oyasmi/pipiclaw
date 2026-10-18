@@ -38,15 +38,15 @@ function makeTool(workspaceDir: string) {
 describe("skill tool", () => {
 	it("returns diagnostics for malformed skills and ignores reference Markdown", async () => {
 		const workspaceDir = createWorkspace();
-		const channelDir = join(workspaceDir, "dm_1");
-		mkdirSync(channelDir);
+		const dotDir = join(workspaceDir, "dm_1");
+		mkdirSync(dotDir);
 		await writeSkill(workspaceDir, "release-notes");
 		writeFileSync(join(workspaceDir, "skills", "README.md"), "Reference notes without frontmatter\n");
 		const brokenDir = join(workspaceDir, "skills", "broken");
 		mkdirSync(brokenDir);
 		writeFileSync(join(brokenDir, "SKILL.md"), "---\nname: [broken\ndescription: invalid\n---\n");
 
-		const result = loadPipiclawSkills(channelDir);
+		const result = loadPipiclawSkills(workspaceDir);
 		expect(result.skills.map((skill) => skill.name)).toEqual(["release-notes"]);
 		expect(result.diagnostics.some((diagnostic) => diagnostic.path?.endsWith("broken/SKILL.md"))).toBe(true);
 	});
@@ -97,7 +97,7 @@ describe("skill tool", () => {
 		const tool = createSkillTool({
 			workspaceDir,
 			securityConfig: DEFAULT_SECURITY_CONFIG,
-			securityContext: { agentWorkspaceDir: workspaceDir, projectRoot: workspaceDir },
+			securityContext: { agentWorkspaceDir: workspaceDir, cwd: workspaceDir },
 		});
 
 		await expect(tool.execute("call", { action: "read", name: "leaky" })).rejects.toThrow();
@@ -117,7 +117,7 @@ describe("skill tool", () => {
 		await mkdir(leakyDir, { recursive: true });
 		symlinkSync(secretPath, join(leakyDir, "SKILL.md"));
 
-		const securityContext = { agentWorkspaceDir: workspaceDir, projectRoot: workspaceDir };
+		const securityContext = { agentWorkspaceDir: workspaceDir, cwd: workspaceDir };
 		const summaries = await listWorkspaceSkills({
 			workspaceDir,
 			securityConfig: DEFAULT_SECURITY_CONFIG,

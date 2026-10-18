@@ -1,5 +1,5 @@
 /**
- * Watches `workspace/events/`, validates each definition, schedules one-shot and periodic events
+ * Watches one dot's `events/`, validates each definition, schedules one-shot and periodic events
  * (cron, optional pre-action gate) and enqueues every occurrence through the injected event sink.
  */
 import { Cron } from "croner";
@@ -54,9 +54,10 @@ function truncateTextPreview(text: string): string {
 	return clipText(text, TEXT_PREVIEW_MAX_CHARS, { headRatio: 1, omitHint: "…", collapseWhitespace: true });
 }
 
-function eventDispatchId(filename: string, event: ScheduledEvent, occurrence: Date): string {
+function eventDispatchId(dot: string, filename: string, event: ScheduledEvent, occurrence: Date): string {
 	const name = eventNameFromFilename(filename);
-	return event.type === "one-shot" ? `event:${name}:${event.at}` : `event:${name}:${occurrence.toISOString()}`;
+	const when = event.type === "one-shot" ? event.at : occurrence.toISOString();
+	return `event:${dot}:${name}:${when}`;
 }
 
 class EventPreActionError extends Error {
@@ -80,6 +81,8 @@ export class EventsWatcher {
 	private startTime: number;
 	private watcher: FSWatcher | null = null;
 	private started = false;
+	/** Set once by `stop()` and never cleared: in-flight loads check it before scheduling anything. */
+	private stopped = false;
 	private knownFiles: Set<string> = new Set();
 	private readonly historyAppender?: JsonlAppender;
 
@@ -87,8 +90,8 @@ export class EventsWatcher {
 		private eventsDir: string,
 		private bot: ChannelEventSink,
 		private executor: Executor,
-		private commandGuardConfig?: SecurityConfig["commandGuard"],
-		private options: EventsWatcherOptions = {},
+		private commandGuardConfig: SecurityConfig["commandGuard"] | undefined,
+		private options: EventsWatcherOptions,
 	) {
 		this.startTime = Date.now();
 		this.historyAppender = options.historyPath
@@ -121,6 +124,7 @@ export class EventsWatcher {
 
 	stop(): void {
 		this.started = false;
+		this.stopped = true;
 		if (this.watcher) {
 			this.watcher.close();
 			this.watcher = null;
@@ -174,6 +178,7 @@ export class EventsWatcher {
 			ts: formatLocalTime(),
 			eventName: eventNameFromFilename(filename),
 			eventPath: resolve(this.eventsDir, filename),
+			dot: this.options.dot,
 			...rest,
 		};
 		if (!this.historyAppender?.tryAppend(fullRecord, "critical")) {
@@ -329,6 +334,11 @@ export class EventsWatcher {
 				}
 			}
 		}
+
+		// `stop()` cannot cancel a load already past its `readFile`; a stopped watcher is never started
+		// again (a reactivated dot gets a new one), so a load finishing late must not schedule a timer
+		// or cron that nothing would ever stop.
+		if (this.stopped) return;
 
 		if (!event) {
 			log.logWarn("events.file.parse_failed", "Event file parse failed", {
@@ -504,6 +514,21 @@ export class EventsWatcher {
 		deleteAfter: boolean = true,
 		occurrence: Date = new Date(),
 	): Promise<void> {
+		// A one-shot recovered by a load that `stop()` could not cancel: the dot went dormant meanwhile.
+		if (this.stopped) return;
+		// Spec 058, D8: an occurrence whose delivery channel is no longer bound to this dot is
+		// skipped — before the pre-action gate, which would otherwise run a command for nothing.
+		if (!this.options.isBound(event.channelId)) {
+			this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "channel_not_bound" });
+			// A one-shot has no next occurrence: keep the file with a marker, as a full queue does.
+			if (deleteAfter) {
+				this.markInvalid(
+					filename,
+					`Delivery channel ${event.channelId} was not bound to dot ${this.options.dot} at ${new Date().toISOString()}; this occurrence was skipped.`,
+				);
+			}
+			return;
+		}
 		if (event.preAction) {
 			try {
 				this.appendEventHistory(filename, event, "pre_action_started", "ok", {
@@ -582,7 +607,8 @@ export class EventsWatcher {
 			text: message,
 			ts: Date.now().toString(),
 			conversationType: "1",
-			dispatchId: eventDispatchId(filename, event, occurrence),
+			dispatchId: eventDispatchId(this.options.dot, filename, event, occurrence),
+			dot: this.options.dot,
 		};
 
 		const enqueued = this.options.dispatch
@@ -635,6 +661,7 @@ export class EventsWatcher {
 			if (!spawn) throw new Error("this runtime cannot create task instances");
 			const result = await spawn({
 				eventName: eventNameFromFilename(filename),
+				dot: this.options.dot,
 				channelId: event.channelId,
 				template,
 				occurrence: due,
@@ -759,18 +786,15 @@ export class EventsWatcher {
 	}
 }
 
-/**
- * Create and start an events watcher.
- */
+/** Create the events watcher of one dot: it watches `<dotDir>/events/` (spec 058, D14). */
 export function createEventsWatcher(
-	workspaceDir: string,
-	bot: ChannelEventSink,
-	executor: Executor,
-	commandGuardConfig?: SecurityConfig["commandGuard"],
-	historyPath?: string,
-	dispatch?: EventsWatcherOptions["dispatch"],
-	spawnTask?: EventsWatcherOptions["spawnTask"],
+	input: EventsWatcherOptions & {
+		dotDir: string;
+		bot: ChannelEventSink;
+		executor: Executor;
+		commandGuardConfig?: SecurityConfig["commandGuard"];
+	},
 ): EventsWatcher {
-	const eventsDir = join(workspaceDir, "events");
-	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig, { historyPath, dispatch, spawnTask });
+	const { dotDir, bot, executor, commandGuardConfig, ...options } = input;
+	return new EventsWatcher(join(dotDir, "events"), bot, executor, commandGuardConfig, options);
 }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { CommandTerminatedError, EXECUTOR_SHELL_IS_BASH, type Executor } from "../executor.js";
-import type { ChannelJobManager } from "../jobs/manager.js";
+import type { DotJobManager } from "../jobs/manager.js";
 import { formatBlockMessage, GuardBlockedError } from "../security/block-message.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
@@ -24,28 +24,27 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
  */
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
 
-/** Subdirectory of the channel dir where full bash/job output spills live. */
+/** Subdirectory of the dot dir where full bash/job output spills live. */
 const BASH_LOG_DIR_NAME = "logs";
-/** Spill files kept per channel before the oldest are pruned on the next tool build. */
+/** Spill files kept per dot before the oldest are pruned on the next tool build. */
 const BASH_LOG_RETENTION = 40;
 /** Bytes read back from the spill file when the in-memory capture was truncated (D2.3). */
 const TAIL_FROM_SPILL_BYTES = DEFAULT_MAX_BYTES * 4;
 
 /**
- * Where the "full output" spill file for a command goes. Under `<channelDir>/logs/` on the main
- * path, which the model's `read` can open under both `boundary: "project"` and `unbounded` — a
- * `/tmp/...` pointer is unreadable under `boundary: "project"` (fix plan §2.2). Sub-agents get no
- * channel dir, so they fall back to the OS temp dir as before.
+ * Where the "full output" spill file for a command goes: under `<dotDir>/logs/` on the main
+ * path, next to the rest of the agent's files (fix plan §2.2). Sub-agents get no channel dir, so
+ * they fall back to the OS temp dir as before.
  */
-function getSpillFilePath(channelDir: string | undefined): string {
+function getSpillFilePath(dotDir: string | undefined): string {
 	const id = randomBytes(8).toString("hex");
-	const dir = channelDir ? join(channelDir, BASH_LOG_DIR_NAME) : tmpdir();
+	const dir = dotDir ? join(dotDir, BASH_LOG_DIR_NAME) : tmpdir();
 	return join(dir, `pipiclaw-bash-${id}.log`);
 }
 
 /** Best-effort: keep the channel's `logs/` dir from growing without bound. */
-async function pruneBashLogs(channelDir: string): Promise<void> {
-	const dir = join(channelDir, BASH_LOG_DIR_NAME);
+async function pruneBashLogs(dotDir: string): Promise<void> {
+	const dir = join(dotDir, BASH_LOG_DIR_NAME);
 	let names: string[];
 	try {
 		names = (await readdir(dir)).filter((n) => n.startsWith("pipiclaw-bash-") && n.endsWith(".log"));
@@ -125,11 +124,11 @@ export interface BashToolOptions {
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
 	/**
-	 * The channel directory. When set, the "full output" spill file lives under
-	 * `<channelDir>/logs/` so the pointer the tool hands back is one the model's `read` can open
+	 * The dot directory. When set, the "full output" spill file lives under
+	 * `<dotDir>/logs/` so the pointer the tool hands back is one the model's `read` can open
 	 * under both path-guard boundaries. Absent on the sub-agent path (spill falls back to tmpdir).
 	 */
-	channelDir?: string;
+	dotDir?: string;
 	/**
 	 * When true, route each command through the `rtk` command optimizer before executing
 	 * (best-effort; falls back to the raw command when rtk is unavailable or declines).
@@ -140,7 +139,7 @@ export interface BashToolOptions {
 	 * Present only on the main path when `tools.jobs.enabled` is on. Enables `async: true`
 	 * background execution. Absent on the sub-agent path, so sub-agents cannot background jobs.
 	 */
-	jobManager?: ChannelJobManager;
+	jobManager?: DotJobManager;
 	/**
 	 * Set inside a task's session. A background job started here belongs to this task, so the
 	 * runtime binds the id rather than asking the model to repeat it (and rejects a conflicting one
@@ -223,10 +222,10 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
-		projectRoot: process.cwd(),
+		cwd: process.cwd(),
 	};
-	if (options.channelDir) {
-		void pruneBashLogs(options.channelDir);
+	if (options.dotDir) {
+		void pruneBashLogs(options.dotDir);
 	}
 
 	return {
@@ -317,6 +316,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				const willNotify = notify ?? true;
 				const jobLabel = clipText(effectiveCommand, 60, { collapseWhitespace: true });
 				const job = await options.jobManager.start(effectiveCommand, jobLabel, effectiveTimeout, {
+					...(options.channelId ? { channelId: options.channelId } : {}),
 					signal,
 					notify: willNotify,
 					...(effectiveTaskId ? { taskId: effectiveTaskId } : {}),
@@ -411,9 +411,9 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				return { text, details: { ...details, producedOutput: output.trim().length > 0 } };
 			};
 
-			const spillPath = getSpillFilePath(options.channelDir);
-			if (options.channelDir) {
-				await mkdir(join(options.channelDir, BASH_LOG_DIR_NAME), { recursive: true }).catch(() => undefined);
+			const spillPath = getSpillFilePath(options.dotDir);
+			if (options.dotDir) {
+				await mkdir(join(options.dotDir, BASH_LOG_DIR_NAME), { recursive: true }).catch(() => undefined);
 			}
 			try {
 				const result = await executor.exec(effectiveCommand, {

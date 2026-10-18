@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseProjectCommand } from "../src/channel/commands.js";
 import { BUILT_IN_COMMANDS, type CommandSubSpec, formatBusyHint, SESSION_COMMANDS } from "../src/commands/catalog.js";
+import { parseDotCommand } from "../src/dot/commands.js";
 import { parseEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
@@ -9,7 +9,7 @@ import { localDayKey } from "../src/shared/local-time.js";
 import { parseSkillsCommand } from "../src/skills/commands.js";
 import { parseSubagentsCommand } from "../src/subagents/commands.js";
 import { parseTasksCommand } from "../src/tasks/commands.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
 /**
  * Review 2026-08-24 §1.1/§3.1: `/help` advertised `/tasks stats` for months after the parser
@@ -20,14 +20,17 @@ import { useTempDirs } from "./helpers/fixtures.js";
  */
 
 const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
+	dot: parseDotCommand,
 	tasks: parseTasksCommand,
 	events: parseEventsCommand,
 	subagents: parseSubagentsCommand,
-	project: parseProjectCommand,
 	skills: parseSkillsCommand,
 };
 
 const EXPECTED_EXAMPLES: Record<string, unknown> = {
+	"/dot": { action: "list" },
+	"/dot new research": { action: "new", name: "research" },
+	"/dot bind research": { action: "bind", name: "research" },
 	"/events list": { action: "list" },
 	"/events show weekly-review": { action: "show", name: "weekly-review" },
 	"/events delete weekly-review": { action: "delete", name: "weekly-review" },
@@ -50,9 +53,6 @@ const EXPECTED_EXAMPLES: Record<string, unknown> = {
 	"/subagents output run_a1b2c3": { action: "output", ref: "run_a1b2c3" },
 	"/subagents cancel run_a1b2c3": { action: "cancel", ref: "run_a1b2c3" },
 	"/subagents roles builder-hard": { action: "roles", name: "builder-hard" },
-	"/project": { action: "show" },
-	"/project set /home/me/projects/foo": { action: "set", path: "/home/me/projects/foo" },
-	"/project reset": { action: "reset" },
 	"/skills": { action: "list" },
 	"/skills show release-checklist": { action: "show", name: "release-checklist" },
 };
@@ -87,8 +87,8 @@ describe("command subcommand examples round-trip through their parser", () => {
 					continue;
 				}
 				if (name === "memory") {
-					const channelDir = makeChannel();
-					await applyMemoryOps(channelDir, [
+					const dotDir = makeChannel();
+					await applyMemoryOps(dotDir, [
 						{
 							op: "add",
 							name: "deploy-window-thursday",
@@ -98,12 +98,12 @@ describe("command subcommand examples round-trip through their parser", () => {
 						},
 					]);
 					if (args.startsWith("journal")) {
-						await appendJournalEntries(channelDir, localDayKey(), ["01:23 memory journal route sentinel"]);
+						await appendJournalEntries(dotDir, localDayKey(), ["01:23 memory journal route sentinel"]);
 					}
-					const result = await handleMemoryCommand({ channelId: "dm_1", channelDir, args });
+					const result = await handleMemoryCommand({ conversation: testConversation(dotDir), args });
 					switch (args.trim().split(/\s+/)[0]) {
 						case "status":
-							expect(result).toContain("频道条目：`1`");
+							expect(result).toContain("记忆条目：`1`");
 							break;
 						case "list":
 							expect(result).toContain("deploy-window-thursday");
@@ -112,7 +112,7 @@ describe("command subcommand examples round-trip through their parser", () => {
 							expect(result).toContain("memory command route sentinel");
 							break;
 						case "forget":
-							expect(await listMemoryEntries(channelDir)).toHaveLength(0);
+							expect(await listMemoryEntries(dotDir)).toHaveLength(0);
 							break;
 						case "journal":
 							expect(result).toContain("memory journal route sentinel");

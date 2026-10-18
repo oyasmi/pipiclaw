@@ -6,6 +6,7 @@
 import { writeFile } from "fs/promises";
 import { join } from "path";
 import type { ChannelContext } from "../../channel/channel-context.js";
+import type { DotConversation } from "../../dot/types.js";
 import * as log from "../../log.js";
 import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
@@ -32,8 +33,7 @@ function getFinalOutcomeText(outcome: FinalOutcome): string | null {
 }
 
 export interface TurnFinisherDeps {
-	channelId: string;
-	channelDir: string;
+	conversation: DotConversation;
 	host: SessionHost;
 	models: ModelSelection;
 	ledger: UsageLedger;
@@ -47,15 +47,18 @@ export interface TurnFinisherDeps {
 
 export class TurnFinisher {
 	private readonly channelId: string;
-	private readonly channelDir: string;
+	private readonly dot: string;
+	/** The debug prompt dump is per conversation: two channels of one dot must not overwrite each other's. */
+	private readonly conversationDir: string;
 	private readonly host: SessionHost;
 	private readonly models: ModelSelection;
 	private readonly ledger: UsageLedger;
 	private readonly turnState: TurnStateMachine;
 
 	constructor(private readonly deps: TurnFinisherDeps) {
-		this.channelId = deps.channelId;
-		this.channelDir = deps.channelDir;
+		this.channelId = deps.conversation.channelId;
+		this.dot = deps.conversation.dot;
+		this.conversationDir = deps.conversation.conversationDir;
 		this.host = deps.host;
 		this.models = deps.models;
 		this.ledger = deps.ledger;
@@ -101,7 +104,7 @@ export class TurnFinisher {
 				taskDigest: input.taskDigestText || undefined,
 				newUserMessage: input.promptText,
 			};
-			await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
+			await writeFile(join(this.conversationDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
 				(error: unknown) =>
 					log.logWarn("agent.debug.dump_failed", "last_prompt.json write failed", {
 						channelId: this.channelId,
@@ -205,6 +208,7 @@ export class TurnFinisher {
 			// keeping Σ(entries) == real spend with no double counting.
 			this.ledger.record({
 				channelId: this.channelId,
+				dot: this.dot,
 				kind: "turn",
 				model: responseModel ?? formatModelReference(currentRunModel),
 				usage: {

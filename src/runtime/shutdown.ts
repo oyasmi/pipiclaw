@@ -35,7 +35,7 @@ export interface ShutdownDeps {
 	taskDriver: { stop(): void };
 	getDurableDispatch: () => { stop(): void } | undefined;
 	memoryMaintenanceScheduler: { stop(): void };
-	eventsWatcher: { stop(): void; flush?(): Promise<void> };
+	dotRuntime: { stop(): void; flush?(): Promise<void> };
 	runs: { stop(): void };
 	jobs: { stop(): void };
 	bot: { stop(): Promise<void> };
@@ -51,7 +51,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 	const {
 		taskDriver,
 		memoryMaintenanceScheduler,
-		eventsWatcher,
+		dotRuntime,
 		runs,
 		jobs,
 		bot,
@@ -74,7 +74,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			taskDriver.stop();
 			deps.getDurableDispatch()?.stop();
 			memoryMaintenanceScheduler.stop();
-			eventsWatcher.stop();
+			dotRuntime.stop();
 			runs.stop();
 			jobs.stop();
 			await bot.stop();
@@ -154,7 +154,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 				channelIndex.close(),
 				getUsageLedger().flush?.() ?? Promise.resolve(),
 				flushSecurityLogs(),
-				...(eventsWatcher.flush ? [eventsWatcher.flush()] : []),
+				...(dotRuntime.flush ? [dotRuntime.flush()] : []),
 			];
 			const storageFlushed = await waitForTasks(storageFlushes, SHUTDOWN_LOG_FLUSH_WAIT_MS);
 			if (!storageFlushed) {

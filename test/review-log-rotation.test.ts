@@ -13,9 +13,9 @@ function createChannelDir(): string {
 
 describe("review log rotation", () => {
 	it("rotates when file exceeds 1MB", async () => {
-		const channelDir = createChannelDir();
-		await mkdir(channelDir, { recursive: true });
-		const logPath = getMemoryReviewLogPath(channelDir);
+		const dotDir = createChannelDir();
+		await mkdir(dotDir, { recursive: true });
+		const logPath = getMemoryReviewLogPath(dotDir);
 
 		// Write a file just under 1MB
 		const bigLine = JSON.stringify({
@@ -31,7 +31,7 @@ describe("review log rotation", () => {
 		expect(sizeBefore).toBeGreaterThan(1_024 * 1_024);
 
 		// Append one more entry to trigger rotation
-		await appendMemoryReviewLog(channelDir, {
+		await appendMemoryReviewLog(dotDir, {
 			timestamp: "2026-04-19T00:00:00.000Z",
 			channelId: "dm_123",
 			reason: "reflect",

@@ -3,6 +3,7 @@
  */
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
+import { conversationTypeOf } from "../channel/channel-id.js";
 import { formatDuration } from "../shared/format.js";
 import type { RunRecord } from "./run-record.js";
 
@@ -15,14 +16,33 @@ export const WAKE_OUTPUT_TAIL_CHARS = 6_000;
  * The completion wake for a settled run: who finished, how, the (untrusted) output tail, and where
  * the full output lives. Pure: the manager supplies the sibling count it alone can compute.
  */
+/**
+ * Running runs that share this wake's question, "was this the last one?": the other runs of its
+ * task, or — for a chat-level run — the other chat-level runs of the same channel. The dot's other
+ * channels get their own wakes, so counting them would leave this channel waiting for nothing.
+ */
+export function countWakeSiblings(record: RunRecord, runs: Iterable<RunRecord>): number {
+	let count = 0;
+	for (const other of runs) {
+		if (other.runId === record.runId || other.status !== "running" || other.taskId !== record.taskId) continue;
+		if (record.taskId === undefined && other.channelId !== record.channelId) continue;
+		count++;
+	}
+	return count;
+}
+
 export function buildRunCompletionWake(input: {
+	/** The run's dot: stamped on the event so admission can drop it once the channel moves (D7). */
+	dot: string;
+	dispatchId: string;
 	record: RunRecord;
 	outputText: string;
 	outputSaved: boolean;
 	/** Other runs of the same task (or, for a chat-level run, the same channel) still running. */
 	siblingCount: number;
 }): ChannelEvent {
-	const { record, outputText, outputSaved, siblingCount } = input;
+	const { dot, dispatchId, record, outputText, outputSaved, siblingCount } = input;
+	const conversationType = conversationTypeOf(record.channelId);
 	const tail = outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim();
 	// P2-1: say so when the tail cut real content, instead of leaving the reader to guess and
 	// spend a `read` round trip finding out output.md has more.
@@ -38,8 +58,6 @@ export function buildRunCompletionWake(input: {
 	// K parallel fan-out runs otherwise produce K wake turns, each re-asking "is this the only
 	// one?" via a fresh subagent_list call — this answers it inline (review 2026-08-23
 	// §3.3), so the model can reliably reply [SILENT] to every wake but the last.
-	// A chat-level run's siblings are the other chat-level runs on this channel: the same "was this
-	// the last one?" question, without a task to scope it.
 	const siblingNote =
 		siblingCount > 0
 			? ` ${siblingCount} other run(s) ${record.taskId ? "for this task" : "on this channel"} are still running.`
@@ -50,7 +68,7 @@ export function buildRunCompletionWake(input: {
 			? `\nVerdict: ${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}`
 			: "";
 	return {
-		type: record.channelId.startsWith("group_") ? "group" : "dm",
+		type: conversationType === "2" ? "group" : "dm",
 		channelId: record.channelId,
 		user: "SUBAGENT",
 		userName: "SUBAGENT",
@@ -72,8 +90,9 @@ export function buildRunCompletionWake(input: {
 			workspaceLine +
 			"Continue whatever was waiting on this delegation. If it needs no follow-up, respond with exactly [SILENT].",
 		ts: String(Date.now()),
-		conversationType: record.channelId.startsWith("group_") ? "2" : "1",
-		dispatchId: `subagent:${record.channelId}:${record.runId}:done`,
+		conversationType,
+		dispatchId,
+		dot,
 		// The result is awaited; the wake itself still runs without a progress card.
 		presentation: "awaited",
 		...(record.taskId
@@ -82,7 +101,7 @@ export function buildRunCompletionWake(input: {
 						kind: "subagent" as const,
 						resourceId: record.runId,
 						taskId: record.taskId,
-						dispatchId: `subagent:${record.channelId}:${record.runId}:done`,
+						dispatchId,
 					},
 				}
 			: {}),

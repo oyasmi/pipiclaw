@@ -16,7 +16,8 @@ import { hashFile } from "./util.js";
 export interface ArtifactIndex {
 	schemaVersion: 1;
 	complete: boolean;
-	mounts: { homeDir: string; workspaceDir: string; channelDir: string };
+	/** `channelDir` is the pre-058 name of `dotDir`, kept readable for archived trials. */
+	mounts: { homeDir: string; workspaceDir: string; dotDir: string; channelDir?: string };
 	entries: Array<{
 		id: string;
 		path: string;
@@ -44,7 +45,7 @@ export function atomicJson(path: string, value: unknown): void {
 }
 
 export function captureArtifacts(
-	context: Pick<TrialContext, "homeDir" | "workspaceDir" | "channelDir">,
+	context: Pick<TrialContext, "homeDir" | "workspaceDir" | "dotDir">,
 	trialDir: string,
 	specs: ArtifactSpec[] = [{ root: "workspace", path: "." }],
 ): ArtifactIndex {
@@ -53,7 +54,7 @@ export function captureArtifacts(
 	const seen = new Set<string>();
 	for (const spec of specs) {
 		const root =
-			spec.root === "home" ? context.homeDir : spec.root === "workspace" ? context.workspaceDir : context.channelDir;
+			spec.root === "home" ? context.homeDir : spec.root === "workspace" ? context.workspaceDir : context.dotDir;
 		const visit = (path: string): void => {
 			const rel = relative(root, path);
 			if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))

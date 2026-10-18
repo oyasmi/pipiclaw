@@ -8,33 +8,33 @@ import type { AgentRunner } from "../agent/types.js";
 import type { BootstrapPaths } from "../app/home.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
+import type { ChannelDescription } from "../channel/channel-id.js";
 import type { ChannelIndex } from "../channel/channel-index.js";
-import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
-import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
 	formatMissingQueueMessage,
 	formatNewSessionReply,
 	formatSteerQueued,
+	parseBuiltInCommand,
 	type RuntimeCommandName,
 } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
 import type { BusyMessageMode } from "../dingtalk/config.js";
 import type { BusyMessageResult, DingTalkBotPort, DingTalkHandler, StopOutcome } from "../dingtalk/handler.js";
+import { type DotCommandPort, formatUnavailableDotReply, formatUnboundChannelReply } from "../dot/commands.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
-import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
-import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { readActiveTasks } from "../tasks/contract.js";
 import { pauseTask as pauseStoredTask } from "../tasks/store.js";
+import type { ChannelResolution } from "./dot-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { persistInboundImage, relativeImagePaths } from "./inbound-images.js";
 import { forceEndStuckTurnAfterStop } from "./stop-watchdog.js";
 import { createTaskDriverEvent, parseDriverTaskId } from "./task-driver.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
-import { type ArchivedMessage, createEventTurnRunner } from "./turn-run.js";
+import { type ArchivedMessage, createEventTurnRunner, isSyntheticEvent } from "./turn-run.js";
 
 function isNoRunningTaskQueueError(err: unknown): boolean {
 	return err instanceof Error && err.message === "No task is currently running.";
@@ -66,7 +66,15 @@ export interface TurnHandlerDeps {
 	stopWatchdogs: Set<string>;
 	channelIndex: ChannelIndex;
 	archiveIncomingMessage: (channelId: string, message: ArchivedMessage, contextLabel: string) => Promise<void>;
-	getRunner: (channelId: string) => AgentRunner;
+	/** The channel's runner; `undefined` when it is not bound to an available dot — none is ever built then. */
+	getRunner: (channelId: string) => AgentRunner | undefined;
+	resolveChannel: (channelId: string) => ChannelResolution;
+	/** `/dot` as asked from `channelId` (spec 058, D5). */
+	dotPort: (channelId: string) => DotCommandPort;
+	/** Names a channel and says whether it is bound to `dot` — the asking channel's dot. */
+	describeChannel: (dot: string, channelId: string) => ChannelDescription;
+	/** Channels registered in a dot's `dot.json` (for `/events history`). */
+	dotChannelIds: (dot: string) => readonly string[];
 	cliVersion: string;
 	startedAt: number;
 	isShuttingDown: () => boolean;
@@ -87,6 +95,10 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 		channelIndex,
 		archiveIncomingMessage,
 		getRunner,
+		resolveChannel,
+		dotPort,
+		describeChannel,
+		dotChannelIds,
 		cliVersion,
 		startedAt,
 		isShuttingDown,
@@ -96,12 +108,15 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 		getTaskDriver,
 	} = deps;
 
+	const reservedTurns = new WeakSet<ChannelEvent>();
 	const runEventTurn = createEventTurnRunner({
 		options,
 		store,
 		activeTasks,
 		archiveIncomingMessage,
 		getRunner,
+		resolveChannel,
+		reservedTurns,
 		isShuttingDown,
 		getDurableDispatch,
 		getJobs,
@@ -129,7 +144,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 				// straight away. The step may not be bound to its session yet, so fall back to the text.
 				const taskId = runner.getTaskLoop()?.taskId ?? parseDriverTaskId(runner.getTurnStatus().taskText);
 				if (taskId) {
-					await pauseStoredTask(getChannelDir(options.paths.workspaceDir, channelId), taskId, {
+					await pauseStoredTask(runner.conversation.dotDir, taskId, {
 						by: "user",
 						reason: "用户 /stop 中止了该任务的当前步骤。",
 					});
@@ -202,20 +217,23 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 				.catch(() => undefined)
 				.then(async () => {
 					try {
-						const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
-						const access = resolveProjectAccessPolicy(
-							loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config,
-							process.cwd(),
-						);
-						const scope = resolveProjectScope(channelDir, access);
-						if (scope.kind === "blocked") {
-							throw new Error(scope.reason);
+						const resolution = resolveChannel(event.channelId);
+						if (resolution.kind !== "bound") {
+							await _bot.sendPlain(
+								event.channelId,
+								resolution.kind === "unbound"
+									? formatUnboundChannelReply()
+									: formatUnavailableDotReply(resolution.dot),
+							);
+							return;
 						}
+						const { conversation } = resolution;
 
 						// The empty session file and active pointer are committed before the old
 						// generation is touched. A filesystem failure therefore leaves the live
-						// session authoritative and retryable.
-						const result = await createFreshActiveSession(channelDir, scope.scope.projectRoot);
+						// session authoritative and retryable. `/new` resets only this channel's
+						// conversation in the dot.
+						const result = await createFreshActiveSession(conversation.conversationDir, conversation.cwd);
 						const oldRunner = channelRunners.get(event.channelId);
 						if (oldRunner) {
 							channelRunners.delete(event.channelId);
@@ -247,7 +265,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 								userName: event.userName,
 								text: event.text,
 								isBot: false,
-								images: relativeImagePaths(options.paths.workspaceDir, event.channelId, event.images),
+								images: relativeImagePaths(conversation.dotDir, event.images),
 							},
 							"/new command",
 						);
@@ -277,42 +295,53 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 
 		async runRuntimeCommand(event: ChannelEvent, name: RuntimeCommandName, args: string): Promise<string> {
 			const { channelId } = event;
+			const resolution = resolveChannel(channelId);
+			if (resolution.kind !== "bound") {
+				return runReportCommand(
+					{
+						kind: "unbound",
+						dotPort: dotPort(channelId),
+						refusal:
+							resolution.kind === "unbound"
+								? formatUnboundChannelReply()
+								: formatUnavailableDotReply(resolution.dot),
+					},
+					name,
+					args,
+				);
+			}
+			const { conversation } = resolution;
+			const { dot, dotDir } = conversation;
 			return runReportCommand(
 				{
-					channelId,
+					kind: "bound",
+					conversation,
+					dotPort: dotPort(channelId),
 					paths: options.paths,
-					actor: "dingtalk-command",
+					describeChannel: (target) => describeChannel(dot, target),
+					dotChannelIds: () => dotChannelIds(dot),
 					version: cliVersion,
 					startedAt,
 					peekRunner: () => channelRunners.get(channelId),
-					getRunner: () => getRunner(channelId),
-					runManager: getRuns().get(channelId),
-					runningJobLines: () => getJobs().runningLines(channelId),
-					// D4.2: dispose the cached runner so the next access rebuilds it under the new scope.
-					// The active-session ref is untouched — same session, new project root.
-					onScopeChanged: async () => {
-						const runner = channelRunners.get(channelId);
-						channelRunners.delete(channelId);
-						await runner?.dispose().catch((err) => {
-							log.logWarn("runtime.runner.dispose_failed", "Runner dispose after /project failed", {
-								channelId: channelId,
-								reason: errorMessage(err),
-							});
-						});
+					getRunner: () => {
+						const runner = getRunner(channelId);
+						if (!runner) throw new Error(`Channel ${channelId} lost its dot binding`);
+						return runner;
 					},
+					runManager: getRuns().get(dot),
 					dispatchTask: async (id) => {
-						const channelDir = getChannelDir(options.paths.workspaceDir, channelId);
-						const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
-							(candidate) => candidate.id === id,
-						);
-						if (!entry) return false;
+						const entry = (await readActiveTasks(join(dotDir, "tasks"))).find((candidate) => candidate.id === id);
+						// The step runs in the task's delivery channel, wherever `/tasks` was typed (D13);
+						// a suspended task is not woken at all.
+						const target = entry?.fields.channel;
+						if (!entry || !target || !describeChannel(dot, target).boundHere) return false;
 						// A human asking to run a task twice means twice, so this key is deliberately
 						// unique per invocation rather than sharing the driver's occurrence key (D1).
 						const now = Date.now();
 						return (
 							(await getDurableDispatch()?.dispatch({
-								...createTaskDriverEvent(channelId, entry, now),
-								dispatchId: `task:${channelId}:${entry.id}:manual:${new Date(now).toISOString()}`,
+								...createTaskDriverEvent(dot, target, entry, now),
+								dispatchId: `task:${dot}:${entry.id}:manual:${new Date(now).toISOString()}`,
 							})) ?? false
 						);
 					},
@@ -332,8 +361,11 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 				return { kind: "handled" };
 			}
 
+			// A channel is busy only while it has a runner, which only a bound channel ever gets; a
+			// binding that disappeared in between is simply run as a normal (refused) turn.
 			const runner = getRunner(event.channelId);
 			const trimmedQueueText = queueText.trim();
+			if (!runner) return { kind: "requeue", text: trimmedQueueText || event.text };
 
 			if (!trimmedQueueText) {
 				await bot.sendPlain(event.channelId, formatMissingQueueMessage(mode === "followUp" ? "followup" : "steer"));
@@ -388,7 +420,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 						isBot: false,
 						deliveryMode: mode,
 						skipContextSync: true,
-						images: relativeImagePaths(options.paths.workspaceDir, event.channelId, event.images),
+						images: relativeImagePaths(runner.conversation.dotDir, event.images),
 					},
 					`${mode} message`,
 				);
@@ -421,13 +453,27 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 			}
 		},
 
-		persistInboundImage: (channelId, image) => persistInboundImage(options.paths.workspaceDir, channelId, image),
+		// D4/D17: an unbound (or unavailable) channel's images are never downloaded into any dot.
+		persistInboundImage: async (channelId, image) => {
+			const resolution = resolveChannel(channelId);
+			if (resolution.kind !== "bound") return null;
+			return persistInboundImage(resolution.conversation.dotDir, channelId, image);
+		},
 
 		handleEvent: runEventTurn,
 
 		reserveEvent(event: ChannelEvent): void {
 			// Must stay synchronous: runs before the queued handler is awaited, so busy state shows up at once.
-			getRunner(event.channelId).beginTurn(event.text);
+			// Only a turn admission will accept gets reserved; `handleEvent` releases it if it refuses.
+			const resolution = resolveChannel(event.channelId);
+			if (resolution.kind !== "bound") return;
+			if (isSyntheticEvent(event) && event.dot !== resolution.conversation.dot) return;
+			// `/dot` runs outside any turn: `/dot bind` must see this channel idle (D5 step 1).
+			if (!isSyntheticEvent(event) && parseBuiltInCommand(event.text)?.name === "dot") return;
+			const runner = getRunner(event.channelId);
+			if (!runner) return;
+			runner.beginTurn(event.text);
+			reservedTurns.add(event);
 		},
 	};
 	return handler;

@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { ChannelJobManager } from "../jobs/manager.js";
+import type { DotJobManager } from "../jobs/manager.js";
 import type { JobSnapshot } from "../jobs/record.js";
 import { formatDuration } from "../shared/format.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -21,7 +21,9 @@ const jobSchema = Type.Object({
 });
 
 export interface JobToolOptions {
-	jobManager: ChannelJobManager;
+	jobManager: DotJobManager;
+	/** The calling channel: a job another channel of this dot started is labelled with its origin. */
+	channelId: string;
 }
 
 /** Total bytes of job output `op=poll` inlines across all finished jobs in one call. */
@@ -32,13 +34,14 @@ interface JobToolArgs {
 	ids?: string[];
 }
 
-function formatJobLine(job: JobSnapshot): string {
-	const exit = job.exitCode !== undefined ? `, exit ${job.exitCode}` : "";
-	return `- [${job.id}] ${job.label} — ${job.status} (${formatDuration(job.durationMs)}${exit})`;
-}
-
 export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSchema> {
 	const { jobManager } = options;
+
+	function formatJobLine(job: JobSnapshot): string {
+		const exit = job.exitCode !== undefined ? `, exit ${job.exitCode}` : "";
+		const origin = job.channelId && job.channelId !== options.channelId ? `, started in ${job.channelId}` : "";
+		return `- [${job.id}] ${job.label} — ${job.status} (${formatDuration(job.durationMs)}${exit}${origin})`;
+	}
 
 	async function completedDetail(jobs: JobSnapshot[]): Promise<string[]> {
 		const sections: string[] = [];
@@ -67,9 +70,11 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 		name: "job",
 		label: "job",
 		description:
-			"Inspect and control background bash jobs (started with bash async:true). op=list shows a snapshot; " +
-			"op=poll waits briefly for a running job to finish and returns its output; op=cancel stops jobs by id. " +
-			"Completion wakes this channel; finish independent work, then end the turn when only waiting remains.",
+			"Inspect and control this dot's background bash jobs (started with bash async:true), shared by every " +
+			"channel bound to it. op=list shows a snapshot; op=poll waits briefly for a running job to finish and " +
+			"returns its output; op=cancel stops jobs by id. A job's completion wakes the channel that started it " +
+			'(a job from another channel is marked "started in <channel>"); for your own jobs, finish independent ' +
+			"work, then end the turn when only waiting remains.",
 		parameters: jobSchema,
 		execute: async (_toolCallId: string, { op, ids }: JobToolArgs, signal?: AbortSignal) => {
 			if (op === "cancel") {
@@ -115,7 +120,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 			if (running.length > 0) {
 				parts.push(`## Still running (${running.length})`, ...running.map(formatJobLine));
 				parts.push(
-					"Finish independent work, then end the turn; completion wakes this channel. Do not loop on poll.",
+					"Finish independent work, then end the turn; completion wakes the channel that started each job. Do not loop on poll.",
 				);
 			}
 			return {

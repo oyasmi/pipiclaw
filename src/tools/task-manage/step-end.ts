@@ -24,7 +24,7 @@ export async function endTaskStep(
 		throw new RecoverableToolError("task_step_end is only available inside a task loop step.");
 	}
 	const id = normalizeTaskId(options.taskId);
-	const document = await readStoredTask(options.channelDir, id);
+	const document = await readStoredTask(options.dotDir, id);
 	if (!document) throw new RecoverableToolError(`Task "${id}" no longer exists; nothing to end.`);
 	const note = requiredField(request.note, "note", "task_step_end");
 
@@ -51,7 +51,7 @@ export async function endTaskStep(
 	const tools = [...new Set(options.getToolsUsed?.() ?? [])];
 	const report = request.report?.trim();
 	const logStep = async (outcome: TaskStepEndRequest["outcome"]) => {
-		await appendTaskLog(options.channelDir, id, {
+		await appendTaskLog(options.dotDir, id, {
 			kind: "step",
 			seq,
 			outcome,
@@ -71,7 +71,7 @@ export async function endTaskStep(
 	// successful write, right before each return.
 	let pendingNotice = report || undefined;
 	const flushNotice = async () => {
-		if (pendingNotice) await queueTaskNotice(options.channelDir, id, pendingNotice);
+		if (pendingNotice) await queueTaskNotice(options.dotDir, id, pendingNotice);
 	};
 
 	if (request.outcome === "done") {

@@ -1,7 +1,8 @@
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
-import { getChannelDir } from "../channel/channel-paths.js";
-import { handleProjectCommand } from "../channel/commands.js";
+import type { ChannelDescription } from "../channel/channel-id.js";
+import { type DotCommandPort, handleDotCommand } from "../dot/commands.js";
+import type { DotConversation } from "../dot/types.js";
 import { handleEventsCommand } from "../events/commands.js";
 import { handleSkillsCommand } from "../skills/commands.js";
 import { handleSubagentsCommand } from "../subagents/commands.js";
@@ -13,11 +14,10 @@ import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import type { RuntimeCommandName } from "./catalog.js";
 
 /**
- * The stateless report commands (`/events /tasks /status /usage /context /subagents /project
- * /skills`) as one transport-neutral handler. The DingTalk runtime and the terminal TUI both route
- * through it, so a report cannot behave differently depending on where it was typed; each
- * transport supplies only what is genuinely its own (how to find its runner, how to rebuild one
- * after `/project`, whether a task can be woken immediately).
+ * The stateless report commands (`/dot /events /tasks /status /usage /context /subagents /skills`) as
+ * one transport-neutral handler. The DingTalk runtime and the terminal TUI both route through it,
+ * so a report cannot behave differently depending on where it was typed; each transport supplies
+ * only what is genuinely its own (how to find its runner, whether a task can be woken immediately).
  */
 /** The path fields the reports read; structurally satisfied by the app's `BootstrapPaths`. */
 export interface ReportCommandPaths {
@@ -29,9 +29,15 @@ export interface ReportCommandPaths {
 }
 
 export interface ReportCommandContext {
-	channelId: string;
+	kind: "bound";
+	/** The asking channel's conversation in its dot. */
+	conversation: DotConversation;
+	dotPort: DotCommandPort;
 	paths: ReportCommandPaths;
-	actor: "dingtalk-command" | "tui-command";
+	/** Names a delivery channel and says whether it is still bound to this dot. */
+	describeChannel: (channelId: string) => ChannelDescription;
+	/** Channels with a conversation in this dot, for `/events history` records older than spec 058. */
+	dotChannelIds: () => readonly string[];
 	version: string;
 	startedAt: number;
 	/** The channel's live runner, if one exists; never builds one. */
@@ -39,26 +45,47 @@ export interface ReportCommandContext {
 	/** The channel's runner, built on demand (`/context` needs a session to report on). */
 	getRunner: () => AgentRunner;
 	runManager: SubAgentRunManager;
-	/** One line per running background job, for `/project`'s "busy" check. */
-	runningJobLines: () => string[];
-	/** Drop the runner built under the old project scope so the next access rebuilds it. */
-	onScopeChanged: () => Promise<void>;
 	/** Immediate task wake for `/tasks run|reply`; absent where there is no durable dispatch (the TUI). */
 	dispatchTask?: (taskId: string) => Promise<boolean>;
 }
 
+/**
+ * A channel with no usable dot (spec 058, D4): `/dot` is the one report it can run; every other
+ * name gets `refusal` — why there is no dot, and the next step.
+ */
+export interface UnboundCommandContext {
+	kind: "unbound";
+	dotPort: DotCommandPort;
+	refusal: string;
+}
+
 export async function runReportCommand(
-	context: ReportCommandContext,
+	context: ReportCommandContext | UnboundCommandContext,
 	name: RuntimeCommandName,
 	args: string,
 ): Promise<string> {
-	const { channelId, paths } = context;
-	const channelDir = getChannelDir(paths.workspaceDir, channelId);
+	if (name === "dot") return handleDotCommand(args, context.dotPort);
+	if (context.kind === "unbound") return context.refusal;
+	const { conversation, paths } = context;
+	const { channelId, dot, dotDir } = conversation;
 	switch (name) {
 		case "events":
-			return handleEventsCommand({ args, workspaceDir: paths.workspaceDir, historyPath: paths.eventHistoryPath });
+			return handleEventsCommand({
+				args,
+				dot,
+				dotDir,
+				historyPath: paths.eventHistoryPath,
+				dotChannelIds: context.dotChannelIds(),
+				describeChannel: context.describeChannel,
+			});
 		case "tasks":
-			return handleTasksCommand({ args, channelDir, dispatchTask: context.dispatchTask });
+			return handleTasksCommand({
+				args,
+				dotDir,
+				currentChannelId: channelId,
+				describeChannel: context.describeChannel,
+				dispatchTask: context.dispatchTask,
+			});
 		case "status":
 			return renderStatus({
 				runner: context.peekRunner(),
@@ -66,7 +93,7 @@ export async function runReportCommand(
 				uptimeMs: Date.now() - context.startedAt,
 			});
 		case "usage":
-			return renderUsageReport(getUsageLedger(), channelId, parseUsageMode(args), new Date());
+			return renderUsageReport(getUsageLedger(), { dot, channelId }, parseUsageMode(args), new Date());
 		// Read-only prompt accounting; safe mid-turn.
 		case "context":
 			return context.getRunner().renderContextReport(args);
@@ -86,23 +113,6 @@ export async function runReportCommand(
 						authConfigPath: paths.authConfigPath,
 						modelsConfigPath: paths.modelsConfigPath,
 					}),
-			});
-		case "project":
-			return handleProjectCommand({
-				args,
-				channelId,
-				channelDir,
-				appHomeDir: paths.appHomeDir,
-				actor: context.actor,
-				isBusy: () => context.peekRunner()?.isBusy() ?? false,
-				listActiveBlockers: () => [
-					...context.runManager
-						.list()
-						.filter((record) => record.status === "running")
-						.map((record) => `委派 \`${record.runId}\`（${record.agent}）仍在运行`),
-					...context.runningJobLines(),
-				],
-				onScopeChanged: context.onScopeChanged,
 			});
 		case "skills":
 			return handleSkillsCommand({

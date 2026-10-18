@@ -20,7 +20,7 @@ export async function writeContent(
 	const securityConfig = options?.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options?.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
-		projectRoot: process.cwd(),
+		cwd: process.cwd(),
 	};
 
 	const target = await checkPathGuard(path, "write", securityConfig, securityContext, {

@@ -91,11 +91,6 @@ export class TurnController {
 		await this.shutdown();
 	}
 
-	/** Test/observability hook. Turn state is owned by the runner. */
-	isRunning(): boolean {
-		return this.deps.runner.isBusy();
-	}
-
 	submit(text: string): void {
 		this.submitChain = this.submitChain
 			.then(() => this.processSubmit(text))

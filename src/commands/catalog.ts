@@ -3,8 +3,7 @@
  * examples, plus the parsing and usage/help rendering built on top of them.
  *
  * It lives in its own domain, not in `src/agent/`, because the catalog describes commands handled
- * in three different layers — the runtime (`/tasks`, `/events`, `/subagents`, `/project`,
- * `/skills`), the agent session (`/model`, `/compact`, `/new`) and memory (`/memory`) — and is read
+ * in three different layers — the runtime (`/tasks`, `/events`, `/subagents`, `/skills`), the agent session (`/model`, `/compact`, `/new`) and memory (`/memory`) — and is read
  * by all of them plus the TUI. Only the catalog and the reply shape are shared: each *handler*
  * still lives in the layer that owns the state it touches (`runtime/*-commands.ts`,
  * `memory/commands.ts`, `agent/session/command-extension.ts`). This file has no imports at all, so nothing
@@ -19,13 +18,13 @@ export type BuiltInCommandName =
 	| "steer"
 	| "followup"
 	| "stop"
+	| "dot"
 	| "events"
 	| "tasks"
 	| "status"
 	| "usage"
 	| "context"
 	| "subagents"
-	| "project"
 	| "skills";
 
 /** The five transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
@@ -81,7 +80,7 @@ export interface CommandSpec {
 	/**
 	 * True for the built-ins `ChannelRunner.handleBuiltinCommand` handles directly (help/stop/
 	 * steer/followup/context); false for the stateless runtime reports (events/tasks/status/
-	 * usage/subagents/project) dispatched through `runRuntimeCommand`. Meaningful only within
+	 * usage/subagents/skills) dispatched through `runRuntimeCommand`. Meaningful only within
 	 * `BUILT_IN_COMMANDS`.
 	 */
 	runnerHandled?: boolean;
@@ -128,6 +127,23 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		runnerHandled: true,
 	},
 	{
+		name: "dot",
+		argumentHint: "[list|new <dot>|bind <dot>]",
+		description: "查看、创建 dot，把本频道绑定到一个 dot；未绑定的频道也能用",
+		// list/new answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
+		availableWhileBusy: true,
+		subcommands: [
+			{ name: "list", description: "列出所有 dot 和各自绑定的频道（默认动作，可省略）", example: "/dot" },
+			{ name: "new", args: "<dot>", description: "创建一个空 dot，不绑定任何频道", example: "/dot new research" },
+			{
+				name: "bind",
+				args: "<dot>",
+				description: "把本频道绑定到这个 dot，同时解除原来的绑定；回合进行中不能执行",
+				example: "/dot bind research",
+			},
+		],
+	},
+	{
 		name: "events",
 		argumentHint: "<list|show|delete|history>",
 		description: "管理定时事件文件，查看事件历史",
@@ -153,10 +169,10 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		name: "tasks",
 		argumentHint:
 			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|archive|doctor]",
-		description: "查看、指挥并诊断本频道的长程任务；pause 只停止自动执行，保留等待条件",
+		description: "查看、指挥并诊断本 dot 的长程任务；pause 只停止自动执行，保留等待条件",
 		availableWhileBusy: true,
 		subcommands: [
-			{ name: "list", description: "列出本频道进行中的任务（默认动作，可省略）", example: "/tasks" },
+			{ name: "list", description: "列出本 dot 进行中的任务（默认动作，可省略）", example: "/tasks" },
 			{
 				name: "show",
 				args: "<id>",
@@ -206,7 +222,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "usage",
 		argumentHint: "[7d|month]",
-		description: "显示本频道与全局的模型花费和 token，按类型与模型分解",
+		description: "显示本 dot 与全局的模型花费和 token，按类型与模型分解",
 		examples: ["/usage", "/usage 7d", "/usage month"],
 		availableWhileBusy: true,
 	},
@@ -261,24 +277,6 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		],
 	},
 	{
-		name: "project",
-		argumentHint: "[set <absolute-path>|reset]",
-		description: "查看或切换本频道的项目目录（读写文件与执行命令的工作目录）；set/reset 需频道空闲",
-		// The read form answers like /status; set/reset validate idleness themselves and reply
-		// with a plain error instead of blocking the built-in-command dispatch path.
-		availableWhileBusy: true,
-		subcommands: [
-			{ name: "show", description: "查看当前频道的项目目录与访问边界（默认动作，可省略）", example: "/project" },
-			{
-				name: "set",
-				args: "<absolute-path>",
-				description: "切换项目目录（需频道空闲，且目录在允许的根目录内）",
-				example: "/project set /home/me/projects/foo",
-			},
-			{ name: "reset", description: "切回默认项目目录", example: "/project reset" },
-		],
-	},
-	{
 		name: "skills",
 		argumentHint: "[list|show <name>]",
 		description: "列出工作区 skills（含未加载及原因），或查看单个 skill 的完整正文",
@@ -304,7 +302,7 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "memory",
 		argumentHint: "[status|list [type]|show <name>|forget <name>|journal [date]]",
-		description: "查看频道记忆、观察期条目与后台整理状态；不经过模型的记忆管理入口",
+		description: "查看本 dot 的记忆、观察期条目与后台整理状态；不经过模型的记忆管理入口",
 		subcommands: [
 			{
 				name: "status",
@@ -418,7 +416,7 @@ export function formatBusyHint(): string {
 
 /**
  * Renders a command's subcommand table as its `usage()` text — the single source `tasks/commands.ts`,
- * `events/commands.ts`, `subagents/commands.ts`, `channel/commands.ts`, and `memory/commands.ts` call
+ * `events/commands.ts`, `subagents/commands.ts`, and `memory/commands.ts` call
  * on a parse error, replacing five hand-written `usage()` bodies (review 2026-08-24 §3.1).
  */
 export function renderSubcommandUsage(name: string): string {

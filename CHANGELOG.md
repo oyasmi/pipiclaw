@@ -2,6 +2,49 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [Unreleased]
+
+### Added
+
+- `dot.json` may set an absolute `cwd`: the agent's working directory (shell, relative paths, default delegation directory) for that dot, while memory, tasks and events stay in the dot directory.
+- A dot can carry its own `SOUL.md` / `AGENTS.md`; it replaces the workspace file of the same name as a whole for that dot.
+- `pipiclaw tui` without `--dot` opens the only dot when exactly one exists.
+- `task_list` reports each task's delivery channel, and the per-turn task agenda marks tasks that report to another channel.
+
+### Changed
+
+- The terminal refuses `task_create` and `event_manage create` (it never runs background work), with a pointer to a bound DingTalk channel.
+- Model-facing descriptions of the memory index, event list, web cache and task list now say "dot" instead of "channel".
+
+### Removed
+
+- Dead code left behind by the dot work: v3 task frontmatter detection and the `note` loop-log record, unused run/job `runningTaskIds`, and several unused helpers. Tests no longer write usage records into the developer's real app home.
+
+## [0.9.5-beta.1] - 2026-10-18
+
+### Breaking
+
+- **Dots (spec 058).** An assistant is now a *dot*: a named, explicitly created unit that owns its memory, journal, tasks, scheduled events, delegation records and working files under `workspace/dots/<dot>/`, and is the agent's working directory. A DingTalk chat or group is only an address bound to a dot (`workspace/dots/bindings.json`); several channels can share one dot — shared memory and tasks, separate conversations — and an unbound channel gets only `/dot` and `/help`, with no model call and nothing written to disk. Nothing creates a dot implicitly.
+- **Existing app homes must be migrated before starting.** The daemon and the TUI refuse to start on the per-channel layout. Stop every Pipiclaw process and run `node scripts/migrate-to-dots.mjs --dry-run` from a checkout, then `--map <old-dir>=<dot>` / `--drop <old-dir>` for every old channel directory and `--verify`; it refuses while a background job or delegation from the old layout is still running (see [Deployment and operations](docs/deployment-and-operations.md#迁移到-dot-布局spec-058)). The script backs up `workspace/` and `state/` first, recovers real channel ids, moves state, stamps tasks with their delivery channel and rewrites absolute paths. A v3 home must first be upgraded to v5 tasks by a 0.9.x release; the in-runtime v3→v5 task conversion and `scripts/rehearse-task-migration.mjs` are removed.
+- **Project scope is removed.** `/project` and `security.json` `projectAccess` are gone (the key is ignored with a warning). The working directory — relative paths, the shell's cwd and a delegation's default `workingDirectory` — is the dot directory; pass an explicit `workingDirectory` to delegate into a repository.
+- **The TUI opens a dot:** `pipiclaw tui --dot <name>` (required), `--create` to create it; `--channel` is gone. It can open a dot the daemon is serving: memory, task and `dot.json` writes take short cross-process locks, the TUI keeps its own conversation, and a second TUI on the same dot refuses to start.
+
+### Added
+
+- `/dot [list|new <name>|bind <name>]`: list dots and their channels, create an empty dot, bind the current channel (refused while a turn is running; the reply says whether the old dot went dormant and how many of its tasks and events are now suspended). A binding whose dot directory is gone is listed as missing.
+- Tasks record their delivery `channel`; tasks and events whose delivery channel is not bound to their dot are suspended and resume when it is bound back. A dot with no binding goes dormant: no events, no task steps, and finished delegations and jobs no longer wake anyone.
+
+### Changed
+
+- Memory writes are serialized per dot (and across processes); `session_search`, `/tasks`, `/events`, `/usage` and `/subagents` report on the dot. Run and job records live under `state/subagent-runs/<dot>/` and `state/jobs/<dot>/`; DingTalk routing metadata moves to `state/dingtalk/conversations.json`.
+- Job and delegation tools see the whole dot; a list entry names the channel that started it, and its completion wakes that channel.
+- The task driver advances tasks of different channels of one dot in the same pass (one step per channel), so one channel's tasks no longer wait behind another's.
+
+### Fixed
+
+- Group job records are no longer nested under the raw channel id's `/` (D10).
+- A chat-level delegation wake counts only the same channel's still-running runs as siblings, so one channel of a dot is never told to wait for another channel's wake.
+
 ## [0.9.4] - 2026-10-17
 
 Includes everything in [0.9.4-beta.2](#094-beta2---2026-10-13) below (user-facing copy overhaul, faster and more robust delegation, enforced source layering), plus the following.
@@ -61,7 +104,7 @@ Includes everything in [0.9.4-beta.2](#094-beta2---2026-10-13) below (user-facin
 ### Upgrade
 
 - Automatic migration supports v3 (`status:` without `state:`), with originals in `tasks/.v3/`. v4 beta files with `state:` are skipped and **require isolation and manual rebuilding**; this is not v4 compatibility. Unsupported waits, previous usage/budgets, and external effects must be reconciled before resuming.
-- Failed recurring templates pause with a note; a failed conversion is rolled back per task (existing archives and backups are never overwritten; unreadable task/event directories count as failures), no marker is written, `state/task-migration-v5.failed.json` records the stage, and startup aborts (no watcher/driver/DingTalk) until the cause is fixed and the daemon is restarted; `node scripts/rehearse-task-migration.mjs` rehearses conversion on a read-only temp copy after `npm run build`. Back up the whole app home, preserve unresolved tasks/events and records, and follow [the upgrade procedure](docs/events-and-tasks.md#beta-用户升级与不可转换任务). Disabled v3 recurring tasks stay paused and get no event template; templates generated for the remaining recurring tasks are picked up by the watcher right after migration, so handle the original tasks while the daemon is stopped.
+- Failed recurring templates pause with a note; a failed conversion is rolled back per task (existing archives and backups are never overwritten; unreadable task/event directories count as failures), no marker is written, `state/task-migration-v5.failed.json` records the stage, and startup aborts (no watcher/driver/DingTalk) until the cause is fixed and the daemon is restarted; `node scripts/rehearse-task-migration.mjs` rehearses conversion on a read-only temp copy after `npm run build`. Back up the whole app home, preserve unresolved tasks/events and records, and follow [the upgrade procedure](docs/events-and-tasks.md#从更早的任务格式升级). Disabled v3 recurring tasks stay paused and get no event template; templates generated for the remaining recurring tasks are picked up by the watcher right after migration, so handle the original tasks while the daemon is stopped.
 - Local checks and CI status are recorded in [the release review](docs/releases/0.9.3-review.md).
 
 ## [0.9.3-beta.5] - 2026-09-20

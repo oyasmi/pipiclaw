@@ -2,7 +2,7 @@
  * `pipiclaw auth` CLI: argument parsing and entry. Parsing is a pure function
  * (`parseAuthArgs`) so it can be unit-tested; `runAuth` wires it to the
  * transport-neutral orchestration in `provider-login.ts`. Deliberately does
- * not construct a runner, session, memory scheduler, or channel directory —
+ * not construct a runner, session or memory scheduler, and does not touch a dot —
  * login is a short, one-shot operation (spec 039 §5.1).
  */
 import { createInterface } from "node:readline/promises";

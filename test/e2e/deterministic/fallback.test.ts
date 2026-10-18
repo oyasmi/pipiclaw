@@ -21,8 +21,8 @@ describe("E2E deterministic: model fallback", () => {
 		// 017 fallback logic. Mutation check: make shouldFallback() return false for a 429
 		// message and the turn ends with an error delivery instead of the backup's answer.
 		harness = await createDeterministicHarness({
-			seed: ({ channelDir }) => {
-				seedLegacySession("chat", join(channelDir, "context.jsonl"), channelDir);
+			seed: ({ dotDir, conversationDir }) => {
+				seedLegacySession("chat", join(conversationDir, "context.jsonl"), dotDir);
 			},
 		});
 		harness.model.script.route({
@@ -44,7 +44,7 @@ describe("E2E deterministic: model fallback", () => {
 			mains[1]?.messages.filter((message) => message.role === "user" && message.content.includes("FALLBACK_TEST")),
 		).toHaveLength(1);
 		expect(mains[1]?.messages.some((message) => message.content.includes("OLD_HISTORY"))).toBe(true);
-		const path = join(harness.channelDir, "context.jsonl");
+		const path = join(harness.conversationDir, "context.jsonl");
 		const raw = readFileSync(path, "utf8")
 			.trim()
 			.split("\n")
@@ -95,15 +95,15 @@ describe("E2E deterministic: model fallback", () => {
 		expect(edits).toBe(2);
 		expect(harness.mainTurnRequests()).toHaveLength(1);
 		vi.restoreAllMocks();
-		const disk = SessionManager.open(join(harness.channelDir, "context.jsonl"));
+		const disk = SessionManager.open(join(harness.conversationDir, "context.jsonl"));
 		expect(disk.getBranch().filter((entry) => entry.type === "context_edit")).toHaveLength(1);
 		expect(faultedHost.sessionManager.getBranch().filter((entry) => entry.type === "context_edit")).toHaveLength(2);
 		vi.spyOn(AgentSession.prototype, "reload").mockRejectedValue(new Error("injected reload failure"));
 		await faultedHost.refreshSessionResources();
-		const beforeRefused = readFileSync(join(harness.channelDir, "context.jsonl"), "utf8");
+		const beforeRefused = readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8");
 		await harness.sendUserMessage("NEXT_TURN");
 		expect(harness.mainTurnRequests()).toHaveLength(1);
-		expect(readFileSync(join(harness.channelDir, "context.jsonl"), "utf8")).toBe(beforeRefused);
+		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).toBe(beforeRefused);
 		vi.restoreAllMocks();
 		await harness.restart();
 		expect(harness.mainTurnRequests()).toHaveLength(1); // No automatic backup replay on rebuild.

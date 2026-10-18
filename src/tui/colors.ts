@@ -15,7 +15,6 @@ export const dim = sgr(2, 22);
 export const italic = sgr(3, 23);
 export const underline = sgr(4, 24);
 export const strikethrough = sgr(9, 29);
-export const red = sgr(31);
 export const yellow = sgr(33);
 export const cyan = sgr(36);
 export const gray = sgr(90);

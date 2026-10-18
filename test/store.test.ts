@@ -1,17 +1,23 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getChannelDirName } from "../src/channel/channel-paths.js";
 import { ChannelStore, type LoggedSubAgentRun } from "../src/channel/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-store-");
 
+/** Every channel but `dm_unbound` archives into its own conversation directory under `root`. */
+function storeFor(root: string): ChannelStore {
+	return new ChannelStore({
+		resolveArchiveDir: (channelId) => (channelId === "dm_unbound" ? undefined : join(root, channelId)),
+	});
+}
+
 /** The store resolves archive paths without creating them, so a test that seeds a file says so. */
 function seedChannelDir(workingDir: string, channelId: string): string {
-	const channelDir = join(workingDir, getChannelDirName(channelId));
-	mkdirSync(channelDir, { recursive: true });
-	return channelDir;
+	const dotDir = join(workingDir, channelId);
+	mkdirSync(dotDir, { recursive: true });
+	return dotDir;
 }
 
 function sampleSubAgentRun(): LoggedSubAgentRun {
@@ -56,7 +62,7 @@ describe("ChannelStore", () => {
 		vi.setSystemTime(new Date("2026-04-01T08:00:00.000Z"));
 
 		const workingDir = createTempDir();
-		const store = new ChannelStore({ workingDir });
+		const store = storeFor(workingDir);
 		const channelId = "dm_1";
 		const first = await store.logMessage(channelId, {
 			date: "",
@@ -77,7 +83,7 @@ describe("ChannelStore", () => {
 		expect(duplicate).toBe(false);
 		expect((store as unknown as { cleanupTimer: NodeJS.Timeout | null }).cleanupTimer).not.toBeNull();
 
-		const logPath = join(workingDir, getChannelDirName(channelId), "log.jsonl");
+		const logPath = join(workingDir, channelId, "log.jsonl");
 		await store.flush();
 		const lines = readFileSync(logPath, "utf-8").trim().split("\n");
 		expect(lines).toHaveLength(1);
@@ -103,10 +109,10 @@ describe("ChannelStore", () => {
 
 	it("rotates oversized logs, resets sync offsets, and writes subagent runs", async () => {
 		const workingDir = createTempDir();
-		const store = new ChannelStore({ workingDir });
-		const channelDir = seedChannelDir(workingDir, "dm_rotate");
-		const logPath = join(channelDir, "log.jsonl");
-		const syncOffsetPath = join(channelDir, ".sync-offset");
+		const store = storeFor(workingDir);
+		const dotDir = seedChannelDir(workingDir, "dm_rotate");
+		const logPath = join(dotDir, "log.jsonl");
+		const syncOffsetPath = join(dotDir, ".sync-offset");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 		writeFileSync(syncOffsetPath, "42", "utf-8");
@@ -124,16 +130,16 @@ describe("ChannelStore", () => {
 		expect(readFileSync(syncOffsetPath, "utf-8")).toBe("0");
 		expect(readFileSync(logPath, "utf-8")).toContain('"text":"rotated"');
 
-		await store.logSubAgentRun("dm_rotate", sampleSubAgentRun());
+		await store.logSubAgentRun(dotDir, sampleSubAgentRun());
 		await store.flush();
-		expect(readFileSync(join(channelDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
+		expect(readFileSync(join(dotDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
 	});
 
 	it("serializes concurrent writes to the same log file around rotation", async () => {
 		const workingDir = createTempDir();
-		const store = new ChannelStore({ workingDir });
-		const channelDir = seedChannelDir(workingDir, "dm_concurrent");
-		const logPath = join(channelDir, "log.jsonl");
+		const store = storeFor(workingDir);
+		const dotDir = seedChannelDir(workingDir, "dm_concurrent");
+		const logPath = join(dotDir, "log.jsonl");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 
@@ -162,21 +168,21 @@ describe("ChannelStore", () => {
 		expect(readFileSync(logPath, "utf-8")).toContain('"text":"second"');
 	});
 
-	it("stores channel logs under a single directory for channel ids with slashes", async () => {
+	it("archives nothing for a channel that is not bound to a dot", async () => {
+		// Spec 058, D4: an unbound channel leaves no trace on disk — no directory, no log.
 		const workingDir = createTempDir();
-		const store = new ChannelStore({ workingDir });
-		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		const store = storeFor(workingDir);
 
-		await store.logMessage(channelId, {
+		const logged = await store.logMessage("dm_unbound", {
 			date: "2026-04-01T10:00:00.000Z",
 			ts: "400",
 			user: "alice",
-			text: "hello group",
+			text: "hello",
 			isBot: false,
 		});
 		await store.flush();
 
-		const channelDir = join(workingDir, getChannelDirName(channelId));
-		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"hello group"');
+		expect(logged).toBe(false);
+		expect(readdirSync(workingDir)).toEqual([]);
 	});
 });

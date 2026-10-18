@@ -6,7 +6,6 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
-import { assertWithinProjectBoundary } from "../subagents/dispatch.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
@@ -46,14 +45,8 @@ export interface SubAgentManageToolOptions {
 	 * only tightens what was already true rather than changing production behavior.
 	 */
 	workspaceDir: string;
-	channelDir: string;
-	/**
-	 * The current project scope, so `follow_up` can re-check a resumed run's `workingDirectory`
-	 * against the boundary in effect *now* rather than trusting the one recorded at dispatch time
-	 * (review 2026-08-23 §3.1) — `/project` can move `workingDirectory` between the two.
-	 */
-	workingDirectory?: string;
-	projectBoundary?: "project" | "unbounded";
+	dot: string;
+	dotDir: string;
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	securityConfig?: SecurityConfig;
@@ -71,12 +64,14 @@ const LIST_CAP = 50;
  *  failure without dumping an unbounded log into the model's context. */
 const STDERR_TAIL_CHARS = 2_000;
 
-function formatRunLine(record: RunRecord): string {
+/** `here` is the calling channel: a run another channel of this dot started is labelled with its origin. */
+function formatRunLine(record: RunRecord, here: string): string {
 	const task = record.taskId ? `, task ${record.taskId}` : "";
+	const origin = record.channelId !== here ? `, started in ${record.channelId}` : "";
 	const lease = record.leaseKey ? ", lease held" : "";
 	const cost = formatCost(record);
 	const costPart = cost ? `, ${cost}` : "";
-	const header = `- [${record.runId}] ${record.agent} (${harnessLabel(record)}) — "${record.label}" — ${record.status} (${formatRunDuration(record)}${task}${lease}${costPart})`;
+	const header = `- [${record.runId}] ${record.agent} (${harnessLabel(record)}) — "${record.label}" — ${record.status} (${formatRunDuration(record)}${task}${lease}${costPart}${origin})`;
 	if (record.status === "failed" && record.failureReason) {
 		return `${header}\n  failed: ${record.failureReason}`;
 	}
@@ -143,7 +138,9 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 		name: "subagent_list",
 		label: "subagent_list",
 		description:
-			"Snapshot of this channel's delegation runs. Completion wakes this channel; inspect when a decision needs current status, not in a polling loop.",
+			"Snapshot of this dot's delegation runs, shared by every channel bound to it. A run's completion wakes the " +
+			'channel that started it (a run from another channel is marked "started in <channel>"); inspect when a ' +
+			"decision needs current status, not in a polling loop.",
 		parameters: subagentListSchema,
 		execute: async () => {
 			// Spec 042 D9: this used to return every run on the channel, unbounded, in both the
@@ -157,7 +154,10 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 				.sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
 			const shownTerminal = terminal.slice(0, Math.max(0, LIST_CAP - running.length));
 			const runs = [...running, ...shownTerminal];
-			const lines = runs.length === 0 ? ["No delegation runs."] : runs.map(formatRunLine);
+			const lines =
+				runs.length === 0
+					? ["No delegation runs."]
+					: runs.map((record) => formatRunLine(record, options.channelId));
 			if (runs.length < allRuns.length) {
 				lines.push(
 					`… showing ${runs.length} of ${allRuns.length} runs (all running + most recently finished). Ask about a specific runId if you need an older one not shown here.`,
@@ -185,11 +185,11 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			const resolution = manager.resolveRef(runId);
 			if (resolution.kind === "ambiguous") {
 				throw new RecoverableToolError(
-					`"${runId}" matches multiple runs on this channel: ${resolution.candidates.map((candidate) => candidate.runId).join(", ")}. Use the full runId.`,
+					`"${runId}" matches multiple runs in this dot: ${resolution.candidates.map((candidate) => candidate.runId).join(", ")}. Use the full runId.`,
 				);
 			}
 			if (resolution.kind === "not_found") {
-				throw new RecoverableToolError(`Run "${runId}" was not found on this channel.`);
+				throw new RecoverableToolError(`Run "${runId}" was not found in this dot.`);
 			}
 			const resolvedRunId = resolution.record.runId;
 
@@ -218,12 +218,6 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				throw new RecoverableToolError(taskLengthError);
 			}
 			const record = resolution.record;
-			// The initial dispatch validated `record.workingDirectory` against the project boundary
-			// in effect at the time (spec 043, D6.2); `/project` can move that boundary afterward, and
-			// this re-checks the *current* one before resuming a process there (review 2026-08-23 §3.1).
-			if (options.projectBoundary === "project" && options.workingDirectory) {
-				assertWithinProjectBoundary(record.workingDirectory, options.workingDirectory, record.workingDirectory);
-			}
 			const harness = resumableHarnessOf(record);
 			if (!harness) {
 				// Internal runs have no persisted transcript to resume — the isolated-context design
@@ -323,7 +317,12 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			try {
 				const envelopedTask = buildFollowUpTask(
 					task,
-					{ workspaceDir: options.workspaceDir, channelId: options.channelId },
+					{
+						workspaceDir: options.workspaceDir,
+						dot: options.dot,
+						dotDir: options.dotDir,
+						channelId: options.channelId,
+					},
 					runContext,
 				);
 				const workspaceBaseline =
@@ -332,7 +331,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 					runManager: manager,
 					runId: newRunId,
 					channelId: options.channelId,
-					channelDir: options.channelDir,
+					dotDir: options.dotDir,
 					label: `follow-up: ${task.slice(0, 80)}`,
 					agent: role.name,
 					source: role.source,

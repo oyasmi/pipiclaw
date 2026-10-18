@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelEvent } from "../src/channel/channel-event.js";
-import { isCoalescableWake, mergeCompletionWakes } from "../src/runtime/wake-coalescing.js";
+import { canAbsorbWake, isCoalescableWake, mergeCompletionWakes } from "../src/runtime/wake-coalescing.js";
 
 function event(overrides: Partial<ChannelEvent>): ChannelEvent {
 	return {
@@ -37,6 +37,12 @@ describe("completion-wake coalescing", () => {
 		expect(isCoalescableWake(event({ dispatchId: "task:dm_1:t1:step" }))).toBe(false);
 		expect(isCoalescableWake(event({ dispatchId: "event:dm_1:x" }))).toBe(false);
 		expect(isCoalescableWake(event({}))).toBe(false);
+		// Spec 058, D7: only a wake produced for the primary's dot rides along — never one from the
+		// dot this channel was bound to before, nor a pre-migration record with no dot.
+		const primary = event({ dispatchId: "subagent:lab:run_a:done", dot: "lab" });
+		expect(canAbsorbWake(primary, event({ dispatchId: "job:lab:job_1:done", dot: "lab" }))).toBe(true);
+		expect(canAbsorbWake(primary, event({ dispatchId: "job:e2e:job_1:done", dot: "e2e" }))).toBe(false);
+		expect(canAbsorbWake(primary, event({ dispatchId: "job:dm_1:job_1:done" }))).toBe(false);
 	});
 
 	it("keeps the primary wake's own text first so its tag and dispatch id stay authoritative", () => {

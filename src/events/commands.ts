@@ -1,10 +1,11 @@
 /**
- * `/events`: list, show, delete and history of scheduled events, confined to `workspace/events/` and
- * the event history.
+ * `/events`: list, show, delete and history of one dot's scheduled events, confined to
+ * `<dot>/events/` and that dot's slice of the event history (spec 058, D14).
  */
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
 import { join } from "path";
+import type { ChannelDescription } from "../channel/channel-id.js";
 import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
@@ -19,8 +20,17 @@ const TEXT_PREVIEW_MAX_CHARS = 100;
 
 export interface HandleEventsCommandOptions {
 	args: string;
-	workspaceDir: string;
+	/** The asking channel's dot: its `events/` and its history records are the whole scope. */
+	dot: string;
+	dotDir: string;
 	historyPath: string;
+	/**
+	 * Channels with a conversation in this dot. History written before spec 058 carries no `dot`;
+	 * such a record belongs here when its channel is one of these.
+	 */
+	dotChannelIds: readonly string[];
+	/** Names a delivery channel and says whether it is still bound to this dot. */
+	describeChannel: (channelId: string) => ChannelDescription;
 }
 
 type EventsCommand =
@@ -62,8 +72,8 @@ export function parseEventsCommand(args: string): EventsCommand {
 	throw new Error(`未知子命令 \`${action}\`。`);
 }
 
-function eventsDir(workspaceDir: string): string {
-	return join(workspaceDir, "events");
+function eventsDir(dotDir: string): string {
+	return join(dotDir, "events");
 }
 
 const SAFE_ID_OPTIONS = { suffix: ".json", pattern: EVENT_NAME_PATTERN, label: "event name" };
@@ -74,8 +84,8 @@ export function normalizeEventName(name: string): string {
 	return normalizeSafeId(name, SAFE_ID_OPTIONS);
 }
 
-export function resolveEventPath(workspaceDir: string, name: string): { eventName: string; eventPath: string } {
-	const { id: eventName, path: eventPath } = resolveSafeIdPath(eventsDir(workspaceDir), name, SAFE_ID_OPTIONS);
+export function resolveEventPath(dotDir: string, name: string): { eventName: string; eventPath: string } {
+	const { id: eventName, path: eventPath } = resolveSafeIdPath(eventsDir(dotDir), name, SAFE_ID_OPTIONS);
 	return { eventName, eventPath };
 }
 
@@ -83,8 +93,17 @@ function clipText(text: string, maxChars = TEXT_PREVIEW_MAX_CHARS): string {
 	return sharedClipText(text, maxChars, { headRatio: 1, omitHint: "...", collapseWhitespace: true });
 }
 
-function formatEventSummary(name: string, event: ScheduledEvent): string {
-	const lines = [`**${name}**`, `- 类型：${event.type}`, `- 频道（channelId）：${event.channelId}`];
+function formatEventSummary(
+	name: string,
+	event: ScheduledEvent,
+	describeChannel: HandleEventsCommandOptions["describeChannel"],
+): string {
+	const channel = describeChannel(event.channelId);
+	const lines = [
+		`**${name}**`,
+		`- 类型：${event.type}`,
+		`- 投递频道（channelId）：${channel.label}${channel.boundHere ? "" : "（已暂停：投递频道未绑定到本 dot）"}`,
+	];
 	if (event.type === "one-shot") {
 		lines.push(`- 触发时间：${event.at}`);
 	}
@@ -122,8 +141,8 @@ function describeEventProblem(error: unknown, name: string): string {
 
 const EMPTY_EVENTS = "暂无定时事件。\n在对话里告诉我要定时做什么，我会创建事件。";
 
-async function listEvents(workspaceDir: string): Promise<string> {
-	const dir = eventsDir(workspaceDir);
+async function listEvents(options: HandleEventsCommandOptions): Promise<string> {
+	const dir = eventsDir(options.dotDir);
 	if (!existsSync(dir)) return EMPTY_EVENTS;
 
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".json")).sort();
@@ -138,7 +157,7 @@ async function listEvents(workspaceDir: string): Promise<string> {
 			// The same definition rules the watcher applies, so "listed as fine" means "will run".
 			// The lead-time rule is creation-only (an overdue one-shot is a legitimate recovery).
 			validateScheduledEvent(event, { enforceOneShotLead: false });
-			blocks.push(formatEventSummary(name, event));
+			blocks.push(formatEventSummary(name, event, options.describeChannel));
 		} catch (error) {
 			blocks.push(`**${name}**\n- ⚠️ 无效：${describeEventProblem(error, name)}`);
 		}
@@ -153,8 +172,8 @@ function eventNotFound(eventName: string): string {
 	return `未找到事件 \`${eventName}\`。用 \`/events list\` 查看。`;
 }
 
-async function showEvent(workspaceDir: string, name: string): Promise<string> {
-	const { eventName, eventPath } = resolveEventPath(workspaceDir, name);
+async function showEvent(options: HandleEventsCommandOptions, name: string): Promise<string> {
+	const { eventName, eventPath } = resolveEventPath(options.dotDir, name);
 	if (!existsSync(eventPath)) return eventNotFound(eventName);
 
 	const raw = await readFile(eventPath, "utf-8");
@@ -165,13 +184,20 @@ async function showEvent(workspaceDir: string, name: string): Promise<string> {
 		// Show the bytes as they are: an unparseable file is exactly the case the user needs to see.
 		body = raw;
 	}
-	return capReply(`**事件 ${eventName}**\n\n\`\`\`json\n${body}\n\`\`\``, {
+	let status = "";
+	try {
+		const channel = options.describeChannel(parseScheduledEventContent(raw, `${eventName}.json`).channelId);
+		status = `- 投递频道：${channel.label}${channel.boundHere ? "" : "（已暂停：投递频道未绑定到本 dot）"}\n\n`;
+	} catch {
+		// An unparseable file has no channel to describe; the raw body below says why.
+	}
+	return capReply(`**事件 ${eventName}**\n\n${status}\`\`\`json\n${body}\n\`\`\``, {
 		nextStepHint: `完整文件在 \`${eventPath}\``,
 	}).text;
 }
 
-async function deleteEvent(workspaceDir: string, name: string): Promise<string> {
-	const { eventName, eventPath } = resolveEventPath(workspaceDir, name);
+async function deleteEvent(options: HandleEventsCommandOptions, name: string): Promise<string> {
+	const { eventName, eventPath } = resolveEventPath(options.dotDir, name);
 	if (!existsSync(eventPath)) return eventNotFound(eventName);
 
 	// Read before deleting so the reply carries what was removed (review 2026-08-24 §3.4):
@@ -179,7 +205,7 @@ async function deleteEvent(workspaceDir: string, name: string): Promise<string> 
 	let summary: string | undefined;
 	try {
 		const event = parseScheduledEventContent(await readFile(eventPath, "utf-8"), `${eventName}.json`);
-		summary = formatEventSummary(eventName, event);
+		summary = formatEventSummary(eventName, event, options.describeChannel);
 	} catch {
 		// Unparseable content is still safe to delete; just skip the summary.
 	}
@@ -234,7 +260,13 @@ function formatHistoryRecord(record: EventHistoryRecord): string {
 	return `- ${bits.join(" · ")}`;
 }
 
-async function showHistory(historyPath: string, name?: string): Promise<string> {
+function belongsToDot(record: EventHistoryRecord, options: HandleEventsCommandOptions): boolean {
+	if (record.dot) return record.dot === options.dot;
+	return record.channelId !== undefined && options.dotChannelIds.includes(record.channelId);
+}
+
+async function showHistory(options: HandleEventsCommandOptions, name?: string): Promise<string> {
+	const { historyPath } = options;
 	const eventName = name ? normalizeEventName(name) : undefined;
 	const empty = eventName
 		? `暂无事件 \`${eventName}\` 的触发记录。\n事件触发后会记录在这里。`
@@ -248,6 +280,7 @@ async function showHistory(historyPath: string, name?: string): Promise<string> 
 		.filter(Boolean)
 		.map(parseHistoryLine)
 		.filter((record): record is EventHistoryRecord => !!record)
+		.filter((record) => belongsToDot(record, options))
 		.filter((record) => !eventName || record.eventName === eventName)
 		.slice(-DEFAULT_HISTORY_LIMIT)
 		.reverse();
@@ -275,13 +308,13 @@ export async function handleEventsCommand(options: HandleEventsCommandOptions): 
 	try {
 		switch (command.action) {
 			case "list":
-				return await listEvents(options.workspaceDir);
+				return await listEvents(options);
 			case "show":
-				return await showEvent(options.workspaceDir, command.name);
+				return await showEvent(options, command.name);
 			case "delete":
-				return await deleteEvent(options.workspaceDir, command.name);
+				return await deleteEvent(options, command.name);
 			case "history":
-				return await showHistory(options.historyPath, command.name);
+				return await showHistory(options, command.name);
 		}
 	} catch (error) {
 		const message = errorMessage(error);

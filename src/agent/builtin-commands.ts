@@ -90,7 +90,7 @@ export async function handleBuiltinCommand(
 				await sendCommandReply(ctx, formatNoRunningTurn("followup"), "followup");
 				return;
 			default: {
-				// The stateless report commands (events/tasks/status/usage/subagents/project — see
+				// The stateless report commands (events/tasks/status/usage/subagents/skills — see
 				// `BUILT_IN_COMMANDS`'s `runnerHandled: false` entries) are routed to their own
 				// handlers upstream and never reach here; the narrowed parameter type makes that a
 				// compile-time guarantee.

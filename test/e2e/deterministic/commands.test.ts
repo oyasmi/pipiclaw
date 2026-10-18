@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -45,7 +45,8 @@ describe("E2E deterministic: command plane", () => {
 			const replies = harness.deliveries.slice(before);
 			expect(replies.length, `${command} should reply`).toBeGreaterThan(0);
 		}
-		const eventPath = join(harness.workspaceDir, "events", "command-plane-probe.json");
+		mkdirSync(join(harness.dotDir, "events"), { recursive: true });
+		const eventPath = join(harness.dotDir, "events", "command-plane-probe.json");
 		writeFileSync(
 			eventPath,
 			JSON.stringify({

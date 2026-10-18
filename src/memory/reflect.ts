@@ -45,7 +45,8 @@ function probationDeadline(today: string): string {
 }
 
 const REFLECT_SYSTEM_PROMPT = `You are Pipiclaw's memory reflection worker. You run in the background, after a chunk of
-conversation, to keep this channel's durable memory and daily journal accurate.
+conversation, to keep this dot's durable memory and daily journal accurate. A dot's memory is shared by every
+channel bound to it, and different people may talk to it.
 
 Return strict JSON only. Do not wrap in Markdown fences.
 
@@ -65,7 +66,7 @@ Rules:
 ${MEMORY_INPUT_SAFETY_RULES}
 - journal: record what happened, what was decided, what is blocked, what's next — terse, one bullet per item. Skip small talk, tool-output echoes, and anything already recorded today (you can see today's journal below).
 - memory (the "ops" array) is for facts that matter to EVERY future session, not this one's progress:
-  - "user": who the user is — name/handle, language, role expectations, long-term preferences.
+  - "user": who a person is — name/handle, language, role expectations, long-term preferences. Say whose it is (their name or handle): never write one person's preference as if it held for everyone this dot talks to.
   - "feedback": corrections about how to work, and lessons learned from a mistake.
   - "project": stable facts, decisions, and constraints about what you're working on.
   - "reference": pointers — paths, URLs, commands, contacts, ids.
@@ -77,7 +78,7 @@ ${MEMORY_INPUT_SAFETY_RULES}
 - Empty arrays are correct when nothing applies. Put anything you considered and rejected in "discarded".`;
 
 const CONDENSE_INSTRUCTIONS = `
-This channel's memory index no longer fits its budget. In addition to the rules above, this run
+This dot's memory index no longer fits its budget. In addition to the rules above, this run
 should also condense: merge entries that say overlapping things into one better entry (delete the
 old ones, add or update the merged one), and delete anything stale. The delete cap is relaxed for
 this run — use it. Every delete should either be covered by an add/update that keeps its real
@@ -85,14 +86,14 @@ content, or its reason should say plainly why the fact no longer matters.`;
 
 export interface ReflectRunOptions {
 	channelId?: string;
-	channelDir: string;
+	dotDir: string;
 	workspaceDir: string;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	/** The conversation window to reflect on (already extracted by the caller's source window). */
 	messages: AgentMessage[];
 	timeoutMs?: number;
-	usageContext?: { channelId: string; correlationId?: string };
+	usageContext?: { channelId: string; dot?: string; correlationId?: string };
 	/** Injectable for tests; defaults to today. */
 	today?: string;
 }
@@ -187,9 +188,9 @@ function classifyWrite(
 
 async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{ prompt: string; condense: boolean }> {
 	const [entries, workspaceMemory, journalToday] = await Promise.all([
-		listMemoryEntries(options.channelDir),
+		listMemoryEntries(options.dotDir),
 		readOptionalTextFile(`${options.workspaceDir}/MEMORY.md`),
-		readOptionalTextFile(`${options.channelDir}/journal/${today}.md`),
+		readOptionalTextFile(`${options.dotDir}/journal/${today}.md`),
 	]);
 	const tiered = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS);
 	const transcript = clipText(
@@ -199,7 +200,7 @@ async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{
 	);
 
 	const sections = [
-		`Channel memory index (full):\n${renderMemoryIndex(entries) || "(empty)"}`,
+		`Dot memory index (full):\n${renderMemoryIndex(entries) || "(empty)"}`,
 		`Workspace background (read-only; do not target it with ops):\n${clipText(workspaceMemory, WORKSPACE_MEMORY_MAX_CHARS, { headRatio: 0.35 }) || "(empty)"}`,
 		`Today's journal so far:\n${clipText(journalToday, JOURNAL_TAIL_MAX_CHARS, { headRatio: 0 }) || "(empty)"}`,
 		`Conversation window to reflect on:\n${transcript || "(empty)"}`,
@@ -233,7 +234,7 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	};
 
 	// Deterministic pre-step, independent of whether the window has meaningful material.
-	const expiredProbation = await expireProbationaryEntries(options.channelDir, today);
+	const expiredProbation = await expireProbationaryEntries(options.dotDir, today);
 
 	const sanitized = sanitizeMessagesForMemory(options.messages);
 	if (!hasMeaningfulExchange(sanitized)) {
@@ -253,7 +254,7 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	});
 	const parsed = response.output;
 
-	const currentEntries = await listMemoryEntries(options.channelDir);
+	const currentEntries = await listMemoryEntries(options.dotDir);
 	const byName = new Map(currentEntries.map((entry) => [entry.name, entry]));
 	const hasUserMessage = sanitized.some((message) => message.role === "user");
 
@@ -385,8 +386,8 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 		storeOps.push({ op: "touch", names: touchNames });
 	}
 
-	const applied = await applyMemoryOps(options.channelDir, storeOps, { today });
-	const journalResult = await appendJournalEntries(options.channelDir, today, parsed.journal);
+	const applied = await applyMemoryOps(options.dotDir, storeOps, { today });
+	const journalResult = await appendJournalEntries(options.dotDir, today, parsed.journal);
 
 	return {
 		skipped: false,

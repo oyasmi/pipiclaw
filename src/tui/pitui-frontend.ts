@@ -25,7 +25,7 @@ import {
 	type TUI,
 	TuiMainScreen,
 } from "@earendil-works/pi-tui";
-import { bold, cyan, dim, gray, italic, red, strikethrough, underline, yellow } from "./colors.js";
+import { bold, cyan, dim, gray, italic, strikethrough, underline, yellow } from "./colors.js";
 import type { Frontend, FrontendCallbacks } from "./frontend.js";
 
 const MARKDOWN_THEME: MarkdownTheme = {
@@ -192,11 +192,5 @@ export class PiTuiFrontend implements Frontend {
 		this.removeInputListener = undefined;
 		this.loader.stop();
 		this.ui.stop();
-	}
-
-	/** Render the final error to the transcript when the app cannot continue. */
-	showError(text: string): void {
-		this.transcript.addChild(new Text(red(text), 1, 0));
-		this.ui.requestRender();
 	}
 }

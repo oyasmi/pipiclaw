@@ -1,15 +1,17 @@
 import { statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import { peekActiveSessionFile } from "../channel/active-session-store.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
+import type { DotConversation } from "../dot/types.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 
 export interface DetachedMaintenanceContextOptions {
-	channelId: string;
-	channelDir: string;
+	conversation: DotConversation;
+	workspaceDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;
 	settingsManager: PipiclawSettingsManager;
@@ -22,9 +24,9 @@ interface CachedTranscript {
 	sessionEntries: SessionEntry[];
 }
 
-// The maintenance scheduler visits idle channels every tick; re-parsing an
-// unchanged context.jsonl each time would be pure I/O waste for long-dead
-// channels. Keyed by channelDir, replaced whenever the file changes.
+// The maintenance scheduler visits idle conversations every tick; re-parsing an
+// unchanged session file each time would be pure I/O waste for long-dead
+// conversations. Keyed by session file, replaced whenever the file changes.
 const transcriptCache = new Map<string, CachedTranscript>();
 
 /** Test hook: drop cached transcripts so a fresh read is forced. */
@@ -33,19 +35,20 @@ export function clearDetachedMaintenanceCache(): void {
 }
 
 /**
- * Build a MemoryMaintenanceRuntimeContext for a channel with no live runner,
- * straight from disk. This is deliberately much lighter than a ChannelRunner:
+ * Build a MemoryMaintenanceRuntimeContext for a conversation with no live runner,
+ * straight from its active session on disk (the same file a runner would open). This is deliberately much lighter than a ChannelRunner:
  * no Agent, no AgentSession, no tool set, no sub-agent discovery — just the
  * persisted transcript, the resolved model, and current settings. Channels
  * that spoke this boot keep using their runner's in-memory context instead.
  *
- * Returns null when the channel has no persisted transcript (nothing for the
+ * Returns null when the conversation has no persisted transcript (nothing for the
  * memory pipeline to work with) or the transcript cannot be read.
  */
 export async function loadDetachedMaintenanceContext(
 	options: DetachedMaintenanceContextOptions,
 ): Promise<MemoryMaintenanceRuntimeContext | null> {
-	const contextFile = join(options.channelDir, "context.jsonl");
+	const { conversation } = options;
+	const contextFile = join(conversation.conversationDir, peekActiveSessionFile(conversation.conversationDir));
 	let stats: { mtimeMs: number; size: number };
 	try {
 		stats = statSync(contextFile);
@@ -53,10 +56,10 @@ export async function loadDetachedMaintenanceContext(
 		return null;
 	}
 
-	let cached = transcriptCache.get(options.channelDir);
+	let cached = transcriptCache.get(contextFile);
 	if (!cached || cached.mtimeMs !== stats.mtimeMs || cached.size !== stats.size) {
 		try {
-			const sessionManager = SessionManager.open(contextFile, options.channelDir);
+			const sessionManager = SessionManager.open(contextFile, conversation.conversationDir, conversation.cwd);
 			cached = {
 				mtimeMs: stats.mtimeMs,
 				size: stats.size,
@@ -66,7 +69,7 @@ export async function loadDetachedMaintenanceContext(
 		} catch {
 			return null;
 		}
-		transcriptCache.set(options.channelDir, cached);
+		transcriptCache.set(contextFile, cached);
 	}
 	const cachedTranscript = cached;
 
@@ -79,10 +82,8 @@ export async function loadDetachedMaintenanceContext(
 
 	options.settingsManager.reload();
 	return {
-		channelId: options.channelId,
-		channelDir: options.channelDir,
-		// `channelDir` is always a direct child of the workspace dir (`getChannelDir`).
-		workspaceDir: dirname(options.channelDir),
+		conversation,
+		workspaceDir: options.workspaceDir,
 		messages: () => [...cachedTranscript.messages],
 		sessionEntries: () => [...cachedTranscript.sessionEntries],
 		model,

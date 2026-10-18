@@ -47,7 +47,6 @@ describe("config-loader", () => {
 
 	it("loads workspace-level skills only", () => {
 		const workspaceDir = createTempDir();
-		const channelDir = join(workspaceDir, "dm_123");
 		const workspaceSkillsDir = join(workspaceDir, "skills");
 		mkdirSync(workspaceSkillsDir, { recursive: true });
 
@@ -74,7 +73,7 @@ describe("config-loader", () => {
 			return { skills: [], diagnostics: [] };
 		});
 
-		const loaded = loadPipiclawSkills(channelDir);
+		const loaded = loadPipiclawSkills(workspaceDir);
 		expect(loaded.skills.map((skill) => skill.name).sort()).toEqual(["shared", "workspace-only"]);
 		expect(loaded.diagnostics).toEqual([]);
 

@@ -26,8 +26,6 @@ export interface TaskLedgerEntry {
 	fields: TaskFrontmatter;
 	/** false => frontmatter could not be read; the task is surfaced rather than skipped. */
 	readable: boolean;
-	/** True when this file still carries v3 frontmatter the conversion should have removed; it is never run. */
-	legacy: boolean;
 	/** The driver may schedule a step for this task right now. */
 	runnable: boolean;
 	/** When a driver-polled `time` ticket comes due, if it has not already. */
@@ -399,7 +397,6 @@ function toEntry(id: string, content: string): Omit<TaskLedgerEntry, "runnable" 
 		title: extractTaskTitle(content, id),
 		fields: parsed.fields,
 		readable: parsed.readable,
-		legacy: parsed.legacy,
 		items: parseTaskItems(content),
 	};
 }
@@ -410,7 +407,7 @@ function withClock(entry: Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired"
 	const ticket = entry.fields.ticket;
 	return {
 		...entry,
-		runnable: isTaskRunnable(entry.fields) && !entry.legacy,
+		runnable: isTaskRunnable(entry.fields),
 		dueMs: ticket ? ticketDueMs(ticket) : undefined,
 		expired: ticket !== undefined && !entry.fields.paused && ticketExpired(ticket, nowDate),
 	};
@@ -479,7 +476,6 @@ export async function readActiveTasks(tasksDir: string, now: number = Date.now()
 				title: id,
 				fields: { state: "open" },
 				readable: false,
-				legacy: false,
 				runnable: true,
 				expired: false,
 			});

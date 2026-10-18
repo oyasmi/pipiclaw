@@ -73,7 +73,7 @@ export const taskLoopQualityCases: EvalCase[] = [
 				graderVersion: "1",
 				rubric:
 					"Pass if the task's step notes state what was done and the concrete evidence for it (a command run, a file read back, a value observed). Fail if the notes only restate the goal, describe intentions, or claim completion without naming any observation.",
-				artifacts: (ctx) => `Loop log:\n${readTaskLoopLog(ctx.channelDir, "evidence-note")}`,
+				artifacts: (ctx) => `Loop log:\n${readTaskLoopLog(ctx.dotDir, "evidence-note")}`,
 			},
 		],
 	},

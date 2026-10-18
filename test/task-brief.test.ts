@@ -14,9 +14,9 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const tempDir = useTempDirs("pipiclaw-task-brief-");
 afterEach(resetTaskLogAppenders);
 
-async function writeTask(channelDir: string, id: string, body: string, fields: Partial<TaskFrontmatter> = {}) {
-	await mkdir(join(channelDir, "tasks"), { recursive: true });
-	const path = join(channelDir, "tasks", `${id}.md`);
+async function writeTask(dotDir: string, id: string, body: string, fields: Partial<TaskFrontmatter> = {}) {
+	await mkdir(join(dotDir, "tasks"), { recursive: true });
+	const path = join(dotDir, "tasks", `${id}.md`);
 	await writeFile(path, renderTaskDocument({ state: "open", usage: createUsage(), ...fields }, body));
 	return path;
 }
@@ -31,25 +31,25 @@ const step = (note: string, seq = 1) => ({
 
 describe("task step brief", () => {
 	it("recovers an unhandled expiry from durable history and stops announcing it after a recovery step", async () => {
-		const channelDir = tempDir();
-		const path = await writeTask(channelDir, "work", "# Work\n");
-		await appendTaskLog(channelDir, "work", { kind: "expired", ticket: "run_lost", action: "reopened" });
+		const dotDir = tempDir();
+		const path = await writeTask(dotDir, "work", "# Work\n");
+		await appendTaskLog(dotDir, "work", { kind: "expired", ticket: "run_lost", action: "reopened" });
 		// A settlement landing after the expiry must not erase the recovery instruction.
-		await appendTaskLog(channelDir, "work", { kind: "settle", ref: "run_x", status: "completed" });
+		await appendTaskLog(dotDir, "work", { kind: "settle", ref: "run_x", status: "completed" });
 
-		const brief = await buildTaskStepBrief({ channelDir, taskId: "work" });
+		const brief = await buildTaskStepBrief({ dotDir, taskId: "work" });
 		expect(brief).toContain(path);
 		expect(brief).toContain(join(PLAYBOOKS_DIR, "task-lead.md"));
 		expect(brief).toMatch(/<task_recovery kind="expired">[\s\S]*run_lost[\s\S]*<\/task_recovery>/);
 
-		await appendTaskLog(channelDir, "work", step("checked producer state"));
-		expect(await buildTaskStepBrief({ channelDir, taskId: "work" })).not.toContain("<task_recovery");
+		await appendTaskLog(dotDir, "work", step("checked producer state"));
+		expect(await buildTaskStepBrief({ dotDir, taskId: "work" })).not.toContain("<task_recovery");
 	});
 
 	it("carries the previous occurrence into the first step of a spawned instance only", async () => {
-		const channelDir = tempDir();
-		await writeTask(channelDir, "weekly-20260928-0900", "# W\n", { origin: "weekly" });
-		await appendTaskLog(channelDir, "weekly-20260928-0900", {
+		const dotDir = tempDir();
+		await writeTask(dotDir, "weekly-20260928-0900", "# W\n", { origin: "weekly" });
+		await appendTaskLog(dotDir, "weekly-20260928-0900", {
 			kind: "step",
 			seq: 3,
 			outcome: "done",
@@ -57,27 +57,27 @@ describe("task step brief", () => {
 			tools: ["bash"],
 			report: "本周周报：合并 12 个 PR",
 		});
-		await appendTaskLog(channelDir, "weekly-20260928-0900", {
+		await appendTaskLog(dotDir, "weekly-20260928-0900", {
 			kind: "close",
 			outcome: "done",
 			note: "published, id=68",
 			steps: 4,
 			usd: 1,
 		});
-		await archiveTask(channelDir, "weekly-20260928-0900", "completed");
+		await archiveTask(dotDir, "weekly-20260928-0900", "completed");
 		// A different event whose name merely starts with this one's must not be mistaken for it.
-		await writeTask(channelDir, "weekly-extra-20260929-0900", "# X\n", { origin: "weekly-extra" });
-		await archiveTask(channelDir, "weekly-extra-20260929-0900", "completed");
-		await writeTask(channelDir, "weekly-20261005-0900", "# W\n", { origin: "weekly" });
+		await writeTask(dotDir, "weekly-extra-20260929-0900", "# X\n", { origin: "weekly-extra" });
+		await archiveTask(dotDir, "weekly-extra-20260929-0900", "completed");
+		await writeTask(dotDir, "weekly-20261005-0900", "# W\n", { origin: "weekly" });
 
-		const first = await buildTaskStepBrief({ channelDir, taskId: "weekly-20261005-0900" });
+		const first = await buildTaskStepBrief({ dotDir, taskId: "weekly-20261005-0900" });
 		expect(first).toMatch(/<previous_occurrence id="weekly-20260928-0900"[\s\S]*published, id=68/);
 		// What the previous occurrence actually delivered, not only how it closed.
 		expect(first).toMatch(/<previous_occurrence[\s\S]*本周周报：合并 12 个 PR[\s\S]*<\/previous_occurrence>/);
 		expect(first).not.toContain("weekly-extra");
 
-		await appendTaskLog(channelDir, "weekly-20261005-0900", step("collected"));
-		expect(await buildTaskStepBrief({ channelDir, taskId: "weekly-20261005-0900" })).not.toContain(
+		await appendTaskLog(dotDir, "weekly-20261005-0900", step("collected"));
+		expect(await buildTaskStepBrief({ dotDir, taskId: "weekly-20261005-0900" })).not.toContain(
 			"<previous_occurrence",
 		);
 	});
@@ -92,36 +92,36 @@ describe("team board (spec 052, D5)", () => {
 	});
 
 	it("groups dispatches under their item and marks only what settled since the last step as new", async () => {
-		const channelDir = tempDir();
-		await writeTask(channelDir, "T", body);
-		expect(await buildTaskStepBrief({ channelDir, taskId: "T" })).not.toContain("<task_board>");
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_a", item: "W1", agent: "explorer" });
-		await appendTaskLog(channelDir, "T", {
+		const dotDir = tempDir();
+		await writeTask(dotDir, "T", body);
+		expect(await buildTaskStepBrief({ dotDir, taskId: "T" })).not.toContain("<task_board>");
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "run_a", item: "W1", agent: "explorer" });
+		await appendTaskLog(dotDir, "T", {
 			kind: "settle",
 			ref: "run_a",
 			item: "W1",
 			status: "completed",
 			output: "/o/a.md",
 		});
-		await appendTaskLog(channelDir, "T", step("read a"));
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_b", item: "W2", agent: "builder" });
-		await appendTaskLog(channelDir, "T", {
+		await appendTaskLog(dotDir, "T", step("read a"));
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "run_b", item: "W2", agent: "builder" });
+		await appendTaskLog(dotDir, "T", {
 			kind: "dispatch",
 			ref: "run_c",
 			item: "W3",
 			agent: "reviewer",
 			purpose: "verify",
 		});
-		await appendTaskLog(channelDir, "T", {
+		await appendTaskLog(dotDir, "T", {
 			kind: "settle",
 			ref: "run_b",
 			item: "W2",
 			status: "completed",
 			output: "/o/b.md",
 		});
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "job_x", agent: "job" });
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "job_x", agent: "job" });
 
-		const board = await buildTaskBoard(channelDir, "T", body);
+		const board = await buildTaskBoard(dotDir, "T", body);
 		const rendered = renderTaskBoard(board!);
 		const lines = rendered.split("\n");
 		expect(lines.find((line) => line.includes("run_a"))).not.toContain("★新");
@@ -134,19 +134,19 @@ describe("team board (spec 052, D5)", () => {
 
 	it("carries the tail and changed paths of results settled since the last step, and only those", async () => {
 		// A task step's brief replaces the completion wake, so the wake's result tail must reach it here.
-		const channelDir = tempDir();
-		await writeTask(channelDir, "T", body);
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_old", item: "W1", agent: "a" });
-		await appendTaskLog(channelDir, "T", {
+		const dotDir = tempDir();
+		await writeTask(dotDir, "T", body);
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "run_old", item: "W1", agent: "a" });
+		await appendTaskLog(dotDir, "T", {
 			kind: "settle",
 			ref: "run_old",
 			item: "W1",
 			status: "completed",
 			tail: "OLD_TAIL",
 		});
-		await appendTaskLog(channelDir, "T", step("read the old one"));
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_new", item: "W2", agent: "b" });
-		await appendTaskLog(channelDir, "T", {
+		await appendTaskLog(dotDir, "T", step("read the old one"));
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "run_new", item: "W2", agent: "b" });
+		await appendTaskLog(dotDir, "T", {
 			kind: "settle",
 			ref: "run_new",
 			item: "W2",
@@ -155,28 +155,28 @@ describe("team board (spec 052, D5)", () => {
 			changed: "M src/export.ts",
 		});
 
-		const brief = await buildTaskStepBrief({ channelDir, taskId: "T" });
+		const brief = await buildTaskStepBrief({ dotDir, taskId: "T" });
 		const results = /<task_results>([\s\S]*)<\/task_results>/.exec(brief ?? "")?.[1] ?? "";
 		expect(results).toContain("NEW_TAIL");
 		expect(results).toContain("M src/export.ts");
 		expect(results).not.toContain("OLD_TAIL");
 
-		await appendTaskLog(channelDir, "T", step("read the new one", 2));
-		expect(await buildTaskStepBrief({ channelDir, taskId: "T" })).not.toContain("<task_results>");
+		await appendTaskLog(dotDir, "T", step("read the new one", 2));
+		expect(await buildTaskStepBrief({ dotDir, taskId: "T" })).not.toContain("<task_results>");
 	});
 
 	it("folds already-seen settled refs beyond the line budget but never running or new ones", async () => {
-		const channelDir = tempDir();
-		await writeTask(channelDir, "T", body);
+		const dotDir = tempDir();
+		await writeTask(dotDir, "T", body);
 		const total = BOARD_REF_LINE_BUDGET + 5;
 		for (let index = 0; index < total; index++) {
-			await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: `run_${index}`, agent: "a" });
-			await appendTaskLog(channelDir, "T", { kind: "settle", ref: `run_${index}`, status: "completed" });
+			await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: `run_${index}`, agent: "a" });
+			await appendTaskLog(dotDir, "T", { kind: "settle", ref: `run_${index}`, status: "completed" });
 		}
-		await appendTaskLog(channelDir, "T", step("seen all of those"));
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_live", agent: "a" });
+		await appendTaskLog(dotDir, "T", step("seen all of those"));
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "run_live", agent: "a" });
 
-		const board = await buildTaskBoard(channelDir, "T", body);
+		const board = await buildTaskBoard(dotDir, "T", body);
 		expect(board?.hiddenSettled).toBe(total + 1 - BOARD_REF_LINE_BUDGET);
 		expect(renderTaskBoard(board!)).toContain("run_live");
 	});
@@ -194,27 +194,27 @@ describe("user-facing task board and log (spec 053, D2)", () => {
 	});
 
 	it("folds every ref of a work item into its one flat line and keeps model vocabulary out", async () => {
-		const channelDir = tempDir();
-		await writeTask(channelDir, "T", body);
+		const dotDir = tempDir();
+		await writeTask(dotDir, "T", body);
 		for (let index = 0; index < BOARD_REF_LINE_BUDGET + 2; index++) {
-			await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: `run_old${index}`, agent: "a" });
-			await appendTaskLog(channelDir, "T", {
+			await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: `run_old${index}`, agent: "a" });
+			await appendTaskLog(dotDir, "T", {
 				kind: "settle",
 				ref: `run_old${index}`,
 				status: "failed",
 				exitCode: 1,
 			});
 		}
-		await appendTaskLog(channelDir, "T", {
+		await appendTaskLog(dotDir, "T", {
 			kind: "step",
 			seq: 1,
 			outcome: "park",
 			note: "waiting\non W1",
 			tools: [],
 		});
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_a1", item: "W1", agent: "builder" });
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_a2", item: "W1", agent: "builder" });
-		await appendTaskLog(channelDir, "T", {
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "run_a1", item: "W1", agent: "builder" });
+		await appendTaskLog(dotDir, "T", { kind: "dispatch", ref: "run_a2", item: "W1", agent: "builder" });
+		await appendTaskLog(dotDir, "T", {
 			kind: "settle",
 			ref: "run_a1",
 			item: "W1",
@@ -223,7 +223,7 @@ describe("user-facing task board and log (spec 053, D2)", () => {
 			exitCode: 0,
 		});
 
-		const board = await buildTaskBoard(channelDir, "T", body);
+		const board = await buildTaskBoard(dotDir, "T", body);
 		const rendered = renderTaskBoardForUser(board!, "T");
 		const lines = rendered.split("\n");
 		expect(lines.filter((line) => line.includes("run_a1"))).toHaveLength(1);
@@ -232,7 +232,7 @@ describe("user-facing task board and log (spec 053, D2)", () => {
 		expect(board?.hiddenSettled).toBeGreaterThan(0);
 		expect(rendered).toContain("/tasks log T");
 
-		const logLines = (await readTaskLog(channelDir, "T")).map(renderTaskLogLineForUser);
+		const logLines = (await readTaskLog(dotDir, "T")).map(renderTaskLogLineForUser);
 		for (const text of [rendered, ...logLines]) {
 			expect(text).not.toMatch(/^\s/m);
 			expect(text).not.toMatch(/task_log|VERDICT|↳|\bexit \d|\bcontinue\b|\bpark\b/);

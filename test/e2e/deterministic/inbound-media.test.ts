@@ -11,8 +11,8 @@ const PNG_BYTES = Buffer.from(
 	"base64",
 );
 
-function writeTestImage(channelDir: string, name: string, bytes: Buffer = PNG_BYTES): InboundImage {
-	const dir = join(channelDir, "inbox");
+function writeTestImage(dotDir: string, name: string, bytes: Buffer = PNG_BYTES): InboundImage {
+	const dir = join(dotDir, "inbox");
 	mkdirSync(dir, { recursive: true });
 	const path = join(dir, name);
 	writeFileSync(path, bytes);
@@ -47,7 +47,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			when: (r) => r.isMainTurn,
 			respond: [reply.text("图里是一只猫。")],
 		});
-		const image = writeTestImage(harness.channelDir, "photo.png");
+		const image = writeTestImage(harness.dotDir, "photo.png");
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
 
@@ -67,7 +67,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			when: (r) => r.isMainTurn,
 			respond: [reply.text("师兄，这条消息里我没有收到图片。")],
 		});
-		const image = writeTestImage(harness.channelDir, "photo.png");
+		const image = writeTestImage(harness.dotDir, "photo.png");
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
 
@@ -89,7 +89,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			respond: [reply.text("ok")],
 		});
 		// Catches accepting oversized declared metadata because the actual file happens to be small.
-		const image = writeTestImage(harness.channelDir, "huge.png");
+		const image = writeTestImage(harness.dotDir, "huge.png");
 		image.byteSize = MAX_INBOUND_IMAGE_BYTES + 1;
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
@@ -114,7 +114,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 		await harness.sendUserMessageNoWait("开始 ORIGINAL 任务");
 		await gate.arrived;
 
-		const image = writeTestImage(harness.channelDir, "steer.png");
+		const image = writeTestImage(harness.dotDir, "steer.png");
 		await harness.sendUserMessageNoWait("这张图 STEER_IMG [图片1]", { images: [image] });
 
 		gate.release();

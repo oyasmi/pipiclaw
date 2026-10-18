@@ -164,7 +164,7 @@ describe("grep tool against a real shell (glob injection)", () => {
 	function makeRealShellTool(tmpDir: string) {
 		return createGrepTool(createExecutor(), {
 			securityConfig: { ...DEFAULT_SECURITY_CONFIG, enabled: false },
-			securityContext: { agentWorkspaceDir: tmpDir, projectRoot: tmpDir },
+			securityContext: { agentWorkspaceDir: tmpDir, cwd: tmpDir },
 		});
 	}
 
@@ -257,7 +257,7 @@ describe("grep tool read-guard backstop (batch 1.4)", () => {
 					enabled: true,
 					pathGuard: { ...DEFAULT_SECURITY_CONFIG.pathGuard, readDeny: [join(dir, "vault")] },
 				},
-				securityContext: { agentWorkspaceDir: dir, projectRoot: dir },
+				securityContext: { agentWorkspaceDir: dir, cwd: dir },
 			});
 
 			const result = await tool.execute("call", { label: "s", pattern: "MATCHME", path: dir } as never);
@@ -287,7 +287,7 @@ describe("grep tool read-guard backstop (batch 1.4)", () => {
 
 			const tool = createGrepTool(createExecutor(), {
 				securityConfig: { ...DEFAULT_SECURITY_CONFIG, enabled: true },
-				securityContext: { agentWorkspaceDir: dir, projectRoot: dir },
+				securityContext: { agentWorkspaceDir: dir, cwd: dir },
 			});
 
 			const result = await tool.execute("call", { label: "s", pattern: "MATCHME", path: dir } as never);

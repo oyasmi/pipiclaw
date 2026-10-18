@@ -1,6 +1,6 @@
 /**
  * Delegation dispatch, shared by `subagent` and `subagent_inline` (spec 046 D2.5): prepare the run
- * (working directory, project boundary, artifact directory), admit it (verify rules, workspace write
+ * (working directory, artifact directory), admit it (verify rules, workspace write
  * lease), then fork to the internal or external runtime.
  */
 import { realpathSync, statSync } from "node:fs";
@@ -30,13 +30,13 @@ function safeRunSegment(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 48) || "run";
 }
 
-function getSubAgentArtifactsRoot(channelDir: string): string {
-	return join(channelDir, "subagent-artifacts");
+function getSubAgentArtifactsRoot(dotDir: string): string {
+	return join(dotDir, "subagent-artifacts");
 }
 
 /** Every run gets its own artifact directory (spec 032 D4), independent of `returns` mode. */
-async function prepareArtifactDir(channelDir: string, runId: string): Promise<string> {
-	const artifactDir = join(getSubAgentArtifactsRoot(channelDir), safeRunSegment(runId));
+async function prepareArtifactDir(dotDir: string, runId: string): Promise<string> {
+	const artifactDir = join(getSubAgentArtifactsRoot(dotDir), safeRunSegment(runId));
 	await mkdir(artifactDir, { recursive: true });
 	return artifactDir;
 }
@@ -58,28 +58,11 @@ function realpathOrSelf(path: string): string {
 	}
 }
 
-/**
- * D6.2's boundary check, hardened against symlinks (review 2026-08-23 §2.3): a plain
- * `resolve()` + string-prefix comparison only judges the *requested* path, so `<projectRoot
- * >/link -> /somewhere/else` passes the check and then everything downstream — the internal
- * agent's own `securityContext.projectRoot`, an external process's `cwd` (which bypasses the
- * path guard entirely) — trusts that escaped target. Comparing realpaths closes it, matching
- * `project-scope.ts` and `workspaceLeaseKey`, the two other places in the tree that already do
- * this.
- */
-export function assertWithinProjectBoundary(target: string, base: string, requested: string): void {
-	const realBase = realpathOrSelf(base);
-	const realTarget = realpathOrSelf(target);
-	if (realTarget !== realBase && !realTarget.startsWith(`${realBase}/`)) {
-		throw new RecoverableToolError(`workingDirectory "${requested}" must be inside the project root (${base}).`);
-	}
-}
-
 function resolveRunWorkingDirectory(requested: string | undefined, options: SubAgentToolOptions): string {
 	const base = resolve(options.workingDirectory ?? process.cwd());
 	const trimmed = requested?.trim();
-	// Resolve the project root once as well. Returning an alias here would leave the later lease,
-	// executor, subject hash, and external cwd exposed to a symlink swap after admission.
+	// Canonicalize once: returning an alias here would leave the later lease, executor, subject
+	// hash, and external cwd exposed to a symlink swap after admission.
 	const canonicalBase = realpathOrSelf(base);
 	if (!trimmed) return canonicalBase;
 	const target = resolve(canonicalBase, trimmed);
@@ -89,9 +72,6 @@ function resolveRunWorkingDirectory(requested: string | undefined, options: SubA
 		if (!statSync(canonicalTarget).isDirectory()) throw new Error("not a directory");
 	} catch {
 		throw new RecoverableToolError(`workingDirectory "${requested}" is not an existing directory.`);
-	}
-	if (options.projectBoundary === "project") {
-		assertWithinProjectBoundary(canonicalTarget, canonicalBase, requested ?? trimmed);
 	}
 	return canonicalTarget;
 }
@@ -117,7 +97,7 @@ async function prepareRunContext(
 	if (item && !taskId) throw new RecoverableToolError("item names a Work Item of a task; pass taskId too.");
 	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new RecoverableToolError(`Invalid taskId: ${taskId}`);
 	if (taskId) {
-		const task = await readStoredTask(options.channelDir, taskId);
+		const task = await readStoredTask(options.dotDir, taskId);
 		if (!task) {
 			throw new RecoverableToolError(
 				`Task ${taskId} does not exist. Create it with task_create before delegating task-owned work.`,
@@ -132,7 +112,7 @@ async function prepareRunContext(
 			);
 		}
 	}
-	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
+	const artifactDir = await prepareArtifactDir(options.dotDir, runId);
 	const workingDirectory = resolveRunWorkingDirectory(params.workingDirectory, options);
 	return { runId, purpose, taskId, item, workingDirectory, artifactDir };
 }

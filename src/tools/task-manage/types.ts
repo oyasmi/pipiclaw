@@ -1,5 +1,5 @@
 import type { Static } from "typebox";
-import type { ChannelJobManager } from "../../jobs/manager.js";
+import type { DotJobManager } from "../../jobs/manager.js";
 import type { SubAgentRunManager } from "../../subagents/runs.js";
 import type {
 	taskCloseSchema,
@@ -21,6 +21,9 @@ export interface TaskManageResult {
 		state: string;
 		paused: boolean;
 		ticket?: string;
+		/** The delivery channel; a task delivering elsewhere reports to that channel, not this chat. */
+		channel?: string;
+		deliversHere: boolean;
 		steps?: number;
 		items?: string;
 	}>;
@@ -40,9 +43,11 @@ export type TaskLogRequest = Static<typeof taskLogSchema>;
 export type TaskStepEndRequest = Static<typeof taskStepEndSchema>;
 
 export interface TaskManageToolOptions {
-	jobManager: ChannelJobManager;
+	jobManager: DotJobManager;
 	runManager: SubAgentRunManager;
-	channelDir: string;
+	dotDir: string;
+	/** The current turn's channel: a task created here delivers to it (spec 058, D13). */
+	channelId: string;
 	/** Present only inside a task session: which task's loop this tool set belongs to. */
 	taskId?: string;
 	/** Tools this step has completed so far; feeds the loop log's idle-step evidence (D6). */

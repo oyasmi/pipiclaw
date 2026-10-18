@@ -3,7 +3,7 @@ import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { getChannelDir } from "../channel/channel-paths.js";
+import { getDotDir, isDotName } from "../dot/paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -13,18 +13,20 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
+import { redeemTicket } from "../tasks/store.js";
+import { buildJobCompletionWake, jobWakeDispatchId } from "./completion-wake.js";
 import { buildLaunchScript, type JobArtifacts, jobArtifacts, parseLaunchOutput } from "./launch.js";
 import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobRecord, toSnapshot } from "./record.js";
 
 /**
- * Per-channel manager for background bash jobs. A long command that ran synchronously would hold
+ * Per-dot manager for background bash jobs. A long command that ran synchronously would hold
  * the channel's run queue for its whole duration, blocking `/steer`, `/followup`, and every other
  * message. A background job instead returns immediately and the model can end its turn.
  *
  * Jobs live on the host, managed through shell commands (`setsid` to launch as its own process
  * group with a startup handshake, a three-state identity probe, a confirmed kill) with no
  * in-process child handles. Records
- * are mirrored to `state/jobs/<channelId>/<id>.json` so they survive a restart: a detached
+ * are mirrored to `state/jobs/<dot>/<id>.json` so they survive a restart: a detached
  * process outlives the daemon, and losing the record while the process kept running meant orphaned
  * work, leaked slots, and unreachable output (spec 031, D6).
  *
@@ -55,27 +57,29 @@ const KILL_CONFIRMED_GONE: ReadonlySet<KillOutcome> = new Set<KillOutcome>([
 ]);
 
 export interface JobStartOptions {
+	/** The channel the job was started from: its completion wake goes back there (spec 058, D7). */
+	channelId?: string;
 	signal?: AbortSignal;
 	notify?: boolean;
 	taskId?: string;
 }
 
 export interface JobManagerOptions {
-	/** Directory for this channel's persisted job records. Omit to run without persistence. */
+	/** Directory for this dot's persisted job records. Omit to run without persistence. */
 	stateDir?: string;
+	/** Is a job's channel still bound to this dot (spec 058, D7)? Omitted (TUI, tests): always. */
+	isBoundTo?: (channelId: string, dot: string) => boolean;
 	/** Delivers the completion wake. Omit to disable waking (sub-agent and test paths). */
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	sweepIntervalMs?: number;
 	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
 	fileStore?: FileStore;
 	/** Directory the full-output spill (and its `.exit`/`.ready`/`.meta` siblings) is written to.
-	 * Defaults to the OS temp dir; the runtime passes `<channelDir>/logs` so the model can read it. */
+	 * Defaults to the OS temp dir; the runtime passes `<dotDir>/logs` so the model can read it. */
 	spillDir?: string;
-	/** This channel's directory, where a task-bound job logs its dispatch and settlement (spec 052, D4). */
-	channelDir?: string;
 }
 
-/** Cap on concurrently running jobs per channel, so a runaway model can't spawn unbounded processes. */
+/** Cap on concurrently running jobs per dot, so a runaway model can't spawn unbounded processes. */
 export const MAX_RUNNING_JOBS = 5;
 /** Longest a single `poll` call blocks before returning a snapshot; the model can poll again. */
 export const POLL_WAIT_MS = 30_000;
@@ -117,7 +121,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-export class ChannelJobManager {
+export class DotJobManager {
 	private readonly jobs = new Map<string, JobRecord>();
 	private readonly wakeQueue = createSerialQueue<string>();
 	/**
@@ -137,8 +141,9 @@ export class ChannelJobManager {
 	private readonly sweepIntervalMs: number;
 	private readonly fileStore: FileStore;
 
+	/** `target` owns these jobs (task logs live in its directory); each job's own channel gets its wake. */
 	constructor(
-		private readonly channelId: string,
+		private readonly target: { dot: string; dotDir?: string },
 		private readonly executor: Executor,
 		options: JobManagerOptions | number = {},
 	) {
@@ -238,27 +243,12 @@ export class ChannelJobManager {
 		this.garbageCollectionTimer.unref?.();
 	}
 
-	get channel(): string {
-		return this.channelId;
-	}
-
 	runningCount(): number {
 		return Array.from(this.jobs.values()).filter((job) => job.status === "running").length;
 	}
 
 	listRunning(): JobRecord[] {
 		return Array.from(this.jobs.values()).filter((job) => job.status === "running");
-	}
-
-	/** Task ids that a still-running job on this channel promises to wake. See `channelJobTaskIds`. */
-	runningTaskIds(): Set<string> {
-		const ids = new Set<string>();
-		for (const job of this.jobs.values()) {
-			if (job.status === "running" && job.contract.notify && job.contract.taskId) {
-				ids.add(job.contract.taskId);
-			}
-		}
-		return ids;
 	}
 
 	/**
@@ -339,6 +329,7 @@ export class ChannelJobManager {
 			exitFile: art.exitFile,
 			timeoutSeconds,
 			contract: { notify: options.notify ?? true, ...(options.taskId ? { taskId: options.taskId } : {}) },
+			...(options.channelId ? { channelId: options.channelId } : {}),
 		};
 		this.jobs.set(id, record);
 		// The persisted record is the only thing that survives a restart — a detached process
@@ -373,8 +364,8 @@ export class ChannelJobManager {
 			});
 			throw failure;
 		}
-		if (options.taskId && this.options.channelDir) {
-			await logTaskDispatch(this.options.channelDir, options.taskId, {
+		if (options.taskId && this.target.dotDir) {
+			await logTaskDispatch(this.target.dotDir, options.taskId, {
 				ref: id,
 				agent: "job",
 				label,
@@ -681,11 +672,11 @@ export class ChannelJobManager {
 	 */
 	private async logSettlementToTask(record: JobRecord): Promise<void> {
 		const taskId = record.contract.taskId;
-		const channelDir = this.options.channelDir;
-		if (!taskId || !channelDir || record.taskLogged) return;
+		const dotDir = this.target.dotDir;
+		if (!taskId || !dotDir || record.taskLogged) return;
 		record.taskLogged = true;
 		const output = await this.readOutput(record.id).catch(() => undefined);
-		await logTaskSettlement(channelDir, taskId, {
+		await logTaskSettlement(dotDir, taskId, {
 			ref: record.id,
 			status: record.status,
 			exitCode: record.exitCode,
@@ -713,38 +704,14 @@ export class ChannelJobManager {
 			return;
 		}
 
+		const channelId = record.channelId;
+		if (!channelId || (this.options.isBoundTo && !this.options.isBoundTo(channelId, this.target.dot))) {
+			await this.suppressWake(record);
+			return;
+		}
 		const output = await this.readOutput(record.id, signal);
 		const tail = output?.text.slice(-WAKE_OUTPUT_TAIL_BYTES).trim();
-		const exit = record.exitCode !== undefined ? `exit ${record.exitCode}` : record.status;
-		const seconds = Math.round(record.durationMs / 1000);
-		const belongsTo = record.contract.taskId ? ` It belongs to task ${record.contract.taskId}.` : "";
-		const event: ChannelEvent = {
-			type: this.channelId.startsWith("group_") ? "group" : "dm",
-			channelId: this.channelId,
-			user: "JOB",
-			userName: "JOB",
-			text:
-				`[JOB:${record.id}] Background job "${record.label}" finished: ${record.status} (${exit}, ${seconds}s).${belongsTo} ` +
-				`Command: ${record.command}\n` +
-				`Output tail:\n${tail || "(no output)"}\n` +
-				`Full output: ${record.spillFile}\n` +
-				"Continue whatever was waiting on this job. If it needs no follow-up, respond with exactly [SILENT].",
-			ts: String(Date.now()),
-			conversationType: this.channelId.startsWith("group_") ? "2" : "1",
-			dispatchId: `job:${this.channelId}:${record.id}:done`,
-			// The result is awaited; the wake itself still runs without a progress card.
-			presentation: "awaited",
-			...(record.contract.taskId
-				? {
-						internalWake: {
-							kind: "job" as const,
-							resourceId: record.id,
-							taskId: record.contract.taskId,
-							dispatchId: `job:${this.channelId}:${record.id}:done`,
-						},
-					}
-				: {}),
-		};
+		const event = buildJobCompletionWake({ dot: this.target.dot, channelId, record, tail });
 		try {
 			await this.options.dispatch(event);
 		} catch (error) {
@@ -753,6 +720,25 @@ export class ChannelJobManager {
 				fields: { jobId: record.id },
 			});
 			return;
+		}
+		record.notified = true;
+		await this.persist(record);
+	}
+
+	/** Same contract as `SubAgentRunManager.suppressWake`: drop the wake, still redeem the `work` ticket. */
+	private async suppressWake(record: JobRecord): Promise<void> {
+		log.logInfoEvent("job.wake.suppressed", "Completion wake dropped: channel not bound to the job's dot", {
+			channelId: record.channelId,
+			fields: { jobId: record.id, dot: this.target.dot, taskId: record.contract.taskId },
+		});
+		const taskId = record.contract.taskId;
+		if (taskId && this.target.dotDir) {
+			await redeemTicket(this.target.dotDir, taskId, (ticket) => ticket.kind === "work").catch((error) => {
+				log.logWarn("job.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
+					reason: errorMessage(error),
+					fields: { jobId: record.id, taskId },
+				});
+			});
 		}
 		record.notified = true;
 		await this.persist(record);
@@ -826,7 +812,7 @@ export class ChannelJobManager {
 	async beginWakeConsumption(id: string, taskId: string, dispatchId: string): Promise<boolean> {
 		return this.wakeQueue.run(id, async () => {
 			const record = this.jobs.get(id);
-			const expected = `job:${this.channelId}:${id}:done`;
+			const expected = jobWakeDispatchId(this.target.dot, id);
 			if (!record) return false;
 			const eligible = record.status !== "running" && record.contract.taskId === taskId && dispatchId === expected;
 			const previousClaim = record.wakeClaimDispatchId;
@@ -1009,62 +995,56 @@ export class ChannelJobManager {
 }
 
 interface JobRuntimeConfig {
-	/** Root of the per-channel record directories (`<jobsStateDir>/<channelId>/`). */
+	/** Root of the per-dot record directories (`<jobsStateDir>/<dot>/`). */
 	jobsStateDir?: string;
 	/**
-	 * The agent workspace root. A job's full-output spill goes to `<workspaceDir>/<channelId>/logs/`
-	 * so the "Full output: …" pointer resolves under both path-guard boundaries (fix plan §2.2). The
-	 * path is stable across restarts, so a re-adopted job's spill is still found.
+	 * The agent workspace root. A job's full-output spill goes to `<dot>/logs/` so the
+	 * "Full output: …" pointer is a file the model can read (fix plan §2.2). The path is stable
+	 * across restarts, so a re-adopted job's spill is still found.
 	 */
 	workspaceDir?: string;
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
-	/** Sweep cadence override for the lazily-built channel managers (tests). */
+	isBoundTo?: JobManagerOptions["isBoundTo"];
+	/** Sweep cadence override for the lazily-built dot managers (tests). */
 	sweepIntervalMs?: number;
 }
 
 /** One application's jobs; the executor and configuration cannot change after construction. */
 export function createJobRuntime(executor: Executor, options: JobRuntimeConfig = {}) {
 	const config = { ...options };
-	const managers = new Map<string, ChannelJobManager>();
+	const managers = new Map<string, DotJobManager>();
 	let stopped = false;
-	function runningLines(channelId: string): string[] {
-		const manager = managers.get(channelId);
-		if (!manager) return [];
-		return manager.listRunning().map((job) => `后台作业 \`${job.id}\` 仍在运行：${job.command.slice(0, 80)}`);
-	}
 
-	function get(channelId: string): ChannelJobManager {
-		let manager = managers.get(channelId);
+	function get(dot: string): DotJobManager {
+		let manager = managers.get(dot);
 		if (!manager) {
-			manager = new ChannelJobManager(channelId, executor, {
-				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, channelId) } : {}),
-				...(config.workspaceDir
-					? {
-							spillDir: join(getChannelDir(config.workspaceDir, channelId), "logs"),
-							channelDir: getChannelDir(config.workspaceDir, channelId),
-						}
-					: {}),
+			const dotDir = config.workspaceDir ? getDotDir(config.workspaceDir, dot) : undefined;
+			manager = new DotJobManager({ dot, dotDir }, executor, {
+				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, dot) } : {}),
+				...(dotDir ? { spillDir: join(dotDir, "logs") } : {}),
 				...(config.dispatch ? { dispatch: config.dispatch } : {}),
+				...(config.isBoundTo ? { isBoundTo: config.isBoundTo } : {}),
 				...(config.sweepIntervalMs ? { sweepIntervalMs: config.sweepIntervalMs } : {}),
 			});
-			managers.set(channelId, manager);
+			managers.set(dot, manager);
 			if (stopped) manager.stop();
 		}
 		return manager;
 	}
 
 	/**
-	 * Re-adopt every channel's persisted jobs at startup. Channels are discovered from the state
-	 * directory itself, so a job survives even when its channel has had no traffic since the restart.
+	 * Re-adopt every dot's persisted jobs at startup. Dots are the record directories themselves,
+	 * and restore does not depend on bindings (spec 058, D6): a job still running when its dot went
+	 * dormant survives the restart too.
 	 */
 	async function restore(): Promise<number> {
 		const jobsStateDir = config.jobsStateDir;
 		if (!jobsStateDir) return 0;
-		let channelIds: string[];
+		let dots: string[];
 		try {
 			await mkdir(jobsStateDir, { recursive: true });
-			channelIds = (await readdir(jobsStateDir, { withFileTypes: true }))
-				.filter((entry) => entry.isDirectory())
+			dots = (await readdir(jobsStateDir, { withFileTypes: true }))
+				.filter((entry) => entry.isDirectory() && isDotName(entry.name))
 				.map((entry) => entry.name);
 		} catch (error) {
 			log.logWarn("job.scan.failed", "Persisted background job scan failed", { reason: errorMessage(error) });
@@ -1072,8 +1052,8 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 		}
 
 		let restored = 0;
-		for (const channelId of channelIds) {
-			restored += await get(channelId).restore();
+		for (const dot of dots) {
+			restored += await get(dot).restore();
 		}
 		if (restored > 0) {
 			log.logInfoEvent("job.restore.done", "Background job records restored", { fields: { count: restored } });
@@ -1083,7 +1063,6 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 
 	return {
 		get,
-		runningLines,
 		restore,
 		stop: () => {
 			stopped = true;

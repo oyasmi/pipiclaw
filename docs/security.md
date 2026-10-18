@@ -100,17 +100,9 @@ $PIPICLAW_HOME/security.json
 - 密钥、凭据、认证配置、浏览器资料、keychain 等敏感位置
 - 高风险系统目录和系统敏感文件
 
-`security.json` 里配置了 `projectAccess` 之后，上面这份默认允许清单会被**收窄成当前项目目录**：文件工具的相对路径以项目目录为准，workspace、主目录和临时目录都在界外，`readAllow` / `writeAllow` 不能放宽到项目目录之外，也不会把项目内部变成白名单；内部需要限制的位置应使用 `readDeny` / `writeDeny`。人可以用 `/project` 查看或切换当前项目目录。
+文件工具的相对路径以 agent 的工作目录为准。内置 playbook 目录另外可读、不可写：agent 要能读自己这一版的运行机制，与安装位置无关。`readDeny` / `writeDeny` 和下面的敏感路径拒绝仍然优先。
 
-项目边界之外只保留三个运行时例外。它们由 runtime 授予，不需要也不能通过 `readAllow` 配置；`readDeny` / `writeDeny` 和上面的敏感路径拒绝仍然优先于它们：
-
-| 位置 | 读 | 写 | 为什么 |
-|---|---|---|---|
-| 内置 playbook 目录 | 允许 | 拒绝 | agent 要能读自己这一版的运行机制，与装在哪儿无关 |
-| workspace `skills/` | 允许 | 允许 | 选了哪个项目都要能加载 skill；写入走通用 `write`/`edit`（`skill` 工具本身只读） |
-| 当前 channel 目录 | 允许 | 仅 `tasks/` | 频道的记忆与任务台账不随项目切换失联；`memory/*.md`（生成的 `MEMORY.md` 索引）由后台维护队列持有，写入走 `memory_save` / `memory_forget`；`journal/` 只由后台反思写，不接受任何工具写入；任务正文是 agent 自己写的契约，需要 `edit` 修订 |
-
-这个例外只保证当前频道在 `boundary: "project"` 时仍可达；其他频道没有该例外。未启用项目边界时，整个 workspace 本就在默认允许根内，因此不能据此声称频道之间有文件级隔离。子智能体不带频道例外，通过调用时注入的上下文获取频道背景。
+整个 workspace 都在默认允许根内，因此 dot 之间没有文件级隔离；正常的记忆和检索流程按 dot 分开（同一个 dot 的频道共享），但通用文件工具和 shell 仍能读到运行账号可读的其他 dot 目录和其他目录。相对路径和 shell 的 cwd 以当前 dot 目录为准。需要强隔离时使用独立账号或容器。
 
 ### 3. 默认拒绝的典型敏感位置
 
@@ -242,7 +234,8 @@ $PIPICLAW_HOME/security.json
 | `pathGuard` | `object` | 文件工具的路径防护 |
 | `networkGuard` | `object` | web 工具的出站网络防护 |
 | `audit` | `object` | 阻断事件审计日志 |
-| `projectAccess` | `object` | 可选项目目录策略；存在时启用文件工具的项目边界 |
+
+`projectAccess` 已退役（spec 058）：项目边界和 `/project` 命令已删除。文件里仍有这个键时，启动只报一条警告，然后忽略它。
 
 ### `commandGuard`
 
@@ -277,26 +270,6 @@ $PIPICLAW_HOME/security.json
 - 相对路径会相对 Pipiclaw workspace 根解析
 - 这是“前缀型路径规则”，不是任意 glob 匹配
 - 基础敏感路径 deny 仍然保留；配置不是“完全绕过所有底线”的总开关
-
-### `projectAccess`
-
-```json
-{
-  "projectAccess": {
-    "defaultRoot": "/srv/projects/app",
-    "allowedRoots": ["/srv/projects"]
-  }
-}
-```
-
-| 字段 | 默认值 / 行为 |
-|---|---|
-| `defaultRoot` | 省略时为启动 cwd；必须是绝对、已存在的目录（支持 `~/`），按 realpath 解析 |
-| `allowedRoots` | 省略或为空时使用 defaultRoot；允许选择列出的目录及子目录，defaultRoot 始终纳入 |
-
-未配置整个 `projectAccess` 时保持原有 workspace/home/temp 范围，`/project set` 不可用。配置后各频道可在空闲时用 `/project set <绝对路径>` 选择允许范围内的目录，或用 `/project reset` 回到默认值，选择保存在频道的 `project.json` 中。无效默认目录会产生诊断并禁用切换；无效 allowedRoots 条目被警告并忽略。
-
-项目边界约束启用 path guard 的通用文件工具。shell 只设置 cwd，仍可通过 `cd`、绝对路径或子进程访问其他目录；外部 CLI 也依赖自己的 sandbox。`/project` 不提供 OS 级隔离。
 
 ### `networkGuard`
 
