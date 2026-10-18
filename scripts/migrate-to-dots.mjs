@@ -834,8 +834,18 @@ export function verify(home, asHome) {
 		}
 	}
 	const roots = rewriteRoots(home, asHome);
+	// Only complete prefixes from this migration can be rewritten. Old conversations also contain
+	// globs, placeholders and truncated ids; scanning every `dm_` occurrence falsely rejects them.
+	const migration = tryReadJson(path.join(stateDir, "dots-migration.done"));
+	const legacyDirs = [
+		...Object.values(migration?.dots ?? {}).map((dot) => dot.from),
+		...(migration?.dropped ?? []),
+	];
+	const knownPrefixes = roots.flatMap((root) => legacyDirs.map((dir) => escapeRegExp(`${root}/workspace/${dir}`)));
 	const leftover = new RegExp(
-		`(?:${roots.map((root) => escapeRegExp(`${root}/workspace/`)).join("|")})(?:dm_|group_|tui_)[^\\s"'\`)]*`,
+		knownPrefixes.length > 0
+			? `(?:${knownPrefixes.join("|")})(?!${PATH_CHAR.source})`
+			: `(?:${roots.map((root) => escapeRegExp(`${root}/workspace/`)).join("|")})(?:dm_|group_|tui_)[^\\s"'\`)]*`,
 		"g",
 	);
 	for (const file of rewriteScope({ workspaceDir, stateDir })) {

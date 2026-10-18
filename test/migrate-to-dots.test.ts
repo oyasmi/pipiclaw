@@ -137,6 +137,16 @@ describe("migrate-to-dots (spec 058, D20)", () => {
 		const home = legacyHome();
 		const ws = join(home, "workspace");
 		const state = join(home, "state");
+		// Real-home rehearsal: historical examples and truncated paths are not references to any
+		// migrated directory. Mutation: the old broad dm_/group_/tui_ scan rejects this home.
+		const historicalExamples = [
+			`${ws}/dm_*/HISTORY.md`,
+			`${ws}/dm_<staffId>/`,
+			`${ws}/dm_1624…`,
+			`${ws}/dm_162403.`,
+			`${ws}/dm_1624039/report.md`,
+		].join("\n");
+		write(join(ws, "dm_162403", "historical-examples.md"), historicalExamples);
 		const result = run(home, ...FULL_MAP, "--no-backup");
 		expect(result.code, result.out).toBe(0);
 
@@ -217,6 +227,7 @@ describe("migrate-to-dots (spec 058, D20)", () => {
 		expect(readFileSync(join(state, "subagent-runs", "news", "run_a.json"), "utf8")).toContain(
 			`${news}/subagent-artifacts/run_a/output.md`,
 		);
+		expect(readFileSync(join(news, "historical-examples.md"), "utf8")).toBe(historicalExamples);
 		expect(
 			existsSync(join(state, "dots-migration.done")) && !existsSync(join(state, "dots-migration.inprogress")),
 		).toBe(true);
