@@ -514,21 +514,8 @@ export class EventsWatcher {
 		deleteAfter: boolean = true,
 		occurrence: Date = new Date(),
 	): Promise<void> {
-		// A one-shot recovered by a load that `stop()` could not cancel: the dot went dormant meanwhile.
-		if (this.stopped) return;
-		// Spec 058, D8: an occurrence whose delivery channel is no longer bound to this dot is
-		// skipped — before the pre-action gate, which would otherwise run a command for nothing.
-		if (!this.options.isBound(event.channelId)) {
-			this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "channel_not_bound" });
-			// A one-shot has no next occurrence: keep the file with a marker, as a full queue does.
-			if (deleteAfter) {
-				this.markInvalid(
-					filename,
-					`Delivery channel ${event.channelId} was not bound to dot ${this.options.dot} at ${new Date().toISOString()}; this occurrence was skipped.`,
-				);
-			}
-			return;
-		}
+		// Spec 058, D8: before the pre-action gate, which would otherwise run a command for nothing.
+		if (!this.admits(filename, event, deleteAfter)) return;
 		if (event.preAction) {
 			try {
 				this.appendEventHistory(filename, event, "pre_action_started", "ok", {
@@ -573,6 +560,8 @@ export class EventsWatcher {
 				}
 				return;
 			}
+			// The gate can run for minutes; the dot may have gone dormant or lost this channel meanwhile.
+			if (!this.admits(filename, event, deleteAfter)) return;
 		}
 
 		if (event.task) {
@@ -640,6 +629,17 @@ export class EventsWatcher {
 				`Event queue was full at ${new Date().toISOString()}; this occurrence was not delivered.`,
 			);
 		}
+	}
+
+	/** Whether the watcher may still act on an occurrence (dot active, channel bound); records a skip. */
+	private admits(filename: string, event: ScheduledEvent, deleteAfter: boolean): boolean {
+		if (this.stopped) return false; // a load `stop()` could not cancel: the dot went dormant meanwhile
+		if (this.options.isBound(event.channelId)) return true;
+		this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "channel_not_bound" });
+		// A one-shot has no next occurrence: keep the file with a marker, as a full queue does.
+		const reason = `Delivery channel ${event.channelId} was not bound to dot ${this.options.dot} at ${new Date().toISOString()}; this occurrence was skipped.`;
+		if (deleteAfter) this.markInvalid(filename, reason);
+		return false;
 	}
 
 	/**

@@ -323,7 +323,7 @@ describe("EventsWatcher", () => {
 			expect(readFileSync(`${filePath}.error.txt`, "utf-8")).toContain("disk full");
 		});
 
-		it("does not spawn when the preAction gate blocks the occurrence", async () => {
+		it("does not spawn when the preAction gate blocks the occurrence or the dot goes dormant during it", async () => {
 			const dir = createTempDir();
 			const spawnTask = vi.fn(async () => ({ outcome: "spawned" as const, id: "x" }));
 			const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, undefined, spawnTask);
@@ -332,6 +332,25 @@ describe("EventsWatcher", () => {
 				{ ...templateEvent, preAction: { type: "bash", command: "false" } },
 				false,
 			);
+			expect(spawnTask).not.toHaveBeenCalled();
+
+			// The gate passes, but while it ran the dot went dormant or the channel was rebound away.
+			// Failure caught: a stopped watcher persisted a task instance for a dot nobody is driving.
+			// Mutation check (run: goes red): drop the post-gate `admits` check in `execute`.
+			for (const lose of ["stop", "unbind"] as const) {
+				let bound = true;
+				const gate = createMockExecutor(async () => {
+					if (lose === "stop") dormant.stop();
+					else bound = false;
+					return { stdout: "", stderr: "", code: 0 };
+				});
+				const dormant = createWatcher(dir, new FakeBot(), gate, undefined, undefined, spawnTask, () => bound);
+				await getEventsWatcherPrivateApi(dormant).execute(
+					"gated.json",
+					{ ...templateEvent, preAction: { type: "bash", command: "check-feed" } },
+					false,
+				);
+			}
 			expect(spawnTask).not.toHaveBeenCalled();
 		});
 	});

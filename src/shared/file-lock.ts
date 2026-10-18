@@ -7,8 +7,8 @@
  * content is written to a private temp file first and then `link`ed into place, which fails with
  * `EEXIST` when someone else holds it — so a lock file never exists half-written. A lock whose
  * holder ran on this host and whose pid is gone is stale and is reclaimed — one reclaimer at a time,
- * see {@link reclaimStale}; a holder on another host is never presumed dead. Release removes the
- * file only while it still carries this acquisition's token.
+ * see {@link reclaimStale}; a holder on another host is never presumed dead, and neither is a
+ * reclaimer. Release removes the file only while it still carries this acquisition's token.
  *
  * Domain-free on purpose (layer 0): memory, tasks and the dot registry each pick their own path
  * and timeout.
@@ -47,11 +47,14 @@ export class FileLockTimeoutError extends Error {
 
 	// Plain fields, not parameter properties: the lock tests load this file into a child
 	// process with Node's type stripping, which does not support them.
-	constructor(lockPath: string, heldBy: FileLockHolder | undefined) {
+	constructor(lockPath: string, heldBy: FileLockHolder | undefined, reclaimGuard?: string) {
 		super(
-			heldBy
+			(heldBy
 				? `Lock ${lockPath} is held by pid ${heldBy.pid} on ${heldBy.hostname} since ${heldBy.acquiredAt}`
-				: `Lock ${lockPath} is held by another process`,
+				: `Lock ${lockPath} is held by another process`) +
+				(reclaimGuard
+					? `; its reclaim guard ${reclaimGuard} is present — if no Pipiclaw process is still running, delete that file`
+					: ""),
 		);
 		this.name = "FileLockTimeoutError";
 		this.lockPath = lockPath;
@@ -61,8 +64,6 @@ export class FileLockTimeoutError extends Error {
 
 const FIRST_RETRY_MS = 20;
 const MAX_RETRY_MS = 250;
-/** A reclaim guard lives for a read and an unlink; one this old was left by a reclaimer that died. */
-const ABANDONED_GUARD_MS = 10_000;
 
 function errorCode(error: unknown): string | undefined {
 	return error && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : undefined;
@@ -133,18 +134,18 @@ async function tryCreate(path: string, content: LockContent): Promise<{ held: Lo
  * the lock aside instead left the path empty for a moment, and a third process could take it
  * while the mover was still putting back a live lock it had grabbed by mistake.) Returns false
  * when another reclaimer holds the guard; the caller treats the lock as still held.
+ *
+ * The guard is never taken away from its holder, however old: a reclaimer that is merely paused
+ * past the stale check would wake up and unlink whatever lock sits at the path by then — a live
+ * one. A guard left by a reclaimer killed inside this function therefore blocks the lock until it
+ * is deleted by hand; {@link FileLockTimeoutError} names it.
  */
 async function reclaimStale(path: string, stale: LockContent): Promise<boolean> {
-	const guard = `${path}.reclaim`;
+	const guard = reclaimGuardPath(path);
 	try {
 		await writeFile(guard, "", { flag: "wx" });
 	} catch (error) {
 		if (errorCode(error) !== "EEXIST") throw error;
-		const age = await stat(guard).then(
-			(stats) => Date.now() - stats.mtimeMs,
-			() => 0,
-		);
-		if (age > ABANDONED_GUARD_MS) await unlink(guard).catch(() => undefined);
 		return false;
 	}
 	try {
@@ -153,6 +154,10 @@ async function reclaimStale(path: string, stale: LockContent): Promise<boolean> 
 	} finally {
 		await unlink(guard).catch(() => undefined);
 	}
+}
+
+function reclaimGuardPath(path: string): string {
+	return `${path}.reclaim`;
 }
 
 async function attempt(path: string): Promise<AcquireFileLockResult> {
@@ -210,7 +215,14 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>, option
 			}
 		}
 		const remaining = deadline - Date.now();
-		if (remaining <= 0) throw new FileLockTimeoutError(path, result.heldBy);
+		if (remaining <= 0) {
+			const guard = reclaimGuardPath(path);
+			const guarded = await stat(guard).then(
+				() => true,
+				() => false,
+			);
+			throw new FileLockTimeoutError(path, result.heldBy, guarded ? guard : undefined);
+		}
 		await new Promise((resolve) => setTimeout(resolve, Math.min(delay, remaining)));
 		delay = Math.min(delay * 2, MAX_RETRY_MS);
 	}

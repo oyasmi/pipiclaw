@@ -11,6 +11,11 @@ export interface LockHolderProcess {
 	kill(): Promise<void>;
 }
 
+export interface PausedReclaimerProcess extends LockHolderProcess {
+	/** Let the child finish its reclaim; resolves once it holds the lock. */
+	resume(): Promise<void>;
+}
+
 function waitForLine(child: ChildProcess, prefix: string): Promise<string> {
 	return new Promise((resolve, reject) => {
 		let buffer = "";
@@ -27,12 +32,13 @@ function waitForLine(child: ChildProcess, prefix: string): Promise<string> {
 	});
 }
 
-/** Spawn a separate process that takes `lockPath` with the real lock implementation. */
-export async function spawnLockHolder(lockPath: string): Promise<LockHolderProcess> {
-	const child = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", HOLDER_SCRIPT, lockPath], {
+function spawnHolderScript(args: string[]): ChildProcess {
+	return spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", HOLDER_SCRIPT, ...args], {
 		stdio: ["pipe", "pipe", "inherit"],
 	});
-	await waitForLine(child, "held ");
+}
+
+function controls(child: ChildProcess): LockHolderProcess {
 	const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
 	return {
 		pid: child.pid ?? -1,
@@ -43,6 +49,30 @@ export async function spawnLockHolder(lockPath: string): Promise<LockHolderProce
 		async kill() {
 			child.kill("SIGKILL");
 			await exited;
+		},
+	};
+}
+
+/** Spawn a separate process that takes `lockPath` with the real lock implementation. */
+export async function spawnLockHolder(lockPath: string): Promise<LockHolderProcess> {
+	const child = spawnHolderScript([lockPath]);
+	await waitForLine(child, "held ");
+	return controls(child);
+}
+
+/**
+ * Spawn a separate process that finds `lockPath` stale and stops inside its reclaim guard, just
+ * before unlinking the dead lock. Resolves once it is parked there.
+ */
+export async function spawnPausedReclaimer(lockPath: string): Promise<PausedReclaimerProcess> {
+	const child = spawnHolderScript([lockPath, "--pause-in-reclaim"]);
+	await waitForLine(child, "in-guard");
+	return {
+		...controls(child),
+		async resume() {
+			const held = waitForLine(child, "held ");
+			child.stdin?.write("resume\n");
+			await held;
 		},
 	};
 }
