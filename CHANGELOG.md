@@ -2,23 +2,25 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
-## [Unreleased]
+## [0.9.5-beta.1] - 2026-10-18
 
 ### Breaking
 
 - **Dots (spec 058).** An assistant is now a *dot*: a named, explicitly created unit that owns its memory, journal, tasks, scheduled events, delegation records and working files under `workspace/dots/<dot>/`, and is the agent's working directory. A DingTalk chat or group is only an address bound to a dot (`workspace/dots/bindings.json`); several channels can share one dot — shared memory and tasks, separate conversations — and an unbound channel gets only `/dot` and `/help`, with no model call and nothing written to disk. Nothing creates a dot implicitly.
-- **Existing app homes must be migrated before starting.** The daemon and the TUI refuse to start on the per-channel layout. Stop every Pipiclaw process and run `node scripts/migrate-to-dots.mjs --dry-run` from a checkout, then `--map <old-dir>=<dot>` / `--drop <old-dir>` for every old channel directory and `--verify` (see [Deployment and operations](docs/deployment-and-operations.md#迁移到-dot-布局spec-058)). The script backs up `workspace/` and `state/` first, recovers real channel ids, moves state, stamps tasks with their delivery channel and rewrites absolute paths. A v3 home must first be upgraded to v5 tasks by a 0.9.x release; the in-runtime v3→v5 task conversion and `scripts/rehearse-task-migration.mjs` are removed.
+- **Existing app homes must be migrated before starting.** The daemon and the TUI refuse to start on the per-channel layout. Stop every Pipiclaw process and run `node scripts/migrate-to-dots.mjs --dry-run` from a checkout, then `--map <old-dir>=<dot>` / `--drop <old-dir>` for every old channel directory and `--verify`; it refuses while a background job or delegation from the old layout is still running (see [Deployment and operations](docs/deployment-and-operations.md#迁移到-dot-布局spec-058)). The script backs up `workspace/` and `state/` first, recovers real channel ids, moves state, stamps tasks with their delivery channel and rewrites absolute paths. A v3 home must first be upgraded to v5 tasks by a 0.9.x release; the in-runtime v3→v5 task conversion and `scripts/rehearse-task-migration.mjs` are removed.
 - **Project scope is removed.** `/project` and `security.json` `projectAccess` are gone (the key is ignored with a warning). The working directory — relative paths, the shell's cwd and a delegation's default `workingDirectory` — is the dot directory; pass an explicit `workingDirectory` to delegate into a repository.
 - **The TUI opens a dot:** `pipiclaw tui --dot <name>` (required), `--create` to create it; `--channel` is gone. It can open a dot the daemon is serving: memory, task and `dot.json` writes take short cross-process locks, the TUI keeps its own conversation, and a second TUI on the same dot refuses to start.
 
 ### Added
 
-- `/dot [list|new <name>|bind <name>]`: list dots and their channels, create an empty dot, bind the current channel (refused while a turn is running; the reply says whether the old dot went dormant and how many of its tasks and events are now suspended).
+- `/dot [list|new <name>|bind <name>]`: list dots and their channels, create an empty dot, bind the current channel (refused while a turn is running; the reply says whether the old dot went dormant and how many of its tasks and events are now suspended). A binding whose dot directory is gone is listed as missing.
 - Tasks record their delivery `channel`; tasks and events whose delivery channel is not bound to their dot are suspended and resume when it is bound back. A dot with no binding goes dormant: no events, no task steps, and finished delegations and jobs no longer wake anyone.
 
 ### Changed
 
 - Memory writes are serialized per dot (and across processes); `session_search`, `/tasks`, `/events`, `/usage` and `/subagents` report on the dot. Run and job records live under `state/subagent-runs/<dot>/` and `state/jobs/<dot>/`; DingTalk routing metadata moves to `state/dingtalk/conversations.json`.
+- Job and delegation tools see the whole dot; a list entry names the channel that started it, and its completion wakes that channel.
+- The task driver advances tasks of different channels of one dot in the same pass (one step per channel), so one channel's tasks no longer wait behind another's.
 
 ### Fixed
 

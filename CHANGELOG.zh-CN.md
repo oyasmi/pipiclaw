@@ -2,23 +2,25 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [Unreleased]
+## [0.9.5-beta.1] - 2026-10-18
 
 ### 不兼容变更
 
 - **Dot（spec 058）。** 助手现在是一个 *dot*：显式创建、有名字的个体，在 `workspace/dots/<dot>/` 下拥有自己的记忆、日记、任务、定时事件、委派记录和工作文件，也是 agent 的工作目录。钉钉私聊或群只是绑定到某个 dot 的地址（`workspace/dots/bindings.json`）；多个频道可以共用一个 dot——记忆和任务共享，对话各自独立。没有绑定的频道只能用 `/dot` 和 `/help`，不调用模型，也不写任何文件。不会有任何东西自动创建 dot。
-- **已有的 app home 必须先迁移才能启动。** daemon 和 TUI 在按频道分目录的旧布局上拒绝启动。停掉所有 Pipiclaw 进程，在仓库检出目录里运行 `node scripts/migrate-to-dots.mjs --dry-run`，再为每个旧频道目录给出 `--map <旧目录>=<dot>` 或 `--drop <旧目录>` 正式执行，最后 `--verify`（见[部署与运维](docs/deployment-and-operations.md#迁移到-dot-布局spec-058)）。脚本先备份 `workspace/` 和 `state/`，还原真实频道 id，迁移状态，为任务写上投递频道并改写绝对路径。还停在 v3 任务格式的 home 要先用 0.9.x 版本升到 v5；运行时内的 v3→v5 任务转换和 `scripts/rehearse-task-migration.mjs` 已删除。
+- **已有的 app home 必须先迁移才能启动。** daemon 和 TUI 在按频道分目录的旧布局上拒绝启动。停掉所有 Pipiclaw 进程，在仓库检出目录里运行 `node scripts/migrate-to-dots.mjs --dry-run`，再为每个旧频道目录给出 `--map <旧目录>=<dot>` 或 `--drop <旧目录>` 正式执行，最后 `--verify`；旧布局下的后台作业或委派仍在运行时脚本拒绝执行（见[部署与运维](docs/deployment-and-operations.md#迁移到-dot-布局spec-058)）。脚本先备份 `workspace/` 和 `state/`，还原真实频道 id，迁移状态，为任务写上投递频道并改写绝对路径。还停在 v3 任务格式的 home 要先用 0.9.x 版本升到 v5；运行时内的 v3→v5 任务转换和 `scripts/rehearse-task-migration.mjs` 已删除。
 - **删除项目范围。** `/project` 和 `security.json` 的 `projectAccess` 已删除（该键会被忽略并给出警告）。工作目录——相对路径、shell 的 cwd、委派的默认 `workingDirectory`——就是 dot 目录；要委派到代码仓库，显式传 `workingDirectory`。
 - **TUI 打开一个 dot：** `pipiclaw tui --dot <名字>`（必填），`--create` 用于创建；`--channel` 已删除。TUI 可以打开正由 daemon 服务的 dot：记忆、任务和 `dot.json` 的写入持有跨进程短锁，TUI 有自己的会话，同一个 dot 的第二个 TUI 会拒绝启动。
 
 ### 新增
 
-- `/dot [list|new <名字>|bind <名字>]`：列出 dot 及其频道、创建空 dot、把当前频道绑定到一个 dot（回合进行中拒绝；回复会说明原 dot 是否休眠、有几个任务和事件因此暂停）。
+- `/dot [list|new <名字>|bind <名字>]`：列出 dot 及其频道、创建空 dot、把当前频道绑定到一个 dot（回合进行中拒绝；回复会说明原 dot 是否休眠、有几个任务和事件因此暂停）。目录已不存在的 dot 若仍被绑定，会列为缺失。
 - 任务记录投递频道 `channel`；投递频道没有绑定在所属 dot 上的任务和事件会暂停，绑回后恢复。没有任何绑定的 dot 休眠：事件不触发、任务不推进，结束的委派和作业也不再唤醒谁。
 
 ### 变更
 
 - 记忆写入按 dot 串行（并跨进程）；`session_search`、`/tasks`、`/events`、`/usage`、`/subagents` 以 dot 为范围。run 和 job 记录改到 `state/subagent-runs/<dot>/`、`state/jobs/<dot>/`；钉钉路由元数据改到 `state/dingtalk/conversations.json`。
+- 作业和委派工具以整个 dot 为范围；列表会注明由哪个频道发起，完成时唤醒发起它的频道。
+- 任务驱动在同一轮里推进同一 dot 不同频道的任务（每个频道一步），一个频道的任务不再排在另一个频道之后。
 
 ### 修复
 
