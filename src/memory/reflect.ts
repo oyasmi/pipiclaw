@@ -77,7 +77,7 @@ ${MEMORY_INPUT_SAFETY_RULES}
 - Empty arrays are correct when nothing applies. Put anything you considered and rejected in "discarded".`;
 
 const CONDENSE_INSTRUCTIONS = `
-This channel's memory index no longer fits its budget. In addition to the rules above, this run
+This dot's memory index no longer fits its budget. In addition to the rules above, this run
 should also condense: merge entries that say overlapping things into one better entry (delete the
 old ones, add or update the merged one), and delete anything stale. The delete cap is relaxed for
 this run — use it. Every delete should either be covered by an add/update that keeps its real
@@ -199,7 +199,7 @@ async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{
 	);
 
 	const sections = [
-		`Channel memory index (full):\n${renderMemoryIndex(entries) || "(empty)"}`,
+		`Dot memory index (full):\n${renderMemoryIndex(entries) || "(empty)"}`,
 		`Workspace background (read-only; do not target it with ops):\n${clipText(workspaceMemory, WORKSPACE_MEMORY_MAX_CHARS, { headRatio: 0.35 }) || "(empty)"}`,
 		`Today's journal so far:\n${clipText(journalToday, JOURNAL_TAIL_MAX_CHARS, { headRatio: 0 }) || "(empty)"}`,
 		`Conversation window to reflect on:\n${transcript || "(empty)"}`,

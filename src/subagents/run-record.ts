@@ -115,7 +115,7 @@ export interface RunRecord extends RunUsage {
 	/** Spec 042 D1: the real process start time (`setLaunched` time), as opposed to `startedAt`
 	 *  (registration time) — restart reconciliation's duration estimate is measured from here. */
 	processStartedAt?: number;
-	/** This run's channel directory, so settlement (including restart reconciliation) can reach the
+	/** This run's dot directory, so settlement (including restart reconciliation) can reach the
 	 *  owning task's log (spec 052, D4). */
 	dotDir?: string;
 	/** True when `durationMs` is a restart-reconciliation estimate rather than a measured process
@@ -152,7 +152,7 @@ export interface RegisterRunInput {
 	item?: string;
 	workingDirectory: string;
 	artifactDir: string;
-	/** This run's channel directory — where its owning task lives. Set at registration for every
+	/** This run's dot directory — where its owning task lives. Set at registration for every
 	 *  runtime, so settlement can credit the task whether the run was internal or external; the
 	 *  external launch path re-persists it with the rest of its info. */
 	dotDir?: string;
@@ -208,9 +208,9 @@ export interface RunNotice {
 /** Sends a notice to the run's own channel; `dot` lets the runtime refuse a channel bound elsewhere (D7). */
 export type RunNotifier = (dot: string, channelId: string, notice: RunNotice) => void | Promise<void>;
 
-/** D10.2: per-channel cap on concurrently running delegation runs. */
-export const MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL = 6;
-/** D10.2: host-wide cap across every channel. Bounds unbounded process/worker growth only —
+/** D10.2: per-dot cap on concurrently running delegation runs (one run manager per dot, spec 058). */
+export const MAX_RUNNING_SUBAGENT_RUNS_PER_DOT = 6;
+/** D10.2: host-wide cap across every dot. Bounds unbounded process/worker growth only —
  *  not the full cross-subsystem (task/job/sidecar) admission scheme the design doc leaves open. */
 export const MAX_RUNNING_SUBAGENT_RUNS_PER_HOST = 20;
 

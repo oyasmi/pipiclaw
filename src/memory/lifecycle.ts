@@ -59,7 +59,7 @@ export function boundCompactionMessages(
 		headRatio: COMPACTION_INPUT_HEAD_RATIO,
 		maxChars: maxUnits * COMPACTION_INPUT_CHARS_PER_TOKEN,
 		marker:
-			"\n\n[... middle omitted from this compaction request; durable channel memory was refreshed before compaction ...]\n\n",
+			"\n\n[... middle omitted from this compaction request; durable dot memory was refreshed before compaction ...]\n\n",
 	});
 	if (!clipped.truncated) {
 		return {

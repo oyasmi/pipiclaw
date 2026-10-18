@@ -488,7 +488,7 @@ describe("sub-agent tool", () => {
 		expect(delegatedTask).toContain("Inspect the current workspace and summarize the main risks.");
 	});
 
-	it("injects the workspace background, channel memory index, and journal for contextual sub-agents (spec 050, D12)", async () => {
+	it("injects the workspace background, dot memory index, and journal for contextual sub-agents (spec 050, D12)", async () => {
 		const workspaceDir = createTempWorkspace();
 		const dotDir = join(workspaceDir, "dm_123");
 		mkdirSync(dotDir, { recursive: true });

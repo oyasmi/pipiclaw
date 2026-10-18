@@ -275,11 +275,14 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		await register(manager, { runId: "run-a" });
 		await register(manager, { runId: "run-b" });
 		await register(manager, { runId: "run-task", taskId: "T-1" });
+		// Another channel of the same dot: its wake goes there, so it is no sibling of this one's
+		// (counting it would leave this channel waiting, [SILENT], for a wake it never gets).
+		await register(manager, { runId: "run-elsewhere", channelId: "group_cidOTHER" });
 
 		await manager.settle("run-a", baseSettleInput(), { announce: true });
 		await manager.settle("run-b", baseSettleInput(), { announce: true });
 
-		// A task's run is not a chat-level sibling.
+		// Neither a task's run nor another channel's is a chat-level sibling.
 		expect(events[0]?.text).toContain("1 other run(s) on this channel are still running.");
 		expect(events[1]?.text).not.toContain("other run(s)");
 	});

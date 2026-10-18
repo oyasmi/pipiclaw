@@ -13,7 +13,7 @@ import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
 import { redeemTicket } from "../tasks/store.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
-import { buildRunCompletionWake, WAKE_OUTPUT_TAIL_CHARS } from "./completion-wake.js";
+import { buildRunCompletionWake, countWakeSiblings, WAKE_OUTPUT_TAIL_CHARS } from "./completion-wake.js";
 import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
 import { finalizeExternalRun } from "./external/settlement.js";
 import { runArchiveEntry, runLedgerEntry } from "./run-archive.js";
@@ -21,7 +21,7 @@ import {
 	applyPendingSettlement,
 	createPendingSettlement,
 	isTerminal,
-	MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL,
+	MAX_RUNNING_SUBAGENT_RUNS_PER_DOT,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
 	normalizeRunIdQuery,
 	parseRunRecord,
@@ -276,7 +276,7 @@ export class SubAgentRunManager {
 		return Array.from(this.runs.values());
 	}
 
-	/** Task ids a still-running delegation on this channel will eventually wake. Feeds `/tasks doctor`. */
+	/** Task ids a still-running delegation in this dot will eventually wake. Feeds `/tasks doctor`. */
 	runningTaskIds(): Set<string> {
 		const ids = new Set<string>();
 		for (const record of this.runs.values()) {
@@ -322,12 +322,12 @@ export class SubAgentRunManager {
 	async register(input: RegisterRunInput): Promise<RunRecord> {
 		return hostAdmissionQueue.run("host", () =>
 			this.queue.run(input.runId, async () => {
-				// D10.2: a per-channel and a host-wide cap, both code constants (a local response to a
+				// D10.2: a per-dot and a host-wide cap, both code constants (a local response to a
 				// runaway model, not a global cross-subsystem admission scheme — see the design doc's
 				// non-goals). Checked before anything is persisted, so a rejected run costs nothing.
-				if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL) {
+				if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_DOT) {
 					throw new RecoverableToolError(
-						`Too many delegation runs already running on this channel (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL}). ` +
+						`Too many delegation runs already running in this dot (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_DOT}). ` +
 							"Wait for one to finish, or cancel one with subagent_run op=cancel first.",
 					);
 				}
@@ -338,7 +338,7 @@ export class SubAgentRunManager {
 					);
 				}
 				if (this.runs.has(input.runId)) {
-					throw new RecoverableToolError(`Run id "${input.runId}" is already registered on this channel.`);
+					throw new RecoverableToolError(`Run id "${input.runId}" is already registered in this dot.`);
 				}
 				const record: RunRecord = {
 					...input,
@@ -652,9 +652,7 @@ export class SubAgentRunManager {
 			await this.suppressWake(record);
 			return;
 		}
-		const siblingCount = Array.from(this.runs.values()).filter(
-			(other) => other.taskId === record.taskId && other.status === "running" && other.runId !== record.runId,
-		).length;
+		const siblingCount = countWakeSiblings(record, this.runs.values());
 		const event = buildRunCompletionWake({
 			dot: this.target.dot,
 			dispatchId: this.wakeDispatchId(record.runId),

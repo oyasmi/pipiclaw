@@ -293,7 +293,7 @@ export async function readMemoryEntry(dotDir: string, name: string): Promise<Mem
 // -------------------------------------------------------------------------------------------------
 
 export function renderMemoryIndex(entries: MemoryEntry[]): string {
-	const lines = ["# Channel Memory", ""];
+	const lines = ["# Dot Memory", ""];
 	for (const type of MEMORY_TYPE_ORDER) {
 		const group = entries.filter((entry) => entry.type === type).sort((a, b) => a.name.localeCompare(b.name));
 		if (group.length === 0) {
@@ -306,7 +306,7 @@ export function renderMemoryIndex(entries: MemoryEntry[]): string {
 		lines.push("");
 	}
 	if (lines.length === 2) {
-		lines.push("_No stored memory in this channel yet._", "");
+		lines.push("_No stored memory in this dot yet._", "");
 	}
 	return `${lines.join("\n").trimEnd()}\n`;
 }

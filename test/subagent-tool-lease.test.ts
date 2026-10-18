@@ -6,10 +6,7 @@ import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
-import {
-	MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL,
-	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
-} from "../src/subagents/run-record.js";
+import { MAX_RUNNING_SUBAGENT_RUNS_PER_DOT, MAX_RUNNING_SUBAGENT_RUNS_PER_HOST } from "../src/subagents/run-record.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../src/tools/subagent.js";
@@ -131,13 +128,13 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		expectWorkspaceAvailable(workspaceDir, channelId);
 	});
 
-	it("releases the lease when per-channel admission rejects registration", async () => {
+	it("releases the lease when per-dot admission rejects registration", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_channel_cap_reject";
 		const dotDir = join(workspaceDir, channelId);
 		mkdirSync(dotDir, { recursive: true });
 		const manager = new SubAgentRunManager({ dot: testDot(channelId), dotDir: "/tmp/pipiclaw-test-dot" }, {});
-		for (let index = 0; index < MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL; index++) {
+		for (let index = 0; index < MAX_RUNNING_SUBAGENT_RUNS_PER_DOT; index++) {
 			await manager.register({
 				runId: `existing-${index}`,
 				channelId,
@@ -164,8 +161,8 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			getRunManager: () => manager,
 		});
 
-		await expect(rejectingTool.execute("channel-cap-reject", writeParams())).rejects.toThrow("on this channel");
-		expect(manager.runningCount()).toBe(MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL);
+		await expect(rejectingTool.execute("channel-cap-reject", writeParams())).rejects.toThrow("in this dot");
+		expect(manager.runningCount()).toBe(MAX_RUNNING_SUBAGENT_RUNS_PER_DOT);
 		expectWorkspaceAvailable(workspaceDir, channelId);
 	});
 

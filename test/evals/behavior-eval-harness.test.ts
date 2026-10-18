@@ -258,7 +258,7 @@ describe("behavior eval multi-turn graders", () => {
 		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "error" });
 	});
 
-	it("seeds a durable channel memory the same way memory_save/the reflect pass write one", async () => {
+	it("seeds a durable dot memory the same way memory_save/the reflect pass write one", async () => {
 		const root = temp();
 		const dotDir = join(root, "workspace", "dots", "eval");
 		await seedChannelMemory(

@@ -79,7 +79,7 @@ export interface JobManagerOptions {
 	spillDir?: string;
 }
 
-/** Cap on concurrently running jobs per channel, so a runaway model can't spawn unbounded processes. */
+/** Cap on concurrently running jobs per dot, so a runaway model can't spawn unbounded processes. */
 export const MAX_RUNNING_JOBS = 5;
 /** Longest a single `poll` call blocks before returning a snapshot; the model can poll again. */
 export const POLL_WAIT_MS = 30_000;
@@ -251,7 +251,7 @@ export class DotJobManager {
 		return Array.from(this.jobs.values()).filter((job) => job.status === "running");
 	}
 
-	/** Task ids that a still-running job on this channel promises to wake. See `channelJobTaskIds`. */
+	/** Task ids that a still-running job in this dot promises to wake. */
 	runningTaskIds(): Set<string> {
 		const ids = new Set<string>();
 		for (const job of this.jobs.values()) {

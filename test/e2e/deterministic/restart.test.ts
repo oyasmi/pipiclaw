@@ -15,7 +15,7 @@ describe("E2E deterministic: restart & persistence", () => {
 		await harness.shutdown();
 	});
 
-	it("A12: a daemon restart resumes the same session file and keeps channel memory", async () => {
+	it("A12: a daemon restart resumes the same session file and keeps dot memory", async () => {
 		// Mutation check: point resolveActiveSessionFile at a fresh name instead of the
 		// existing context.jsonl and the post-restart turn branches from root — its
 		// entry's parentId no longer chains onto the pre-restart assistant message.

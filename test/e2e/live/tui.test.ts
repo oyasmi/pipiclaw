@@ -30,7 +30,7 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		cleanupE2ETestHome(home.homeDir);
 	});
 
-	it("answers a one-shot prompt through the terminal channel and persists channel memory", async () => {
+	it("answers a one-shot prompt through the terminal channel and persists dot memory", async () => {
 		const { runTuiApp } = await import("../../../src/tui/app.js");
 
 		const chunks: string[] = [];

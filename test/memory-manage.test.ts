@@ -42,7 +42,7 @@ describe("memory tools", () => {
 		expect(text).toMatch(/read.*file/i);
 	});
 
-	it("saves a durable entry as a channel memory file", async () => {
+	it("saves a durable entry as a dot memory file", async () => {
 		const dotDir = createTempChannel();
 		const { details } = await run(makeSave(dotDir), {
 			content: "User prefers responses in Chinese",

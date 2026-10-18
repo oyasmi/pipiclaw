@@ -169,10 +169,10 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		name: "tasks",
 		argumentHint:
 			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|archive|doctor]",
-		description: "查看、指挥并诊断本频道的长程任务；pause 只停止自动执行，保留等待条件",
+		description: "查看、指挥并诊断本 dot 的长程任务；pause 只停止自动执行，保留等待条件",
 		availableWhileBusy: true,
 		subcommands: [
-			{ name: "list", description: "列出本频道进行中的任务（默认动作，可省略）", example: "/tasks" },
+			{ name: "list", description: "列出本 dot 进行中的任务（默认动作，可省略）", example: "/tasks" },
 			{
 				name: "show",
 				args: "<id>",
@@ -222,7 +222,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "usage",
 		argumentHint: "[7d|month]",
-		description: "显示本频道与全局的模型花费和 token，按类型与模型分解",
+		description: "显示本 dot 与全局的模型花费和 token，按类型与模型分解",
 		examples: ["/usage", "/usage 7d", "/usage month"],
 		availableWhileBusy: true,
 	},
@@ -302,7 +302,7 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "memory",
 		argumentHint: "[status|list [type]|show <name>|forget <name>|journal [date]]",
-		description: "查看频道记忆、观察期条目与后台整理状态；不经过模型的记忆管理入口",
+		description: "查看本 dot 的记忆、观察期条目与后台整理状态；不经过模型的记忆管理入口",
 		subcommands: [
 			{
 				name: "status",

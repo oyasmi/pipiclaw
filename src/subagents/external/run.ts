@@ -237,7 +237,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	const spawnedArgv = [invocation.executable, ...invocation.args];
 
 	// Spec 042 D11: admission (inside register(), including the concurrency-limit checks) happens
-	// *before* the audit write, not after — previously a run rejected for being over the per-channel
+	// *before* the audit write, not after — previously a run rejected for being over the per-dot
 	// or host-wide cap still left behind an `external-agent` audit record claiming a process that
 	// never existed. `external-agent` records what was *executed* (D8.1), so the record must not
 	// precede the point where this run is actually admitted to run.
