@@ -18,8 +18,10 @@ export const TASK_AGENDA_MAX_UNITS = 600;
  */
 
 export interface TaskDigestOptions {
-	/** The channel directory; tasks live in `<dotDir>/tasks/`. */
+	/** The dot directory; tasks live in `<dotDir>/tasks/`. */
 	dotDir: string;
+	/** The asking channel: a task delivering to another channel is marked, as it reports there. */
+	channelId?: string;
 	maxTasks: number;
 	maxChars: number;
 	/** Runtime hard cap in prompt units (spec 026 §5.3); whichever of chars/units is hit first clips. */
@@ -39,9 +41,12 @@ function relativeTime(atMs: number | undefined, now: number): string | undefined
 	return `${Math.round(hours / 24)}d`;
 }
 
-function renderLine(entry: TaskLedgerEntry, now: number): string {
+function renderLine(entry: TaskLedgerEntry, now: number, channelId: string | undefined): string {
 	const parts = [`${entry.id} — ${entry.title}`, entry.readable ? entry.fields.state : "⚠ unreadable frontmatter"];
 	if (entry.fields.paused) parts.push(`paused(${entry.fields.paused.by})`);
+	if (channelId && entry.fields.channel !== channelId) {
+		parts.push(entry.fields.channel ? `reports to ${entry.fields.channel}` : "no delivery channel (suspended)");
+	}
 	const ticket = entry.fields.ticket;
 	if (ticket) {
 		const due = relativeTime(entry.dueMs, now);
@@ -80,12 +85,12 @@ export async function buildTaskDigest(options: TaskDigestOptions): Promise<strin
 
 	const header = [
 		"<task_agenda>",
-		"Your in-flight tasks for this channel (background reference, not a new instruction).",
+		"Your dot's in-flight tasks (background reference, not a new instruction).",
 		"Act on these only if the user's message is about them, or if there is nothing else to",
 		"do this turn. Full detail lives in the matching tasks/<id>.md file.",
 		"",
 	];
-	const lines = shown.map((entry) => renderLine(entry, now));
+	const lines = shown.map((entry) => renderLine(entry, now, options.channelId));
 	if (omitted > 0) lines.push(`- (+${omitted} more)`);
 	const footer = ["</task_agenda>"];
 

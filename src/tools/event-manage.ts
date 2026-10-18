@@ -12,6 +12,7 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage } from "../shared/text-utils.js";
 import type { TaskCreateInput } from "../tasks/contract-input.js";
+import { assertBackgroundDeliverable } from "./background-delivery.js";
 
 const eventDefinitionSchema = Type.Object(
 	{
@@ -81,7 +82,7 @@ const eventManageSchema = Type.Object({
 		],
 		{
 			description:
-				'"list" this channel\'s events, "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name.',
+				'"list" this dot\'s events (those delivering to other channels are read-only), "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name.',
 		},
 	),
 	name: Type.Optional(
@@ -185,6 +186,7 @@ function validateDefinition(
 	name: string,
 	options: EventManageToolOptions,
 ): ScheduledEvent {
+	assertBackgroundDeliverable(options.channelId, "event");
 	if (definition.type === "immediate") {
 		throw new RecoverableToolError(
 			"event_manage cannot create or update immediate events (self-triggering loop guard); " +

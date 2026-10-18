@@ -54,7 +54,8 @@ export function createTaskListTool(options: TaskManageToolOptions): AgentTool<ty
 	return {
 		name: "task_list",
 		label: "task_list",
-		description: "List persistent tasks in this channel's active directory.",
+		description:
+			"List this dot's persistent tasks, including those created from other channels (each reports to its own `channel`; `deliversHere` marks the ones that report to this chat).",
 		parameters: taskListSchema,
 		execute: async () => {
 			const result = await listTasks(options);

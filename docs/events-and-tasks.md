@@ -247,6 +247,8 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 频道绑定到 dot 之后，`workspace/CHANNELS.md` 会列出它的 id、名称和所属 dot；`dots/bindings.json` 是绑定的原始记录。在频道里让 agent 用 `event_manage` 创建事件时，投递频道自动就是当前频道，不用自己写。
 
+终端（TUI）不进绑定表，也不运行任务驱动器和事件 watcher，所以在终端里 `task_create` 或 `event_manage create` 会被拒绝，并提示去绑定了该 dot 的钉钉频道里创建。
+
 ## 谁来管理事件：三个入口
 
 同一个 dot 的 `events/` 目录有三个互不冲突的管理入口：

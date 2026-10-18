@@ -80,6 +80,8 @@ export async function listTasks(options: TaskManageToolOptions): Promise<TaskMan
 		state: entry.fields.state,
 		paused: Boolean(entry.fields.paused),
 		ticket: entry.fields.ticket ? describeTicket(entry.fields.ticket) : undefined,
+		channel: entry.fields.channel,
+		deliversHere: entry.fields.channel === options.channelId,
 		steps: entry.fields.usage?.steps,
 		items: entry.items ? `${entry.items.done}/${entry.items.total}` : undefined,
 	}));

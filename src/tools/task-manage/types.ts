@@ -21,6 +21,9 @@ export interface TaskManageResult {
 		state: string;
 		paused: boolean;
 		ticket?: string;
+		/** The delivery channel; a task delivering elsewhere reports to that channel, not this chat. */
+		channel?: string;
+		deliversHere: boolean;
 		steps?: number;
 		items?: string;
 	}>;

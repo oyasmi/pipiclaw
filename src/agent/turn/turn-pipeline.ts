@@ -135,7 +135,9 @@ export class TurnPipeline {
 		// fails the turn exactly as it did when this ran inline. A task step gets none: its brief
 		// already carries its own task, and the channel's other tasks are noise there.
 		const taskDigestPromise = (
-			this.host.tasksEnabled && !this.host.taskLoop ? buildTaskDigestForTurn(this.dotDir) : Promise.resolve("")
+			this.host.tasksEnabled && !this.host.taskLoop
+				? buildTaskDigestForTurn(this.dotDir, this.channelId)
+				: Promise.resolve("")
 		).then(
 			(text) => ({ text }) as { text: string; error?: never },
 			(error: unknown) => ({ error }) as { text?: never; error: unknown },
