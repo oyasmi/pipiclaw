@@ -278,6 +278,42 @@ npm install -g @oyasmi/pipiclaw@latest
 
 如果你固定版本运行，也可以明确写版本号。
 
+### 迁移到 dot 布局（spec 058）
+
+从按频道分目录的版本升级时，app home 要先迁移一次。旧布局下 daemon 和 TUI 都会拒绝启动，并提示运行迁移脚本。脚本只在仓库检出目录里提供（npm 安装包不含 `scripts/`）。
+
+**前置条件**：
+
+- 停掉这个 app home 上的所有 Pipiclaw 进程（daemon 和 TUI）。脚本会扫描 `/proc`，发现 `PIPICLAW_HOME`（或 `$HOME/.pipiclaw`）指向同一目录的 pipiclaw 进程就拒绝执行。
+- `state/task-migration-v5.done` 存在：旧版本至少完整运行过一次。
+- `workspace/dots/` 不存在或为空。
+
+**步骤**：
+
+```bash
+# 1. 盘点：列出每个旧频道目录、还原出的频道 id、名称、大小和任务数，不写任何东西
+node scripts/migrate-to-dots.mjs --home ~/.pipiclaw --dry-run
+
+# 2. 为每个旧目录指定去向：迁成一个 dot（原频道自动绑定到它），或者 drop 到 workspace/.legacy/
+node scripts/migrate-to-dots.mjs --home ~/.pipiclaw \
+  --map dm_0152xxxx=main --map 'group_cidL1__xxxx===team' --map tui_local=desk --drop dm_tester --dry-run
+
+# 3. 去掉 --dry-run 正式执行，然后只读校验
+node scripts/migrate-to-dots.mjs --home ~/.pipiclaw --map ... --drop ...
+node scripts/migrate-to-dots.mjs --home ~/.pipiclaw --verify
+```
+
+- `--map` 在最后一个 `=` 处切分。群目录名常以 `==` 结尾，后面再接 `=<dot>`，就是连续三个 `=`（上例的目录名是 `group_cidL1__xxxx==`）。用单引号包住整个参数。
+- 每个旧目录都必须出现在 `--map` 或 `--drop` 里，一个 dot 只接收一个旧目录；要让多个频道共用一个 dot，迁移后在频道里 `/dot bind`。
+- 真实频道 id 依次从 `.channel-meta.json`、`CHANNELS.md`、目录名还原，来源不一致或无法还原时拒绝执行。
+- `tui_*` 目录迁成 dot 后不绑定任何钉钉频道，用 `pipiclaw tui --dot <名字>` 打开。
+- 文件里指向旧频道目录的绝对路径会改写到新位置（报告里有每个文件的替换次数）；`state/usage`、`state/logs`、事件历史不改写。
+- 旧目录里的 `project.json` 会删除，报告里记录原来的 `projectRoot`：dot 的工作目录就是 dot 目录本身。
+
+**备份与失败恢复**：执行前脚本把 `workspace/` 和 `state/` 用 `cp -a` 备份到 `<home>/backups/pre-dots-<时间戳>/`，报告写在其中的 `migration-report.json`（`--no-backup` 时写到 `state/dots-migration-report.json`）。中途失败时 `state/dots-migration.inprogress` 会保留，Pipiclaw 因此拒绝启动；按脚本打印的命令从备份恢复（删掉 `workspace/` 与 `state/`，再把备份里的两个目录 `cp -a` 回来），修正原因后重新执行。
+
+**先在副本上演练**：`cp -a ~/.pipiclaw /tmp/pipiclaw-copy`，对副本执行上面的步骤，并加 `--as-home ~/.pipiclaw`：副本里的绝对路径仍指向原 home，这个选项让改写和校验按原 home 的路径进行。演练时可以用 `PIPICLAW_HOME=/tmp/pipiclaw-copy pipiclaw tui --dot <名字>` 进去核对记忆和任务，**不要在副本上启动 daemon**——它会用同一套钉钉凭据连上钉钉。
+
 ## 备份与恢复（Backup and Restore）
 
 最重要的是备份 app home 目录。默认是 `~/.pipiclaw/`；如果设置了 `PIPICLAW_HOME`，则使用对应目录。至少应包含：
