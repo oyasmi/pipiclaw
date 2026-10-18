@@ -8,7 +8,7 @@
 
 ## 1. 定位与总体形态
 
-Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtime**，个人和团队都可以使用。它包装 `@earendil-works/pi-coding-agent` SDK（`@mariozechner/pi-coding-agent` 的 fork），把一个 coding agent 挂到钉钉（DingTalk Stream 模式）上，并补齐长期运行所需的外围系统——按频道隔离的会话与记忆、定时事件、持久任务、子代理、安全护栏、用量账本。同一套 agent 内核还有第二个传输前端：终端 TUI。
+Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtime**，个人和团队都可以使用。它包装 `@earendil-works/pi-coding-agent` SDK（`@mariozechner/pi-coding-agent` 的 fork），把一个 coding agent 挂到钉钉（DingTalk Stream 模式）上，并补齐长期运行所需的外围系统——dot（显式创建的助手个体，拥有记忆、任务、事件和文件；频道只是绑定到它的地址）、定时事件、持久任务、子代理、安全护栏、用量账本。同一套 agent 内核还有第二个传输前端：终端 TUI。
 
 ```
 pipiclaw            # 默认：长驻钉钉 daemon（等价 pipiclaw run）
@@ -44,7 +44,7 @@ pipiclaw tui --dot <名字> [提示] # 终端聊天：打开一个 dot，同一 
 | 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
 | 5 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts`、`client.ts` |
 | 5 | `src/skills/` | 工作区 skill 的加载、校验、读取，以及 `/skills` | `loader.ts`、`validation.ts`、`workspace.ts`、`commands.ts` |
-| 6 | `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
+| 6 | `src/memory/` | 一条事实一文件的 dot 记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
 | 6 | `src/events/` | 定时/传感器事件：定义、校验、文件监视器、`/events` | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
 | 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`record.ts` |
 | 7 | `src/subagents/` | 角色发现、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
@@ -68,15 +68,16 @@ flowchart TB
     subgraph daemon [pipiclaw daemon 进程]
         BOT["DingTalkBot<br/>(dingtalk/bot.ts)<br/>连接/重连/去重/allowFrom"]
         CQ["ChannelQueue ×N<br/>每频道消息串行队列"]
-        HANDLER["DingTalkHandler<br/>(runtime/turn-handler.ts)<br/>命令分发 / 频道状态"]
-        RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每频道一个，bootstrap 缓存"]
+        HANDLER["DingTalkHandler<br/>(runtime/turn-handler.ts)<br/>命令分发 / 准入"]
+        DOTS["DotRuntime<br/>(runtime/dot-runtime.ts)<br/>绑定表 / 激活与休眠"]
+        RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每个已绑定频道一个，bootstrap 缓存"]
         SESSION["SDK AgentSession + Agent<br/>(pi-coding-agent)"]
         TOOLS["工具集<br/>(tools/registry.ts)"]
         SEC["security/ 护栏<br/>command / path / network"]
         DELIVERY["ChannelDeliveryController<br/>(dingtalk/delivery.ts)<br/>AI Card 流式 / 纯文本"]
 
         subgraph bg [后台定时服务]
-            EW["EventsWatcher<br/>workspace/events/*.json"]
+            EW["EventsWatcher ×每个激活的 dot<br/>dots/&lt;dot&gt;/events/*.json"]
             TD["TaskDriver<br/>tasks/*.md 台账扫描"]
             MMS["MemoryMaintenanceScheduler<br/>门控记忆维护"]
             DD["DurableDispatchService<br/>文件外发箱 at-least-once"]
@@ -87,6 +88,7 @@ flowchart TB
     FS[(APP_HOME_DIR<br/>workspace/ + state/)]
 
     DT -->|下行消息| BOT --> CQ --> HANDLER --> RUNNER --> SESSION
+    HANDLER -->|先解析绑定| DOTS
     SESSION --> TOOLS --> SEC
     SESSION <--> LLM
     RUNNER -->|会话事件| DELIVERY -->|AI Card / plain| DT
@@ -102,8 +104,9 @@ flowchart TB
 
 - **`DingTalkBot`**（`dingtalk/bot.ts` 只是门面，下面这些职责由 `connection.ts`、`inbound.ts`、`cards.ts`、`media.ts`、`access-token.ts` 各自承担）负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
 - **合成事件不直接进内存队列**：EventsWatcher 和 TaskDriver 产生的事件先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
-- **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，TUI（`tui/app.ts`）的单进程一频道 `const`——一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
-- **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到频道目录；完成后同样先经过 durable dispatch 再唤醒频道。
+- **先解析绑定，再建 runner**（spec 058）：`DotRuntime` 是 daemon 里唯一回答"这个频道绑在哪个 dot 上、哪些 dot 处于激活状态"的地方。未绑定的频道只能用 `/dot` 和 `/help`，不建 runner、不归档、不调用模型、不在盘上留下任何东西；合成事件只有在它的频道仍绑定在事件所属的 dot（`event.dot`）上时才被接受。没有任何绑定的 dot 处于休眠：它的事件 watcher 停止，task driver 和记忆调度器不再扫描它，正在跑的 run 和 job 照常结算但不投递唤醒。
+- **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，TUI（`tui/app.ts`）的单进程一个 `const`（频道 `tui`，会话区 `conversations/tui-N/`）——一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
+- **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到 dot 目录；完成后同样先经过 durable dispatch，再唤醒发起委派的那个频道（仍绑定在该 dot 上时）。
 
 ## 4. 一条消息的生命周期
 
@@ -126,9 +129,10 @@ sequenceDiagram
         B->>Q: enqueueStreamMessage (上限 20 条)
     end
     Q->>H: handleEvent（每频道严格串行）
-    H->>H: 归档到 log.jsonl；内建命令(/status /tasks /events /usage…)直接短路
+    H->>H: 解析绑定：未绑定只答 /dot、/help；合成事件须仍属本 dot，否则丢弃
+    H->>H: /dot 在准入前执行；归档到会话区 log.jsonl；内建命令(/status /tasks /events /usage…)直接短路
     H->>R: runner.run(ctx, store)
-    R->>R: 组装 prompt：<br/>① 首轮才有：memory_bootstrap(workspace MEMORY.md+channel 索引+当天 journal)<br/>② 任务摘要 task digest<br/>③ 用户消息
+    R->>R: 组装 prompt：<br/>① 首轮才有：memory_bootstrap(workspace MEMORY.md+dot 记忆索引+当天 journal)<br/>② 任务摘要 task digest<br/>③ 用户消息
     R->>R: 预防性压缩判断（投影 token 超阈值则先 compact）
     R->>S: session.prompt()（带模型 fallback 链）
     loop agent 循环
@@ -148,7 +152,7 @@ sequenceDiagram
 - **忙时语义**：任务流式进行中，内建命令（`/help /stop /steer /followup /events /tasks /status /usage /context /subagents`）仍可用；普通消息按 `busyMessageDefault`（默认 `steer`）注入当前轮；`/stop` 会中止当前轮、丢弃排队消息、暂停关联任务并取消 durable-dispatch 租约——但**不再**连带终止已派发的委派 run（spec 040），停止一个 run 需要显式 `/subagents cancel <runId>`；回执会指名被暂停的任务和 `/tasks resume <id>`，避免用户以为只是打断了一轮。`/new` 是例外，会绕过 busy 检查和旧 channel queue，立即提交新会话边界；其他会话命令（`/model` `/compact` `/session`）只在空闲时可用。
 - **未知斜杠命令在分发处拒绝**（`isKnownSlashCommand`），避免 `/modle` 这类笔误消耗一整轮 LLM。
 - **模型 fallback**（`models/fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
-- **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到频道目录 `last_prompt.json`。
+- **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到会话区的 `last_prompt.json`。
 
 ### 投递层（ChannelContext）
 
@@ -173,9 +177,10 @@ sequenceDiagram
 | `ChannelQueue` | `dingtalk/channel-queue.ts`（由 dingtalk 传输消费） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
 | `RunQueue`（`createRunQueue`） | `agent/turn/run-queue.ts` | **一轮之内的出站投递调用**：进度/通知按序发往钉钉 API，错误只记日志不打断轮次 | 每轮 |
 | `DotMemoryQueue` | `memory/dot-memory-queue.ts` | **同一 dot 的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`memory_save`、`/memory` 命令共用**进程级单例**，按 dot 名排队并持有 `.locks/memory.lock`（与 TUI 进程互斥），绝不能各自内联或按频道排队，否则同一 dot 的几个频道会争写同一批记忆文件（spec 058 INV-8） | 每 dot（跨子系统、跨进程共享） |
-| `ChannelStore.writeQueue` | `channel/store.ts` | `log.jsonl` 追加与轮转 | 每频道 |
+| `ChannelStore.writeQueue` | `channel/store.ts` | 会话区 `log.jsonl` 追加与轮转 | 每频道 |
+| 跨进程短锁 | `shared/file-lock.ts` | `dots/<dot>/.locks/` 下的 `memory.lock`（记忆写）、`task-<id>.lock`（任务修改）、`dot-json.lock`（`dot.json` 读改写）；TUI 运行期间另持有 `conversations/tui-N/.lock`。daemon 与 TUI 可以同时使用同一个 dot，靠的就是这些锁 | 每 dot / 每会话区（跨进程） |
 | `DurableDispatchService.queue` | `runtime/durable-dispatch.ts` | 外发箱记录的读写 | 每记录 id |
-| `SubAgentRunManager.queue` | `subagents/runs.ts` | 一个 run 的 register/settle/cancel：保证结算、记账、唤醒各只发生一次（三个幂等标记见下） | 每 runId（manager 本身每频道一个单例） |
+| `SubAgentRunManager.queue` | `subagents/runs.ts` | 一个 run 的 register/settle/cancel：保证结算、记账、唤醒各只发生一次（三个幂等标记见下） | 每 runId（manager 本身每 dot 一个单例） |
 | `writeFileAtomically` | `shared/atomic-file.ts` | 配置/状态文件：写临时文件再 rename | 每次写 |
 
 另外两个互斥点：`SessionResourceGate`（`agent/session/session-resource-gate.ts`）让"资源热重载"与"prompt 进行中"互斥；`DingTalkBot` 内卡片创建和 access token 刷新都做了 singleflight 合并；`subagents/workspace-lease.ts` 是进程级的排他写锁（不是队列，没有等待语义），只有 `mutates: write` 的委派 run 会取它，key 是工作目录的 realpath，父子目录也算冲突——第二个写入者直接被拒绝，不是排队。
@@ -186,9 +191,9 @@ sequenceDiagram
 
 ## 6. 记忆子系统（`src/memory/`，spec 050）
 
-三件东西，每件只有一个真相：频道记忆（一条事实一个文件）、按天的日志、以及由管理员拥有的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不做检索打分——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
+三件东西，每件只有一个真相：dot 记忆（一条事实一个文件，dot 的所有频道共享）、按天的日志、以及由管理员拥有的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不做检索打分——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
 
-### 6.1 每频道的记忆文件
+### 6.1 每个 dot 的记忆文件
 
 | 文件 | 内容 | 写入者 | 是否预载入上下文 |
 |---|---|---|---|
@@ -196,7 +201,7 @@ sequenceDiagram
 | `MEMORY.md` | 从 `memory/*.md` **生成**的索引，人也能直接看 | `store.ts` 每次写入后重建；启动时若缺失也重建（按 mtime 缓存） | 会话首轮（含 `/new` 之后、压缩之后）整份注入，超预算按类型分层 |
 | `journal/YYYY-MM-DD.md` | 按天追加的工作记录（发生了什么、定了什么、卡在哪） | 只有后台反思 pass 写 | 首轮注入当天尾部 |
 | `memory/.tombstones.jsonl` | 已遗忘记忆的 name + 内容哈希（不含原文），防止反思把同一件事又写回来 | `memory_forget` / `/memory forget` / reflect | 否 |
-| `log.jsonl` / `context.jsonl` | 冷存储：完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 工具检索 |
+| `conversations/*/log.jsonl` / 会话 JSONL | 冷存储：各频道的完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 跨本 dot 的所有会话区检索 |
 | `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（含 actions/skipped/error；重复的相同跳过原因去重） | `review-log.ts` | 否，人工排查用 |
 
 工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于 path guard，因此“管理员拥有”不是 OS 级只读保证。频道 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
@@ -252,9 +257,9 @@ flowchart LR
 
 | | 定时事件 Events | 持久任务 Tasks |
 |---|---|---|
-| 事实源 | `workspace/events/<name>.json` | `workspace/<channelId>/tasks/<id>.md`（frontmatter 契约） |
+| 事实源 | `dots/<dot>/events/<name>.json`（`channelId` 是投递频道） | `dots/<dot>/tasks/<id>.md`（frontmatter 契约，`channel` 是投递频道） |
 | 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库）；交付一段聊天 `text`，或一份**任务模板** `task` | 一次性项目：`open / parked / done` 三态 + 正交的 `paused`；`parked` 必带一张等待票；归档记录 `completed / cancelled` |
-| 驱动者 | `EventsWatcher`：fs.watch + 防抖，cron 到点触发 | `TaskDriver`：自适应 timer + nudge 扫描台账，每频道每 tick 至多唤醒 1 个可行动任务 |
+| 驱动者 | 每个激活的 dot 一个 `EventsWatcher`：fs.watch + 防抖，cron 到点触发；投递频道未绑定在本 dot 上时跳过（`channel_not_bound`） | `TaskDriver`：自适应 timer + nudge 扫描各激活 dot 的台账，每个 dot 每 tick 至多唤醒 1 个可行动任务；投递频道未绑定在本 dot 上的任务整体挂起 |
 | 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `time / work / ask` 等待票 |
 | 治理 | 事件历史 `state/events/history.jsonl`；模板事件上一实例未结束时跳过并回执 | 两维预算（steps/usd，含绑定委派成本）、空转检测和等待票兜底；触发边界后写 `paused` 并直接通知 |
 | Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_list`/`task_log`，任务会话里另有 `task_step_end`；配合 `task-lead` playbook |
@@ -324,32 +329,38 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │   ├── SOUL.md                    # 身份与语气（注入系统提示词最前）
 │   ├── AGENTS.md                  # 用户/团队操作规则（经 SDK agentsFiles 注入）
 │   ├── MEMORY.md / ENVIRONMENT.md # 管理员维护的共享背景 / 机器事实
-│   ├── CHANNELS.md                # runtime 维护的频道索引（ID / 名称 / 最近消息 / 主题）
-│   ├── skills/  sub-agents/  events/
-│   └── <channelId>/               # dm_* / group_*，每频道一目录
-│       ├── memory/<name>.md       # 一条记忆一个文件（frontmatter 元数据）
-│       ├── memory/.tombstones.jsonl # 已遗忘记忆的 name + 内容哈希
-│       ├── MEMORY.md              # 生成的记忆索引（勿手改，写入后自动重建）
-│       ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，只由反思 pass 写
-│       ├── memory-review.jsonl    # 反思/工具写入的动作与拒绝原因审计
-│       ├── log.jsonl  context.jsonl  .channel-meta.json
-│       ├── active-session.json     # 当前聊天 session 指针；无指针时用 context.jsonl
-│       ├── <session>.jsonl         # /new 等操作创建的聊天会话
-│       ├── subagent-runs.jsonl     # 委派执行摘要
-│       ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
-│       └── tasks/
-│           ├── <id>.md / <id>.jsonl # 契约 / 循环日志
-│           ├── .sessions/          # 每个任务独立会话
-│           ├── .steer/             # 用户指示与待发送的通知
-│           ├── .v3/                # 转换前的原件（含移走的任务专属事件）
-│           └── archive/            # 已关闭契约与日志
+│   ├── CHANNELS.md                # runtime 维护的频道索引（ID / 名称 / dot / 最近消息 / 主题）
+│   ├── skills/  sub-agents/
+│   └── dots/
+│       ├── bindings.json          # 频道 id → dot，绑定的唯一记录
+│       └── <dot>/                 # 一个 dot（agent 的 cwd）
+│           ├── dot.json               # 名字 + 各频道的会话区登记
+│           ├── memory/<name>.md       # 一条记忆一个文件（frontmatter 元数据）
+│           ├── memory/.tombstones.jsonl # 已遗忘记忆的 name + 内容哈希
+│           ├── MEMORY.md              # 生成的记忆索引（勿手改，写入后自动重建）
+│           ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，只由反思 pass 写
+│           ├── memory-review.jsonl    # 反思/工具写入的动作与拒绝原因审计
+│           ├── conversations/<kind>-<n>/ # 每个与本 dot 对话过的频道一个会话区（dm-1、group-1、tui-1…）
+│           │   ├── log.jsonl  context.jsonl  last_prompt.json
+│           │   ├── active-session.json # 当前聊天 session 指针；无指针时用 context.jsonl
+│           │   └── <session>.jsonl     # /new 等操作创建的聊天会话
+│           ├── events/                 # 本 dot 的定时事件
+│           ├── .locks/                 # 跨进程短锁
+│           ├── subagent-runs.jsonl     # 委派执行摘要
+│           ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
+│           └── tasks/
+│               ├── <id>.md / <id>.jsonl # 契约 / 循环日志
+│               ├── .sessions/          # 每个任务独立会话
+│               ├── .steer/             # 用户指示与待发送的通知
+│               └── archive/            # 已关闭契约与日志
 └── state/
     ├── auth/identity.json         # OpenAI OAuth 安装身份（首次登录创建）
+    ├── dingtalk/conversations.json # 各频道的钉钉路由元数据
     ├── dispatch/                  # durable-dispatch 外发箱
     ├── events/history.jsonl       # 事件审计
-    ├── jobs/<channelId>/          # 后台作业状态与输出索引
-    ├── subagent-runs/<channelId>/ # 委派权威状态、pid、argv、幂等标记（目录名 `/` → `__`）
-    ├── memory/<channelId>.json    # 反思调度打点状态（单 job）
+    ├── jobs/<dot>/                # 后台作业状态与输出索引
+    ├── subagent-runs/<dot>/       # 委派权威状态、pid、argv、幂等标记
+    ├── memory/<dot>/<会话区>.json # 反思调度打点状态（单 job）
     ├── logs/runtime.jsonl         # 结构化运行日志
     └── usage/                     # 用量账本
 ```
@@ -399,12 +410,12 @@ playbook 正文不进提示词，agent 触发时用 `read` 按需加载。
 
 ```mermaid
 flowchart LR
-    A[停后台服务<br/>+ bot.stop] --> B[等活跃轮次<br/>≤15s] --> C[超时则 abort<br/>再等 ≤5s] --> D[flush 各频道记忆<br/>≤45s] --> E[重置 runner 缓存]
+    A[停后台服务<br/>+ bot.stop] --> B[等活跃轮次<br/>≤15s] --> C[超时则 abort<br/>再等 ≤5s] --> D[flush 各 runner 的记忆<br/>≤45s] --> E[重置 runner 缓存]
 ```
 
 关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
 
-**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/app/auth-command.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `docs/archive/specs/039-provider-login-cli/design.md`。
+**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/app/auth-command.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器，也不读写 dot——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `docs/archive/specs/039-provider-login-cli/design.md`。
 
 ## 12.1 公共 API 面（`src/index.ts`，spec 035）
 

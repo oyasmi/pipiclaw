@@ -29,11 +29,11 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 | 层 | 载体 | 持有什么 | 谁维护 |
 |----|------|----------|--------|
-| **events** | `workspace/events/*.json` | 何时唤醒：提醒、周期与定时工作的模板、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`） |
-| **tasks** | `workspace/<channelId>/tasks/<id>.md` + `<id>.jsonl` | 契约（目标、验收清单、工作项）、等待票、用量；循环日志记着每一步、每次派发与结算 | 主 agent 经 `task_create`/`task_update`/`task_close` 建档，任务循环经 `task_step_end` 推进 |
+| **events** | `dots/<dot>/events/*.json` | 何时唤醒：提醒、周期与定时工作的模板、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`） |
+| **tasks** | `dots/<dot>/tasks/<id>.md` + `<id>.jsonl` | 契约（目标、验收清单、工作项）、等待票、用量；循环日志记着每一步、每次派发与结算 | 主 agent 经 `task_create`/`task_update`/`task_close` 建档，任务循环经 `task_step_end` 推进 |
 | **task driver** | runtime 确定性扫描 | 兑现到期的票、兜底过期的票、停下超预算的任务、排下一步 | Pipiclaw runtime，扫描本身零 token |
 
-三层文件都放在 app home 下的 `workspace/` 中。默认路径 `~/.pipiclaw/workspace/`；若设置了 `PIPICLAW_HOME`，则为 `${PIPICLAW_HOME}/workspace/`。
+事件和任务都属于一个 dot，放在 `workspace/dots/<dot>/` 下（默认 `~/.pipiclaw/workspace/dots/<dot>/`；设置了 `PIPICLAW_HOME` 时以它为根）。每个事件和任务都记着自己的**投递频道**：事件的 `channelId`、任务 frontmatter 的 `channel`，结果只发到那里。投递频道没有绑定在这个 dot 上时（换绑到了别的 dot，或者解绑了），对应的事件和任务**挂起**：事件到点跳过，任务不推进；频道绑回来后自动恢复。dot 失去全部绑定时整体休眠，它的事件 watcher 停止。
 
 **为什么需要两层。**只有事件时，每次唤醒都是无状态的：agent 醒来只知道事件文本那一句话，不知道有哪些在途工作、上次做到哪、验收标准是什么。任务补上这块记忆，让工作变成：
 
@@ -47,7 +47,7 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 ## 它是什么（What It Is）
 
-在 `~/.pipiclaw/workspace/events/` 中放入一个 `.json` 文件，运行中的 Pipiclaw 就会读取它，并把它转成一条发给指定会话通道（channel）的事件消息。
+在 dot 的 `events/` 目录（`~/.pipiclaw/workspace/dots/<dot>/events/`）中放入一个 `.json` 文件，运行中的 Pipiclaw 就会读取它，并把它转成一条发给投递频道 `channelId` 的事件消息。`channelId` 必须是绑定在这个 dot 上的频道，否则到点时跳过，并在事件历史里记一条 `skipped`（`channel_not_bound`）。
 
 适合的场景：
 
@@ -245,11 +245,11 @@ Pipiclaw 会把事件调度层的审计记录写入：
 - 私聊：`dm_<staffId>`
 - 群聊：`group_<conversationId>`
 
-如果你已经和机器人正常对话过，Pipiclaw 会在 `workspace/` 下创建对应的会话通道目录，目录名通常就能帮你定位 `channelId`。
+频道绑定到 dot 之后，`workspace/CHANNELS.md` 会列出它的 id、名称和所属 dot；`dots/bindings.json` 是绑定的原始记录。在频道里让 agent 用 `event_manage` 创建事件时，投递频道自动就是当前频道，不用自己写。
 
 ## 谁来管理事件：三个入口
 
-同一个 `workspace/events/` 目录有三个互不冲突的管理入口：
+同一个 dot 的 `events/` 目录有三个互不冲突的管理入口：
 
 | 入口 | 谁用 | 能做什么 |
 |------|------|----------|
@@ -259,16 +259,16 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 ### `/events` 命令（人用，只读 + 删除）
 
-钉钉渠道中用 `/events` 查看和删除现有事件。它只管理已有文件，不支持通过命令创建或更新；需要新增或修改时，直接编辑 `workspace/events/*.json` 或让 agent 用 `event_manage`。
+钉钉渠道中用 `/events` 查看和删除现有事件。它只管理已有文件，不支持通过命令创建或更新；需要新增或修改时，直接编辑 `dots/<dot>/events/*.json` 或让 agent 用 `event_manage`。`/events` 列出本 dot 的全部事件，投递到别的频道的会标出频道名，投递频道已不在本 dot 上的标为已暂停。
 
 | 命令 | 说明 |
 |------|------|
 | `/events list` | 列出事件文件名、类型、`channelId`、`schedule` / `at`（无 timezone 列）和文本预览；定义无效（包括 watcher 会拒绝的过密 cron）时用一句中文说明原因 |
-| `/events show <name>` | 展示 `workspace/events/<name>.json` 的完整 JSON |
+| `/events show <name>` | 展示 `dots/<dot>/events/<name>.json` 的完整 JSON |
 | `/events delete <name>` | 删除对应事件文件 |
 | `/events history [name]` | 读取最近的事件调度历史，一条一行；传入 `name` 时只显示该事件 |
 
-事件名只允许普通文件名字符（字母、数字、`.`、`_`、`-`）。可以写 `weekly-review` 或 `weekly-review.json`，Pipiclaw 会统一归一化。命令不会访问 `workspace/events/` 之外的路径。
+事件名只允许普通文件名字符（字母、数字、`.`、`_`、`-`）。可以写 `weekly-review` 或 `weekly-review.json`，Pipiclaw 会统一归一化。命令不会访问本 dot 的 `events/` 之外的路径。
 
 ### `event_manage` 工具（agent 自调度）
 
@@ -294,7 +294,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
    - 禁止 `immediate` 类型（create 与 update 双侧）——当下能做的事就在当前回合做完；
    - `one-shot` 的 `at` 必须至少晚于现在 2 分钟；
    - `periodic` 的 cron 最密每 **30 分钟**一次；**带 `preAction` 门控时放宽到最密每 5 分钟**——传感器条件不成立时静默、零 token，适合调用用户已安装的稳定检测命令；硬下限仍是 5 分钟；
-   - `workspace/events/` 内事件文件数达到 50 时拒绝再 create。
+   - 本 dot 的 `events/` 内事件文件数达到 50 时拒绝再 create。
 
 > 手工编辑会绕过 `event_manage` 的 channel 所有权、提前量等即时错误提示，但 watcher 仍是最终信任边界：`immediate`、过密 cron、过多事件和被 command guard 拒绝的 `preAction` 仍会被拒绝。`one-shot` 的 2 分钟提前量也用于 watcher 校验进程运行期间新写入的文件；启动前遗留且已经错过的文件按可靠恢复语义补投递一次。
 > 注意：第 4 条的两道 guard 检查都以 `security.json` 里 `commandGuard.enabled` 为前提；全局关闭 command guard 时，写入时与触发时的检查都不生效（这是既有安全语义）。
@@ -380,20 +380,19 @@ Pipiclaw 会把事件调度层的审计记录写入：
 | **循环日志** | `tasks/<id>.jsonl` | append-only：每一步做了什么、每次派发与结算、票据过期、收尾 |
 | **等待票** | 契约 frontmatter 的 `ticket` | "什么会叫醒我，最迟什么时候"——由 runtime 校验、由 runtime 兑现 |
 
-v3（0.9.2）的 `status`、`wake`、`control`、`schedule`、`Manual`、`Verification`、`Current Cycle`/`History` 全部退役；v4 的 `run`/`job`/`signal`/`schedule` 票也不再支持。升级时 daemon 会做一次确定性转换（原件备份到 `tasks/.v3/`），详见[从 v3 转换](#从-v3-转换)。
+v3（0.9.2）的 `status`、`wake`、`control`、`schedule`、`Manual`、`Verification`、`Current Cycle`/`History` 全部退役；v4 的 `run`/`job`/`signal`/`schedule` 票也不再支持。见[从更早的任务格式升级](#从更早的任务格式升级)。
 
 ## 任务模型
 
 ### 目录布局
 
 ```text
-workspace/<channelId>/tasks/
+workspace/dots/<dot>/tasks/
 ├── export-api.md             契约
 ├── export-api.jsonl          循环日志
 ├── weekly-report-20261005-0900.md    事件模板生成的实例
 ├── .sessions/               每个任务一份任务会话
 ├── .steer/                  待处理的用户指示与待发送的通知
-├── .v3/                     转换前的原件（不会被删）
 └── archive/
     ├── released-note.md
     └── released-note.jsonl
@@ -433,6 +432,7 @@ budget: {"usd":30}
 |---|---|
 | `state` | `open`（现在有活可干）/ `parked`（在等一张票）/ `done`（已关闭，仅归档文件） |
 | `paused` | `{by,reason,at}`。**出现即暂停**，与 `state` 正交；`by` 为 `user` 或 `runtime` |
+| `channel` | 投递频道：创建时写入（聊天里创建取当前频道，事件模板生成的实例取事件的 `channelId`），之后不变。它没有绑定在本 dot 上时任务挂起 |
 | `ticket` | `state: parked` 时必需，`open`/`done` 时必须不存在 |
 | `usage` | 整个任务的用量：步数、成本、连续过期次数 |
 | `budget` | 可选的每任务预算覆盖，只有 `steps` 与 `usd`，见[预算](#预算与停止) |
@@ -523,7 +523,9 @@ driver 是自适应 timer + nudge 的零 token 扫描：
 1. **兑现**到期的 `time` 票。
 2. **兜底**过期的票（重开或通知）。
 3. **停下**已经超预算或在空转的任务。
-4. **排队**一个可跑的任务，按频道 round-robin 保证公平。
+4. **排队**一个可跑的任务，每个 dot 每次至多一个，在 dot 内部轮转保证公平；派发前看的是投递频道是否忙。
+
+只扫描激活的 dot（至少绑定了一个频道）。投递频道没有绑定在本 dot 上的任务整个跳过：不兑现、不兜底、不计预算、不派发，进入挂起时记一条 info 日志 `taskdriver.task.suspended`，频道绑回来后照常推进。
 
 `work`/`ask` 从不轮询——它们由各自的所有者推过来：`SubAgentRunManager` 与 `JobManager` 的结算、`/tasks reply`。所有推送边都要经过同一个幂等的票据兑现，所以 at-least-once 的重放是安全的 no-op。任务处于 `open`（已有步骤在驱动）时到达的结算唤醒不会再开一个模型回合，结果已经写进日志，下一步的看板会带上。
 
@@ -543,8 +545,10 @@ events 与 tasks 之间只有一条边：**事件按模板生成任务实例**�
 /tasks reply <id> <内容>                 回答任务的提问，并让它继续
 /tasks pause <id> / resume <id> [+steps N|+usd X]
 /tasks archive                          已归档任务
-/tasks doctor                           只检查手工编辑或转换未完成造成的问题
+/tasks doctor                           只检查手工编辑或转换未完成造成的问题（含缺少投递频道的任务）
 ```
+
+`/tasks` 列出本 dot 的全部任务：投递频道不是当前频道时显示它的名称，投递频道已不在本 dot 上时标为"已暂停：投递频道未绑定到本 dot"。
 
 聊天里的回复使用界面用语（[对照表](interaction-and-commands.md#界面用语对照)）：契约显示为"任务说明"，团队看板为"工作项"，循环日志为"任务记录"，等待票为"等待条件"，兜底时限为"最晚检查时间"，状态为"进行中 / 等待中 / 已结束"。它们和模型看到的 step brief 读的是同一份数据，但由两个渲染器分别输出（`renderTaskBoardForUser` / `renderTaskLogLineForUser`）：给你的版本是平铺列表，一个工作项的多个委派合并在一行，不出现 `continue`、`VERDICT`、`exit` 这类参数值和工具名，时间只到分钟。回复受 1,500 字预算约束，超出时给出 `/tasks log <id>` 和任务文件的绝对路径。
 
@@ -561,37 +565,15 @@ task_list      task_create    task_update    task_close    task_log
 task_step_end  （只在任务会话里注册）
 ```
 
-`task_update` 只改工作项和预算，不再承载进度记录——进度属于 `task_step_end` 的 `note`。`task_close` 只有 `complete`（DoD 全部勾选且没有在途项）和 `cancel`；关闭任务**不会**取消仍在运行的委派或作业，回执会列出来。任务会话的工具集里**没有** `task_create`、`memory_save` 和 `event_manage`：任务不建任务、不写频道记忆、不管事件。
+`task_update` 只改工作项和预算，不再承载进度记录——进度属于 `task_step_end` 的 `note`。`task_close` 只有 `complete`（DoD 全部勾选且没有在途项）和 `cancel`；关闭任务**不会**取消仍在运行的委派或作业，回执会列出来。任务会话的工具集里**没有** `task_create`、`memory_save` 和 `event_manage`：任务不建任务、不写 dot 记忆、不管事件。
 
 每回合仍注入 `<task_agenda>`，每行含状态、等待票摘要与兜底时间、工作项进度和用量；它是背景参考，不是新指令。
 
-## 从 v3 转换
+## 从更早的任务格式升级
 
-daemon 首次以 v5 启动时（服务启动之前）执行一次确定性转换（无 LLM，marker 位于 `state/task-migration-v5.done`）。只转换带 v3 frontmatter（`status:`）的文件，任何带 `state:` 的文件不动（即使同时有 `status:`）；0.9.3 beta 期间写出的 v4 文件不在转换范围内，见下方人工重建步骤。
+v3→v5 的任务转换代码随 spec 058 删除。dot 迁移脚本（[部署与运维](deployment-and-operations.md#迁移到-dot-布局spec-058)）要求 `state/task-migration-v5.done` 已存在，所以从 v3 升级要先装一个 0.9.x 版本完整启动一次，让它把任务转成 v5，再升级并迁移到 dot。
 
-1. v3 的等待字段（`wake`、`waitingFor`）没有对应的 v5 来源，不会保留；任务改回 `open`，其中原 `status: waiting` 的任务在循环日志留说明。`enabled: false` 或 `control.stop` 转成 `paused`；其中带 `schedule` 的停用任务**不会**生成事件模板（事件没有停用状态，生成即会运行），只在循环日志留 note 记录原周期，原件在 `tasks/.v3/`，要恢复周期需人工用 `event_manage` 新建。因此升级不会让已停用的任务重新跑起来。
-2. `## Plan` 改名 `## Work Items`；`## Current Cycle`、`## History` 删除（这些逐轮记录现在属于循环日志）；`Manual`、`Verification` 保留在正文里。
-3. **周期任务变成事件模板**：为带 `schedule` 的任务写出 `workspace/events/<id>.json`（同一个 cron，模板由契约生成，原 Manual/Verification 并入 Goal，勾选全部复位）。两次执行之间休眠（`sleeping`）的任务随即以 `cancelled` 归档；正在执行的那一轮不打断，就地成为该事件的一个实例，下一次由事件生成。无法表达为模板的周期任务会被置 `paused`，等人工处理；已停用的周期任务同样保持 `paused` 且不生成模板（即使原为 `sleeping` 也不归档）。
-4. 任务专属的 `task.<channelId>.<taskId>.*` 传感器事件移到 `tasks/.v3/events/`。
-5. 原件复制到 `tasks/.v3/`，**永不删除、不覆盖**：已有同名备份时保留原备份，新副本另存为 `<id>.backup-<n>.md`；`tasks/.v3/events/` 中的事件备份同样不覆盖（`<name>.backup-<n>.json`）。
-
-**失败处置。** 单个任务转换抛错时，会先回滚：恢复 v3 原文件、删除本次写出的事件模板和新建的循环日志；归档步骤本身拒绝覆盖既有 `archive/` 条目，并在中途失败时撤销已移动的日志分片与归档契约（回滚本身也可能失败，见下）。任务目录或事件目录读取失败（EACCES/EIO 等，目录不存在除外）不会被当成“没有任务”：它们按 `scan`/`events` 失败处理，不写 marker。若严格发现模式遇到无法映射回真实 ID 的转义频道目录（名称中的 `__` 可能来自原 ID 的 `/`），迁移会按 `discover` 失败；从备份恢复含真实频道 ID 的 `CHANNELS.md` 后再重试，不能把目录名当作频道 ID。只要有任一任务、事件移动或频道发现失败：不写 marker，写 `state/task-migration-v5.failed.json`（频道、任务、失败阶段 `backup`/`template`/`task`/`log`/`archive`/`events`/`scan`/`discover`、错误、回滚结果），并让启动**直接报错退出**——事件 watcher、task driver、钉钉连接都不会启动。已成功转换的其他任务保持已转换。排除原因后重启即重试失败项（已转换的带 `state:`，会被跳过）。若报告里有回滚失败（`rollback` 不是 `ok`），之后每次启动都继续拒绝，直到你按报告核对并恢复 `tasks/.v3/` 或完整备份中的原件、再手工删除该报告。注意：回滚只清理本次尝试产物；转换前就存在的文件（含既有归档、`.v3/` 备份）不动。若归档撤销本身失败，错误信息会带 `undo of partial archive failed`，须按报告人工核对 `tasks/` 与 `tasks/archive/`。doctor 不检查所有 v4 专属字段，不能用“未发现问题”证明升级完成。
-
-转换代码会在下一个 minor 版本删除。
-
-## beta 用户升级与不可转换任务
-
-**任务格式决定支持范围，不是 beta 版本号。** v3 用 `status:`；v4 已有 `state:`，常见 `cycle`、`verify` 或旧票种；v5 使用 `usage`，等待票只支持 `time` / `work` / `ask`。不要把 v4 的“转换器跳过”理解为兼容：普通读取可能忽略旧字段或把无法解析的 parked 票归一化为 open，既有用量、预算与等待语义不能保证保留。
-
-1. **先控制在途动作。** 在旧版本里用 `/subagents list running` 核对外部 run，等待完成或经明确授权取消；单独停止 daemon 不会停止 detached 外部进程。核对外部系统真实状态，列出已发生的发送、写入、部署等动作与尚未完成的工作。不要自动重派。
-2. **停 daemon，备份完整 app home**（默认 `~/.pipiclaw/`，自定义时为 `PIPICLAW_HOME`），包含 workspace、state、任务 Markdown/JSONL、`.sessions/`、事件、委派记录和产物。备份放在 app home 之外；核对可读性。原有 `.v3/`、`.verifications/` 与归档也保留。不要只备份契约。
-3. **逐份检查原始文件，再启动新版。** 为每个 v4、无法判定或无法转换的任务建立清单（频道、旧 id、路径、阻塞原因、旧预算/用量、等待来源、周期、待核对的外部动作）。停止服务期间，将其契约、同名日志与会话文件移入 app home 外的人工恢复目录，记录原路径；将对应周期/传感器事件也移出 `workspace/events/`。移动前核对备份，不删除、不改写原件。这样隔离未支持数据，避免新版读写丢字段或事件自动执行。
-4. **隔离副本演练 v3 转换。** 用仓库自带脚本：`npm run build` 后执行 `node scripts/rehearse-task-migration.mjs [appHome]`（默认 `$PIPICLAW_HOME` 或 `~/.pipiclaw`）。它只只读复制 `workspace/events/` 与各频道 `tasks/`（不含 `.sessions/`）到临时目录，直接调用迁移函数；不经过 bootstrap，因此不会启动钉钉、事件 watcher、task driver 或外部执行器，也不写源目录。脚本打印将生成的事件模板与各任务转换结果，失败时打印失败报告并以非零退出；在临时目录里检查 `.v3/` 原件与循环日志 note，用完删除。注意：真实启动时迁移先于事件 watcher 完成，随后 watcher 立即启动，**没有“生成模板之后、watcher 之前”可人工介入的时点**，所以不能在生产首次启动后再隔离模板。仍会生成的模板是启用的 v3 周期任务（含 `active`/`waiting` 的在途一轮与 `sleeping`）对应的 `events/<id>.json`（或 `<id>-task.json`）。安全流程：(a) 在演练副本中盘点 `workspace/events/` 新增文件，列出每个将生成的模板及 cron；(b) 对不希望在升级后自动运行的 v3 周期任务，**在停 daemon 状态下于生产原文件里设 `enabled: false`（先备份）**，使其按停用路径迁移、不生成模板，之后再按第 5 步手工重建；(c) 同名事件 `<id>.json` 已存在时迁移会改用 `<id>-task.json`，首次启动前把不应执行的既存同名/关联事件移出 `workspace/events/`；(d) 若无法对某个任务确定处置，停在备份与检查阶段，不启动新版。
-5. **人工重建 v4 或失败项。** 通过聊天侧 `task_create` 用新 id 创建 v5 契约，复制经核对的 Goal、DoD 与剩余 Work Items，明确授权边界和禁止重复动作；保留旧路径作为证据。经用户确认设置 `steps` / `usd` 剩余预算，旧 `cycle` 用量作为历史记录留存，不假装已转入新计数。周期工作通过 `event_manage` 重建 `task` 模板，检查 cron、频道、DoD 及每次执行的权限；只在确认应启用时放回事件目录。创建任务后可能立即推进，必须先确认允许继续。
-6. **重建等待来源，不手写 ticket。** 先核对已有 run/job 的结算与产物；不要假定旧绑定会转给新 id。要继续等外部条件时，在新任务会话中创建带超时的只读后台作业，再由 `task_step_end` + `resolveTicket` 生成 `work` 票；需要用户判断用 `ask`，定时复查用 `time`。未知外部状态继续隔离，交回用户确认。
-7. **验收后恢复。** 逐项对照备份与清单，检查 `/tasks show`、`/tasks log`、`/events show` 和事件历史，确保无重复模板或未授权动作。模板不可表达、名字冲突（`<id>` 和 `<id>-task` 都存在）时，保留暂停任务，用日志里的原因修复新模板，不靠删文件避冲突。不要删除 `task-migration-v5.done` 全量重跑；启动因转换失败而中止时，按上文“失败处置”处理，必要时对该 v3 任务改为人工重建。未解决项留在恢复清单中，不能隐式丢弃。
-
-回滚须先停止新版并处理其在途外部 run，再恢复**完整**备份与匹配的旧程序；不要将旧任务覆盖进已运行的新版。备份恢复不能撤销已经发生的外部动作，须另行核对。
+0.9.3 beta 期间写出的 v4 任务文件（有 `state:`，同时带 `cycle`、`verify` 或 `run`/`job`/`signal`/`schedule` 票）从来不在转换范围内：它们的用量、预算和等待语义不会被保留。迁移前把这类任务的契约、日志和会话文件移出 `tasks/`，迁移后在对应的 dot 里用 `task_create` 以新 id 重建（核对 Goal、DoD 和剩余工作项，重新确认预算；周期工作改成带 `task` 模板的事件），等待来源由新任务通过 `task_step_end` 重新建立，不要手写 `ticket`。
 
 ## 异常恢复
 

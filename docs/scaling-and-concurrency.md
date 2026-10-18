@@ -8,40 +8,45 @@ Pipiclaw 是单进程 Node.js 应用，定位是个人与小团队助手。一�
 
 ## 会话隔离模型（Session Isolation Model）
 
-Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的对话历史、记忆和执行上下文：
+Pipiclaw 区分两样东西：**频道（channel）**是消息的地址，**dot** 是拥有记忆、任务、事件和工作文件的助手个体。频道要先用 `/dot bind <名字>` 绑定到一个 dot 才会被服务；没有绑定的频道只能用 `/dot` 和 `/help`，不会调用模型，也不会在盘上留下任何东西。
 
-| 场景 | 通道 ID | 说明 |
+| 场景 | 频道 ID | 说明 |
 |------|---------|------|
-| 私聊 | `dm_{staffId}` | 按发送者隔离 |
-| 群聊 | `group_{conversationId}` | 按群隔离 |
+| 私聊 | `dm_{staffId}` | 按发送者区分 |
+| 群聊 | `group_{conversationId}` | 按群区分 |
+| 终端 | `tui` | `pipiclaw tui --dot <名字>` 打开的那个 dot |
 
-你和同事分别私聊同一个实例，各自是独立通道；同一个群里的所有成员共享一个群通道。正常会话、记忆和检索入口不会跨频道混用，workspace 根目录的 `MEMORY.md` 则是共享知识。这是应用层状态隔离，不是 OS 级文件隔离：通用文件工具或 shell 仍可能访问运行账号可读的其他频道目录。强隔离应使用独立账号或容器。
+- **同一个 dot 下的频道**共享记忆、日志、任务、事件和文件；对话上下文按频道分开（每个频道在 dot 里有自己的会话区 `conversations/<kind>-<n>/`），别的频道说过的原话要用 `session_search` 查。
+- **不同 dot** 之间不共享记忆和检索。要让私聊的内容不进群，就不要把它们绑到同一个 dot。
+- workspace 根目录的 `MEMORY.md` 是所有 dot 共享的知识。
+
+这是应用层状态隔离，不是 OS 级文件隔离：通用文件工具或 shell 仍可能访问运行账号可读的其他 dot 目录。强隔离应使用独立账号或容器。
 
 ## 并发模型（Concurrency Model）
 
-**通道之间并行。** 每个通道有自己的消息队列和 Runner。不同通道不会因为另一个通道正在等待 LLM 或钉钉网络 I/O 而被串行阻塞，因此多个私聊和群聊可以同时推进。它们仍共享同一个 Node.js 进程、模型账号、网络连接和宿主机资源，所以“并行”不代表无限吞吐。
+**通道之间并行。** 每个已绑定的通道有自己的消息队列和 Runner。不同通道不会因为另一个通道正在等待 LLM 或钉钉网络 I/O 而被串行阻塞，因此多个私聊和群聊可以同时推进。它们仍共享同一个 Node.js 进程、模型账号、网络连接和宿主机资源，所以“并行”不代表无限吞吐。
 
-**同一通道内串行。** 每个通道由一条 channel queue 保证同一时刻只执行一个主回合；记忆写入另有每通道串行队列，与后台维护互不竞态。群里多人同时 @机器人时，他们仍在同一条共享会话线上，后到的消息不会创建一个与当前群会话并行的主回合。通道忙碌时，新消息的行为：
+**同一通道内串行。** 每个通道由一条 channel queue 保证同一时刻只执行一个主回合；记忆写入另有**按 dot** 串行的队列，同一个 dot 的几个频道、后台维护和 TUI 进程都在它后面排队（跨进程部分由 `dots/<dot>/.locks/memory.lock` 保证）。群里多人同时 @机器人时，他们仍在同一条共享会话线上，后到的消息不会创建一个与当前群会话并行的主回合。通道忙碌时，新消息的行为：
 
 | 新消息 | 行为 |
 |--------|------|
 | 普通消息 | 按 `channel.json` 的 `busyMessageDefault`：默认作为 steer 插入当前任务，配置 `followUp` 则排队 |
 | `/steer` / `/followup` / `/stop` | 即时干预 / 排队 / 中止 |
-| `/help` `/events` `/tasks` `/status` `/usage` | 由传输层立即响应，不占用运行队列 |
+| `/help` `/dot` `/events` `/tasks` `/status` `/usage` | 由传输层立即响应，不占用运行队列；`/dot bind` 在回合进行中会被拒绝 |
 | `/new` | 绕过 busy 检查和旧 channel queue，立即建立新的会话边界；旧回合在后台收尾 |
 | 其他会话命令（`/model` `/compact` `/session`） | 提示空闲后再用 |
 | 未知 `/` 命令 | 直接拒绝并提示 `/help`，不发给模型 |
 
-`/tasks` 命令虽然不占用运行队列，但同一 task 的命令、agent 工具调用、driver 治理和启动迁移会经过进程内 keyed queue 串行修改，避免 read-modify-write 相互覆盖。这个保证只在单进程内成立：**不要让多个 Pipiclaw 进程共享同一个 workspace**；需要拆实例时必须使用彼此独立的工作区。
+`/tasks` 命令虽然不占用运行队列，但同一 task 的命令、agent 工具调用和 driver 治理都经过进程内 keyed queue，再持有跨进程锁 `dots/<dot>/.locks/task-<id>.lock` 串行修改，避免 read-modify-write 相互覆盖；`dot.json` 的读改写同样持锁。所以 daemon 和 TUI 可以同时使用同一个 dot（包括已绑定、正在被 daemon 服务的 dot）；同一个 dot 同时只能开一个 TUI，第二个会被会话区锁拒绝。**不要让两个 daemon 共享同一个 workspace**：绑定表、durable dispatch 和后台状态只由一个 daemon 写，需要拆实例时必须使用彼此独立的 app home。
 
 **后台负载也在同一进程里。** 除用户回合外，还有几类受控的后台工作会消耗 LLM API：
 
-- 记忆维护调度器：本地闸门通过后才做 LLM 整理，每 tick 最多处理 1 个通道（内置常量；整体可用 `memoryMaintenance.enabled` 关闭）；
-- 内建 task driver：扫描本身零 token，根据等待票、周期和预算推进任务，每 tick 最多派发 4 个通道；连续空转或超预算会暂停并通知（整体由 `tools.tasks.enabled` 控制）；
-- 后台作业（`bash async`）：每通道最多 5 个并发子进程，不占运行队列。
-- 委派 run：内置子智能体超过 120 秒后可跨回合存活，外部智能体从派发开始即独立于主回合；每频道最多 6 个、单个 Pipiclaw 实例最多 20 个运行中 run。
+- 记忆维护调度器：本地闸门通过后才做 LLM 整理，每 tick 最多处理 1 个会话区（只看激活 dot 中已绑定频道的会话区）（内置常量；整体可用 `memoryMaintenance.enabled` 关闭）；
+- 内建 task driver：扫描本身零 token，根据等待票、周期和预算推进任务，每个激活的 dot 每 tick 最多派发 1 个任务步骤；投递频道未绑定在本 dot 上的任务不推进；连续空转或超预算会暂停并通知（整体由 `tools.tasks.enabled` 控制）；
+- 后台作业（`bash async`）：每个 dot 最多 5 个并发子进程，不占运行队列。
+- 委派 run：内置子智能体超过 120 秒后可跨回合存活，外部智能体从派发开始即独立于主回合；每个 dot 最多 6 个、单个 Pipiclaw 实例最多 20 个运行中 run。
 
-委派 run 完成后通过 durable dispatch 唤醒所属频道。`/stop` 只停止主回合；委派必须用 `/subagents cancel` 单独终止。
+委派 run 完成后通过 durable dispatch 唤醒发起它的频道；那时该频道已经换绑到别的 dot 的话，唤醒不投递（结果仍记录在 run 里，任务的等待条件照常兑现）。`/stop` 只停止主回合；委派必须用 `/subagents cancel` 单独终止。
 
 ### 委派写锁
 
@@ -51,12 +56,12 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 
 ### 跨通道共享代码目录
 
-channel 隔离的是会话状态，不会自动复制或锁住项目 checkout。两个 channel 可以同时在同一个代码仓库里工作；此时两个主智能体执行的 `write`、`edit`、`bash` 或 Git 操作可能作用于同一棵目录。上面的委派写锁不覆盖主智能体自己的工具调用，因此不能把 channel 隔离理解成项目文件的事务隔离。
+dot 隔离的是会话与记忆状态，不会自动复制或锁住项目 checkout。两个频道（无论是否属于同一个 dot）可以同时在同一个代码仓库里工作；此时两个主智能体执行的 `write`、`edit`、`bash` 或 Git 操作可能作用于同一棵目录。上面的委派写锁不覆盖主智能体自己的工具调用，因此不能把 dot 或频道之间的隔离理解成项目文件的事务隔离。
 
 如果多个群或私聊可能同时交办写代码任务，建议按风险从低到高选择：
 
-- 约定同一时刻只有一个 channel 对共享 checkout 做写操作；
-- 为并行任务创建独立 Git worktree，让各 channel 用绝对路径（委派时用 `workingDirectory`）在各自的 worktree 里工作；
+- 约定同一时刻只有一个频道对共享 checkout 做写操作；
+- 为并行任务创建独立 Git worktree，让各频道用绝对路径（委派时用 `workingDirectory`）在各自的 worktree 里工作；
 - 按团队或项目拆分 Pipiclaw 实例，并使用彼此独立的 workspace 和 checkout。
 
 ## 资源占用与已知瓶颈（Footprint and Known Bottlenecks）

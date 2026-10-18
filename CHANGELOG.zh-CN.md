@@ -2,6 +2,29 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [Unreleased]
+
+### 不兼容变更
+
+- **Dot（spec 058）。** 助手现在是一个 *dot*：显式创建、有名字的个体，在 `workspace/dots/<dot>/` 下拥有自己的记忆、日记、任务、定时事件、委派记录和工作文件，也是 agent 的工作目录。钉钉私聊或群只是绑定到某个 dot 的地址（`workspace/dots/bindings.json`）；多个频道可以共用一个 dot——记忆和任务共享，对话各自独立。没有绑定的频道只能用 `/dot` 和 `/help`，不调用模型，也不写任何文件。不会有任何东西自动创建 dot。
+- **已有的 app home 必须先迁移才能启动。** daemon 和 TUI 在按频道分目录的旧布局上拒绝启动。停掉所有 Pipiclaw 进程，在仓库检出目录里运行 `node scripts/migrate-to-dots.mjs --dry-run`，再为每个旧频道目录给出 `--map <旧目录>=<dot>` 或 `--drop <旧目录>` 正式执行，最后 `--verify`（见[部署与运维](docs/deployment-and-operations.md#迁移到-dot-布局spec-058)）。脚本先备份 `workspace/` 和 `state/`，还原真实频道 id，迁移状态，为任务写上投递频道并改写绝对路径。还停在 v3 任务格式的 home 要先用 0.9.x 版本升到 v5；运行时内的 v3→v5 任务转换和 `scripts/rehearse-task-migration.mjs` 已删除。
+- **删除项目范围。** `/project` 和 `security.json` 的 `projectAccess` 已删除（该键会被忽略并给出警告）。工作目录——相对路径、shell 的 cwd、委派的默认 `workingDirectory`——就是 dot 目录；要委派到代码仓库，显式传 `workingDirectory`。
+- **TUI 打开一个 dot：** `pipiclaw tui --dot <名字>`（必填），`--create` 用于创建；`--channel` 已删除。TUI 可以打开正由 daemon 服务的 dot：记忆、任务和 `dot.json` 的写入持有跨进程短锁，TUI 有自己的会话，同一个 dot 的第二个 TUI 会拒绝启动。
+
+### 新增
+
+- `/dot [list|new <名字>|bind <名字>]`：列出 dot 及其频道、创建空 dot、把当前频道绑定到一个 dot（回合进行中拒绝；回复会说明原 dot 是否休眠、有几个任务和事件因此暂停）。
+- 任务记录投递频道 `channel`；投递频道没有绑定在所属 dot 上的任务和事件会暂停，绑回后恢复。没有任何绑定的 dot 休眠：事件不触发、任务不推进，结束的委派和作业也不再唤醒谁。
+
+### 变更
+
+- 记忆写入按 dot 串行（并跨进程）；`session_search`、`/tasks`、`/events`、`/usage`、`/subagents` 以 dot 为范围。run 和 job 记录改到 `state/subagent-runs/<dot>/`、`state/jobs/<dot>/`；钉钉路由元数据改到 `state/dingtalk/conversations.json`。
+
+### 修复
+
+- 群频道的作业记录不再因频道 id 里的 `/` 嵌套成多层目录（D10）。
+- 聊天级委派的完成唤醒只把同一频道仍在运行的 run 计为兄弟，dot 的一个频道不会被告知去等另一个频道的唤醒。
+
 ## [0.9.4] - 2026-10-17
 
 包含下方 [0.9.4-beta.2](#094-beta2---2026-10-13) 的全部内容（用户可见文案整改、委派更快更稳、源码分层约束），以及以下变化。
@@ -61,7 +84,7 @@
 ### 升级
 
 - 自动迁移仅支持 v3（有 `status:` 且无 `state:`），原件存入 `tasks/.v3/`。带 `state:` 的 v4 beta 文件跳过，**须隔离后人工重建**，不代表兼容 v4。恢复前必须核对旧等待、用量/预算与真实外部动作。
-- 周期模板转换失败会暂停并留说明；转换失败会按任务回滚（不覆盖既有归档与备份）、不写标记、在 `state/task-migration-v5.failed.json` 记录阶段，并中止启动（不启动 watcher/driver/钉钉），修复后重启即重试；`npm run build` 后可用 `node scripts/rehearse-task-migration.mjs` 在只读临时副本上演练。备份整个 app home，保留未解决任务、事件与记录，遵循[升级步骤](docs/events-and-tasks.md#beta-用户升级与不可转换任务)。停用的 v3 周期任务保持暂停、不生成事件模板；其余模板迁移后即被 watcher 执行，须在停 daemon 时先处理原任务。
+- 周期模板转换失败会暂停并留说明；转换失败会按任务回滚（不覆盖既有归档与备份）、不写标记、在 `state/task-migration-v5.failed.json` 记录阶段，并中止启动（不启动 watcher/driver/钉钉），修复后重启即重试；`npm run build` 后可用 `node scripts/rehearse-task-migration.mjs` 在只读临时副本上演练。备份整个 app home，保留未解决任务、事件与记录，遵循[升级步骤](docs/events-and-tasks.md#从更早的任务格式升级)。停用的 v3 周期任务保持暂停、不生成事件模板；其余模板迁移后即被 watcher 执行，须在停 daemon 时先处理原任务。
 - 本地检查与 CI 状态见[发布评审](docs/releases/0.9.3-review.md)。
 
 ## [0.9.3-beta.5] - 2026-09-20

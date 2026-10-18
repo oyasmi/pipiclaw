@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | 设计已确认，待实施（[实施计划](./plan.md)） |
+| 状态 | 已实施（2026-10-18，分支 `dev/dots`）；真实数据迁移（P7）由部署者用迁移脚本执行；实施偏差与闸门结果见文末「实施记录」 |
 | 日期 | 2026-10-17 |
 | 触发 | 用户希望把调校好的助手共享到多个钉钉群或私聊里使用，对外是同一个 agent；现在 channel 与记忆、任务、文件一一绑死，做不到 |
 | 前置 | 043 项目范围（本 spec 将其**整体删除**）、050 记忆 v2、051/052 任务、053 对外文案、054 分层与 `npm run arch` |
@@ -836,3 +836,55 @@ TUI 核心已在 P2 完成。本阶段：
 - 核对：`src/tui/` 不创建 task driver、事件 watcher、记忆调度器；jobs/runs 的 runtime 没有 state 目录，不落盘（与现状一致）。
 - 文档：TUI 的用法实际写在 `docs/interaction-and-commands.md`、`docs/configuration-reference.md` 和两份 README（plan 写的 `deployment-and-operations.md` 没有 TUI 一节），已改为 `--dot`/`--create`。
 - **手工核对**（2026-10-18，临时 app home：`~/.pipiclaw` 只读地复制了 `auth.json`、`models.json`、`settings.json`，没有对真实 home 运行任何命令，因为 TUI 的 bootstrap 会先建脚手架）：不带 `--create` 打开不存在的 dot 报错并提示 `--create`；`--create --print "/dot"` 列出新 dot；`/dot new side` 创建成功并提示去钉钉绑定；`/dot bind side` 回复终端不支持；一次真实模型对话回答了正确的 dot 名和工作目录（`dots/manual`），落盘为 `conversations/tui-1/` 与 `dot.json` 中的 `tui` 条目，退出后 `.lock` 已释放。交互式全屏界面没有手工跑（这里没有交互终端），只跑了 `--print`。
+
+### P5 迁移脚本
+
+提交 `29cb2be`。`scripts/migrate-to-dots.mjs` 零依赖、不 import `src/`/`dist/`，按盘点 → 规划 → 执行 → 校验拆成函数；`--dry-run` 打印完整计划，什么都不写。`test/migrate-to-dots.test.ts` +6 单测（plan 预计 +6），以 `node` 子进程运行脚本：完整迁移（DM、含 `/` 只能从 `.channel-meta.json` 还原的群、TUI、`dm_162403`/`dm_1624031` 前缀邻居、事件归位、任务补 `channel`、各状态目录、dispatch 记录、用量、路径改写，最后 `--verify` 通过）；遗漏目录时拒绝且不写一个字节；真实 id 冲突或无法还原时拒绝；缺 `task-migration-v5.done` 时拒绝；`--dry-run` 不写盘且列出每项移动；`--verify` 能发现残留旧路径与未归位事件。mutation（均变红）：执行前不拒绝（3 例红）、去掉多来源一致性检查、去掉路径边界前瞻、改写表改为从短到长。
+
+按代码与真实数据做的决定：
+
+- **运行中进程检查按目标 home 归属**：只把程序本身是 pipiclaw（`argv[0]`/`argv[1]` 为 `pipiclaw` bin 或 `pipiclaw/dist/main.js`）、且 `PIPICLAW_HOME`（缺省 `$HOME/.pipiclaw`）指向目标 home 的进程算作冲突；读不到环境的进程保守计入。原因：本机正在运行的 daemon（服务真实 `~/.pipiclaw`）和 tsserver（路径含 `pipiclaw`）会让在副本上的演练永远无法执行，而简单的子串匹配会误报。
+- **新增 `--as-home <dir>`**：副本里的绝对路径仍指向原 home（`/home/oyasmi/.pipiclaw/...`），不加此项时演练会跳过全部路径改写、`--verify` 照样通过，演练就失去意义。加上后改写与校验按原 home 的路径进行，与真实迁移完全一致。
+- **旧 dispatch id 改写为 dot 形式**（`job:<频道>:` → `job:<dot>:`，`subagent:`、`task:` 同理，`event:<名字>:` → `event:<dot>:<名字>:`）：run/job 的唤醒校验逐字比较 dispatch id，不改写的话迁移前在途的唤醒会被判为不可验证而丢弃。
+- **job 记录按频道归类**：旧记录不含 `channelId`，从目录相对路径还原（D10 的 bug 让群 id 的 `/` 嵌成多层目录），写入时补上 `channelId`。
+- **会话区文件**除 D20 列出的之外还包括 `last_prompt.json`（P2 已把它移到会话区）。
+- **先备份再写 `inprogress` 标记**（D20 写的是先标记后备份）：备份里含 `state/`，先写标记会让"从备份恢复"把标记一起恢复，daemon 依旧拒绝启动。
+- `workspace/dots/` 存在但为空时允许迁移：新版本的 bootstrap 会先建脚手架再做布局检查，用户误启动一次新版本不应让迁移无法进行。
+- `--map` 在最后一个 `=` 处切分；群目录名以 `==` 结尾时写成 `…===<dot>`，文档里给了例子。
+
+**演练**：已在 `~/.pipiclaw` 的 `cp -a` 副本上执行 `--dry-run --as-home ~/.pipiclaw`（源数据只读，没有在副本上启动 daemon），盘点结果交给了用户：6 个旧目录全部还原出真实频道 id（`dm_015262473638858016`、`dm_manager3947`、`group_cidL1/dcU8u+SV7I9YuUXLeXg==` 来自 `.channel-meta.json` + CHANNELS.md + 目录名，`dm_162403`、`dm_tester` 来自目录名，`tui_local` → `tui`），2 个工作区事件都投递到 `dm_015262473638858016`，三个活跃目录各有 `projectRoot /home/oyasmi` 的 `project.json`，运行中的真实 daemon 没有阻挡副本。**用户决定（2026-10-18）：不由实施者做映射和正式演练，由用户自己用迁移脚本迁移这 6 个目录。**因此正式迁移、副本上的 `--verify` 与 TUI 核对均未由实施者执行，G6 中"真实副本上的演练报告与 `--verify` 通过"一项未完成。
+
+### P6 文档、playbook 与评测
+
+- 顶层手册按 D23 清单逐个改为当前行为：`architecture.md`（拓扑加入 DotRuntime 与准入、锁表、磁盘布局）、`memory.md`、`events-and-tasks.md`（投递频道、挂起；删除已不存在的 v3→v5 转换与演练脚本两节，换成"从更早的任务格式升级"）、`interaction-and-commands.md`（dot 与频道、`/dot`、FAQ、界面用语）、`security.md`、`sub-agents.md`、`tools.md`、`configuration-reference.md`（`dots/`、会话区、TUI 与 daemon 共享 dot）、`deployment-and-operations.md`（运行文件、首次绑定、启动失败与未绑定的排障、备份清单、迁移一节）、`scaling-and-concurrency.md`、`runtime-mechanisms.md`、`runtime-playbooks.md`、`skills.md`、`design-philosophy.md`、两份 README（首次在钉钉里 `/dot new` + `/dot bind`）。CHANGELOG 两份新增 Unreleased 条目；旧条目保持历史原文，只把指向已删除小节的锚点改到新小节。
+- `AGENTS.md`：项目描述、模块表（security 去掉 project scope，memory、agent 改为 dot）、Runtime Model 三层（workspace / dot / 会话区）、`/events` 路径约束、run/job manager 按 dot。`CLAUDE.md`：转发流程加入"先解析绑定"、并发一节的任务锁/`dot.json` 锁/TUI 会话区锁、任务的 `channel` 与挂起、每个 dot 的事件 watcher、委派按 dot 与默认工作目录、dot 记忆、`dots/` 与 `state/dingtalk/`。
+- playbooks 已在 P2 改完；`npm run playbooks:measure` 合计 8510 units（task + delegation 4255），预算测试在单测里通过。
+- 053 D4 术语表追加 dot、绑定/换绑、投递频道、休眠（后台工作已暂停），"允许的根目录"一行标注已随 058 删除；`docs/specs/README.md` 改为已实施。
+- **文档核对中发现并修复的代码问题**：
+  - **聊天级委派唤醒的兄弟计数跨了频道**（真实回归）：run manager 改为每 dot 一个后，"还有 N 个其他 run 在运行"统计的是整个 dot 的聊天级 run。同一 dot 的两个频道各自委派时，A 频道会被告知还有 1 个在跑，可能回复 `[SILENT]` 去等一个根本发往 B 的唤醒。现在聊天级 run 只计同频道的。`subagent-runs.test.ts` 原有的兄弟计数用例**原地扩展**（加一个另一频道的 run），不增用例；去掉修复后该用例变红。为守住 `runs.ts` 的超长基线，规则移到 `completion-wake.ts` 的 `countWakeSiblings`（`runs.ts` 1173 → 1169）。
+  - 按 dot 生效的上限与模型可见文本仍写着 channel：`MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL` 改名 `…_PER_DOT`，其错误信息、run id 重复的错误、reflect 提示词、压缩提示、生成的 `MEMORY.md` 标题与空索引占位、`subagent` 工具的 `context` 描述、外部角色 `memory: index` 的 discovery 警告、`/tasks` `/usage` `/memory` 的帮助文案。
+  - 两个 manager 的 `runningTaskIds()` 在本 spec 之前就没有调用方（`14ef524` 已如此），不在本 spec 范围内，只删掉了注释里指向不存在函数的引用。
+- **INV-6 手工核对**（2026-10-18）：daemon 进程不能在这里真正启动（会连上钉钉），所以用 A18 的 daemon 夹具进程（真实 bootstrap、只替换钉钉 I/O）服务已绑定到 dot `e2e` 的 `dm_e2e_user`，同时另起一个真实的 `pipiclaw tui --dot e2e --print` 进程调用 `memory_save`：记忆文件与 `MEMORY.md` 索引写入成功，`conversations/` 下为 `dm-1` 与 `tui-1`，`.locks/` 与会话区锁全部释放，之后 daemon 继续正常服务该频道。用的是一次性测试文件，核对后已删除，不计入用例数。
+- **评测**（模型 `openai-codex/gpt-5.6-luna`，thinking medium，dev profile，每例 1 次试验，judge 关闭；dev 是冒烟探针，不构成发布或基线结论）：
+  - `npm run eval -- plan --changed-since ba10670` 选出 12 例；`selftest` 离线 12/12 合格。
+  - 第一轮 `2026-10-18T01-27-05-947Z-fgwe0q`：8/12。失败的 4 例全是任务类（T-ask-01、T-run-01、T-job-01、T-horizon-01），都在 `waitFor` 处超时 60 秒。归因：评测夹具直接写任务文件，没有新加的 `channel` 字段，task driver 按设计把它们挂起（生产路径的 `createTaskDocument` 强制要求该字段，所以只有夹具会这样）。修复见 `6204059`，属于 P2 迁移评测框架时的遗漏，不是运行时回归。
+  - 修复后全量重跑 `2026-10-18T01-36-52-304Z-2mqz32`：11/12，4 个任务类用例全部通过。唯一失败的 M-extract-01 中，reflect 正常运行，但模型只写了日记、没有写 durable memory（`memory-review.jsonl` 中只有 `journal append`）。同一构建上单独重跑 3 次 `2026-10-18T01-43-31-620Z-5jig9l`，3/3 通过；它在第一轮也通过了。归因：模型判断的波动，不是提示词回归。最终构建上该用例 3/4。
+  - 成本：三次运行的 agent 记录小计分别为 $0.0538、$0.0809（另有 1 条成本未知）、以及最后一次单例重跑。
+  - 未运行：core/candidate profile 与多试验置信区间。所以这些结果只能说明没有明显故障，不能作为发布质量的结论。
+
+### 验收清单（2026-10-18）
+
+| 项 | 状态 | 依据 |
+|---|---|---|
+| G1 同一 dot 两个频道记忆共享、会话隔离 | 通过 | DOT-1（并入 M2） |
+| G2 入站消息和后台服务不创建 dot 或频道目录 | 通过 | DOT-4；INV-2 |
+| G3 显式投递频道；准入拒绝跨 dot 投递 | 通过 | DOT-3；durable dispatch 拒绝无 dot 事件的单测 |
+| G4 INV-3 检索为空；`channel-paths.ts` 已删 | 通过 | P2 闸门 |
+| G5 project 检索为空；`projectAccess` 只 warn | 通过 | P1 闸门 |
+| G6 迁移脚本测试通过；副本演练与 `--verify`；上线 | 部分完成 | 脚本 6 例全过，副本上的 dry-run 盘点已完成；按用户决定，正式迁移、`--verify` 和上线由用户自己执行 |
+| INV-6 daemon 与 TUI 同时使用同一 dot；跨进程锁；第二个 TUI 被拒绝 | 通过 | `file-lock` 子进程单测、记忆队列与任务锁的持锁用例；P6 手工核对（daemon 夹具进程 + 真实 TUI 进程） |
+| INV-8 记忆写入以 dot 为键串行 | 通过 | DOT-2 |
+| 用例数变化逐阶段说明 | 完成 | 各阶段实施记录。P5 单测 +6（908 → 914）；P6 不增用例 |
+| 评测执行情况如实记录 | 完成 | 见上方「评测」 |
+
+**最终闸门**（2026-10-18）：`npm run check` 全绿（134 个文件 914 例），`npm run test:e2e` 24 个文件 59 例，`npm run eval:typecheck` 通过，`npm run test:evals` 69 例，`npm run arch` 的文档路径检查通过。

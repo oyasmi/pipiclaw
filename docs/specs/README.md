@@ -1,6 +1,6 @@
 # 设计记录
 
-`docs/specs/` 当前保留 spec 050–058，其中 055 已完成离线实施，真实发布验收待执行；058 设计已确认，待实施。编号 050 之前的所有 spec 已完整移到 [历史归档](../archive/README.md)，保留原编号、目录名和文件名；这些历史设计仍可用于追溯决策。
+`docs/specs/` 当前保留 spec 050–058，其中 055 已完成离线实施，真实发布验收待执行；058 已实施，真实数据迁移由部署者执行。编号 050 之前的所有 spec 已完整移到 [历史归档](../archive/README.md)，保留原编号、目录名和文件名；这些历史设计仍可用于追溯决策。
 
 ## 保留的设计
 
@@ -14,7 +14,7 @@
 | `055` | [pi 1.2.0 升级](./055-pi-1.2-upgrade/design.md)：持久化上下文、工具装配、安全备用重试、OAuth 安装身份与迁移/回退；离线实施完成（[实施计划](./055-pi-1.2-upgrade/plan.md)、[验收记录](./055-pi-1.2-upgrade/acceptance.md)），真实发布验收待执行 |
 | `056` | [评测日常工作流](./056-eval-workflow/design.md)：小集合快速检查、摘要与明细、评分边界及场景契约维护；已实施（[验收记录](./056-eval-workflow/acceptance.md)） |
 | `057` | [无人参与评测闭环](./057-autonomous-evals/design.md)：评分器正反例校验、客观验收、封存证据重放和兼容参照；已实施（[验收记录](./057-autonomous-evals/acceptance.md)） |
-| `058` | [Dot](./058-dots/design.md)：把助手个体从频道中独立出来，频道通过绑定指向 dot；删除 project 与频道 id 路径转义；独立迁移脚本；设计已确认，待实施（[实施计划](./058-dots/plan.md)） |
+| `058` | [Dot](./058-dots/design.md)：把助手个体从频道中独立出来，频道通过绑定指向 dot；删除 project 与频道 id 路径转义；独立迁移脚本；已实施（[实施计划](./058-dots/plan.md)，实施记录在设计文档末尾） |
 
 050、051 已完成的实施清单也保存在归档中（[050](../archive/specs/050-memory-v2/plan.md)、[051](../archive/specs/051-long-horizon-task-loop/plan.md)）。
 

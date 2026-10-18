@@ -1,7 +1,7 @@
 # 交互与命令
 
 > **适合谁**：日常在钉钉或终端中使用 Pipiclaw，希望知道消息发到哪里、忙碌时如何介入、哪些命令不消耗模型。
-> **读完你能**：选择合适的入口和输出模式，理解频道隔离，并在任务运行中查看、纠偏、排队或终止工作。
+> **读完你能**：选择合适的入口和输出模式，理解 dot 与频道绑定，并在任务运行中查看、纠偏、排队或终止工作。
 
 ## 两个入口，共用一套工作状态
 
@@ -21,19 +21,32 @@ pipiclaw tui --dot news --print "总结当前仓库"  # 一次性运行后退出
 
 TUI 适合前台对话和同步完成的内置委派，不是外部异步 run 的常驻宿主。当前只有 DingTalk daemon 配置了委派状态持久化、完成唤醒和重启对账；在 TUI 中启动外部角色后不会主动弹出完成通知，退出 TUI 也不会在下次启动时重新认领该 run。长时间外部委派请使用常驻 daemon。
 
-## 频道如何隔离
+## dot 与频道
 
-Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
+**dot** 是一个独立的助手个体：它拥有自己的记忆（`memory/*.md`，生成 `MEMORY.md` 索引）、`journal/`、任务、定时事件、委派记录和工作文件，放在 `workspace/dots/<名字>/` 下，也是 agent 的工作目录。**频道（channel）**是消息的地址：一次私聊或一个群。
 
-| 场景 | 频道 ID | 隔离效果 |
+| 场景 | 频道 ID |
+|---|---|
+| 钉钉私聊 | `dm_<staffId>` |
+| 钉钉群聊 | `group_<conversationId>` |
+| 终端 TUI | `tui`（打开 `--dot` 指定的那个 dot） |
+
+- 频道要先**绑定**到一个 dot 才会被服务。没有绑定的频道只能用 `/dot` 和 `/help`，其他消息只会收到一条"还没有绑定 dot"的提示，不会调用模型，也不会创建任何文件。dot 只能显式创建（`/dot new`），不会自动出现。
+- 一个频道同时只绑定一个 dot；一个 dot 可以绑定多个频道。绑定到同一个 dot 的频道**共享**记忆、任务、事件和文件，**对话各自独立**：每个频道在 dot 里有自己的会话区（`conversations/dm-1/`、`group-1/`…），`/new` 只重置当前频道的会话。别的频道说过的原话，agent 用 `session_search` 去查。
+- 任务和定时事件记着自己的**投递频道**，结果只发到那里。投递频道换绑到别的 dot 后，它们暂停；绑回来自动恢复。一个 dot 失去所有绑定后整体休眠：事件不触发，任务不推进，正在跑的委派照常结束但不再通知。
+- `workspace/MEMORY.md`、`ENVIRONMENT.md`、`AGENTS.md`、skills 和角色目录是所有 dot 共享的工作区级配置。
+
+同一个 daemon 可以并行推进多个频道：不同用户的私聊、不同群聊不会因为另一个频道正在等待模型而排成一条全局队列。同一频道内仍只有一个主回合；同一个群里的所有成员共享这条会话线。dot 之间的隔离也不等于项目文件隔离——多个频道指向同一个 checkout 时，主智能体的写操作仍可能冲突。部署和共享目录边界见[并发与容量](./scaling-and-concurrency.md)。
+
+### `/dot` 命令
+
+| 命令 | 作用 | 回合进行中 |
 |---|---|---|
-| 钉钉私聊 | `dm_<staffId>` | 每个人有独立会话和记忆 |
-| 钉钉群聊 | `group_<conversationId>` | 每个群有独立上下文和记忆 |
-| 默认 TUI | `tui_local` | 本机终端独立频道 |
+| `/dot` 或 `/dot list` | 列出所有 dot、各自绑定的频道（显示名称）、本频道当前的 dot，以及休眠或不可用的 dot | 可用 |
+| `/dot new <名字>` | 创建一个空 dot，不绑定任何频道。名字只能用 1–32 个小写字母、数字和连字符 | 可用 |
+| `/dot bind <名字>` | 把本频道绑定到这个 dot，同时解除原来的绑定。回复会说明原 dot 是否进入休眠、有几个任务和定时事件因此暂停 | 拒绝，等本回合结束后再发 |
 
-每个频道拥有自己的会话、`memory/*.md`（生成 `MEMORY.md` 索引）、`journal/`、任务台账、委派记录和冷存储历史。`workspace/MEMORY.md`、`ENVIRONMENT.md`、`AGENTS.md`、skills 和角色目录是工作区级共享配置。
-
-同一个 daemon 可以并行推进多个频道：不同用户的私聊、不同群聊不会因为另一个频道正在等待模型而排成一条全局队列。同一频道内仍只有一个主回合；同一个群里的所有成员共享这条会话线。频道隔离也不等于项目文件隔离——多个频道指向同一个 checkout 时，主智能体的写操作仍可能冲突。部署和共享目录边界见[并发与容量](./scaling-and-concurrency.md)。
+绑回一个以前绑定过的 dot 时，沿用本频道在那里的会话区，接着之前的对话；想重新开始就 `/new`。绑定关系也写在服务器上的 `workspace/CHANNELS.md`（「dot」一列）和 `workspace/dots/bindings.json` 里。
 
 ## 钉钉中的输出形态
 
@@ -71,10 +84,11 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | `/stop` | 停止当前回合；必要时暂停任务 |
 | `/steer <消息>` | 调整当前回合 |
 | `/followup <消息>` | 排队下一条请求 |
+| `/dot [list\|new <名字>\|bind <名字>]` | 查看、创建 dot，把本频道绑定到一个 dot；未绑定的频道也能用 |
 | `/events list\|show\|delete\|history` | 查看和管理定时事件 |
 | `/tasks ...` | 查看、诊断和控制任务台账 |
 | `/status` | 查看执行状态、模型、上下文、运行时长和版本 |
-| `/usage [7d\|month]` | 查看频道与全局用量、成本和未知用量条目 |
+| `/usage [7d\|month]` | 查看本 dot（以及其中本频道）与全局的用量、成本和未知用量条目 |
 | `/context [detail]` | 查看系统提示词、工具定义和每回合自动附加内容的体量；`detail` 列出各分段来源和工具、skill 清单 |
 | `/subagents ...` | 查看、控制委派 run 和角色目录 |
 | `/skills [list\|show <name>]` | 列出工作区 skills（含未通过内容扫描而未加载的，附原因），或查看单个 skill 的完整正文 |
@@ -109,7 +123,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 | 命令 | 作用 |
 |---|---|
-| `/memory [status\|list [type]\|show <name>\|journal [date]\|forget <name>]` | 查看或删除频道记忆，并查看工作日记 |
+| `/memory [status\|list [type]\|show <name>\|journal [date]\|forget <name>]` | 查看或删除本 dot 的记忆，并查看工作日记 |
 | `/session` | 查看当前会话、消息、token 和模型状态 |
 | `/thinking [level\|cycle]` | 查看或切换当前模型的推理强度 |
 | `/model [provider/modelId]` | 查看或切换模型；唯一子串也可匹配 |
@@ -139,6 +153,9 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | 工作日记 | journal |
 | 后台整理 | reflect |
 | 随时可用 / 空闲时可用 | 传输层 / 会话层命令 |
+| 绑定 / 换绑 | binding（`dots/bindings.json`） |
+| 投递频道 | 事件的 `channelId`、任务的 `channel` |
+| 后台工作已暂停（dot） | 休眠的 dot（dormant） |
 
 Workspace skill 用 `/skills` 查看目录、用 `/skills show <name>` 查看正文，用 `/skill:<名称>` 直接调用。未知斜杠命令会被拒绝并提示 `/help`，不会因为拼写错误开启一个模型回合。
 
@@ -152,14 +169,14 @@ Workspace skill 用 `/skills` 查看目录、用 `/skills show <name>` 查看正
 
 **为什么 `/model` 在忙碌时不能用？** 它会修改当前会话状态，因此只能在空闲时执行。`/status`、`/usage`、`/tasks` 和 `/subagents` 是只读或运行时控制面，忙碌时仍可用。
 
-**为什么群里记得的事情，私聊里不知道？** 群聊与私聊是不同频道，默认隔离是为了避免信息泄漏。确实需要共享的稳定背景由管理员写入 `workspace/MEMORY.md`。
+**为什么群里记得的事情，私聊里不知道？** 这两个频道绑定在不同的 dot 上，记忆各自独立——这是为了避免私聊内容进群。想让它们共享记忆，在其中一个频道里 `/dot bind <另一个的 dot>`；只需要共享稳定背景时，由管理员写入 `workspace/MEMORY.md`。用 `/dot` 可以看到每个频道绑在哪里。
 
 **如何继续上次 TUI 对话？** 用同一个 `--dot` 重新打开。没有 `/resume` 命令，每个 dot 的终端会话区会自动续上。
 
 ## 相关文档
 
 - 安装和首次接入：[项目 README](../README.md#快速开始)
-- 频道记忆：[memory.md](./memory.md)
+- dot 记忆：[memory.md](./memory.md)
 - 定时事件与任务命令：[events-and-tasks.md](./events-and-tasks.md)
 - 委派命令与角色：[sub-agents.md](./sub-agents.md)
 - 多频道并发与容量边界：[scaling-and-concurrency.md](./scaling-and-concurrency.md)
