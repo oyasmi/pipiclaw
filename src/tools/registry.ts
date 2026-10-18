@@ -305,7 +305,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		// Present only when a job manager was supplied (always on the main path,
 		// never for sub-agents).
 		enabledBy: (ctx) => ctx.jobManager !== undefined,
-		create: (ctx) => createJobTool({ jobManager: req(ctx.jobManager, "jobManager") }),
+		create: (ctx) => createJobTool({ jobManager: req(ctx.jobManager, "jobManager"), channelId: ctx.channelId }),
 	},
 ];
 

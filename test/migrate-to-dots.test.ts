@@ -93,11 +93,16 @@ function legacyHome(): string {
 	write(join(state, "memory", "dm_162403.json"), '{"channelId":"dm_162403","dirty":true}');
 	write(
 		join(state, "subagent-runs", "dm_162403", "run_a.json"),
-		`{"runId":"run_a","channelId":"dm_162403","outputPath":"${dm}/subagent-artifacts/run_a/output.md"}`,
+		`{"runId":"run_a","channelId":"dm_162403","outputPath":"${dm}/subagent-artifacts/run_a/output.md","wakeClaimDispatchId":"subagent:dm_162403:run_a:done"}`,
 	);
 	// The D10 bug: a group's job record nested under the raw id's `/`.
 	write(join(state, "jobs", "group_cidAB", "cd+EF==", "job_1.json"), '{"id":"job_1","status":"running"}');
 	const wakeId = "job:dm_162403:job_2:done";
+	// Its completion wake was claimed by the old process, which stopped before finishing it.
+	write(
+		join(state, "jobs", "dm_162403", "job_2.json"),
+		JSON.stringify({ id: "job_2", channelId: "dm_162403", status: "completed", wakeClaimDispatchId: wakeId }),
+	);
 	write(
 		join(state, "dispatch", `${encodeURIComponent(wakeId)}.json`),
 		JSON.stringify({
@@ -181,6 +186,13 @@ describe("migrate-to-dots (spec 058, D20)", () => {
 			channelId: GROUP_ID,
 		});
 		const newWake = "job:news:job_2:done";
+		// A claimed-but-unfinished wake is resumed only when the claim names the migrated id.
+		expect(JSON.parse(readFileSync(join(state, "jobs", "news", "job_2.json"), "utf8")).wakeClaimDispatchId).toBe(
+			newWake,
+		);
+		expect(
+			JSON.parse(readFileSync(join(state, "subagent-runs", "news", "run_a.json"), "utf8")).wakeClaimDispatchId,
+		).toBe("subagent:news:run_a:done");
 		expect(
 			JSON.parse(readFileSync(join(state, "dispatch", `${encodeURIComponent(newWake)}.json`), "utf8")),
 		).toMatchObject({
@@ -240,15 +252,29 @@ describe("migrate-to-dots (spec 058, D20)", () => {
 		expect(snapshot(home)).toEqual(before);
 	});
 
-	it("refuses to run before the v5 task migration has finished", () => {
-		// Failure caught: migrating v3-format tasks the new runtime can no longer upgrade.
-		const home = legacyHome();
-		rmSync(join(home, "state", "task-migration-v5.done"));
-		const before = snapshot(home);
-		const result = run(home, ...FULL_MAP, "--no-backup");
-		expect(result.code).toBe(1);
-		expect(result.out).toContain("task-migration-v5.done");
-		expect(snapshot(home)).toEqual(before);
+	it("refuses to run before its preconditions hold, writing nothing", () => {
+		// Failure caught: migrating v3-format tasks the new runtime can no longer upgrade; moving the
+		// directories a still-running background job will write its exit marker into.
+		const cases: Array<[string, (home: string) => void]> = [
+			["task-migration-v5.done", (home) => rmSync(join(home, "state", "task-migration-v5.done"))],
+			[
+				"background job job_live is still running",
+				(home) =>
+					write(
+						join(home, "state", "jobs", "dm_162403", "job_live.json"),
+						JSON.stringify({ id: "job_live", status: "running", pid: process.pid }),
+					),
+			],
+		];
+		for (const [expected, seed] of cases) {
+			const home = legacyHome();
+			seed(home);
+			const before = snapshot(home);
+			const result = run(home, ...FULL_MAP, "--no-backup");
+			expect(result.code, expected).toBe(1);
+			expect(result.out).toContain(expected);
+			expect(snapshot(home)).toEqual(before);
+		}
 	});
 
 	it("dry-run prints every move and writes nothing", () => {

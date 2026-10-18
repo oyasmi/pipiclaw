@@ -255,27 +255,34 @@ export class DotRuntime {
 		if (previous === dot) return { kind: "same", dot };
 		this.records.set(dot, summary);
 
-		// 2–4. Activate the target, give the channel its conversation there, then commit the binding.
-		// Until the write succeeds nothing has changed for the channel; a target activated only for
-		// this bind goes dormant again.
+		// 2–3. Give the channel its conversation in the target, then commit the binding. Until the
+		// write succeeds nothing has changed for the channel and nothing in the target has started.
 		const now = new Date();
-		const wasActive = this.active.has(dot);
-		try {
-			await this.activate(dot);
-			await allocateConversation(this.options.workspaceDir, dot, channelId, kind, now);
-			await this.refreshRecord(dot);
-			const next: BindingsFile = {
-				...this.bindings,
-				bindings: { ...this.bindings.bindings, [channelId]: { dot, boundAt: now.toISOString() } },
-			};
-			await writeBindings(this.options.workspaceDir, next);
-			this.bindings = next;
-		} catch (error) {
-			if (!wasActive && this.boundChannelsOf(dot).length === 0) await this.deactivate(dot);
-			throw error;
-		}
+		await allocateConversation(this.options.workspaceDir, dot, channelId, kind, now);
+		await this.refreshRecord(dot);
+		const next: BindingsFile = {
+			...this.bindings,
+			bindings: { ...this.bindings.bindings, [channelId]: { dot, boundAt: now.toISOString() } },
+		};
+		await writeBindings(this.options.workspaceDir, next);
+		this.bindings = next;
 		log.logInfoEvent("dot.bound", "Channel bound to dot", { channelId, fields: { dot, previousDot: previous } });
 		this.options.onBindingChanged?.(channelId);
+
+		// 4. Only now may the target produce work: its watcher's startup scan recovers overdue
+		// one-shots for this channel, which it would skip as `channel_not_bound` before the commit.
+		// The channel queue holds this channel's next message until `/dot bind` returns, so the
+		// activation's repair still runs before any turn opens the conversation. A failure here
+		// cannot undo the committed binding; the next restart activates the dot again.
+		try {
+			await this.activate(dot);
+		} catch (error) {
+			log.logWarn("dot.bind.activate_failed", "Activating the dot after a bind failed", {
+				channelId,
+				reason: errorMessage(error),
+				fields: { dot },
+			});
+		}
 
 		// 5. The old runner goes; a failure here cannot undo the committed binding.
 		try {

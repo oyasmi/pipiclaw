@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -52,8 +52,15 @@ describe("cross-process file lock", () => {
 		const holder = await spawnLockHolder(lockPath);
 		await holder.kill();
 		expect(existsSync(lockPath)).toBe(true);
-		// Failure caught: a crashed TUI would otherwise lock its dot's memory until a human intervened.
+		// …and a reclaimer died too, inside its reclaim guard.
+		const guard = `${lockPath}.reclaim`;
+		writeFileSync(guard, "");
+		const longAgo = new Date(Date.now() - 60_000);
+		utimesSync(guard, longAgo, longAgo);
+		// Failure caught: a crashed TUI (or a crashed reclaimer) would otherwise lock its dot's
+		// memory until a human intervened.
 		await expect(withFileLock(lockPath, async () => "ran", { timeoutMs: 2_000 })).resolves.toBe("ran");
+		expect(existsSync(guard)).toBe(false);
 	});
 
 	it("never removes a lock it does not hold", async () => {

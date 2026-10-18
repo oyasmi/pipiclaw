@@ -212,6 +212,38 @@ function findRunningProcesses(home) {
 	return { found, checked: true };
 }
 
+/**
+ * Jobs and external runs whose process is still alive. They outlive the daemon by design, but they
+ * write their exit marker and output to absolute paths under the old layout, which the migration
+ * moves away — so the migration waits for them instead of stranding their results.
+ */
+function findLiveDetachedWork(stateDir) {
+	const live = [];
+	const visit = (dir, kind) => {
+		for (const entry of listDir(dir)) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) visit(full, kind);
+			else if (entry.isFile() && entry.name.endsWith(".json")) {
+				const record = tryReadJson(full);
+				if (record?.status !== "running" || typeof record.pid !== "number" || !isProcessAlive(record.pid)) continue;
+				live.push({ kind, id: record.id ?? record.runId ?? entry.name, pid: record.pid });
+			}
+		}
+	};
+	visit(path.join(stateDir, "jobs"), "job");
+	visit(path.join(stateDir, "subagent-runs"), "run");
+	return live;
+}
+
+function isProcessAlive(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error?.code === "EPERM";
+	}
+}
+
 function realpathOr(file) {
 	try {
 		return fs.realpathSync(file);
@@ -234,6 +266,11 @@ export function inventory(home) {
 	}
 	const processes = findRunningProcesses(home);
 	for (const proc of processes.found) problems.push(`pipiclaw is running on this home (pid ${proc.pid}): ${proc.command}`);
+	for (const work of findLiveDetachedWork(stateDir)) {
+		problems.push(
+			`background ${work.kind} ${work.id} is still running (pid ${work.pid}): wait for it to finish or cancel it before migrating — it writes its result under the old layout`,
+		);
+	}
 
 	const index = readChannelIndex(workspaceDir);
 	const legacy = [];
@@ -431,6 +468,16 @@ function migrateDispatchId(id, oldChannelId, dot) {
 	}
 	if (id.startsWith("event:")) return `event:${dot}:${id.slice("event:".length)}`;
 	return id;
+}
+
+/**
+ * A completion wake the old process claimed but did not finish is resumed by comparing the
+ * record's `wakeClaimDispatchId` with the outbox record's id — which the migration rewrites to the
+ * dot form, so the claim must follow it or the resumed wake is refused as unverifiable.
+ */
+function migrateWakeClaim(record, item) {
+	if (typeof record.wakeClaimDispatchId !== "string") return record;
+	return { ...record, wakeClaimDispatchId: migrateDispatchId(record.wakeClaimDispatchId, item.oldChannelId, item.dot) };
 }
 
 function buildRewriter(rewrites) {
@@ -634,8 +681,17 @@ function migrateState(p, report) {
 		if (!entry.isDirectory()) continue;
 		const item = byDir.get(entry.name);
 		const from = path.join(runsDir, entry.name);
-		if (item) move(from, path.join(runsDir, item.dot), log);
-		else move(from, path.join(legacyState, "subagent-runs", entry.name), log);
+		if (!item) {
+			move(from, path.join(legacyState, "subagent-runs", entry.name), log);
+			continue;
+		}
+		const to = path.join(runsDir, item.dot);
+		move(from, to, log);
+		for (const run of listDir(to)) {
+			const file = path.join(to, run.name);
+			const record = run.isFile() && run.name.endsWith(".json") ? tryReadJson(file) : undefined;
+			if (typeof record?.wakeClaimDispatchId === "string") writeJson(file, migrateWakeClaim(record, item));
+		}
 	}
 
 	// Job records: classified by channel (a group id's `/` used to nest directories, D10).
@@ -656,7 +712,7 @@ function migrateState(p, report) {
 		const item = byOldChannel.get(channelId) ?? byDir.get(channelId);
 		if (item && record) {
 			const to = path.join(jobsDir, item.dot, path.basename(file));
-			writeJson(to, { ...record, channelId: item.channelId });
+			writeJson(to, { ...migrateWakeClaim(record, item), channelId: item.channelId });
 			fs.rmSync(file);
 			log.push({ move: file, to });
 		} else {
@@ -679,6 +735,12 @@ function migrateState(p, report) {
 		const id = migrateDispatchId(String(record.id), item.oldChannelId, item.dot);
 		const event = { ...record.event, channelId: item.channelId, dot: item.dot };
 		if (event.dispatchId) event.dispatchId = migrateDispatchId(String(event.dispatchId), item.oldChannelId, item.dot);
+		if (event.internalWake?.dispatchId) {
+			event.internalWake = {
+				...event.internalWake,
+				dispatchId: migrateDispatchId(String(event.internalWake.dispatchId), item.oldChannelId, item.dot),
+			};
+		}
 		const to = path.join(dispatchDir, `${encodeURIComponent(id)}.json`);
 		writeJson(to, { ...record, id, event });
 		if (to !== file) fs.rmSync(file);

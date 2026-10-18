@@ -39,6 +39,8 @@ function sameMeta(a: ConversationMeta | undefined, b: ConversationMeta): boolean
 
 export class ConversationMetaStore {
 	private entries?: Map<string, ConversationMeta>;
+	/** The last write failed: memory holds entries the file does not, so the next `set` writes even if unchanged. */
+	private unsaved = false;
 
 	constructor(
 		/** `stateDir` is the app's `state/` directory; omit it to keep metadata in memory only. */
@@ -83,14 +85,16 @@ export class ConversationMetaStore {
 	set(channelId: string, meta: ConversationMeta): void {
 		this.touchChannel(channelId);
 		const entries = this.load();
-		if (sameMeta(entries.get(channelId), meta)) return;
+		if (sameMeta(entries.get(channelId), meta) && !this.unsaved) return;
 		entries.set(channelId, meta);
 
 		const path = this.path;
 		if (!path) return;
 		try {
 			writeFileAtomicallySync(path, `${JSON.stringify(Object.fromEntries(entries), null, 2)}\n`);
+			this.unsaved = false;
 		} catch (err) {
+			this.unsaved = true;
 			log.logWarn("dingtalk.metadata.persist_failed", "Conversation metadata persist failed", {
 				channelId: channelId,
 				reason: errorMessage(err),

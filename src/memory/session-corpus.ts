@@ -329,7 +329,6 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 	const maxFiles = Math.max(1, Math.floor(options.maxFiles));
 	const maxChars = options.maxCharsPerDocument ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
 	const maxDocuments = options.maxDocumentsTotal ?? DEFAULT_MAX_DOCUMENTS_TOTAL;
-	const docs: SessionSearchDocument[] = [];
 	const conversationDirs = (await listConversations(options.dotDir)).map((conversation) => ({
 		conversation,
 		dir: join(options.dotDir, "conversations", conversation),
@@ -346,25 +345,49 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 		readPlan.push({ ...entry, source: "session" });
 	}
 
+	// Every conversation is read, each keeping at most its newest `maxDocuments`; the total is then
+	// shared out by `shareBudget`. Stopping in directory order once the total ran over let one
+	// long-lived channel fill the budget before later channels were read at all (spec 058, D12:
+	// `session_search` covers the whole dot).
+	const byConversation = new Map<string, SessionSearchDocument[]>();
 	for (const item of readPlan) {
+		let docs = byConversation.get(item.conversation) ?? [];
 		for (const document of await parseJsonlFile(item.path, item.source, maxChars)) {
 			// Ids are `<file>:<line>`, and every conversation has its own `context.jsonl`.
 			docs.push({ ...document, id: `${item.conversation}/${document.id}`, conversation: item.conversation });
 		}
-		if (docs.length > maxDocuments * 2) {
-			break;
-		}
+		if (docs.length > maxDocuments * 2) docs = docs.slice(-maxDocuments);
+		byConversation.set(item.conversation, docs);
 	}
+	return shareBudget([...byConversation.values()].map(deduplicate), maxDocuments);
+}
 
+function deduplicate(docs: SessionSearchDocument[]): SessionSearchDocument[] {
 	const deduplicated: SessionSearchDocument[] = [];
 	const seen = new Set<string>();
 	for (const document of docs) {
 		const identity = document.timestamp
-			? `${document.conversation}\0${document.timestamp}\0${document.role}\0${document.text}`
+			? `${document.timestamp}\0${document.role}\0${document.text}`
 			: `${document.source}\0${document.id}`;
 		if (seen.has(identity)) continue;
 		seen.add(identity);
 		deduplicated.push(document);
 	}
-	return deduplicated.length > maxDocuments ? deduplicated.slice(-maxDocuments) : deduplicated;
+	return deduplicated;
+}
+
+/**
+ * Fair shares of `budget`, smallest conversation first: one that needs less than an equal share
+ * keeps everything and leaves the rest to the others; a larger one keeps its newest documents.
+ */
+function shareBudget(groups: SessionSearchDocument[][], budget: number): SessionSearchDocument[] {
+	const kept = new Map<SessionSearchDocument[], SessionSearchDocument[]>();
+	let remaining = budget;
+	const bySize = [...groups].sort((a, b) => a.length - b.length);
+	bySize.forEach((group, index) => {
+		const take = Math.min(group.length, Math.floor(remaining / (bySize.length - index)));
+		kept.set(group, take === 0 ? [] : group.slice(-take));
+		remaining -= take;
+	});
+	return groups.flatMap((group) => kept.get(group) ?? []);
 }

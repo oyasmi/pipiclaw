@@ -44,8 +44,9 @@ export type BindOutcome =
 	| { kind: "invalid"; dot: string };
 
 /**
- * `/dot list`'s rows: every dot on disk with the channels bound to it. `label` names a channel
- * (the caller owns channel ids); `current` is the asking channel's dot.
+ * `/dot list`'s rows: every dot on disk, plus every dot a binding names that is no longer there
+ * (shown missing, D4), each with the channels bound to it. `label` names a channel (the caller
+ * owns channel ids); `current` is the asking channel's dot.
  */
 export function buildDotList(
 	dots: readonly DotSummary[],
@@ -53,12 +54,14 @@ export function buildDotList(
 	current: string | undefined,
 	label: (channelId: string) => string,
 ): DotListItem[] {
-	return dots.map((summary) => ({
-		name: summary.name,
-		availability: summary.availability,
-		current: summary.name === current,
+	const onDisk = new Map<string, DotAvailability>(dots.map((summary) => [summary.name, summary.availability]));
+	const names = [...new Set([...onDisk.keys(), ...Object.values(bindings).map((binding) => binding.dot)])].sort();
+	return names.map((name) => ({
+		name,
+		availability: onDisk.get(name) ?? "missing",
+		current: name === current,
 		channels: Object.entries(bindings)
-			.filter(([, binding]) => binding.dot === summary.name)
+			.filter(([, binding]) => binding.dot === name)
 			.map(([channelId]) => ({ channelId, label: label(channelId) })),
 	}));
 }

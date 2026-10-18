@@ -454,36 +454,37 @@ export class TaskDriver {
 						? [...candidates.slice(lastIndex + 1), ...candidates.slice(0, lastIndex + 1)]
 						: candidates;
 
-				const picked = rotated.find(({ entry }) => {
+				// One step per delivery channel per pass: a dot's tasks may deliver to different channels,
+				// whose queues run independently, so one channel's step must not hold back another's.
+				// Tasks sharing a channel still take turns (D6 rotation).
+				const usedChannels = new Set<string>();
+				for (const { entry, channelId } of rotated) {
+					if (dispatched >= settings.maxDispatchesPerTick) break;
+					if (usedChannels.has(channelId)) continue;
 					const previous = this.lastDispatchMs.get(attemptKey(dot, entry.id));
-					return previous === undefined || nowMs - previous >= REDISPATCH_GUARD_MS;
-				});
-				if (!picked) {
-					for (const { entry } of rotated) {
-						const previous = this.lastDispatchMs.get(attemptKey(dot, entry.id));
-						if (previous !== undefined) this.noteHorizon(previous + REDISPATCH_GUARD_MS, nowMs);
+					if (previous !== undefined && nowMs - previous < REDISPATCH_GUARD_MS) {
+						this.noteHorizon(previous + REDISPATCH_GUARD_MS, nowMs);
+						continue;
 					}
-					continue;
-				}
-
-				const { entry, channelId } = picked;
-				const event = createTaskDriverEvent(dot, channelId, entry, nowMs);
-				const accepted = await this.options.dispatch(event);
-				this.observeDispatch(event, accepted);
-				this.lastDispatchMs.set(attemptKey(dot, entry.id), nowMs);
-				this.lastDispatchedTaskId.set(dot, entry.id);
-				if (accepted) {
-					dispatched++;
-					lastDispatchOffset = offset;
-					log.logDebugEvent("taskdriver.step.enqueued", "Task step enqueued", {
-						channelId: channelId,
-						fields: { taskId: entry.id, dot },
-					});
-				} else {
-					log.logWarn("taskdriver.step.enqueue_failed", "Task step not enqueued: channel queue unavailable", {
-						channelId: channelId,
-						fields: { taskId: entry.id, dot },
-					});
+					usedChannels.add(channelId);
+					const event = createTaskDriverEvent(dot, channelId, entry, nowMs);
+					const accepted = await this.options.dispatch(event);
+					this.observeDispatch(event, accepted);
+					this.lastDispatchMs.set(attemptKey(dot, entry.id), nowMs);
+					this.lastDispatchedTaskId.set(dot, entry.id);
+					if (accepted) {
+						dispatched++;
+						lastDispatchOffset = offset;
+						log.logDebugEvent("taskdriver.step.enqueued", "Task step enqueued", {
+							channelId: channelId,
+							fields: { taskId: entry.id, dot },
+						});
+					} else {
+						log.logWarn("taskdriver.step.enqueue_failed", "Task step not enqueued: channel queue unavailable", {
+							channelId: channelId,
+							fields: { taskId: entry.id, dot },
+						});
+					}
 				}
 			}
 

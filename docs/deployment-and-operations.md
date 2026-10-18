@@ -303,6 +303,7 @@ node scripts/migrate-to-dots.mjs --home ~/.pipiclaw --map ... --drop ...
 node scripts/migrate-to-dots.mjs --home ~/.pipiclaw --verify
 ```
 
+- 先停 daemon，并等后台 job、外部委派跑完（或先取消）：它们在 daemon 停止后仍会继续运行，并把结果写到旧布局的路径下。脚本发现仍存活的这类进程时会列出来并拒绝执行。
 - `--map` 在最后一个 `=` 处切分。群目录名常以 `==` 结尾，后面再接 `=<dot>`，就是连续三个 `=`（上例的目录名是 `group_cidL1__xxxx==`）。用单引号包住整个参数。
 - 每个旧目录都必须出现在 `--map` 或 `--drop` 里，一个 dot 只接收一个旧目录；要让多个频道共用一个 dot，迁移后在频道里 `/dot bind`。
 - 真实频道 id 依次从 `.channel-meta.json`、`CHANNELS.md`、目录名还原，来源不一致或无法还原时拒绝执行。

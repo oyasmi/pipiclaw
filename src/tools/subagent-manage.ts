@@ -64,12 +64,14 @@ const LIST_CAP = 50;
  *  failure without dumping an unbounded log into the model's context. */
 const STDERR_TAIL_CHARS = 2_000;
 
-function formatRunLine(record: RunRecord): string {
+/** `here` is the calling channel: a run another channel of this dot started is labelled with its origin. */
+function formatRunLine(record: RunRecord, here: string): string {
 	const task = record.taskId ? `, task ${record.taskId}` : "";
+	const origin = record.channelId !== here ? `, started in ${record.channelId}` : "";
 	const lease = record.leaseKey ? ", lease held" : "";
 	const cost = formatCost(record);
 	const costPart = cost ? `, ${cost}` : "";
-	const header = `- [${record.runId}] ${record.agent} (${harnessLabel(record)}) — "${record.label}" — ${record.status} (${formatRunDuration(record)}${task}${lease}${costPart})`;
+	const header = `- [${record.runId}] ${record.agent} (${harnessLabel(record)}) — "${record.label}" — ${record.status} (${formatRunDuration(record)}${task}${lease}${costPart}${origin})`;
 	if (record.status === "failed" && record.failureReason) {
 		return `${header}\n  failed: ${record.failureReason}`;
 	}
@@ -136,7 +138,9 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 		name: "subagent_list",
 		label: "subagent_list",
 		description:
-			"Snapshot of this channel's delegation runs. Completion wakes this channel; inspect when a decision needs current status, not in a polling loop.",
+			"Snapshot of this dot's delegation runs, shared by every channel bound to it. A run's completion wakes the " +
+			'channel that started it (a run from another channel is marked "started in <channel>"); inspect when a ' +
+			"decision needs current status, not in a polling loop.",
 		parameters: subagentListSchema,
 		execute: async () => {
 			// Spec 042 D9: this used to return every run on the channel, unbounded, in both the
@@ -150,7 +154,10 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 				.sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
 			const shownTerminal = terminal.slice(0, Math.max(0, LIST_CAP - running.length));
 			const runs = [...running, ...shownTerminal];
-			const lines = runs.length === 0 ? ["No delegation runs."] : runs.map(formatRunLine);
+			const lines =
+				runs.length === 0
+					? ["No delegation runs."]
+					: runs.map((record) => formatRunLine(record, options.channelId));
 			if (runs.length < allRuns.length) {
 				lines.push(
 					`… showing ${runs.length} of ${allRuns.length} runs (all running + most recently finished). Ask about a specific runId if you need an older one not shown here.`,
@@ -178,11 +185,11 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			const resolution = manager.resolveRef(runId);
 			if (resolution.kind === "ambiguous") {
 				throw new RecoverableToolError(
-					`"${runId}" matches multiple runs on this channel: ${resolution.candidates.map((candidate) => candidate.runId).join(", ")}. Use the full runId.`,
+					`"${runId}" matches multiple runs in this dot: ${resolution.candidates.map((candidate) => candidate.runId).join(", ")}. Use the full runId.`,
 				);
 			}
 			if (resolution.kind === "not_found") {
-				throw new RecoverableToolError(`Run "${runId}" was not found on this channel.`);
+				throw new RecoverableToolError(`Run "${runId}" was not found in this dot.`);
 			}
 			const resolvedRunId = resolution.record.runId;
 

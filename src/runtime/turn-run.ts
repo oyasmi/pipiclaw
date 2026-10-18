@@ -20,6 +20,7 @@ import {
 import { createDingTalkContext } from "../dingtalk/delivery.js";
 import type { DingTalkBotPort } from "../dingtalk/handler.js";
 import { formatUnavailableDotReply, formatUnboundChannelReply } from "../dot/commands.js";
+import { getDotDir } from "../dot/paths.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -32,7 +33,7 @@ import { relativeImagePaths } from "./inbound-images.js";
 import { parseDriverTaskId } from "./task-driver.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { claimVerifiedWake } from "./task-wake.js";
-import { isCoalescableWake, MAX_COALESCED_WAKES, mergeCompletionWakes } from "./wake-coalescing.js";
+import { canAbsorbWake, isCoalescableWake, MAX_COALESCED_WAKES, mergeCompletionWakes } from "./wake-coalescing.js";
 
 /**
  * The `runRuntimeCommand` names usable on the idle-turn path — every `BUILT_IN_COMMANDS` entry
@@ -213,8 +214,15 @@ export function createEventTurnRunner(
 		const structuredWakeFinalized = event.internalWake === undefined;
 		let absorbedDispatchIds: string[] = [];
 		if (durable && event.dispatchId && isCoalescableWake(event)) {
+			const primary = event;
 			const absorbed = await durable
-				.absorbPending(event.channelId, event.dispatchId, isCoalescableWake, MAX_COALESCED_WAKES - 1, stopEpoch)
+				.absorbPending(
+					event.channelId,
+					event.dispatchId,
+					(candidate) => canAbsorbWake(primary, candidate),
+					MAX_COALESCED_WAKES - 1,
+					stopEpoch,
+				)
 				.catch((error: unknown) => {
 					log.logWarn("dispatch.wake.absorb_failed", "Wake coalescing failed", {
 						channelId: event.channelId,
@@ -421,6 +429,28 @@ export function createEventTurnRunner(
 		getTaskDriver().nudge?.();
 	};
 
+	/**
+	 * A task-bound wake dropped at admission because its channel left the wake's dot while it was
+	 * queued. No turn runs, but the business side settles exactly as when the producer suppresses
+	 * the wake itself: the owner verifies and claims it and the task's `work` ticket is redeemed, so
+	 * the task resumes as soon as its channel is bound back instead of waiting out the backstop.
+	 */
+	const settleDroppedTaskWake = async (event: ChannelEvent): Promise<void> => {
+		const wake = event.internalWake;
+		if (!wake || !event.dot) return;
+		try {
+			const owner = wake.kind === "job" ? getJobs().get(event.dot) : getRuns().get(event.dot);
+			const claimed = await claimVerifiedWake(event, getDotDir(options.paths.workspaceDir, event.dot), owner);
+			await claimed?.finish();
+		} catch (error) {
+			log.logWarn("dispatch.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
+				channelId: event.channelId,
+				reason: errorMessage(error),
+				fields: { dispatchId: event.dispatchId, taskId: wake.taskId },
+			});
+		}
+	};
+
 	/** Release a turn `reserveEvent` began for an event that admission then refused. */
 	const releaseReservation = (event: ChannelEvent): void => {
 		if (!deps.reservedTurns.delete(event)) return;
@@ -490,6 +520,7 @@ export function createEventTurnRunner(
 					},
 				});
 				releaseReservation(inboundEvent);
+				await settleDroppedTaskWake(inboundEvent);
 				await getDurableDispatch()?.markCompleted(inboundEvent.dispatchId);
 				return;
 			}

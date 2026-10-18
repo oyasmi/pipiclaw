@@ -243,7 +243,7 @@ describe("session search", () => {
 		expect(result.results).toEqual([]);
 	});
 
-	it("caps documents at maxDocumentsTotal and keeps newest", async () => {
+	it("caps documents at maxDocumentsTotal, keeps the newest, and leaves no conversation out", async () => {
 		const workspaceDir = createWorkspace();
 		const dotDir = join(workspaceDir, "dm_123");
 		mkdirSync(dotDir, { recursive: true });
@@ -254,13 +254,20 @@ describe("session search", () => {
 			isBot: false,
 		}));
 		writeJsonl(join(conv(dotDir), "log.jsonl"), entries);
+		// Spec 058, D12: a quiet channel sorted after a busy one is still searched — the budget used
+		// to run out, in directory order, before it was read.
+		writeJsonl(join(conv(dotDir, "group-1"), "log.jsonl"), [
+			{ date: new Date().toISOString(), userName: "Bob", text: "the group's only note", isBot: false },
+		]);
 
 		const docs = await buildSessionCorpus({ dotDir, maxFiles: 6, maxDocumentsTotal: 50 });
 
-		expect(docs.length).toBeLessThanOrEqual(50);
-		// Should keep newest (tail) entries
-		const lastDoc = docs[docs.length - 1];
-		expect(lastDoc?.text).toContain("message number 199");
+		expect(docs.length).toBe(50);
+		expect(docs.filter((doc) => doc.conversation === "group-1").map((doc) => doc.text)).toEqual([
+			"[Bob] the group's only note",
+		]);
+		// The busy channel keeps its newest (tail) entries.
+		expect(docs.filter((doc) => doc.conversation === "dm-1").at(-1)?.text).toContain("message number 199");
 	});
 
 	// batch 2.5: a keyword deep inside a long message must stay findable — the old code clipped each

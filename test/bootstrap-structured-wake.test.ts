@@ -334,6 +334,26 @@ describe("runtime structured wake delivery", () => {
 		}
 	});
 
+	it("still redeems the task's work ticket when the channel left the wake's dot while it was queued", async () => {
+		// Failure caught (spec 058, D8): the producer redeems the ticket when it suppresses a wake
+		// itself, but a wake that was already queued when the channel rebound was only dropped — the
+		// task stayed parked on finished work until its backstop. No turn may run in the new dot.
+		// Mutation check (run: goes red): drop `settleDroppedTaskWake` from the mismatch branch.
+		for (const kind of ["job", "subagent"] as const) {
+			const harness = await createHarness(`rebound_${kind}`);
+			const taskId = `T-rebound-${kind}`;
+			const dotDir = await waitingTask(harness.dotDir, taskId);
+			const wake = await createWake(harness, kind, taskId, dotDir);
+			await createDot(harness.runtimePaths.workspaceDir, "lab", new Date());
+			await expect(harness.runtime.dots.bind(harness.channelId, "lab")).resolves.toMatchObject({ kind: "bound" });
+
+			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
+			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();
+			expect((await readStoredTask(dotDir, taskId))?.fields.state, kind).toBe("open");
+			await harness.runtime.shutdown();
+		}
+	});
+
 	it("keeps both awaited completions and background checks free of progress cards", async () => {
 		const harness = await createHarness("presentation");
 		const awaited: DingTalkEvent = {

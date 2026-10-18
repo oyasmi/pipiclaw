@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildDotList } from "../src/dot/commands.js";
 import { getBindingsPath, getDotDir, getDotLockPath, isDotName } from "../src/dot/paths.js";
 import { allocateConversation, createDot, listDots, loadBindings } from "../src/dot/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -80,7 +81,7 @@ describe("dot registry", () => {
 		await expect(loadBindings(workspace)).rejects.toThrow(/version/);
 	});
 
-	it("marks a dot whose dot.json names another directory as invalid", async () => {
+	it("marks a dot whose dot.json names another directory as invalid, and lists a bound dot that is gone", async () => {
 		const workspace = makeWorkspace();
 		await createDot(workspace, "news", NOW);
 		const dotDir = join(workspace, "dots", "copy");
@@ -90,9 +91,19 @@ describe("dot registry", () => {
 			JSON.stringify({ version: 1, name: "news", createdAt: NOW.toISOString(), conversations: {} }),
 		);
 		mkdirSync(join(workspace, "dots", "empty"));
-		const byName = Object.fromEntries((await listDots(workspace)).map((dot) => [dot.name, dot.availability]));
+		const dots = await listDots(workspace);
+		const byName = Object.fromEntries(dots.map((dot) => [dot.name, dot.availability]));
 		// Failure caught: a copied directory answering to the original's name would let two dots share
 		// one identity in bindings and logs.
 		expect(byName).toEqual({ copy: "invalid", empty: "missing", news: "available" });
+
+		// D4: a channel bound to a dot whose directory was moved away still finds its row in `/dot`.
+		const rows = buildDotList(dots, { dm_1: { dot: "gone", boundAt: NOW.toISOString() } }, "gone", (id) => id);
+		expect(rows.find((row) => row.name === "gone")).toEqual({
+			name: "gone",
+			availability: "missing",
+			current: true,
+			channels: [{ channelId: "dm_1", label: "dm_1" }],
+		});
 	});
 });

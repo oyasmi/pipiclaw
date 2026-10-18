@@ -19,6 +19,8 @@ export interface JobSnapshot {
 	/** The task this job's completion wake belongs to, if any — lets a caller verify that a
 	 *  `[JOB:<id>] ... belongs to task <taskId>.` wake actually names the job it claims to (T9). */
 	taskId?: string;
+	/** The channel that started the job, where its completion wake goes; jobs are shared per dot. */
+	channelId?: string;
 }
 
 /** What should happen when the job finishes. */
@@ -98,5 +100,6 @@ export function toSnapshot(record: JobRecord): JobSnapshot {
 		exitCode: record.exitCode,
 		timeoutSeconds: record.timeoutSeconds,
 		taskId: record.contract.taskId,
+		channelId: record.channelId,
 	};
 }

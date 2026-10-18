@@ -81,6 +81,8 @@ export class EventsWatcher {
 	private startTime: number;
 	private watcher: FSWatcher | null = null;
 	private started = false;
+	/** Set once by `stop()` and never cleared: in-flight loads check it before scheduling anything. */
+	private stopped = false;
 	private knownFiles: Set<string> = new Set();
 	private readonly historyAppender?: JsonlAppender;
 
@@ -122,6 +124,7 @@ export class EventsWatcher {
 
 	stop(): void {
 		this.started = false;
+		this.stopped = true;
 		if (this.watcher) {
 			this.watcher.close();
 			this.watcher = null;
@@ -332,6 +335,11 @@ export class EventsWatcher {
 			}
 		}
 
+		// `stop()` cannot cancel a load already past its `readFile`; a stopped watcher is never started
+		// again (a reactivated dot gets a new one), so a load finishing late must not schedule a timer
+		// or cron that nothing would ever stop.
+		if (this.stopped) return;
+
 		if (!event) {
 			log.logWarn("events.file.parse_failed", "Event file parse failed", {
 				reason: lastError?.message,
@@ -506,6 +514,8 @@ export class EventsWatcher {
 		deleteAfter: boolean = true,
 		occurrence: Date = new Date(),
 	): Promise<void> {
+		// A one-shot recovered by a load that `stop()` could not cancel: the dot went dormant meanwhile.
+		if (this.stopped) return;
 		// Spec 058, D8: an occurrence whose delivery channel is no longer bound to this dot is
 		// skipped — before the pre-action gate, which would otherwise run a command for nothing.
 		if (!this.options.isBound(event.channelId)) {

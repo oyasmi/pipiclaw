@@ -397,6 +397,23 @@ describe("EventsWatcher", () => {
 		expect(existsSync(join(dir, "broken.json.error.txt"))).toBe(true);
 	});
 
+	it("schedules nothing from a load that finishes after stop (spec 058 dormancy)", async () => {
+		// Failure caught: a dot going dormant while a periodic file is mid-load leaves an orphan cron
+		// on the discarded watcher; on reactivation it fires alongside the new watcher's cron.
+		// Mutation check (run: goes red): drop the `stopped` check in `handleFile`.
+		const dir = createTempDir();
+		writeFileSync(
+			join(dir, "digest.json"),
+			JSON.stringify({ type: "periodic", channelId: "dm_1", text: "digest", schedule: "0 9 * * *" }),
+		);
+		const watcher = createWatcher(dir);
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+		const loading = privateApi.handleFile("digest.json"); // suspended in its readFile
+		watcher.stop();
+		await loading;
+		expect(privateApi.crons.size).toBe(0);
+	});
+
 	it("enqueues synthetic events and deletes handled files", async () => {
 		const dir = createTempDir();
 		const historyPath = join(createTempDir(), "history.jsonl");

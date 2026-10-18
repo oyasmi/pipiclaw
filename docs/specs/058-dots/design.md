@@ -7,7 +7,7 @@
 | 触发 | 用户希望把调校好的助手共享到多个钉钉群或私聊里使用，对外是同一个 agent；现在 channel 与记忆、任务、文件一一绑死，做不到 |
 | 前置 | 043 项目范围（本 spec 将其**整体删除**）、050 记忆 v2、051/052 任务、053 对外文案、054 分层与 `npm run arch` |
 | 关联实现 | 新模块 `src/dot/`；`src/runtime/` 新增 `dot-runtime.ts`；`channel/ agent/ memory/ tasks/ events/ jobs/ subagents/ tools/ dingtalk/ tui/ usage/ security/ commands/` 全部改用 dot 寻址；新脚本 `scripts/migrate-to-dots.mjs`；`AGENTS.md`、`CLAUDE.md`、`docs/` 顶层手册与 playbooks |
-| 明确不含 | 权限控制（`admins` 留待后续）；dot 改名、删除、合并；每个 dot 独立的 SOUL / skills / 模型；跨频道同步最近上下文；TUI 写入绑定；多进程同时写同一个 dot |
+| 明确不含 | 权限控制（`admins` 留待后续）；dot 改名、删除、合并；每个 dot 独立的 SOUL / skills / 模型；跨频道同步最近上下文；TUI 写入绑定 |
 
 ## 摘要
 
@@ -226,9 +226,9 @@
 所有步骤都在本频道的队列项里执行。空闲时的运行时命令本来就经过频道队列，所以后面排队的消息会在绑定完成之后才处理。
 
 1. **校验**：名字合法；dot 存在且可用；本频道不忙。如果本频道已经绑定在这个 dot 上，回复"本频道已经绑定在 dot `x` 上。"，不做任何事。
-2. **激活目标 dot**（D6）：启动它的事件 watcher，把它加入后台扫描。目标 dot 此时是否正被 TUI 打开，都不影响绑定。
-3. **分配会话区**：本频道在目标 dot 里第一次出现时，分配会话区并写 `dot.json`。这一步是幂等的，即使后续步骤失败也无害。
-4. **写绑定表**：绑定表一写入，绑定就算成功。
+2. **分配会话区**：本频道在目标 dot 里第一次出现时，分配会话区并写 `dot.json`。这一步是幂等的，即使后续步骤失败也无害。
+3. **写绑定表**：绑定表一写入，绑定就算成功。
+4. **激活目标 dot**（D6）：启动它的事件 watcher，把它加入后台扫描。目标 dot 此时是否正被 TUI 打开，都不影响绑定。激活放在提交之后：watcher 启动扫描会补发本频道过期的一次性事件，提交前扫描会把它当作 `channel_not_bound` 跳过（审查 R3）。激活失败只记日志，不影响已经提交的绑定。
 5. **移出并释放旧 runner**：先把它移出 runner 缓存，再 `await runner.dispose()`。`dispose` 里的 `flushForShutdown` 会对旧 dot 做最后一次 reflect，让这段对话的积累落进旧 dot 的记忆。dispose 失败只记日志，不影响已经提交的绑定。
 6. **处理旧 dot**：
    - 旧 dot 如果已经没有任何绑定，交给 `DotRuntime` 安排休眠（D6）。
@@ -569,6 +569,7 @@ node scripts/migrate-to-dots.mjs [--home <dir>] --verify   # 只读校验迁移�
 - `<home>/workspace/` 存在，`workspace/dots/` 不存在（已经迁移过的不能再迁一次）。
 - `state/task-migration-v5.done` 存在。v3→v5 的任务迁移必须先完成（D21 会删掉那段代码）。
 - 没有在运行的 pipiclaw 进程：扫描 `/proc/*/cmdline`，排除脚本自身。
+- 没有仍在运行的后台 job 或外部委派：`state/jobs/` 与 `state/subagent-runs/` 中 `status: running` 且 `pid` 仍存活的记录。它们在 daemon 停止后继续运行，并把退出标记和输出写到旧布局的绝对路径下（审查 R6）。等它们结束或先取消，再迁移。
 - **每个旧频道目录都已被 `--map` 或 `--drop` 指定**。旧频道目录指 workspace 根下名字以 `dm_`、`group_`、`tui_` 开头的目录。有遗漏就列出来，拒绝执行，不提供"其余自动处理"这种选项。
 - dot 名合法、互不重复。每个旧目录最多映射到一个 dot（脚本不合并两份记忆，要共享就迁移后用 `/dot bind`）。
 - **每个旧目录都能还原出真实的频道 id**，按以下优先级：
@@ -589,7 +590,7 @@ node scripts/migrate-to-dots.mjs [--home <dir>] --verify   # 只读校验迁移�
    - 写 `dot.json` 登记会话区；绑定表增加"原频道 → dot"。
 3. 对每个 `--drop`：整个目录移到 `workspace/.legacy/<目录名>/`。
 4. **事件**：逐个读 `workspace/events/*.json`（连同对应的 `.error.txt`）的 `channelId`。频道对应某个已迁移的 dot，就移到 `dots/<dot>/events/`；对应的是被 drop 的频道或未知频道，就移到 `workspace/.legacy/events/`。最后删除空的 `workspace/events/`。
-5. **任务**：在每个 dot 的 `tasks/*.md`（不含 `archive/`）的 frontmatter 里，按 `FIELD_ORDER` 的位置插入一行 `channel: <原频道 id>`。来自 `tui_*` 的 dot 写 `tui`，这些任务在 TUI 打开之前一直挂起。
+5. **任务**：在每个 dot 的 `tasks/*.md`（不含 `archive/`）的 frontmatter 里，按 `FIELD_ORDER` 的位置插入一行 `channel: <原频道 id>`。来自 `tui_*` 的 dot 写 `tui`。`tui` 永远不会出现在绑定表里，TUI 也不运行任务驱动器（D13/D18），所以这些任务即使 TUI 打开也不会自动推进，需要在钉钉里换一个已绑定的投递频道。
 6. **状态**：
    - `state/memory/<旧目录名>.json` 移到 `state/memory/<dot>/<kind>-1.json`；
    - `state/subagent-runs/<旧目录名>/` 移到 `state/subagent-runs/<dot>/`；
@@ -679,7 +680,7 @@ daemon 启动时，在任何服务启动之前做旧布局检测。发现以下�
 - **dot 的改名、删除、合并、复制**。v1 要改名只能停掉 daemon 后手工改，文档不承诺这个操作。
 - **每个 dot 独立的 SOUL、AGENTS、skills、sub-agents、模型配置**。
 - **跨频道同步最近上下文**：其他频道刚聊了什么，靠记忆、日记和 `session_search` 获取。
-- **TUI 写入绑定、TUI 与 daemon 同时服务同一个 dot**。
+- **TUI 写入绑定**。（TUI 与 daemon 同时使用同一个 dot 是允许的，见 D6/D18 与 INV-6。）
 - **一个频道同时绑定多个 dot**、按话题分流到不同 dot。
 - **从 `dot.json` 里配置默认工作目录**（D9 留的口子）。
 
@@ -811,7 +812,7 @@ e2e：56 → 55（−1）：第二个 A19（"`/project set` 在忙碌时被拒�
 
 - `/dot` 进入 catalog（`availableWhileBusy`，`bind` 在忙碌时由 `DotRuntime.bind` 自己拒绝）。router 的上下文改为联合类型 `ReportCommandContext | UnboundCommandContext`：未绑定频道只带 `dotPort` 和拒绝文案，`/dot` 在两种上下文里都能执行，其余命令在未绑定时直接返回拒绝文案；类型上不需要 `!`。
 - 空闲时的 `/dot` 在 `runEventTurn` 里于准入之前执行：不归档、不建 runner、`reserveEvent` 不为它占回合。这样 `/dot bind` 看到的频道是空闲的，排在它后面的消息按新绑定解析。忙碌时由传输层的运行时命令分支执行（与其他报告命令一致）。
-- `DotRuntime.bind` 按 D5 七步实现，整个过程在一个绑定写队列里串行（不同频道的 bind 也是对同一个 `bindings.json` 的读改写）。绑定表写入失败时抛错，内存中的绑定、runner 都不变，为这次 bind 而激活的目标 dot 重新休眠。第 5 步复用 bootstrap 抽出的 `releaseCachedRunner`（先移出缓存，再 `dispose`，LRU 淘汰也改用它），失败只记日志。挂起计数只读旧 dot 的 `tasks/` 与 `events/`。
+- `DotRuntime.bind` 按 D5 七步实现，整个过程在一个绑定写队列里串行（不同频道的 bind 也是对同一个 `bindings.json` 的读改写）。绑定表写入失败时抛错，内存中的绑定、runner 都不变（审查 R3 之后目标 dot 在提交后才激活，失败时无需回退激活）。第 5 步复用 bootstrap 抽出的 `releaseCachedRunner`（先移出缓存，再 `dispose`，LRU 淘汰也改用它），失败只记日志。挂起计数只读旧 dot 的 `tasks/` 与 `events/`。
 - 绑定变化时 `channelIndex.noteBindingChanged()` 立即重写 CHANNELS.md。
 - `/dot list` 截断提示给出 `CHANNELS.md` 的绝对路径（由端口提供 `channelIndexPath`）：053 的形状规则要求截断提示交出命令或绝对路径，相对路径会被 `user-copy-shape` 判为不合格。
 - 与 plan 的出入：D5 第 3 步之后没有再做一次中断回合修复。目标 dot 中该频道的会话区只在绑定于该 dot 时被写入，崩溃后重启时它仍绑定在那里，激活时已经修复过。
@@ -871,6 +872,36 @@ TUI 核心已在 P2 完成。本阶段：
   - 修复后全量重跑 `2026-10-18T01-36-52-304Z-2mqz32`：11/12，4 个任务类用例全部通过。唯一失败的 M-extract-01 中，reflect 正常运行，但模型只写了日记、没有写 durable memory（`memory-review.jsonl` 中只有 `journal append`）。同一构建上单独重跑 3 次 `2026-10-18T01-43-31-620Z-5jig9l`，3/3 通过；它在第一轮也通过了。归因：模型判断的波动，不是提示词回归。最终构建上该用例 3/4。
   - 成本：三次运行的 agent 记录小计分别为 $0.0538、$0.0809（另有 1 条成本未知）、以及最后一次单例重跑。
   - 未运行：core/candidate profile 与多试验置信区间。所以这些结果只能说明没有明显故障，不能作为发布质量的结论。
+
+### 审查处置（2026-10-18）
+
+处理 `docs/reviews/2026-10-18-spec-058-review.md`。11 项问题逐条对照代码核实，均属实；修复都选择了能关闭问题的最小改动，没有照搬报告中较重的方案。
+
+| 项 | 处置 | 改动 |
+|---|---|---|
+| R1 合并唤醒绕过 dot 准入 | 修复 | `canAbsorbWake`：只有与主唤醒同 dot 的候选可以并入同一回合；其余候选留在队列里，由各自的准入丢弃 |
+| R2 陈旧锁回收破坏互斥 | 修复 | 删除 rename-旁路-放回的做法，改为 `<lock>.reclaim` 独占守卫：守卫内锁文件仍是被判定为陈旧的 token 时才删除。超过 10s 的守卫视为回收者崩溃后遗留，直接清除。没有引入内核锁或额外的进程协调协议 |
+| R3 绑定提交前启动 watcher | 修复 | D5 改为先分配会话区、提交绑定，再激活目标 dot；绑定写失败时也不再需要回退激活 |
+| R4 停止后在途加载注册 cron | 修复 | watcher 增加只置位一次的 `stopped` 标志：`handleFile` 读完文件后、`execute` 入口处检查。DotRuntime 每次激活都会新建 watcher，这个标志就起到世代号的作用，不需要 drain |
+| R5 迁移漏改 wake claim | 修复 | job/run 记录的 `wakeClaimDispatchId` 与 outbox 的 `internalWake.dispatchId` 都按 `migrateDispatchId` 改写 |
+| R6 迁移时仍有存活的后台进程 | 修复 | 前置检查拒绝 `running` 且 pid 存活的 job/run（见 D20）。不杀进程，也不代替用户取消 |
+| R7 准入丢弃不兑现 work 票据 | 修复 | 不匹配 dot 的分支对 `internalWake` 走所属 dot 的 owner 校验（`claimVerifiedWake`），然后 `finish`，与生产端 `suppressWake` 的效果一致；不创建 runner，也不调模型 |
+| R8 元数据写失败后不再重试 | 修复 | 写失败时置 `unsaved`，之后相同值的 `set` 也会重写一次。损坏文件的恢复策略不在本次范围 |
+| R9 检索预算按目录顺序截断 | 修复 | 每个会话区都会读取，每个最多保留最近 `maxDocuments` 条，再用 `shareBudget` 按小会话优先公平分配，小会话用不完的份额让给大会话 |
+| R10 `/dot` 不列缺失的已绑定 dot | 修复 | `buildDotList` 合并磁盘上的 dot 名与绑定表引用的 dot 名，缺失的标为 `missing` |
+| R11 工具文案仍是频道级 | 修复 | `subagent_list`/`job` 的描述改为 dot 级，说明唤醒回到发起频道；列表行对其他频道发起的工作标注 `started in <channel>`（`JobSnapshot` 增加 `channelId`） |
+| A 收尾与投递分离 | 由 R7 覆盖 | 不另建状态/副作用表 |
+| B 共享记忆的主体归因 | 部分 | reflect 提示改成 dot 级，并要求 `user` 类事实写明归属的人。结构化 provenance 不做 |
+| C 同 dot 多频道调度吞吐 | 修复 | TaskDriver 每轮对每个投递频道各派发一步（仍受全局预算限制）；同一频道的任务仍然轮转 |
+| D 缩短全局绑定事务 | 不做 | `/dot bind` 是低频操作，慢 reflect 阻塞换绑可以接受 |
+| E TUI 后台能力提示 | 不做 | 已在 D20 与 TUI 文档中说明；没有新的运行时提示 |
+| F `projectAccess` 退役 | 不做 | 本机没有这个配置；按用户要求不在权限迁移上加复杂度 |
+| G 运行中热修复契约 | 不做 | 修改 dot 目录或记录前须停 daemon，维持现状 |
+| H spec 过期表述 | 修复 | §1「明确不含」、§6 非目标、D20 中 TUI 任务的描述已与 D6/D18 对齐 |
+
+用例数：+2（914 → 916）。R4 的停止后加载、R7 换绑后兑现票据是新的故障模式，各新增 1 例；其余都扩展了现有用例（wake-coalescing、file-lock、dot-runtime、migrate-to-dots、dingtalk 元数据、session-search、dot-registry、task-driver）。逐项做了 mutation check：撤掉修复或换回旧实现后，对应用例变红。R2 的三进程竞态需要系统调用级的时序控制才能复现；在进程内并发下，新旧实现都测不出差异，所以没有加一个对旧代码也不会变红的压力测试，只扩展用例覆盖新引入的「遗留守卫」恢复路径。
+
+闸门：`npm run check` 134 个文件 916 例，`npm run test:e2e` 24 个文件 59 例，`npm run test:evals` 69 例。
 
 ### 验收清单（2026-10-18）
 

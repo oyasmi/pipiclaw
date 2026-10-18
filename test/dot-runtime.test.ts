@@ -11,7 +11,13 @@ import { bindTestChannel, useTempDirs } from "./helpers/fixtures.js";
 const tempDir = useTempDirs("pipiclaw-dot-runtime-");
 
 function runtimeFor(workspaceDir: string) {
-	const watchers: Array<{ dot: string; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }> = [];
+	const watchers: Array<{
+		dot: string;
+		start: ReturnType<typeof vi.fn>;
+		stop: ReturnType<typeof vi.fn>;
+		/** The dot each channel was bound to when this watcher started (and ran its recovery scan). */
+		bindingsAtStart?: Record<string, string>;
+	}> = [];
 	const recover = vi.fn(async () => {});
 	const send = vi.fn(async () => true);
 	const busy = new Set<string>();
@@ -21,7 +27,15 @@ function runtimeFor(workspaceDir: string) {
 		workspaceDir,
 		recover,
 		createWatcher: ({ dot }) => {
-			const watcher = { dot, start: vi.fn(), stop: vi.fn() };
+			const watcher: (typeof watchers)[number] = {
+				dot,
+				start: vi.fn(() => {
+					watcher.bindingsAtStart = Object.fromEntries(
+						Object.entries(runtime.bindingTable()).map(([channelId, binding]) => [channelId, binding.dot]),
+					);
+				}),
+				stop: vi.fn(),
+			};
 			watchers.push(watcher);
 			return watcher;
 		},
@@ -76,7 +90,8 @@ describe("DotRuntime.bind (spec 058, D5)", () => {
 	it("refuses without side effects, then rebinds: old runner released, old dot suspended or dormant", async () => {
 		// Failure caught: a refused bind that still writes bindings or drops the runner; a release
 		// failure that rolls back a committed binding; an old dot left active with no channel, or
-		// its suspended work not reported.
+		// its suspended work not reported; a target whose watcher starts (and skips this channel's
+		// overdue one-shots as unbound) before the binding is committed.
 		const workspaceDir = tempDir();
 		await bindTestChannel(workspaceDir, "dm_1", "news");
 		await bindTestChannel(workspaceDir, "dm_2", "news");
@@ -93,9 +108,10 @@ describe("DotRuntime.bind (spec 058, D5)", () => {
 			join(newsDir, "events", "digest.json"),
 			JSON.stringify({ type: "periodic", channelId: "dm_1", schedule: "0 9 * * *", text: "digest" }),
 		);
-		const { runtime, busy, releaseRunner, onBindingChanged } = runtimeFor(workspaceDir);
+		const { runtime, watchers, busy, releaseRunner, onBindingChanged } = runtimeFor(workspaceDir);
 		await runtime.load();
 		await runtime.activateBound();
+		runtime.startServices();
 		const bindingsBefore = readFileSync(getBindingsPath(workspaceDir), "utf8");
 
 		busy.add("dm_1");
@@ -119,6 +135,7 @@ describe("DotRuntime.bind (spec 058, D5)", () => {
 		expect(releaseRunner).toHaveBeenCalledWith("dm_1");
 		expect(onBindingChanged).toHaveBeenCalledWith("dm_1");
 		expect(runtime.activeDots().map((target) => target.dot)).toEqual(["lab", "news"]);
+		expect(watchers.find((watcher) => watcher.dot === "lab")?.bindingsAtStart?.dm_1).toBe("lab");
 
 		await expect(runtime.bind("dm_2", "lab")).resolves.toMatchObject({ previousDotDormant: true });
 		expect(runtime.activeDots().map((target) => target.dot)).toEqual(["lab"]);

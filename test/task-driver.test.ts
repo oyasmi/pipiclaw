@@ -80,17 +80,20 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:open]");
 	});
 
-	it("delivers a step to the task's own channel, a base64 group id included", async () => {
+	it("delivers a step to the task's own channel, a base64 group id included, one step per channel per pass", async () => {
 		// Spec 058, D13: the delivery channel is read from the task, never derived from a path —
-		// a group id with `/` and `=` must arrive intact, stamped with the task's dot.
+		// a group id with `/` and `=` must arrive intact, stamped with the task's dot. A dot's
+		// channels run independently: one channel's ready task must not wait behind another
+		// channel's step, while two tasks of one channel still take turns.
 		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
 		bound.add(channelId);
 		await writeTask(channelId, "open", taskDoc({ state: "open" }));
+		await writeTask("dm_a", "dm-first", taskDoc({ state: "open" }));
+		await writeTask("dm_a", "dm-second", taskDoc({ state: "open" }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
-		expect(dispatch).toHaveBeenCalledOnce();
-		expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
-			channelId,
+		expect(dispatch.mock.calls.map(([event]) => event.channelId).sort()).toEqual(["dm_a", channelId].sort());
+		expect(dispatch.mock.calls.find(([event]) => event.channelId === channelId)?.[0]).toMatchObject({
 			dot: "news",
 			type: "group",
 			conversationType: "2",

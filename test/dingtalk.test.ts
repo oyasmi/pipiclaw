@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent, DingTalkHandler } from "../src/dingtalk/handler.js";
@@ -738,7 +738,7 @@ describe("dingtalk", () => {
 		});
 	});
 
-	it("persists conversation metadata, reloads it after a restart, writes only on change, and reclaims idle queues", () => {
+	it("persists conversation metadata, reloads it after a restart, writes only on change or after a failed write, and reclaims idle queues", () => {
 		const { bot, stateDir } = createBot();
 		const privateApi = getPrivateApi(bot);
 		const meta = { conversationId: "conv_1", conversationType: "1", senderId: "staff_1" };
@@ -752,6 +752,16 @@ describe("dingtalk", () => {
 		writeFileSync(metadataPath, JSON.stringify({ dm_staff_1: meta, marker: meta }));
 		privateApi.conversations.set("dm_staff_1", meta);
 		expect(JSON.parse(readFileSync(metadataPath, "utf-8")).marker).toEqual(meta);
+
+		// …but after a failed write, the same value is written again once the disk recovers, or the
+		// channel would route only until the next restart.
+		const dm2 = { ...meta, senderId: "staff_2" };
+		rmSync(metadataPath);
+		mkdirSync(join(metadataPath, "blocker"), { recursive: true });
+		privateApi.conversations.set("dm_staff_2", dm2);
+		rmSync(metadataPath, { recursive: true });
+		privateApi.conversations.set("dm_staff_2", dm2);
+		expect(new ConversationMetaStore({ stateDir }, () => {}).get("dm_staff_2")).toEqual(dm2);
 
 		privateApi.getQueue("dm_staff_1");
 		privateApi.cleanupIdleChannelCaches(Date.now() + 2 * 60 * 60 * 1000);

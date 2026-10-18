@@ -22,6 +22,16 @@ export function isCoalescableWake(event: ChannelEvent): boolean {
 	return !event.internalWake && typeof event.dispatchId === "string" && COMPLETION_WAKE_ID.test(event.dispatchId);
 }
 
+/**
+ * Whether `candidate` may ride along in `primary`'s turn. The primary already passed admission's
+ * dot check (spec 058, D7); a candidate is folded in only when it was produced for that same dot,
+ * so a wake left over from before a rebind (or from before the migration, with no dot) never
+ * reaches the new dot's model. It stays queued and its own admission drops it.
+ */
+export function canAbsorbWake(primary: ChannelEvent, candidate: ChannelEvent): boolean {
+	return isCoalescableWake(candidate) && candidate.dot !== undefined && candidate.dot === primary.dot;
+}
+
 /** The primary wake keeps its own text (and `[KIND:id]` tag) first; the others follow it. */
 export function mergeCompletionWakes(primary: ChannelEvent, others: ChannelEvent[]): ChannelEvent {
 	if (others.length === 0) return primary;

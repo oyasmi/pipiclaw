@@ -45,7 +45,8 @@ function probationDeadline(today: string): string {
 }
 
 const REFLECT_SYSTEM_PROMPT = `You are Pipiclaw's memory reflection worker. You run in the background, after a chunk of
-conversation, to keep this channel's durable memory and daily journal accurate.
+conversation, to keep this dot's durable memory and daily journal accurate. A dot's memory is shared by every
+channel bound to it, and different people may talk to it.
 
 Return strict JSON only. Do not wrap in Markdown fences.
 
@@ -65,7 +66,7 @@ Rules:
 ${MEMORY_INPUT_SAFETY_RULES}
 - journal: record what happened, what was decided, what is blocked, what's next — terse, one bullet per item. Skip small talk, tool-output echoes, and anything already recorded today (you can see today's journal below).
 - memory (the "ops" array) is for facts that matter to EVERY future session, not this one's progress:
-  - "user": who the user is — name/handle, language, role expectations, long-term preferences.
+  - "user": who a person is — name/handle, language, role expectations, long-term preferences. Say whose it is (their name or handle): never write one person's preference as if it held for everyone this dot talks to.
   - "feedback": corrections about how to work, and lessons learned from a mistake.
   - "project": stable facts, decisions, and constraints about what you're working on.
   - "reference": pointers — paths, URLs, commands, contacts, ids.
