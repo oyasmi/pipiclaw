@@ -441,22 +441,6 @@ describe("DotJobManager", () => {
 		}
 	});
 
-	// What `/tasks doctor` asks to tell a healthy parked task from a forgotten one.
-	it("names the tasks a running job promises to wake", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new DotJobManager({ dot: "news" }, executor);
-		const delegated = await manager.start("sleep 100", "delegated", 300, { taskId: "deploy" });
-		await manager.start("sleep 100", "unattached", 300);
-		await manager.start("sleep 100", "quiet", 300, { taskId: "muted", notify: false });
-
-		expect(manager.runningTaskIds()).toEqual(new Set(["deploy"]));
-
-		// A finished job no longer promises anything; the task it fed is now on its own.
-		executor.probeResult = "EXIT:0";
-		await manager.poll([delegated.id]);
-		expect(manager.runningTaskIds()).toEqual(new Set());
-	});
-
 	it("poll returns immediately for an already-finished job or an already-aborted signal", async () => {
 		const executor = new FakeJobExecutor();
 		const manager = new DotJobManager({ dot: "news" }, executor);

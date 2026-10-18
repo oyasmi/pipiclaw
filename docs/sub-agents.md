@@ -412,7 +412,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
 - 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但它会取写 lease 且无法保证没动过产物；不得修改被检查的实现或为了通过测试而修代码，PASS 也不能代替你核对真实产物。
 - 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
-- 给外部角色写 `memory: index` 却没意识到这会把频道记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
+- 给外部角色写 `memory: index` 却没意识到这会把 dot 记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
 - 改了外部角色的 `command`/`model`/`shell` 之后还指望 `follow_up` 能续接旧会话——指纹不匹配会被拒绝，需要改派新任务。
 
 ## 该看哪份文档

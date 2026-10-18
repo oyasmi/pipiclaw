@@ -50,14 +50,6 @@ describe("task frontmatter contract (spec 052, §3.3)", () => {
 		expect(parseTaskFrontmatter(`${archived}\n# T\n`).fields.channel).toBe("dm_1");
 	});
 
-	it("reads a v3 file as legacy (not unreadable), and a park on a retired ticket falls back to open", () => {
-		const v3 =
-			'---\nstatus: waiting\nstate: parked\nticket: {"kind":"run","id":"r","by":"2099-01-01T00:00:00+08:00"}\n---\n# T\n';
-		const parsed = parseTaskFrontmatter(v3);
-		expect(parsed).toMatchObject({ legacy: true, readable: true });
-		expect(parsed.fields.state).toBe("open");
-	});
-
 	it("fails open to a live task when the block is missing or corrupt", () => {
 		for (const content of ["# no frontmatter\n", "---\nnot: closed\n"]) {
 			const parsed = parseTaskFrontmatter(content);

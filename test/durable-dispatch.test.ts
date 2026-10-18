@@ -543,7 +543,6 @@ describe("DurableDispatchService", () => {
 				title: "周报",
 				fields: { state: "open" },
 				readable: true,
-				legacy: false,
 				runnable: true,
 				expired: false,
 			},

@@ -476,7 +476,7 @@ export async function createRuntimeContext(
 		taskDriver,
 		getDurableDispatch,
 		memoryMaintenanceScheduler,
-		eventsWatcher: dotRuntime,
+		dotRuntime,
 		runs,
 		jobs,
 		bot,

@@ -2,6 +2,24 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [Unreleased]
+
+### 新增
+
+- `dot.json` 可设置绝对路径 `cwd`：作为该 dot 里 agent 的工作目录（shell、相对路径、委派默认目录）；记忆、任务和事件仍留在 dot 目录。
+- dot 可以有自己的 `SOUL.md` / `AGENTS.md`，存在时整份替换 workspace 的同名文件。
+- 只存在一个 dot 时，`pipiclaw tui` 可省略 `--dot`。
+- `task_list` 返回每个任务的投递频道；每回合的任务清单会标出汇报到其他频道的任务。
+
+### 变更
+
+- 终端拒绝 `task_create` 和 `event_manage create`（终端不运行后台工作），并提示到已绑定的钉钉频道里创建。
+- 记忆索引、事件列表、网页缓存和任务列表的模型可见描述由“频道”改为“dot”。
+
+### 删除
+
+- dot 改造遗留的死代码：v3 任务文件头识别和循环日志的 `note` 记录、无人调用的 run/job `runningTaskIds` 及若干未使用的辅助函数。测试不再把用量记录写进开发者真实的 app home。
+
 ## [0.9.5-beta.1] - 2026-10-18
 
 ### 不兼容变更

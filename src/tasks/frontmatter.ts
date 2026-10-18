@@ -60,8 +60,6 @@ export interface ParsedTaskFrontmatter {
 	fields: TaskFrontmatter;
 	/** false => the block could not be read at all; the task is surfaced rather than skipped. */
 	readable: boolean;
-	/** True when a v3 line (`status`, `control`, `schedule`…) is present — the file is not converted, so it never runs. */
-	legacy: boolean;
 }
 
 const STATES: readonly TaskState[] = ["open", "parked", "done"];
@@ -77,8 +75,6 @@ export function taskStateLabel(state: TaskState): string {
 }
 /** Fixed render order, so a diff of a task file reads the same way every time. */
 const FIELD_ORDER = ["state", "paused", "channel", "origin", "ticket", "usage", "budget"] as const;
-/** v3 frontmatter keys; their presence means the one-time conversion has not run on this file. */
-const LEGACY_KEYS = new Set(["status", "enabled", "control", "wake", "schedule"]);
 
 function parseJsonObject(raw: string): Record<string, unknown> | undefined {
 	try {
@@ -130,12 +126,11 @@ function parseBudget(raw: string): Partial<TaskBudget> | undefined {
  * ledger.
  */
 export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
-	if (!content.startsWith("---")) return { fields: { state: "open" }, readable: false, legacy: false };
+	if (!content.startsWith("---")) return { fields: { state: "open" }, readable: false };
 	const end = content.indexOf("\n---", 3);
-	if (end === -1) return { fields: { state: "open" }, readable: false, legacy: false };
+	if (end === -1) return { fields: { state: "open" }, readable: false };
 
 	const fields: TaskFrontmatter = { state: "open" };
-	let legacy = false;
 	let sawState = false;
 	for (const line of content.slice(3, end).split("\n")) {
 		const idx = line.indexOf(":");
@@ -174,14 +169,13 @@ export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
 				fields.closedAt = value || undefined;
 				break;
 			default:
-				if (LEGACY_KEYS.has(key)) legacy = true;
 				break;
 		}
 	}
 	if (fields.outcome) fields.state = "done";
 	// A file with no recognizable marker is not frontmatter we understand.
-	const readable = sawState || fields.outcome !== undefined || legacy;
-	return { fields: normalizeTaskFrontmatter(fields), readable, legacy };
+	const readable = sawState || fields.outcome !== undefined;
+	return { fields: normalizeTaskFrontmatter(fields), readable };
 }
 
 /**

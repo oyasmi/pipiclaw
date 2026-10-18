@@ -52,7 +52,7 @@ This file stores stable workspace-level memory.
 
 - It is intended to be managed by a human administrator.
 - It is not automatically rewritten by normal runtime consolidation.
-- Store durable shared background here when it should apply across channels.
+- Store durable shared background here when it should apply across all dots.
 - Keep this file focused on stable facts, policies, and shared context, not transient conversation history.
 
 ## Shared Context

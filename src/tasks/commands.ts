@@ -7,7 +7,6 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
-import { docsUrl } from "../paths.js";
 import { formatSpanZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -235,7 +234,7 @@ async function showTask(options: HandleTasksCommandOptions, idInput: string): Pr
 	const boardLines = board ? ["", "**工作项**", renderTaskBoardForUser(board, id, now)] : [];
 
 	const log = await readTaskLog(dotDir, id, {
-		kinds: ["step", "expired", "close", "note"],
+		kinds: ["step", "expired", "close"],
 		limit: SHOW_LOG_LINES,
 	});
 	const logLines = log.length > 0 ? ["", "**最近记录**", ...log.map(renderTaskLogLineForUser)] : [];
@@ -367,8 +366,8 @@ function issue(problem: string, nextStep: string): string {
  * `/tasks doctor`, deliberately small (spec 051, D11; spec 052, D11).
  *
  * Most of what older doctors looked for cannot be produced any more: the frontmatter normalizer
- * and `resolveTicket` reject those states at write time. What is left is what a *hand edit*, or a
- * conversion that did not run, can still create.
+ * and `resolveTicket` reject those states at write time. What is left is what a *hand edit* can
+ * still create.
  */
 async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	const now = Date.now();
@@ -397,14 +396,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				issue(
 					`\`${entry.id}\` 的投递频道没有绑定到本 dot，已暂停`,
 					"在那个频道里把它绑定回本 dot，或把文件头的 `channel:` 改成本 dot 已绑定的频道",
-				),
-			);
-		}
-		if (entry.legacy) {
-			problems.push(
-				issue(
-					`\`${entry.id}\` 仍含旧版本的字段（status / enabled / control / wake / schedule）`,
-					`保留原件，按 ${docsUrl("events-and-tasks.md")} 的升级步骤处理；不要只删旧字段`,
 				),
 			);
 		}

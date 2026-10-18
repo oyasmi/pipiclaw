@@ -6,7 +6,6 @@ import { formatLocalTime } from "./shared/local-time.js";
 export interface LogContext {
 	channelId: string;
 	userName?: string;
-	channelName?: string;
 }
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

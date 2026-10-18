@@ -94,20 +94,12 @@ export interface TaskCloseRecord {
 	usd: number;
 }
 
-/** Written only by the v3 → v5 conversion, to explain a decision it made about this task. */
-export interface TaskNoteRecord {
-	ts: string;
-	kind: "note";
-	note: string;
-}
-
 export type TaskLogRecord =
 	| TaskStepRecord
 	| TaskDispatchRecord
 	| TaskSettleRecord
 	| TaskExpiredRecord
-	| TaskCloseRecord
-	| TaskNoteRecord;
+	| TaskCloseRecord;
 
 /** Same rotation shape as the channel archive: the log is working history, not an audit trail. */
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
@@ -149,8 +141,7 @@ export type TaskLogInput =
 	| Omit<TaskDispatchRecord, "ts">
 	| Omit<TaskSettleRecord, "ts">
 	| Omit<TaskExpiredRecord, "ts">
-	| Omit<TaskCloseRecord, "ts">
-	| Omit<TaskNoteRecord, "ts">;
+	| Omit<TaskCloseRecord, "ts">;
 
 /**
  * Append one record. `appendStrict` rather than `append`: the loop log is the only durable trace
@@ -167,7 +158,7 @@ export async function appendTaskLog(dotDir: string, id: string, record: TaskLogI
 	await withTaskMutation(dotDir, id, () => appenderFor(taskLogPath(dotDir, id)).appendStrict(withTs));
 }
 
-const RECORD_KINDS: readonly TaskLogRecord["kind"][] = ["step", "dispatch", "settle", "expired", "close", "note"];
+const RECORD_KINDS: readonly TaskLogRecord["kind"][] = ["step", "dispatch", "settle", "expired", "close"];
 
 function toRecord(value: unknown): TaskLogRecord | undefined {
 	if (!isPlainObject(value) || typeof value.ts !== "string") return undefined;
@@ -249,8 +240,6 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 			return `- [${record.ts}] 等待票过期（${record.ticket}）→ ${record.action}`;
 		case "close":
 			return `- [${record.ts}] ${record.outcome === "done" ? "完成" : "取消"}：${record.note}`;
-		case "note":
-			return `- [${record.ts}] ${record.note}`;
 	}
 }
 
@@ -311,7 +300,5 @@ export function renderTaskLogLineForUser(record: TaskLogRecord): string {
 			return `- ${at} 等待超时（${oneLine(record.ticket, 80)}），${record.action === "reopened" ? "已重新开始" : "已暂停"}`;
 		case "close":
 			return `- ${at} ${record.outcome === "done" ? "任务完成" : "任务取消"}：${oneLine(record.note, 160)}`;
-		case "note":
-			return `- ${at} ${oneLine(record.note, 160)}`;
 	}
 }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 
 /**
- * Small per-channel cache of fetched web page bodies so a long page can be paged over with `offset`
+ * Small per-dot cache of fetched web page bodies so a long page can be paged over with `offset`
  * without re-issuing the (slow, non-deterministic) HTTP request. Bodies are the clean extracted text
  * — the banner and windowing are re-applied by the tool on each read. The entry also carries the
  * fetch-time facts the model needs to judge the content (final URL after redirects, HTTP status,

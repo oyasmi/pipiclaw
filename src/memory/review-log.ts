@@ -18,7 +18,7 @@ export interface MemoryReviewLogEntry {
 }
 
 const REVIEW_LOG_MAX_BYTES = 1_024 * 1_024; // 1 MB
-// Three job kinds share a log per channel (path), so the key space is path x reason.
+// Three job kinds share a log per dot (path), so the key space is path x reason.
 const MAX_GATE_SKIP_KEYS = 768;
 
 const writeQueue = createSerialQueue<string>();

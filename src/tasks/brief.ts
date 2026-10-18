@@ -84,7 +84,7 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string 
 	if (!document) return undefined;
 
 	const steer = await consumeTaskSteer(input.dotDir, input.taskId);
-	const log = await readTaskLog(input.dotDir, input.taskId, { kinds: ["step", "expired", "close", "note"] });
+	const log = await readTaskLog(input.dotDir, input.taskId, { kinds: ["step", "expired", "close"] });
 	const recent = log.slice(-BRIEF_LOG_LINES);
 	const board = await buildTaskBoard(input.dotDir, input.taskId, document.body);
 

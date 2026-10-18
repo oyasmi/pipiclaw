@@ -251,17 +251,6 @@ export class DotJobManager {
 		return Array.from(this.jobs.values()).filter((job) => job.status === "running");
 	}
 
-	/** Task ids that a still-running job in this dot promises to wake. */
-	runningTaskIds(): Set<string> {
-		const ids = new Set<string>();
-		for (const job of this.jobs.values()) {
-			if (job.status === "running" && job.contract.notify && job.contract.taskId) {
-				ids.add(job.contract.taskId);
-			}
-		}
-		return ids;
-	}
-
 	/**
 	 * Launch a command in the background and return its snapshot. The wrapper (`buildLaunchScript`)
 	 * runs a readiness handshake before the command executes: only after the inner shell proves it

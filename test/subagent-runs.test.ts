@@ -644,15 +644,6 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(events[0]?.text).toContain("[SUBAGENT:run-unwoken]");
 		expect(restored.get("run-unwoken")?.wakeEnqueued).toBe(true);
 	});
-
-	it("runningTaskIds reports only tasks behind a still-running run", async () => {
-		const manager = new SubAgentRunManager(DOT, {});
-		await register(manager, { taskId: "T-1" });
-		expect(manager.runningTaskIds()).toEqual(new Set(["T-1"]));
-
-		await manager.settle("run-1", baseSettleInput(), { announce: false });
-		expect(manager.runningTaskIds()).toEqual(new Set());
-	});
 });
 
 /** spec 041: short, human-typeable run ids, and prefix resolution for the commands that use them. */

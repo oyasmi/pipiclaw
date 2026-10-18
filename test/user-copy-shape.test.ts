@@ -433,7 +433,6 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			title: "周报",
 			fields: { state: "parked", usage: { ...createUsage(), steps: 60 } },
 			readable: true,
-			legacy: false,
 			runnable: true,
 			expired: false,
 		};

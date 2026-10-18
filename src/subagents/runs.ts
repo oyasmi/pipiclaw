@@ -276,17 +276,6 @@ export class SubAgentRunManager {
 		return Array.from(this.runs.values());
 	}
 
-	/** Task ids a still-running delegation in this dot will eventually wake. Feeds `/tasks doctor`. */
-	runningTaskIds(): Set<string> {
-		const ids = new Set<string>();
-		for (const record of this.runs.values()) {
-			if (record.status === "running" && record.taskId) {
-				ids.add(record.taskId);
-			}
-		}
-		return ids;
-	}
-
 	runningCount(): number {
 		return Array.from(this.runs.values()).filter((record) => record.status === "running").length;
 	}

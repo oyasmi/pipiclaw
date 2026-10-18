@@ -223,6 +223,6 @@ export function renderContextReport(input: PromptContextReportInput): string {
 	if (input.skills.length > 0) lines.push("", `**Skills**：${input.skills.map((skill) => skill.name).join("、")}`);
 	return capReply(lines.join("\n"), {
 		nextStepHint:
-			"用 `/context` 只看汇总；完整提示词需部署者在服务器上设 `PIPICLAW_DEBUG=1`，之后查看频道目录的 `last_prompt.json`",
+			"用 `/context` 只看汇总；完整提示词需部署者在服务器上设 `PIPICLAW_DEBUG=1`，之后查看该频道会话目录（`conversations/<会话区>/`）里的 `last_prompt.json`",
 	}).text;
 }

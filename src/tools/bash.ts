@@ -24,9 +24,9 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
  */
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
 
-/** Subdirectory of the channel dir where full bash/job output spills live. */
+/** Subdirectory of the dot dir where full bash/job output spills live. */
 const BASH_LOG_DIR_NAME = "logs";
-/** Spill files kept per channel before the oldest are pruned on the next tool build. */
+/** Spill files kept per dot before the oldest are pruned on the next tool build. */
 const BASH_LOG_RETENTION = 40;
 /** Bytes read back from the spill file when the in-memory capture was truncated (D2.3). */
 const TAIL_FROM_SPILL_BYTES = DEFAULT_MAX_BYTES * 4;
@@ -124,7 +124,7 @@ export interface BashToolOptions {
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
 	/**
-	 * The channel directory. When set, the "full output" spill file lives under
+	 * The dot directory. When set, the "full output" spill file lives under
 	 * `<dotDir>/logs/` so the pointer the tool hands back is one the model's `read` can open
 	 * under both path-guard boundaries. Absent on the sub-agent path (spill falls back to tmpdir).
 	 */

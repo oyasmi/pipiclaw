@@ -2,6 +2,24 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [Unreleased]
+
+### Added
+
+- `dot.json` may set an absolute `cwd`: the agent's working directory (shell, relative paths, default delegation directory) for that dot, while memory, tasks and events stay in the dot directory.
+- A dot can carry its own `SOUL.md` / `AGENTS.md`; it replaces the workspace file of the same name as a whole for that dot.
+- `pipiclaw tui` without `--dot` opens the only dot when exactly one exists.
+- `task_list` reports each task's delivery channel, and the per-turn task agenda marks tasks that report to another channel.
+
+### Changed
+
+- The terminal refuses `task_create` and `event_manage create` (it never runs background work), with a pointer to a bound DingTalk channel.
+- Model-facing descriptions of the memory index, event list, web cache and task list now say "dot" instead of "channel".
+
+### Removed
+
+- Dead code left behind by the dot work: v3 task frontmatter detection and the `note` loop-log record, unused run/job `runningTaskIds`, and several unused helpers. Tests no longer write usage records into the developer's real app home.
+
 ## [0.9.5-beta.1] - 2026-10-18
 
 ### Breaking
