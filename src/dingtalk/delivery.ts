@@ -197,24 +197,28 @@ class ChannelDeliveryController {
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = null;
 
-		const delivered = await this.bot.sendPlain(
-			this.event.channelId,
-			text,
-			title ? { title, markdown: true } : undefined,
-		);
-		if (!delivered) {
-			// Do not archive a response we failed to deliver: the conversation log
-			// must not claim we answered when the user never received it.
-			return false;
+		if (this.cardWarmupTriggered && !this.getProgressText().trim()) {
+			// The card only ever said "正在处理…": the answer goes into it rather than into a second
+			// message under a card that would just read "已答复。".
+			this.finalReplacementText = text;
+			this.mode = "finalize-with-fallback";
+			this.bumpRevision(true);
+			await this.flush();
+		} else {
+			if (!(await this.bot.sendPlain(this.event.channelId, text, title ? { title, markdown: true } : undefined))) {
+				return false;
+			}
+			this.finalResponseDelivered = true;
+			this.mode = "finalize-existing";
+			this.bumpRevision(true);
 		}
+		// Do not archive a response we failed to deliver: the conversation log
+		// must not claim we answered when the user never received it.
+		if (!this.finalResponseDelivered) return false;
 
 		if (shouldLog) {
 			this.archiveBotResponse(text);
 		}
-
-		this.finalResponseDelivered = true;
-		this.mode = "finalize-existing";
-		this.bumpRevision(true);
 		return true;
 	}
 

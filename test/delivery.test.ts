@@ -46,14 +46,15 @@ describe("delivery", () => {
 		},
 	);
 
-	it("finishes a waiting-only card with nonempty content after delivering the answer", async () => {
-		const { bot, ctx } = setup();
+	it("puts the answer into a waiting-only card instead of sending a second message", async () => {
+		const { bot, store, ctx } = setup();
 		ctx.primeCard(1500);
 		await vi.advanceTimersByTimeAsync(1500);
-		await ctx.respondPlain("answer");
+		expect(await ctx.respondPlain("answer")).toBe(true);
 		await ctx.flush();
-		expect(bot.calls.map((c) => c.method)).toEqual(["replaceCard", "sendPlain", "finalizeExistingCard"]);
-		expect(String(bot.calls.at(-1)?.args[1]).trim()).not.toBe("");
+		expect(bot.calls.map((c) => c.method)).toEqual(["replaceCard", "finalizeCard"]);
+		expect(bot.calls.at(-1)?.args[1]).toBe("answer");
+		expect(store.logged).toHaveLength(1);
 	});
 
 	it("coalesces progress, ignores blanks, and sends a snapshot before later deltas", async () => {

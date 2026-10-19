@@ -164,6 +164,8 @@ sequenceDiagram
 | `rolling_progress_then_plain_final` | 卡片滚动窗口（常驻首行 `⏱ 用时 · N 步` + 最近 3 段） | 同上 |
 | `final_card_only` | 无进度 | 仅最终卡片 |
 
+两种 `*_then_plain_final` 下，若等待卡（约 3.5 秒后创建）直到答复时仍没有进度，答复直接写进这张卡，不再另发 plain 消息（`delivery.ts` `sendFinal`）。
+
 聊天侧后台唤醒（JOB / SUBAGENT / EVENT）不受上表约束；TASK_STEP 默认静音，只投递显式通知和运行时回执。对聊天侧后台唤醒，`handleEvent` 给它们的 `ChannelContext` 传 `progressStyle: "none"`，因此不建卡、不推思考流、`[SILENT]` 收尾也没有卡片要删；最终答案仍按 `finalDelivery` 正常投递。用户消息不受影响。
 
 `ChannelDeliveryController` 维护 revision 计数的同步循环：进度更新合并、≥800ms 节流、卡片预热（`primeCard`）、失败时降级 plain、`flush()` 有 60s 兜底死线保证 `run()` 的 finally 不会永久挂起频道。

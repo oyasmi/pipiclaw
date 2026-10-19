@@ -395,7 +395,7 @@ export function createEventTurnRunner(
 			turn.baseCtx = baseCtx;
 			ctx = muteChannelContext(baseCtx);
 		}
-		if (!backgroundOnly && !taskStep) ctx.primeCard(1500);
+		if (!backgroundOnly && !taskStep) ctx.primeCard(3500);
 		const result = await runner.run(ctx, store);
 		turn.mergedWakesHandled = result.stopReason !== "aborted" && result.stopReason !== "error";
 		if (taskStep) await finishTaskStep(runner, turn.event.channelId, taskStep.taskId, bot);

@@ -163,22 +163,22 @@ describe("card delivery with stateful remote HTTP", () => {
 		},
 	);
 
-	it("waits for in-flight creation and then finishes the same card on close", async () => {
+	it("waits for in-flight creation and then answers in that same card", async () => {
 		const { ctx } = setup();
 		createGate = deferred();
 		ctx.primeCard(1);
 		await vi.advanceTimersByTimeAsync(1);
-		await ctx.respondPlain("answer");
-		let closed = false;
-		const closing = ctx.close().then(() => {
-			closed = true;
+		let answered = false;
+		const answering = ctx.respondPlain("answer").then(() => {
+			answered = true;
 		});
 		await Promise.resolve();
-		expect(closed).toBe(false);
+		expect(answered).toBe(false);
 		createGate.resolve();
-		await closing;
-		expect(onlyCard().finished).toBe(true);
-		expect(onlyCard().content.trim()).not.toBe("");
+		await answering;
+		await ctx.close();
+		expect(onlyCard()).toEqual({ content: "answer", finished: true });
+		expect(plainCalls()).toHaveLength(0);
 	});
 
 	it("a late create after stop cannot replace the next turn's card", async () => {

@@ -13,7 +13,7 @@ describe("E2E deterministic: progress & silent turns", () => {
 	it("awaited completion wakes create no progress cards while waiting, whether they answer or stay silent", async () => {
 		// Regression: awaited job/subagent wakes used to prime a card, then clear it on [SILENT].
 		// Mutation check: restoring the awaited exception in bootstrap's backgroundOnly makes
-		// the held wake create a card at 1500ms and this test fail (verified 2026-09-19).
+		// the held wake create a card at 3500ms and this test fail (verified 2026-09-19).
 		harness = await createDeterministicHarness();
 		for (const [marker, answer] of [
 			["SILENT_WAKE", "[SILENT]"],
@@ -40,7 +40,7 @@ describe("E2E deterministic: progress & silent turns", () => {
 			const wake = harness.sendWake(marker, { presentation: "awaited" });
 			try {
 				await requestArrived;
-				await vi.advanceTimersByTimeAsync(1500);
+				await vi.advanceTimersByTimeAsync(3500);
 				expect(harness.deliveries.slice(before).filter((d) => d.method !== "discardCard")).toHaveLength(0);
 			} finally {
 				vi.useRealTimers();
