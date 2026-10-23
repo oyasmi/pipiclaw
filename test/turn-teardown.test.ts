@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionResourceGate } from "../src/agent/session/session-resource-gate.js";
+import { forceEndStuckTurnAfterStop } from "../src/agent/stop-watchdog.js";
 import { createRunQueue } from "../src/agent/turn/run-queue.js";
 import * as log from "../src/log.js";
-import { forceEndStuckTurnAfterStop } from "../src/runtime/stop-watchdog.js";
 import { createFakeTurnState } from "./helpers/fake-turn-state.js";
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
@@ -94,6 +94,7 @@ describe("forceEndStuckTurnAfterStop", () => {
 		// Ends in time: no force, no notification.
 		const timely = createFakeTurnState();
 		timely.beginTurn("normal work");
+		timely.requestStop();
 		setTimeout(() => timely.endTurn(), 10);
 		const silentNotify = vi.fn(async () => {});
 
@@ -111,6 +112,7 @@ describe("forceEndStuckTurnAfterStop", () => {
 		// Stuck past the grace window: force-released and the channel notified.
 		const stuck = createFakeTurnState();
 		stuck.beginTurn("stuck work");
+		stuck.requestStop();
 		const notify = vi.fn(async () => {});
 
 		expect(
@@ -131,6 +133,7 @@ describe("forceEndStuckTurnAfterStop", () => {
 	it("ignores the stuck turn's own late release so the next turn keeps its busy state", async () => {
 		const turn = createFakeTurnState();
 		turn.beginTurn("stuck work");
+		turn.requestStop();
 
 		await forceEndStuckTurnAfterStop({
 			channelId: "dm_tester",

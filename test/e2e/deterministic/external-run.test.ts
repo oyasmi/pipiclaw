@@ -1,58 +1,15 @@
-import { type ChildProcess, fork } from "node:child_process";
 import { once } from "node:events";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { isProcessAlive, killProcessGroup } from "../../../src/shared/host-process.js";
 import type { RunRecord } from "../../../src/subagents/run-record.js";
+import { crash, startDaemon } from "../../support/daemon-process.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
 import { bindChannelOnDisk, E2E_DOT, reply, writeWorkspaceFile } from "../../support/runtime-harness.js";
 import { cleanupE2ETestHome, createDeterministicHome } from "../../support/setup.js";
 import { waitFor } from "../helpers/wait.js";
-
-async function startDaemon(homeDir: string) {
-	const child = fork(fileURLToPath(new URL("../../support/daemon-worker.mjs", import.meta.url)), [homeDir], {
-		env: { ...process.env, PIPICLAW_HOME: homeDir, PI_OFFLINE: "1" },
-		stdio: ["ignore", "ignore", "pipe", "ipc"],
-	});
-	let stderr = "";
-	child.stderr!.on("data", (data) => {
-		stderr += String(data);
-	});
-	async function receive(): Promise<{ ready?: boolean; value?: unknown; error?: string }> {
-		try {
-			return (await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0];
-		} catch (error) {
-			throw new Error(`daemon IPC failed: ${stderr}`, { cause: error });
-		}
-	}
-	try {
-		if (!(await receive()).ready) throw new Error(`daemon did not become ready: ${stderr}`);
-	} catch (error) {
-		await crash(child);
-		throw error;
-	}
-	return {
-		child,
-		// This fixture deliberately has one request in flight; no general RPC layer is needed.
-		async call(action: string, fields: Record<string, string> = {}): Promise<unknown> {
-			const response = receive();
-			child.send({ action, ...fields });
-			const result = await response;
-			if (result.error) throw new Error(result.error);
-			return result.value;
-		},
-	};
-}
-
-async function crash(child: ChildProcess): Promise<void> {
-	if (child.exitCode !== null || child.signalCode !== null) return;
-	const exited = once(child, "exit");
-	child.kill("SIGKILL");
-	await exited;
-}
 
 describe("E2E deterministic: external process recovery", () => {
 	it("A18: a live detached exec run survives daemon SIGKILL and is re-adopted before admission; /stop preserves it", async () => {

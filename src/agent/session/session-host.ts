@@ -39,7 +39,6 @@ import { getApiKeyForModel } from "../../models/api-keys.js";
 import { findExactModelReferenceMatch, hasKnownModelPricing } from "../../models/reference.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../../models/runtime.js";
 import type { LoadedSecurityConfig } from "../../security/config.js";
-import { type ConfigDiagnostic, formatConfigDiagnostic } from "../../shared/config-diagnostic.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { isRecord } from "../../shared/type-guards.js";
 import { withTimeout } from "../../shared/with-timeout.js";
@@ -56,6 +55,7 @@ import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResour
 import type { PromptBuildResult } from "../prompt/types.js";
 import type { RunState } from "../types.js";
 import { createCommandExtension } from "./command-extension.js";
+import { SessionCompaction } from "./compaction.js";
 import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./event-guards.js";
 import type { ModelSelection } from "./model-selection.js";
 import {
@@ -66,6 +66,7 @@ import {
 } from "./session-adapter.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
+import { reportConfigDiagnostics, reportSettingsDiagnostics } from "./settings-diagnostics.js";
 
 const MODEL_REGISTRY_REFRESH_TIMEOUT_MS = 15_000;
 const SESSION_RELOAD_TIMEOUT_MS = 30_000;
@@ -83,21 +84,6 @@ function plainTextOf(content: unknown): string {
 /** Task sessions live under `<dotDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
 function isTaskSessionPath(sessionFile: string | undefined): boolean {
 	return sessionFile?.replace(/\\/g, "/").includes(`/${TASK_SESSIONS_DIRNAME}/`) === true;
-}
-
-/** Surface settings.json load errors (once drained) as warnings; shared by construction and reload. */
-export function reportSettingsDiagnostics(
-	settingsManager: PipiclawSettingsManager,
-	channelId: string,
-	appHomeDir: string,
-): void {
-	for (const { scope, error } of settingsManager.drainErrors()) {
-		log.logWarn("config.settings.load_failed", "Settings load failed", {
-			channelId,
-			reason: error.message,
-			fields: { scope, path: join(appHomeDir, "settings.json") },
-		});
-	}
 }
 
 export interface SessionHostDeps {
@@ -144,7 +130,7 @@ export class SessionHost {
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
 	private readonly mediaSender?: MediaSender;
 	private readonly cwd: string;
-	private readonly settingsManager: PipiclawSettingsManager;
+	readonly settingsManager: PipiclawSettingsManager;
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
 	private readonly executor: Executor;
 	private readonly fileStore: FileStore;
@@ -183,7 +169,9 @@ export class SessionHost {
 	/** The exact system prompt the provider last received (our prompt + pi's tail + footer). */
 	lastFinalPrompt?: string;
 	currentTools: AgentTool<any>[] = [];
+	private retired = false;
 	firstTurnMemoryBootstrapPending = true;
+	readonly compaction: SessionCompaction;
 	/** Mirror of `tools.tasks.enabled` from the last tools-config load (see buildRuntimeTools). */
 	tasksEnabled = true;
 	/**
@@ -217,6 +205,20 @@ export class SessionHost {
 		this.models = deps.models;
 		this.ledger = deps.ledger;
 		this.currentSkills = deps.initialSkills;
+		this.compaction = new SessionCompaction({
+			conversation: this.conversation,
+			getSession: () => this.session,
+			getRuntime: () => this.modelRuntime,
+			preserveMemory: (event) => this.memoryLifecycle.prepareCompaction(event),
+			ledger: this.ledger,
+			getRunState: () => this.runState,
+			isEnabled: () => this.settingsManager.getCompactionEnabled(),
+			onPersistenceFault: (session, error) => this.markContextFault(session, error, "background-compaction"),
+			onAdopt: () => {
+				this.firstTurnMemoryBootstrapPending = true;
+				void this.memoryLifecycle.resumeBoundaryReflect();
+			},
+		});
 		this.sessionResourceGate = new SessionResourceGate(async () => {
 			await this.reloadSessionResources();
 		});
@@ -241,12 +243,12 @@ export class SessionHost {
 
 	private readonly contextFaults = new WeakSet<AgentSession>();
 
-	markContextFault(session: AgentSession, error: unknown): Error {
+	markContextFault(session: AgentSession, error: unknown, stage = "fallback-context-edit"): Error {
 		this.contextFaults.add(session);
 		log.logWarn("agent.session.context_failed", "Session context persistence failed", {
 			channelId: this.channelId,
 			reason: errorMessage(error),
-			fields: { sessionId: session.sessionManager.getSessionId(), stage: "fallback-context-edit" },
+			fields: { sessionId: session.sessionManager.getSessionId(), stage },
 		});
 		return new Error(CONTEXT_FAULT_MESSAGE, { cause: error });
 	}
@@ -265,9 +267,11 @@ export class SessionHost {
 
 	/** Stop listening to the live session and dispose it (no-op error handling is the caller's). */
 	retireLiveSession(): void {
+		this.retired = true;
+		this.compaction.retire();
 		this.sessionUnsubscribe?.();
 		this.sessionUnsubscribe = undefined;
-		this.session.dispose();
+		this.session?.dispose();
 	}
 
 	/**
@@ -276,6 +280,7 @@ export class SessionHost {
 	 * not have one yet.
 	 */
 	async disposeSession(): Promise<void> {
+		this.compaction.retire();
 		await this.sessionReady;
 		this.sessionUnsubscribe?.();
 		this.sessionUnsubscribe = undefined;
@@ -311,10 +316,15 @@ export class SessionHost {
 
 		const initial = await this.createSessionRuntime(sessionManager);
 		this.session = initial.session;
+		if (this.retired) {
+			this.session.dispose();
+			throw new Error("Session generation retired");
+		}
 		this.sessionRuntime = new AgentSessionRuntime(
 			this.session,
 			this.createAgentSessionServices(initial.resourceLoader),
 			async ({ sessionManager, sessionStartEvent }) => {
+				if (this.retired) throw new Error("Session generation retired");
 				// `/new`, fork, and switch already wrote the target session's durable header by
 				// this point (the SDK does it synchronously before invoking this callback); commit
 				// the pointer before we rebuild and rebind to it, so a crash between "SDK created
@@ -336,6 +346,11 @@ export class SessionHost {
 			},
 		);
 		this.sessionRuntime.setRebindSession(async (session) => {
+			this.compaction.cancel("session-rebind");
+			if (this.retired) {
+				session.dispose();
+				throw new Error("Session generation retired");
+			}
 			this.session = session;
 			await this.bindSessionExtensions();
 			this.subscribeToSessionEvents();
@@ -353,11 +368,13 @@ export class SessionHost {
 	}
 
 	private async reloadSessionResources(): Promise<void> {
+		if (this.retired) return;
 		this.settingsManager.reload();
-		this.reportSettingsDiagnostics();
+		reportSettingsDiagnostics(this.settingsManager, this.channelId, this.appHomeDir);
 		const skills = loadPipiclawSkills(this.workspaceDir);
 		this.currentSkills = skills;
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
+		if (this.retired) return;
 		this.rebuildSessionTools();
 		try {
 			await withTimeout(`[${this.channelId}] session reload`, SESSION_RELOAD_TIMEOUT_MS, () =>
@@ -430,29 +447,7 @@ export class SessionHost {
 		return discovery;
 	}
 
-	private reportSettingsDiagnostics(): void {
-		reportSettingsDiagnostics(this.settingsManager, this.channelId, this.appHomeDir);
-	}
-
-	private reportConfigDiagnostics(diagnostics: ConfigDiagnostic[]): void {
-		for (const diagnostic of diagnostics) {
-			log.logWarn("config.diagnostic", formatConfigDiagnostic(diagnostic), {
-				channelId: this.channelId,
-				fields: { path: diagnostic.path },
-			});
-		}
-	}
-
-	/**
-	 * Build the Pipiclaw-owned system prompt (spec 025). This replaces pi's default
-	 * base prompt entirely: identity, execution contract, hard invariants, the tool
-	 * catalog and the workspace files are ours. pi still appends its tail (skills,
-	 * date, cwd), and the boundary footer is appended after that by the prompt
-	 * extension.
-	 *
-	 * Nothing channel-specific enters this text — that is what lets two channels in
-	 * one workspace share a cached prompt prefix. Channel facts ride the turn.
-	 */
+	/** Build the shared Pipiclaw prompt; channel facts stay in turn context and pi appends its tail. */
 	buildSystemPrompt(): PromptBuildResult {
 		const toolNames = this.currentTools.map((tool) => tool.name);
 		const resources = loadWorkspacePromptResources(this.workspaceDir, this.conversation.dotDir);
@@ -500,6 +495,7 @@ export class SessionHost {
 			agentDir: this.appHomeDir,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			extensionFactories: [
+				this.compaction.createExtensionFactory(),
 				this.memoryLifecycle.createExtensionFactory(),
 				createPromptBoundaryExtension({
 					getFooter: () => this.lastPromptBuild?.footer ?? "",
@@ -606,6 +602,7 @@ export class SessionHost {
 		sessionManager: SessionManager,
 		sessionStartEvent?: SessionStartEvent,
 	): Promise<{ session: AgentSession; resourceLoader: ResourceLoader }> {
+		if (this.retired) throw new Error("Session generation retired");
 		const tools = this.buildRuntimeTools();
 		const agent = new Agent({
 			initialState: {
@@ -624,6 +621,7 @@ export class SessionHost {
 		// Must precede `new AgentSession`: the session snapshots the loader's extensions in its
 		// constructor (see `loadSessionResources`).
 		await this.loadSessionResources(resourceLoader);
+		if (this.retired) throw new Error("Session generation retired");
 		const sessionSettingsManager = asSdkSettingsManager(this.settingsManager);
 		const session = new AgentSession({
 			agent,
@@ -640,17 +638,10 @@ export class SessionHost {
 		return { session, resourceLoader };
 	}
 
-	/**
-	 * Bind this runner to a task cycle's own session (spec 051, D3/INV-5).
-	 *
-	 * Task work must not accumulate in the channel's chat transcript: the one real channel on the
-	 * author's machine had grown to 7.4 MB and been compacted six times because chat and two daily
-	 * tasks shared it, so every compaction damaged all three at once. Swapping the bound session
-	 * per turn gives each task its own bounded context while leaving turn state, `/stop`, and
-	 * delivery exactly where they already are.
-	 */
+	/** Bind a task to its own transcript, keeping scheduled work out of the chat history. */
 	async bindTaskSession(taskId: string): Promise<void> {
 		await this.sessionReady;
+		if (this.retired) return;
 		const path = taskSessionPath(this.dotDir, taskId);
 		await mkdir(dirname(path), { recursive: true });
 		this.taskLoop = { taskId };
@@ -660,7 +651,7 @@ export class SessionHost {
 
 	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
 	async bindChatSession(): Promise<void> {
-		if (!this.taskLoop) return;
+		if (this.retired || !this.taskLoop) return;
 		this.taskLoop = undefined;
 		await this.sessionRuntime.switchSession(
 			join(this.conversationDir, resolveActiveSessionFile(this.conversationDir)),
@@ -689,7 +680,7 @@ export class SessionHost {
 	private buildRuntimeTools(): AgentTool<any>[] {
 		const securityLoad = this.loadSecurityConfig();
 		const toolsLoad = loadToolsConfigWithDiagnostics(this.appHomeDir);
-		this.reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics]);
+		reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics], this.channelId);
 		this.tasksEnabled = toolsLoad.config.tools.tasks.enabled;
 
 		const tools = createPipiclawTools({

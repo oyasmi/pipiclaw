@@ -13,6 +13,7 @@ const families: Array<[string, EvalDomain, boolean, string]> = [
 	["C-test-proof-01", "coding", true, "首次验证失败后继续修正"],
 	["C-scope-01", "coding", false, "小需求保持既有范围"],
 	["C-existing-01", "coding", false, "保留工作区已有修改"],
+	["M-compaction-01", "memory", false, "会话压缩后的目标与限制延续"],
 	["M-extract-01", "memory", true, "工具窗口中的约定抽取"],
 	["M-overflow-01", "memory", true, "索引预算外的持久事实召回"],
 	["M-correction-01", "memory", true, "更正跨会话生效"],
@@ -73,6 +74,8 @@ export const coreRepresentativeIds = [
 ] as const;
 
 const migration: Record<string, string> = {
+	"M-compaction-01": "M-compaction-01",
+	"M-compaction-02": "M-compaction-01",
 	"C-fix-01": "C-fix-01",
 	"C-test-proof-01": "C-test-proof-01",
 	"T-run-01": "T-run-01",

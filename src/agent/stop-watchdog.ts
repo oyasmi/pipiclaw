@@ -3,8 +3,8 @@
  * the channel does not keep reporting "a turn is already running".
  */
 
-import type { AgentRunner } from "../agent/types.js";
 import { sleepUnref } from "../shared/with-timeout.js";
+import type { AgentRunner } from "./types.js";
 
 /**
  * How long `/stop` waits for the turn to actually end before force-releasing it.
@@ -12,7 +12,7 @@ import { sleepUnref } from "../shared/with-timeout.js";
  * epilogue (delivery drain, session-resource reload, memory flush) ignores both
  * and would otherwise keep the channel reporting "已有回合在运行" indefinitely.
  */
-const STOP_FORCE_END_GRACE_MS = 15_000;
+const STOP_FORCE_END_GRACE_MS = 3_000;
 const STOP_FORCE_END_POLL_MS = 250;
 
 /**
@@ -25,20 +25,24 @@ export async function forceEndStuckTurnAfterStop(input: {
 	graceMs?: number;
 	pollMs?: number;
 	notify?: (text: string) => Promise<unknown>;
+	isCurrent?: () => boolean;
+	recover?: () => void;
 }): Promise<boolean> {
 	const graceMs = input.graceMs ?? STOP_FORCE_END_GRACE_MS;
 	const pollMs = input.pollMs ?? STOP_FORCE_END_POLL_MS;
 	const deadline = Date.now() + graceMs;
-	while (input.runner.isBusy() && Date.now() < deadline) {
+	const stopped = () =>
+		input.runner.isBusy() && input.runner.getTurnStatus().stopRequested && (input.isCurrent?.() ?? true);
+	while (stopped() && Date.now() < deadline) {
 		await sleepUnref(Math.min(pollMs, Math.max(1, deadline - Date.now())));
 	}
+	if (!stopped()) return false;
 	if (!input.runner.forceEndTurn(`/stop did not take effect within ${graceMs}ms`)) {
 		return false;
 	}
+	input.recover?.();
 	await input
-		.notify?.(
-			`⚠️ 上一个回合的收尾卡住了，已强制结束以释放会话（后台清理仍在继续）。现在可以正常发消息或使用 \`/new\`、\`/model\`。`,
-		)
+		.notify?.(`⚠️ 上一个回合未能及时停止，已隔离并恢复原会话。现在可以继续发消息，或使用 \`/new\`、\`/model\`。`)
 		.catch(() => undefined);
 	return true;
 }

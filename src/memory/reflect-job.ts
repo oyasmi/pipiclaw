@@ -4,6 +4,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { DotConversation } from "../dot/types.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { drainBoundaryReflectWork } from "./boundary-work.js";
 import { type DotMemoryQueue, getDotMemoryQueue } from "./dot-memory-queue.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
@@ -47,6 +48,8 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 	const queue = input.queue ?? getDotMemoryQueue();
 	const { conversation } = input;
 	const { channelId, dotDir } = conversation;
+	await drainBoundaryReflectWork({ ...input, queue });
+	if (!input.settings.memoryMaintenance.enabled) return;
 	return queue.run(conversation, async () => {
 		const now = input.now ?? new Date();
 		const maintenance = resolveMemoryMaintenanceSettings(input.settings.memoryMaintenance);

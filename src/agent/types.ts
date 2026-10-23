@@ -84,6 +84,8 @@ export interface AgentRunner {
 	getTaskLoop(): { taskId: string } | undefined;
 	/** Permanently retire this runner generation after an out-of-band `/new`. */
 	retireForNewSession(): void;
+	/** Fence an unresponsive generation without changing the active session reference. */
+	retireForRecovery(): void;
 	/**
 	 * Synchronously reserve the turn for a message. Transports MUST call this in
 	 * the same tick they dequeue the message, before any await, so a concurrent

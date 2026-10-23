@@ -47,13 +47,13 @@ class TerminalDeliveryController {
 			respondPlain: async (final: string, shouldLog = true) => this.sendFinal(final, shouldLog),
 			replaceMessage: async (final: string) => this.replaceWithFinal(final),
 			respondInThread: async (notice: string) => {
-				if (notice.trim()) {
+				if (!this.closed && notice.trim()) {
 					this.renderer.showNotice(notice);
 				}
 			},
 			setTyping: async () => {},
 			setWorking: async (working: boolean) => {
-				this.renderer.setWorking(working);
+				if (!this.closed) this.renderer.setWorking(working);
 			},
 			deleteMessage: async () => this.silence(),
 			primeCard: () => {},

@@ -8,12 +8,11 @@ import type {
 	SessionEntry,
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 import type { DotConversation } from "../dot/types.js";
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { clipTextByPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { drainBoundaryReflectWork, enqueueBoundaryReflectWork } from "./boundary-work.js";
 import { type DotMemoryQueue, getDotMemoryQueue } from "./dot-memory-queue.js";
 import {
 	type MemoryActivityEvent,
@@ -23,65 +22,10 @@ import {
 import { type ReflectRunResult, runReflect } from "./reflect.js";
 import { reviewLogEntryFor } from "./reflect-job.js";
 import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
-import { buildCompactionMemorySourceWindow, buildIncrementalMemorySourceWindow } from "./source-window.js";
+import { buildIncrementalMemorySourceWindow } from "./source-window.js";
 
 /** Boundaries `MemoryLifecycle` reflects on directly, outside the scheduled idle job (spec 050, D7). */
-export type ConsolidationReason = "compaction" | "new-session" | "shutdown";
-
-const COMPACTION_INPUT_MAX_UNITS = 48_000;
-const COMPACTION_INPUT_MIN_UNITS = 4_000;
-const COMPACTION_INPUT_CHARS_PER_TOKEN = 3;
-const COMPACTION_INPUT_HEAD_RATIO = 0.35;
-
-/**
- * Bound one standalone summarization request. Provider limits can be lower than a model's
- * advertised context window; sending the whole pre-compaction transcript is therefore not safe.
- * The head preserves the original goal and the larger tail preserves current work. Durable
- * memory is refreshed before this runs, so the omitted middle is still available outside the
- * provider request.
- */
-export function boundCompactionMessages(
-	messages: AgentMessage[],
-	contextWindow: number,
-	reserveTokens: number,
-): { messages: AgentMessage[]; truncated: boolean; originalChars: number; boundedChars: number } {
-	if (messages.length === 0) {
-		return { messages, truncated: false, originalChars: 0, boundedChars: 0 };
-	}
-	const safeWindow = Number.isFinite(contextWindow) && contextWindow > 0 ? Math.floor(contextWindow) : 128_000;
-	const safeReserve = Number.isFinite(reserveTokens) && reserveTokens > 0 ? Math.floor(reserveTokens) : 16_384;
-	const maxUnits = Math.min(
-		COMPACTION_INPUT_MAX_UNITS,
-		Math.max(COMPACTION_INPUT_MIN_UNITS, safeWindow - safeReserve - 8_192),
-	);
-	const serialized = serializeConversation(convertToLlm(messages));
-	const clipped = clipTextByPromptUnits(serialized, maxUnits, {
-		headRatio: COMPACTION_INPUT_HEAD_RATIO,
-		maxChars: maxUnits * COMPACTION_INPUT_CHARS_PER_TOKEN,
-		marker:
-			"\n\n[... middle omitted from this compaction request; durable dot memory was refreshed before compaction ...]\n\n",
-	});
-	if (!clipped.truncated) {
-		return {
-			messages,
-			truncated: false,
-			originalChars: serialized.length,
-			boundedChars: serialized.length,
-		};
-	}
-	return {
-		messages: [
-			{
-				role: "user",
-				content: [{ type: "text", text: clipped.text }],
-				timestamp: Date.now(),
-			},
-		],
-		truncated: true,
-		originalChars: serialized.length,
-		boundedChars: clipped.text.length,
-	};
-}
+export type ConsolidationReason = "new-session" | "shutdown";
 
 export interface MemoryLifecycleOptions {
 	/** The conversation whose session this lifecycle reflects; its memory lands in the dot. */
@@ -110,11 +54,11 @@ export class MemoryLifecycle {
 
 	createExtensionFactory(): ExtensionFactory {
 		return (pi) => {
-			pi.on("session_before_compact", async (event: SessionBeforeCompactEvent) => {
-				await this.handleSessionBeforeCompact(event);
-			});
 			pi.on("session_compact", async (event: SessionCompactEvent) => {
 				this.handleSessionCompact(event);
+			});
+			pi.on("session_compact_failed", () => {
+				this.startBoundaryReflect();
 			});
 			pi.on("session_before_switch", (event: SessionBeforeSwitchEvent) => {
 				this.handleSessionBeforeSwitch(event);
@@ -142,6 +86,7 @@ export class MemoryLifecycle {
 	}
 
 	async flushForShutdown(): Promise<void> {
+		await this.resumeBoundaryReflect();
 		// Let any detached new-session reflect run finish (and update the durable checkpoint)
 		// before deciding whether a final flush is still needed.
 		await this.whenNewSessionReflectSettled();
@@ -213,20 +158,13 @@ export class MemoryLifecycle {
 		reason: ConsolidationReason,
 		messages?: AgentMessage[],
 		sessionEntries?: SessionEntry[],
-		firstKeptEntryId?: string,
 	): Promise<void> {
 		const messageSnapshot = [...(messages ?? this.options.getMessages())];
 		const sessionEntrySnapshot = sessionEntries ? [...sessionEntries] : [...this.options.getSessionEntries()];
 		const revisionSnapshot = this.durableRevision;
 
 		await this.runDurableMemoryJobSerial(async () => {
-			await this.runBoundaryReflectNow(
-				reason,
-				messageSnapshot,
-				sessionEntrySnapshot,
-				revisionSnapshot,
-				firstKeptEntryId,
-			);
+			await this.runBoundaryReflectNow(reason, messageSnapshot, sessionEntrySnapshot, revisionSnapshot);
 		});
 	}
 
@@ -235,27 +173,18 @@ export class MemoryLifecycle {
 		messageSnapshot: AgentMessage[],
 		sessionEntrySnapshot: SessionEntry[] = [],
 		revisionSnapshot: number = this.durableRevision,
-		firstKeptEntryId?: string,
 	): Promise<void> {
 		try {
 			const maintenanceState = this.options.appHomeDir
 				? await readMemoryMaintenanceState(this.options.appHomeDir, this.options.conversation)
 				: undefined;
 			const lastEntryId = maintenanceState?.lastReflectedEntryId;
-			const sourceWindow =
-				reason === "compaction"
-					? buildCompactionMemorySourceWindow({
-							entries: sessionEntrySnapshot,
-							messagesToSummarize: messageSnapshot,
-							firstKeptEntryId,
-							lastEntryId,
-						})
-					: buildIncrementalMemorySourceWindow({
-							entries: sessionEntrySnapshot,
-							lastEntryId,
-							sourceKind: reason,
-							fallbackMessages: messageSnapshot,
-						});
+			const sourceWindow = buildIncrementalMemorySourceWindow({
+				entries: sessionEntrySnapshot,
+				lastEntryId,
+				sourceKind: reason,
+				fallbackMessages: messageSnapshot,
+			});
 			log.logInfo(`[${this.options.conversation.channelId}] Memory reflect starting (${reason})`);
 			const result = await runReflect({
 				channelId: this.options.conversation.channelId,
@@ -300,37 +229,36 @@ export class MemoryLifecycle {
 		}
 	}
 
-	private async handleSessionBeforeCompact(event: SessionBeforeCompactEvent): Promise<void> {
-		await this.runBoundaryReflect(
-			"compaction",
-			event.preparation.messagesToSummarize,
-			this.options.getSessionEntries(),
+	/** The agent's bounded compaction operation awaits only durable snapshot persistence. */
+	async prepareCompaction(event: SessionBeforeCompactEvent): Promise<void> {
+		await enqueueBoundaryReflectWork(
+			this.options.conversation,
+			event.branchEntries,
 			event.preparation.firstKeptEntryId,
+			event.signal,
 		);
+	}
 
-		const model = this.options.getModel();
-		for (const key of ["messagesToSummarize", "turnPrefixMessages"] as const) {
-			const bounded = boundCompactionMessages(
-				event.preparation[key] ?? [],
-				model.contextWindow,
-				event.preparation.settings?.reserveTokens ?? 16_384,
-			);
-			if (!bounded.truncated) continue;
-			event.preparation[key] = bounded.messages;
-			log.logWarn("memory.compaction_input.bounded", "Oversized compaction input bounded", {
-				channelId: this.options.conversation.channelId,
-				fields: {
-					key,
-					originalChars: bounded.originalChars,
-					boundedChars: bounded.boundedChars,
-					model: `${model.provider}/${model.id}`,
-				},
-			});
-		}
+	resumeBoundaryReflect(): Promise<void> {
+		this.startBoundaryReflect();
+		return this.backgroundNewSessionReflect;
+	}
+
+	private startBoundaryReflect(): void {
+		if (!this.options.appHomeDir) return;
+		this.backgroundNewSessionReflect = drainBoundaryReflectWork({
+			conversation: this.options.conversation,
+			workspaceDir: this.options.workspaceDir,
+			appHomeDir: this.options.appHomeDir,
+			model: this.options.getModel(),
+			resolveApiKey: this.options.resolveApiKey,
+			queue: this.memoryQueue,
+		});
 	}
 
 	private handleSessionCompact(_event: SessionCompactEvent): void {
 		this.recordActivity("boundary");
+		this.startBoundaryReflect();
 	}
 
 	private handleSessionBeforeSwitch(event: SessionBeforeSwitchEvent): void {

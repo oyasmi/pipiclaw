@@ -194,22 +194,24 @@ async function runWithConversation(
 	});
 	const jobs = createJobRuntime(createExecutor(), { workspaceDir: paths.workspaceDir });
 	const runs = createSubAgentRuntime({ workspaceDir: paths.workspaceDir });
-	const runner = createRunner(conversation, {
-		jobManager: jobs.get(dot),
-		runManager: runs.get(dot),
-		appHomeDir: paths.appHomeDir,
-		workspaceDir: paths.workspaceDir,
-		describeChannel: (id) => names.get(id),
-		describeConversation: (dir) => {
-			const owner = Object.entries(record?.conversations ?? {}).find(([, entry]) => entry.dir === dir)?.[0];
-			return owner ? formatChannelLabel(owner, names.get(owner)) : undefined;
-		},
-		authConfigPath: paths.authConfigPath,
-		modelsConfigPath: paths.modelsConfigPath,
-		settingsManager,
-		mediaSender: createTerminalMediaSender(io),
-	});
+	const makeRunner = () =>
+		createRunner(conversation, {
+			jobManager: jobs.get(dot),
+			runManager: runs.get(dot),
+			appHomeDir: paths.appHomeDir,
+			workspaceDir: paths.workspaceDir,
+			describeChannel: (id) => names.get(id),
+			describeConversation: (dir) => {
+				const owner = Object.entries(record?.conversations ?? {}).find(([, entry]) => entry.dir === dir)?.[0];
+				return owner ? formatChannelLabel(owner, names.get(owner)) : undefined;
+			},
+			authConfigPath: paths.authConfigPath,
+			modelsConfigPath: paths.modelsConfigPath,
+			settingsManager,
+			mediaSender: createTerminalMediaSender(io),
+		});
 
+	let runner = makeRunner();
 	const tuiSettings = settingsManager.getTuiSettings();
 	const traits: DeliveryTraits = {
 		progressStyle: progressStyleOf(tuiSettings.responseMode),
@@ -228,6 +230,10 @@ async function runWithConversation(
 	const startedAt = Date.now();
 	const controller = new TurnController({
 		runner,
+		replaceRunner: () => {
+			runner = makeRunner();
+			return runner;
+		},
 		frontend,
 		store,
 		traits,

@@ -424,14 +424,16 @@ describe("runtime stop handling", () => {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
 		expect(runtime.handler.isRunning("dm_tester")).toBe(false);
-		expect(bot.deliveries.some((entry) => String(entry.args[1]).includes("强制结束"))).toBe(true);
+		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
 
-		// The wedged turn's own late release must not disturb whatever runs next.
-		runner.beginTurn("next message");
+		// The next generation owns an independent state machine; late cleanup cannot release it.
+		const nextRunner: AgentRunner = { ...runner, ...createFakeTurnState() };
+		createRunnerMock.mockReturnValue(nextRunner);
+		runtime.handler.reserveEvent?.({ ...event, text: "next message" });
 		releaseRun();
 		await task;
 		expect(runtime.handler.isRunning("dm_tester")).toBe(true);
-		runner.endTurn();
+		nextRunner.endTurn();
 
 		await runtime.shutdown();
 	}, 20_000);

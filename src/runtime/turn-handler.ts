@@ -4,6 +4,7 @@
  * its collaborators) by `bootstrap.ts`.
  */
 import { join } from "path";
+import { forceEndStuckTurnAfterStop } from "../agent/stop-watchdog.js";
 import type { AgentRunner } from "../agent/types.js";
 import type { BootstrapPaths } from "../app/home.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
@@ -31,7 +32,6 @@ import { pauseTask as pauseStoredTask } from "../tasks/store.js";
 import type { ChannelResolution } from "./dot-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { persistInboundImage, relativeImagePaths } from "./inbound-images.js";
-import { forceEndStuckTurnAfterStop } from "./stop-watchdog.js";
 import { createTaskDriverEvent, parseDriverTaskId } from "./task-driver.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { type ArchivedMessage, createEventTurnRunner, isSyntheticEvent } from "./turn-run.js";
@@ -116,6 +116,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 		archiveIncomingMessage,
 		getRunner,
 		resolveChannel,
+		isCurrentRunner: (runner) => channelRunners.get(runner.conversation.channelId) === runner,
 		reservedTurns,
 		isShuttingDown,
 		getDurableDispatch,
@@ -194,6 +195,13 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 						channelId,
 						runner,
 						graceMs: options.stopForceEndGraceMs,
+						isCurrent: () => channelRunners.get(channelId) === runner,
+						recover: () => {
+							runner.retireForRecovery();
+							channelRunners.delete(channelId);
+							_bot.resetChannelQueue(channelId);
+							getDurableDispatch()?.discardQueuedClaims(channelId);
+						},
 						notify: (text) => _bot.sendPlain(channelId, text),
 					})
 						.catch((err) => {

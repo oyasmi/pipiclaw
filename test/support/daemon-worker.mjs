@@ -59,6 +59,13 @@ process.on("message", async ({ action, text, channelId, runId, dot = "e2e" }) =>
 				conversationId: "conv_e2e",
 				conversationType: "1",
 			});
+		} else if (action === "turn") {
+			await runtime.handler.handleEvent({
+				type: "dm", channelId, text, ts: String(Date.now()), user: "e2e", userName: "E2E",
+				conversationId: "conv_e2e", conversationType: "1",
+			}, runtime.bot);
+		} else if (action === "maintenance") {
+			await runtime.memoryMaintenance.runOnce();
 		} else if (action === "record") {
 			// Runs are owned per dot (spec 058, D15); the record keeps its originating channel.
 			value = runtime.runs.get(dot).get(runId) ?? null;

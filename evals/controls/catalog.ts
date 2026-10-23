@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fixtureInteger } from "../harness/fixture-seed.js";
+import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
 import { controlDelivery, controlEvent, controlFile } from "./fixtures.js";
 import type { OracleControl } from "./types.js";
 
@@ -64,6 +64,44 @@ const coding: OracleControl[] = [
 ];
 
 const cases: Record<string, OracleControl[]> = {
+	"M-compaction-01": [
+		reject(
+			"renamed-field",
+			"The observed approval_id drift must never be accepted as the original schema",
+			["checkpoint-task-retained"],
+			(ctx) =>
+				controlFile(
+					ctx,
+					"handoff.json",
+					JSON.stringify({ region: "eu-west-1", approval_id: fixtureToken(ctx.seed, "APPROVAL"), deploy: false }),
+				),
+		),
+		pass("json-equivalence", "Whitespace and field ordering do not change task completion", (ctx) =>
+			controlFile(
+				ctx,
+				"handoff.json",
+				JSON.stringify(
+					{ deploy: false, approval: fixtureToken(ctx.seed, "APPROVAL"), region: "eu-west-1" },
+					null,
+					2,
+				),
+			),
+		),
+		reject(
+			"forgot-restriction",
+			"A plausible handoff must retain the prohibition",
+			["checkpoint-task-retained"],
+			(ctx) =>
+				controlFile(
+					ctx,
+					"handoff.json",
+					JSON.stringify({ deploy: true, approval: fixtureToken(ctx.seed, "APPROVAL"), region: "eu-west-1" }),
+				),
+		),
+		reject("no-compaction", "Uncompressed history cannot prove checkpoint quality", ["compaction-occurred"], (ctx) =>
+			controlFile(ctx, "conversations/dm-1/context.jsonl", '{"type":"message"}\n'),
+		),
+	],
 	"C-fix-01": [
 		...coding,
 		reject("unrelated-shell", "An echo command is not verification", ["verification-ran"], (ctx) => {
@@ -379,6 +417,21 @@ const cases: Record<string, OracleControl[]> = {
 		),
 	],
 };
+
+cases["M-compaction-02"] = [
+	...cases["M-compaction-01"]!,
+	reject("manual-only", "A manual checkpoint does not prove background adoption", ["compaction-occurred"], (ctx) =>
+		controlFile(ctx, "conversations/dm-1/context.jsonl", '{"type":"compaction"}\n'),
+	),
+	reject(
+		"early-artifact",
+		"A file from the uncompressed first step is insufficient",
+		["artifact-written-after-checkpoint"],
+		(ctx) => {
+			ctx.trace.length = 0;
+		},
+	),
+];
 
 export function oracleControls(caseId: string): OracleControl[] | undefined {
 	const specific = cases[caseId];

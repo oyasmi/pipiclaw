@@ -7,11 +7,14 @@
  * unit-tested with fakes and a fake clock. `app.ts` builds the real ones.
  */
 
+import { forceEndStuckTurnAfterStop } from "../agent/stop-watchdog.js";
 import type { AgentRunner } from "../agent/types.js";
+import { createFreshActiveSession } from "../channel/active-session-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
 	formatBusyHint,
 	formatFollowupQueued,
+	formatNewSessionReply,
 	formatNoRunningTurn,
 	formatSteerQueued,
 	formatUnknownCommandMessage,
@@ -41,6 +44,8 @@ export interface TurnControllerDeps {
 	/** Info commands that do not depend on run state. */
 	renderHelp: (args?: string) => string;
 	runReport: DispatchDeps["runReport"];
+	/** The app owns the runner cache; replacement preserves its conversation/session reference. */
+	replaceRunner: () => AgentRunner;
 }
 
 export class TurnController {
@@ -50,8 +55,10 @@ export class TurnController {
 	private currentTurn: Promise<void> = Promise.resolve();
 	private readonly followups: string[] = [];
 	private submitChain: Promise<void> = Promise.resolve();
+	private resetChain: Promise<void> = Promise.resolve();
 	private exitArmed = false;
 	private exiting = false;
+	private stopping: AgentRunner | undefined;
 	private exitResolve!: () => void;
 	private readonly exitPromise = new Promise<void>((resolve) => {
 		this.exitResolve = resolve;
@@ -92,6 +99,12 @@ export class TurnController {
 	}
 
 	submit(text: string): void {
+		if (["stop", "new", "exit", "quit"].includes(slashCommandName(text) ?? "")) {
+			void this.processSubmit(text).catch((error: unknown) => {
+				this.deps.frontend.showNotice(`操作失败：${errorMessage(error)}`);
+			});
+			return;
+		}
 		this.submitChain = this.submitChain
 			.then(() => this.processSubmit(text))
 			.catch((err) => {
@@ -104,6 +117,7 @@ export class TurnController {
 
 	private async processSubmit(text: string): Promise<void> {
 		if (this.exiting) return;
+		if (!["new", "stop", "exit", "quit"].includes(slashCommandName(text) ?? "")) await this.resetChain;
 		// Any submitted line disarms a pending "press Ctrl-C again to exit".
 		this.exitArmed = false;
 		const outcome = await dispatch(text, this.dispatchDeps);
@@ -119,8 +133,7 @@ export class TurnController {
 				return;
 			case "stop":
 				if (this.deps.runner.isBusy()) {
-					void this.deps.runner.abort();
-					this.deps.frontend.showNotice("正在停止…");
+					this.stopTurn();
 				} else {
 					this.deps.frontend.showNotice(formatNoRunningTurn("stop"));
 				}
@@ -132,6 +145,10 @@ export class TurnController {
 				await this.applyText(outcome.text);
 				return;
 			case "run": {
+				if (slashCommandName(outcome.text) === "new") {
+					await this.newSession();
+					return;
+				}
 				// Reject an unknown slash command rather than steering/running its raw
 				// text. Session commands, skills, and prompt templates pass through.
 				const name = outcome.text.trim().startsWith("/") ? slashCommandName(outcome.text) : null;
@@ -155,12 +172,19 @@ export class TurnController {
 
 	/** A plain message or /steer: steer the in-flight turn, else start a fresh one. */
 	private async applyText(text: string): Promise<void> {
-		if (this.deps.runner.isBusy()) {
+		const runner = this.deps.runner;
+		if (runner.isBusy()) {
+			if (this.deps.runner.interruptCompaction()) {
+				this.followups.push(text);
+				return;
+			}
 			try {
-				await this.deps.runner.queueSteer(text, this.deps.userName);
+				await runner.queueSteer(text, this.deps.userName);
+				if (this.deps.runner !== runner) return;
 				this.deps.frontend.showNotice(formatSteerQueued(false));
 				return;
 			} catch {
+				if (this.deps.runner !== runner) return;
 				// The busy window closed between dispatch and here; run it fresh.
 			}
 		}
@@ -178,38 +202,44 @@ export class TurnController {
 
 	private beginTurn(text: string): void {
 		if (this.deps.runner.isBusy() || this.exiting) return;
-		// Reserve the turn synchronously; the runner is the single owner of busy state.
-		this.deps.runner.beginTurn(text);
+		// Capture this generation: late cleanup must not touch its replacement.
+		const runner = this.deps.runner;
+		runner.beginTurn(text);
 		this.deps.frontend.setBusy(true);
 		this.updateStatus();
 
 		this.currentTurn = (async () => {
 			const input = this.makeTurnInput(text);
 			await this.archiveIncoming(input);
+			if (this.deps.runner !== runner) return;
 			const ctx = createTerminalContext(input, this.deps.frontend, this.deps.store, this.deps.traits);
 			try {
-				await this.deps.runner.run(ctx, this.deps.store);
+				await runner.run(ctx, this.deps.store);
 			} catch (err) {
 				this.deps.frontend.showNotice(`处理失败：${errorMessage(err)}`);
 			} finally {
 				await ctx.close();
-				this.deps.runner.endTurn();
-				this.deps.frontend.setBusy(false);
-				this.updateStatus();
+				runner.endTurn();
+				if (this.deps.runner === runner) {
+					this.deps.frontend.setBusy(false);
+					this.updateStatus();
+				}
 			}
 		})();
 
 		// The turn is over whether it settled or its finally threw (e.g. a frontend
 		// method failing); drain either way and never leak an unhandled rejection.
 		void this.currentTurn.then(
-			() => this.drainFollowups(),
+			() => {
+				if (this.deps.runner === runner) this.drainFollowups();
+			},
 			(err) => {
 				log.logWarn("tui.turn.finalizer_failed", "Turn finalizer failed", {
 					channelId: this.deps.channelId,
 					reason: errorMessage(err),
 				});
-				this.deps.runner.endTurn();
-				this.drainFollowups();
+				runner.endTurn();
+				if (this.deps.runner === runner) this.drainFollowups();
 			},
 		);
 	}
@@ -250,8 +280,7 @@ export class TurnController {
 
 	private handleInterrupt(): void {
 		if (this.deps.runner.isBusy()) {
-			void this.deps.runner.abort();
-			this.deps.frontend.showNotice("正在停止…");
+			this.stopTurn();
 			return;
 		}
 		// Idle: first Ctrl-C arms the exit prompt, the next one exits (no time
@@ -262,6 +291,56 @@ export class TurnController {
 		}
 		this.exitArmed = true;
 		this.deps.frontend.showNotice("再按一次 Ctrl-C 退出。");
+	}
+
+	private stopTurn(): void {
+		const runner = this.deps.runner;
+		runner.requestStop();
+		this.followups.length = 0;
+		void runner.abort().catch(() => undefined);
+		this.deps.frontend.showNotice("正在停止…");
+		if (this.stopping === runner) return;
+		this.stopping = runner;
+		void forceEndStuckTurnAfterStop({
+			channelId: this.deps.channelId,
+			runner,
+			isCurrent: () => this.deps.runner === runner,
+			recover: () => {
+				runner.retireForRecovery();
+				this.deps.runner = this.deps.replaceRunner();
+				this.currentTurn = Promise.resolve();
+				this.submitChain = Promise.resolve();
+				this.deps.frontend.setBusy(false);
+				this.updateStatus();
+			},
+			notify: async (text) => this.deps.frontend.showNotice(text),
+		})
+			.catch((error: unknown) => {
+				log.logWarn("tui.turn.recovery_failed", "Turn recovery failed", { reason: errorMessage(error) });
+			})
+			.finally(() => {
+				if (this.stopping === runner) this.stopping = undefined;
+			});
+	}
+
+	private async newSession(): Promise<void> {
+		const reset = this.resetChain.then(() => this.commitNewSession());
+		this.resetChain = reset.catch(() => undefined);
+		await reset;
+	}
+
+	private async commitNewSession(): Promise<void> {
+		const runner = this.deps.runner;
+		const conversation = runner.conversation;
+		const result = await createFreshActiveSession(conversation.conversationDir, conversation.cwd);
+		runner.retireForNewSession();
+		this.followups.length = 0;
+		this.deps.runner = this.deps.replaceRunner();
+		this.currentTurn = Promise.resolve();
+		this.submitChain = Promise.resolve();
+		this.deps.frontend.setBusy(false);
+		this.deps.frontend.showFinal(formatNewSessionReply(result.sessionId));
+		this.updateStatus();
 	}
 
 	private requestExit(): void {
@@ -312,7 +391,8 @@ export class TurnController {
 		this.exiting = true;
 
 		if (this.deps.runner.isBusy()) {
-			await this.deps.runner.abort().catch(() => {});
+			this.deps.runner.requestStop();
+			void this.deps.runner.abort().catch(() => {});
 			// Never let a rejected turn (e.g. ctx.close() throwing in the turn's finally)
 			// escape the race — that would skip frontend.stop() and strand the terminal in
 			// raw mode. The turn already logs its own failures.

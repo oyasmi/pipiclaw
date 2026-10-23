@@ -105,7 +105,7 @@ flowchart TB
 - **`DingTalkBot`**（`dingtalk/bot.ts` 只是门面，下面这些职责由 `connection.ts`、`inbound.ts`、`cards.ts`、`media.ts`、`access-token.ts` 各自承担）负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
 - **合成事件不直接进内存队列**：EventsWatcher 和 TaskDriver 产生的事件先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
 - **先解析绑定，再建 runner**（spec 058）：`DotRuntime` 是 daemon 里唯一回答"这个频道绑在哪个 dot 上、哪些 dot 处于激活状态"的地方。未绑定的频道只能用 `/dot` 和 `/help`，不建 runner、不归档、不调用模型、不在盘上留下任何东西；合成事件只有在它的频道仍绑定在事件所属的 dot（`event.dot`）上时才被接受。没有任何绑定的 dot 处于休眠：它的事件 watcher 停止，task driver 和记忆调度器不再扫描它，正在跑的 run 和 job 照常结算但不投递唤醒。
-- **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，TUI（`tui/app.ts`）的单进程一个 `const`（频道 `tui`，会话区 `conversations/tui-N/`）——一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
+- **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，TUI（`tui/app.ts`）的单进程一个可替换引用（频道 `tui`，会话区 `conversations/tui-N/`）——一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
 - **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到 dot 目录；完成后同样先经过 durable dispatch，再唤醒发起委派的那个频道（仍绑定在该 dot 上时）。
 
 ## 4. 一条消息的生命周期
@@ -133,7 +133,7 @@ sequenceDiagram
     H->>H: /dot 在准入前执行；归档到会话区 log.jsonl；内建命令(/status /tasks /events /usage…)直接短路
     H->>R: runner.run(ctx, store)
     R->>R: 组装 prompt：<br/>① 首轮才有：memory_bootstrap(workspace MEMORY.md+dot 记忆索引+当天 journal)<br/>② 任务摘要 task digest<br/>③ 用户消息
-    R->>R: 预防性压缩判断（投影 token 超阈值则先 compact）
+    R->>R: 后台压缩准备/采用（只有达到硬预算才等待）
     R->>S: session.prompt()（带模型 fallback 链）
     loop agent 循环
         S->>S: LLM ↔ 工具调用（经安全护栏）
@@ -153,6 +153,16 @@ sequenceDiagram
 - **未知斜杠命令在分发处拒绝**（`isKnownSlashCommand`），避免 `/modle` 这类笔误消耗一整轮 LLM。
 - **模型 fallback**（`models/fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
 - **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到会话区的 `last_prompt.json`。
+
+**会话压缩与停止恢复**
+
+`agent/session/compaction.ts` 管理后台候选：有效窗口减去输出预留及 4096 tokens 误差余量，剩余输入预算的 70% 启动准备；主会话继续使用原投影，仅到硬预算才等待现有候选的剩余期限。新请求前和工具批次结束时检查，主会话追加消息不会取消候选。
+
+`compaction-snapshot.ts` 从 SDK 公开的 canonical projection 选取工具调用/结果完整的切点，固定 session/manager、模型、已有 compaction、覆盖边界和整个历史前缀哈希。采用前重新验证，允许追加尾部，拒绝 context_edit、分支、模型、会话或压缩变化。只在 idle 或工具批次结束调用公开 appendCompaction + refreshContext，保留新增尾部；预览收益不足或仍高于准备阈值则丢弃并冷却。落盘失败隔离当前 session，禁止继续使用 SDK 已改变但可能未持久化的索引。重绑、/stop、/new 和退休都会取消候选。
+
+`compaction-summary.ts` 复用独立摘要执行：鉴权、快照和全部分段/重试共享 60 秒总期限，20 秒无有效输出取消，off thinking，每次最多 4096 输出 tokens。`compaction-input.ts` 只在摘要请求中缩减大工具载荷，保留头尾、哈希与原 JSONL 引用；普通长历史按完整覆盖、带重叠的片段递进摘要，最多四段，不任意删除中段。空、截断、超预算摘要保留原状态。手动 /compact 和 SDK 阈值/溢出仍有同样的受限恢复路径，现有后台候选可被 SDK 采用；扩展失败显式返回 cancel。自动失败/取消冷却 30 秒，slash command 和 steer 入队不启动额外前台压缩，自动入口遵守 compaction.enabled。
+
+`agent/stop-watchdog.ts` 由钉钉和 TUI 共用：停止超过 3 秒未收敛时，宿主退休旧 runner 并更换队列/执行引用，保留活动会话文件。旧 SDK 订阅和投递关闭，迟到的回合不再改变新代次或结算通知；`/new` 仍表示显式新建会话。摘要后台生成和并发采用候选结果不属于当前实现。
 
 ### 投递层（ChannelContext）
 
@@ -236,7 +246,9 @@ flowchart LR
 
     BOOT -->|注入 memory_bootstrap| PROMPT[本轮 prompt]
     SAVE --> STORE
-    LC -->|compact 前 / new session 前 / shutdown| REFLECT
+    LC -->|compact 前仅落盘| BW["boundary-work.ts<br/>.memory-work/&lt;conversation&gt;/&lt;id&gt;.json"]
+    BW -->|压缩结束 / 启动恢复 / 调度器| REFLECT
+    LC -->|new session 前异步 / shutdown| REFLECT
     GATES --> JOB --> REFLECT
     REFLECT --> STORE
     REFLECT --> SIDE
@@ -246,7 +258,7 @@ flowchart LR
 - **入口（读）**只有一条：会话首轮（`firstTurnMemoryBootstrapPending`，压缩后重新置位）把 `store.listMemoryEntries` 的结果交给 `index-budget.ts` 分层，和 workspace `MEMORY.md`、当天 journal 尾部一起用 `render.ts` 包成 `<memory_bootstrap>`。之后整个会话都不再重复注入——同一份索引反复出现在历史里既浪费 token 也会干扰模型读历史。中途新增/更新的记忆要到下一次首轮才可见，这是刻意接受的延迟：模型怀疑"以前可能记过"时用 `memory_search`。
 - **索引超预算时的分层**（`index-budget.ts`，装不下才触发，约 70–100 条以后）：`user`/`feedback` 类型永远全给（它们决定行为，条数天然少），`project`/`reference` 按 `updated` 降序填充直到预算，末尾补一行"还有 N 条，用 memory_search"。**没有相关性排序**——首轮的用户消息往往只是一句问候，拿它给几十条记忆打分没有意义。
 - **`memory_save` 的冲突检测**：写入前用 `search.ts` 的 Jaccard 相似度（`descriptionSimilarity`，阈值 0.6）在内存里比一遍频道已有记忆的 description；命中就报 `RecoverableToolError` 列出候选 `name`，要求模型带上 `replaces`（目标 name 或 `"none"`）重新调用。带 `replaces` 可越过相似性提示；目标不存在、疑似凭据等其他校验仍可能拒绝写入。`memory_forget` 按 `name` 精确删除，不再做模糊文本匹配。
-- **反思是唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。触发点与 v1 完全一致：压缩前、`/new` 前（后台异步）、关机 flush、以及频道空闲后的调度 tick——只是现在只有一个 job，`lifecycle.ts` 的边界钩子和 `reflect-job.ts` 的空闲触发调用的是同一个 `reflect.ts`。
+- **反思是记忆模块唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。压缩前只持久化待整理的原始消息范围，不等待记忆队列或模型；`boundary-work.ts` 在压缩结束后异步整理，并由启动和调度器恢复未完成工作，关闭空闲维护也不取消已持久化的边界工作。`/new` 前（后台异步）、关机 flush 和空闲 tick 仍调用同一个 `reflect.ts`。
 - **试用期转正信号从"被召回"改成"被 touch"**：v1 靠每轮召回记录使用次数；v2 索引首轮整份给出，"被注入"不再是有效信号。改为反思 pass 输出里的 `touch: [names]`——模型读窗口时判断"这段对话依赖或印证了哪些既有记忆"，被 touch 一次即转正（清除 `expires`）。30 天内没有任何一次 pass 认为它相关，`store.expireProbationaryEntries`（反思开始前的确定性前置步骤）直接删除——不留墓碑，之后仍可被重新学到。
 - **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。
 - **调度器**（`scheduler.ts`）每 tick 轮转选取一个不活跃且到期的频道，单一 job（`reflect-job.ts`）先过确定性 gate（`shouldRunReflect`：`dirty`、空闲时长、距上次反思间隔、增量窗口是否有实质对话），gate 不放行则零 LLM 成本。频道上下文的取法不变：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的磁盘冷上下文。

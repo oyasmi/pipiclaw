@@ -1,11 +1,19 @@
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { drainBoundaryReflectWork, hasBoundaryReflectWork } from "../src/memory/boundary-work.js";
+import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 vi.mock("../src/memory/reflect.js", () => ({ runReflect: vi.fn() }));
 vi.mock("../src/memory/review-log.js", () => ({ appendMemoryReviewLog: vi.fn() }));
 
-import { boundCompactionMessages, MemoryLifecycle } from "../src/memory/lifecycle.js";
+import { reduceSummaryPayloads, splitSummaryInput } from "../src/agent/session/compaction-input.js";
+import { MemoryLifecycle } from "../src/memory/lifecycle.js";
 import { runReflect } from "../src/memory/reflect.js";
 import { appendMemoryReviewLog } from "../src/memory/review-log.js";
+
+const tempDir = useTempDirs("pipiclaw-boundary-work-");
 
 const CONVERSATION = {
 	dot: "news",
@@ -82,65 +90,115 @@ function createLifecycle(
 }
 
 describe("MemoryLifecycle", () => {
-	it("bounds an oversized compaction request while retaining its head and tail", () => {
-		const head = "ORIGINAL_GOAL ";
-		const middle = "中".repeat(20_000);
-		const tail = " CURRENT_STATE";
-		const result = boundCompactionMessages(
-			[{ role: "user", content: `${head}${middle}${tail}`, timestamp: Date.now() }] as never[],
-			16_000,
-			4_000,
-		);
-
-		expect(result.truncated).toBe(true);
-		expect(result.boundedChars).toBeLessThan(result.originalChars);
-		expect(result.messages).toHaveLength(1);
-		const boundedText = (result.messages[0] as { content: Array<{ text: string }> }).content[0]?.text ?? "";
-		expect(boundedText).toContain("ORIGINAL_GOAL");
-		expect(boundedText).toContain("CURRENT_STATE");
-		expect(boundedText).toContain("middle omitted");
+	it("contains boundary discovery I/O failures before they escape detached lifecycle work", async () => {
+		// Regression: discovery used to reject outside the worker's catch, risking an unhandled rejection.
+		const root = tempDir();
+		const conversation = { ...CONVERSATION, dotDir: root };
+		const appHomeDir = join(root, "app");
+		await writeFile(join(root, ".memory-work"), "unavailable directory");
+		await expect(
+			drainBoundaryReflectWork({
+				conversation,
+				workspaceDir: root,
+				appHomeDir,
+				model: { provider: "test", id: "noop" } as never,
+				resolveApiKey: async () => "",
+			}),
+		).resolves.toBeUndefined();
+		expect(runReflect).not.toHaveBeenCalled();
+		expect((await readMemoryMaintenanceState(appHomeDir, conversation)).failureBackoffUntil).toBeTruthy();
 	});
 
-	it("reflects on the compaction window before session_before_compact resolves", async () => {
-		let resolveReflect: (() => void) | undefined;
-		vi.mocked(runReflect).mockImplementation(
-			() =>
-				new Promise((resolve) => {
-					resolveReflect = () =>
-						resolve({
-							skipped: false,
-							condensed: false,
-							journalAppended: 0,
-							journalSkippedDuplicate: 0,
-							added: [],
-							updated: [],
-							deleted: [],
-							touched: [],
-							renamed: [],
-							expiredProbation: [],
-							rejected: [],
-							discarded: [],
-						} as never);
-				}),
+	it("covers a large Chinese transcript across bounded chunks, including its middle", () => {
+		const input = `ORIGINAL_GOAL ${"中".repeat(20000)} MIDDLE_CONSTRAINT ${"文".repeat(20000)} CURRENT_STATE`;
+		const tool = {
+			role: "toolResult" as const,
+			toolCallId: "source-call",
+			toolName: "read",
+			// Each block fits the SDK limit; together they exceed it. The final error must survive.
+			content: [
+				{ type: "text" as const, text: `FILE_HEAD ${"x".repeat(1200)}` },
+				{ type: "text" as const, text: "y".repeat(1200) },
+				{ type: "text" as const, text: `${"z".repeat(1200)} FAILURE_AT_END` },
+			],
+			isError: true,
+			timestamp: 2,
+		};
+		const reduced = reduceSummaryPayloads(
+			[{ role: "user", content: input, timestamp: 1 }, tool, { ...tool, toolCallId: "source-call-2" }],
+			[],
+			"/tmp/original.jsonl",
 		);
+		const chunks = splitSummaryInput(reduced, 26000, 4000);
+		expect(chunks.length).toBeGreaterThan(1);
+		const all = JSON.stringify(chunks);
+		expect(all).toContain("ORIGINAL_GOAL");
+		expect(all).toContain("MIDDLE_CONSTRAINT");
+		expect(all).toContain("CURRENT_STATE");
+		expect(all).toContain("FAILURE_AT_END");
+		expect(all).toContain("/tmp/original.jsonl");
+		expect(all).toContain("sha256=");
+		expect(all).toContain("Repeated payload");
+		expect(tool.content.map((part) => part.text).join("\n").length).toBeGreaterThan(3600);
+		expect(() =>
+			splitSummaryInput([{ role: "user", content: "中".repeat(300000), timestamp: 1 }], 26000, 4000),
+		).toThrow();
+	});
 
-		const compactionMessages = [{ role: "user", content: "summarize this" }] as never[];
-		const lifecycle = createLifecycle();
-		const fakePi = createFakePi();
-		lifecycle.createExtensionFactory()(fakePi.api as never);
-
-		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
-			preparation: { messagesToSummarize: compactionMessages },
-		});
-		await waitForAssertion(() => {
-			expect(runReflect).toHaveBeenCalledTimes(1);
-		});
-
-		resolveReflect?.();
-		await expect(beforeCompact).resolves.toBeUndefined();
-		expect(vi.mocked(runReflect)).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dm_123", messages: compactionMessages }),
-		);
+	it("persists compaction memory without waiting on inference and resumes the work after recreation", async () => {
+		const root = tempDir();
+		const conversation = { ...CONVERSATION, dotDir: root, conversationDir: join(root, "conversations/dm-1") };
+		const entries = [
+			{
+				type: "message",
+				id: "u1",
+				message: { role: "user", content: "remember the deployment decision", timestamp: 1 },
+			},
+			{
+				type: "message",
+				id: "a1",
+				message: { role: "assistant", content: [{ type: "text", text: "confirmed" }], timestamp: 2 },
+			},
+			{ type: "message", id: "keep", message: { role: "user", content: "continue", timestamp: 3 } },
+		] as never[];
+		const options = {
+			conversation,
+			workspaceDir: root,
+			appHomeDir: join(root, "app"),
+			getMessages: () => [],
+			getSessionEntries: () => entries,
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
+			resolveApiKey: async () => "",
+		};
+		const lifecycle = new MemoryLifecycle(options);
+		await lifecycle.prepareCompaction({
+			branchEntries: entries,
+			preparation: { firstKeptEntryId: "keep" },
+			signal: new AbortController().signal,
+		} as never);
+		expect(runReflect).not.toHaveBeenCalled();
+		expect(await hasBoundaryReflectWork(conversation)).toBe(true);
+		const dir = join(root, ".memory-work", conversation.conversation);
+		const file = (await readdir(dir)).find((name) => name.endsWith(".json"))!;
+		const snapshot = await readFile(join(dir, file), "utf8");
+		vi.mocked(runReflect).mockRejectedValueOnce(new Error("provider unavailable"));
+		await new MemoryLifecycle(options).resumeBoundaryReflect();
+		expect(await hasBoundaryReflectWork(conversation)).toBe(true);
+		// Failed work remains pending during backoff; no captured closure is needed to retry later.
+		await new MemoryLifecycle(options).resumeBoundaryReflect();
+		expect(runReflect).toHaveBeenCalledOnce();
+		await updateMemoryMaintenanceState(options.appHomeDir, conversation, (state) => ({
+			...state,
+			failureBackoffUntil: null,
+		}));
+		await new MemoryLifecycle(options).resumeBoundaryReflect();
+		expect(runReflect).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(runReflect).mock.calls[0]![0].messages).toHaveLength(2);
+		expect(await hasBoundaryReflectWork(conversation)).toBe(false);
+		// A late/replayed enqueue cannot resurrect a completed operation.
+		await writeFile(join(dir, file), snapshot);
+		await new MemoryLifecycle(options).resumeBoundaryReflect();
+		expect(runReflect).toHaveBeenCalledTimes(2);
 	});
 
 	it("returns immediately from new-session switch and reflects in the background", async () => {

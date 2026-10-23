@@ -61,5 +61,6 @@ export function createFakeSessionBinding(
 		bindChatSession: async (): Promise<void> => {},
 		getTaskLoop: (): { taskId: string } | undefined => undefined,
 		retireForNewSession: (): void => {},
+		retireForRecovery: (): void => {},
 	};
 }

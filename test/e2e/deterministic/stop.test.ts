@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChannelRunner } from "../../../src/agent/channel-runner.js";
+import type { DingTalkBot } from "../../../src/dingtalk/bot.js";
 import * as apiKeys from "../../../src/models/api-keys.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
@@ -72,5 +74,62 @@ describe("E2E deterministic: /stop", () => {
 		});
 		await harness.sendUserMessage("STILL_ALIVE?");
 		expect(harness.lastMainTurnRequest()?.matchedRoute).toBe("next");
+
+		// A5 recovery extension: a settled SDK can still have a wedged transport callback.
+		// Mutation (2026-10-22): remove resetChannelQueue from recovery; the real transport stays blocked and this case fails.
+		let atEpilogue!: () => void;
+		const epilogue = new Promise<void>((resolve) => {
+			atEpilogue = resolve;
+		});
+		let releaseEpilogue!: () => void;
+		const epilogueGate = new Promise<void>((resolve) => {
+			releaseEpilogue = resolve;
+		});
+		let recovered!: () => void;
+		const recovery = new Promise<void>((resolve) => {
+			recovered = resolve;
+		});
+		const run = ChannelRunner.prototype.run;
+		vi.spyOn(ChannelRunner.prototype, "run").mockImplementation(async function (this: ChannelRunner, ctx, store) {
+			const result = await run.call(this, ctx, store);
+			if (ctx.message.text === "WEDGE_RETURN") {
+				atEpilogue();
+				await epilogueGate;
+			}
+			return result;
+		});
+		const retire = ChannelRunner.prototype.retireForRecovery;
+		vi.spyOn(ChannelRunner.prototype, "retireForRecovery").mockImplementation(function (this: ChannelRunner) {
+			retire.call(this);
+			recovered();
+		});
+		let oldTurn: Promise<void> = Promise.resolve();
+		const handle = harness.runtime.handler.handleEvent.bind(harness.runtime.handler);
+		vi.spyOn(harness.runtime.handler, "handleEvent").mockImplementation((event, bot, isEvent) => {
+			const pending = handle(event, bot, isEvent);
+			if (event.text === "WEDGE_RETURN") oldTurn = pending;
+			return pending;
+		});
+		const nextGate = harness.model.script.hold({
+			when: (request) => request.isMainTurn && request.lastUserText.includes("AFTER_RECOVERY"),
+		});
+		try {
+			await harness.sendUserMessageNoWait("WEDGE_RETURN");
+			await epilogue;
+			await harness.sendUserMessageNoWait("/stop");
+			await recovery;
+			const bot = (harness.runtime as typeof harness.runtime & { bot: DingTalkBot }).bot;
+			expect(bot.allChannelQueuesIdle()).toBe(true);
+			await harness.sendUserMessageNoWait("AFTER_RECOVERY");
+			const nextRequest = await nextGate.arrived;
+			expect(JSON.stringify(nextRequest.messages)).toContain("WEDGE_RETURN");
+			releaseEpilogue();
+			await oldTurn;
+			expect(harness.runtime.handler.isRunning(harness.channelId)).toBe(true);
+		} finally {
+			releaseEpilogue();
+			nextGate.release();
+		}
+		await harness.waitForIdle();
 	});
 });

@@ -16,7 +16,7 @@ import type { ModelSelection } from "../session/model-selection.js";
 import { SessionRetryAttempt } from "../session/session-adapter.js";
 import type { SessionHost } from "../session/session-host.js";
 import { MAX_USER_MESSAGE_CHARS, type RunState } from "../types.js";
-import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
+import { estimateIncomingMessageTokens } from "./context-budget.js";
 import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import type { createRunQueue } from "./run-queue.js";
 import { buildFirstTurnMemoryBootstrap, buildTaskDigestForTurn, renderDotTurnContext } from "./turn-context.js";
@@ -182,9 +182,11 @@ export class TurnPipeline {
 			!ownTurn.stopRequested &&
 			(!attempt || this.host.session === attempt.session);
 		const submit = async (session: AgentSession, text: string) => {
+			const revision = this.host.compaction.revision;
 			await session.prompt(text, turn.images.images.length > 0 ? { images: turn.images.images } : undefined);
 			turn.promptSubmitted = true;
-			if (turn.bootstrapPrepared) this.host.firstTurnMemoryBootstrapPending = false;
+			if (turn.bootstrapPrepared && revision === this.host.compaction.revision)
+				this.host.firstTurnMemoryBootstrapPending = false;
 		};
 		return {
 			prompt: async (text) => {
@@ -298,7 +300,6 @@ export class TurnPipeline {
 		for (const notice of preparedImages.notices) {
 			await this.runState.ctx?.respondInThread(notice);
 		}
-		await this.maybeRunPreventiveCompactionForIncomingText(queuedMessage, preparedImages.images.length);
 
 		this.assertBusyWindowOpen();
 
@@ -311,31 +312,11 @@ export class TurnPipeline {
 	}
 
 	async maybeRunPreventiveCompactionForIncomingText(incomingText: string, imageCount: number = 0): Promise<void> {
-		const currentModel = this.session.model ?? this.models.activeModel;
-		const contextUsage = this.session.getContextUsage();
-		const contextTokens = contextUsage?.tokens;
-		const incomingTokens = estimateIncomingMessageTokens(incomingText, imageCount);
-		const decision = getPreventiveCompactionDecision(contextTokens, incomingTokens, currentModel.contextWindow);
-
-		if (!decision.shouldCompact) {
+		if (incomingText.trimStart().startsWith("/")) return;
+		if (!this.host.settingsManager.getCompactionEnabled()) {
+			this.host.compaction.cancel("disabled");
 			return;
 		}
-
-		const currentTokens = contextTokens ?? 0;
-		const startedAt = Date.now();
-		log.logInfo(
-			`[${this.channelId}] Preventive compaction triggered: projected ${decision.projectedTokens}/${currentModel.contextWindow} tokens (current=${currentTokens}, incoming≈${incomingTokens}), threshold=${decision.thresholdTokens}`,
-		);
-
-		try {
-			await this.session.compact();
-			log.logInfo(`[${this.channelId}] Preventive compaction complete in ${Date.now() - startedAt}ms`);
-		} catch (error) {
-			const message = errorMessage(error);
-			log.logWarn("agent.compaction.preventive_failed", "Preventive compaction failed", {
-				channelId: this.channelId,
-				reason: message,
-			});
-		}
+		await this.host.compaction.beforePrompt(estimateIncomingMessageTokens(incomingText, imageCount));
 	}
 }

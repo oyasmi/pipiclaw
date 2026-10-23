@@ -40,7 +40,8 @@ import type { UsageTotals } from "../usage/totals.js";
 import { handleBuiltinCommand, requireQueuedMessage } from "./builtin-commands.js";
 import { measureToolSchemas, type PromptTurnContextStats, renderContextReport } from "./prompt/manifest.js";
 import { ModelSelection } from "./session/model-selection.js";
-import { reportSettingsDiagnostics, SessionHost } from "./session/session-host.js";
+import { SessionHost } from "./session/session-host.js";
+import { reportSettingsDiagnostics } from "./session/settings-diagnostics.js";
 import { createRunQueue } from "./turn/run-queue.js";
 import { TurnFinisher } from "./turn/turn-finish.js";
 import { createTurnProgress, TurnPipeline } from "./turn/turn-pipeline.js";
@@ -227,6 +228,14 @@ export class ChannelRunner implements AgentRunner {
 			endTurn: () => this.endTurn(),
 		});
 		this.host.start(sessionManager);
+		void this.host.sessionReady
+			.then(() => this.memoryLifecycle.resumeBoundaryReflect())
+			.catch((error: unknown) => {
+				log.logWarn("memory.boundary.resume_failed", "Boundary memory resume failed", {
+					channelId,
+					reason: errorMessage(error),
+				});
+			});
 	}
 
 	private get session(): AgentSession {
@@ -256,6 +265,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	requestStop(): void {
+		this.host.compaction.cancel("stop");
 		this.turnState.requestStop();
 	}
 
@@ -412,6 +422,8 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async flushMemoryForShutdown(): Promise<void> {
+		this.host.compaction.cancel("shutdown");
+		await this.host.ensureSessionReady();
 		await this.flushMemoryActivity();
 		await this.memoryLifecycle.flushForShutdown();
 	}
@@ -472,24 +484,20 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	retireForNewSession(): void {
+		if (!this.retired && this.session) this.memoryLifecycle.noteNewSessionBoundary();
+		this.retireForRecovery();
+	}
+
+	retireForRecovery(): void {
 		if (this.retired) return;
 		this.retired = true;
-		if (this.session) {
-			this.memoryLifecycle.noteNewSessionBoundary();
-		}
+		this.requestStop();
 		// close() marks the delivery context closed synchronously before awaiting its drain,
 		// so late events from the old provider cannot overwrite the new session's response.
 		void this.runState.ctx?.close().catch(() => undefined);
-		this.forceEndTurn("superseded by /new");
+		this.forceEndTurn("runner generation retired");
 
-		const retireLiveSession = (): void => this.host.retireLiveSession();
-		if (this.session) {
-			retireLiveSession();
-		} else {
-			// A second message can issue `/new` while this generation is still initializing.
-			// Let construction settle in the background, then immediately tear it down.
-			void this.host.sessionReady.then(retireLiveSession, () => undefined);
-		}
+		this.host.retireLiveSession();
 	}
 
 	/**
@@ -523,12 +531,12 @@ export class ChannelRunner implements AgentRunner {
 	 * while turn state, `/stop` and delivery stay exactly where they already are.
 	 */
 	bindTaskSession(taskId: string): Promise<void> {
-		return this.host.bindTaskSession(taskId);
+		return this.retired ? Promise.resolve() : this.host.bindTaskSession(taskId);
 	}
 
 	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
 	bindChatSession(): Promise<void> {
-		return this.host.bindChatSession();
+		return this.retired ? Promise.resolve() : this.host.bindChatSession();
 	}
 
 	/** Which task loop this runner is currently bound to, if any. */

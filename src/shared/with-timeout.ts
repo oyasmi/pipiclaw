@@ -58,3 +58,24 @@ export async function withTimeout<T>(operation: string, timeoutMs: number, run: 
 		if (timer) clearTimeout(timer);
 	}
 }
+
+/** Release a caller even when a dependency ignores abort. Check the signal again before committing side effects. */
+export async function withAbortSignal<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+	signal.throwIfAborted();
+	let abort: () => void = () => {};
+	const cancelled = new Promise<never>((_, reject) => {
+		abort = () => reject(signal.reason);
+		signal.addEventListener("abort", abort, { once: true });
+	});
+	try {
+		return await Promise.race([
+			Promise.resolve().then(() => {
+				signal.throwIfAborted();
+				return run();
+			}),
+			cancelled,
+		]);
+	} finally {
+		signal.removeEventListener("abort", abort);
+	}
+}

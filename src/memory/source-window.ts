@@ -67,30 +67,3 @@ export function buildIncrementalMemorySourceWindow(options: {
 		windowId: createWindowId(options.sourceKind, options.lastEntryId, throughEntryId, messages),
 	};
 }
-
-export function buildCompactionMemorySourceWindow(options: {
-	entries: SessionEntry[];
-	messagesToSummarize: AgentMessage[];
-	firstKeptEntryId?: string;
-	lastEntryId?: string;
-}): MemorySourceWindow {
-	const boundaryIndex = options.firstKeptEntryId
-		? options.entries.findIndex((entry) => entry.id === options.firstKeptEntryId)
-		: -1;
-	const coveredEntries = boundaryIndex >= 0 ? options.entries.slice(0, boundaryIndex) : [];
-	const incrementalEntries = entriesSince(coveredEntries, options.lastEntryId);
-	const throughEntryId = incrementalEntries.at(-1)?.id ?? coveredEntries.at(-1)?.id;
-	const incrementalMessages = messagesFromEntries(incrementalEntries);
-	const messages =
-		incrementalMessages.length > 0 || options.lastEntryId !== undefined
-			? incrementalMessages
-			: [...options.messagesToSummarize];
-	return {
-		sourceKind: "compaction",
-		fromEntryId: options.lastEntryId,
-		throughEntryId,
-		entries: incrementalEntries,
-		messages,
-		windowId: createWindowId("compaction", options.lastEntryId, throughEntryId, messages),
-	};
-}

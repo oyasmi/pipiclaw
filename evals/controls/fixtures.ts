@@ -59,6 +59,23 @@ function askPark(ctx: TrialContext): void {
 }
 
 export function buildPositiveContext(id: string, ctx: TrialContext): TrialContext {
+	if (id === "M-compaction-01" || id === "M-compaction-02") {
+		controlFile(
+			ctx,
+			"conversations/dm-1/context.jsonl",
+			'{"type":"compaction","summary":"checkpoint","details":{"background":true}}\n',
+		);
+		controlFile(
+			ctx,
+			"handoff.json",
+			JSON.stringify({ region: "eu-west-1", approval: fixtureToken(ctx.seed, "APPROVAL"), deploy: false }),
+		);
+		if (id === "M-compaction-02") {
+			controlEvent(ctx, "tool-call", "write", { argsJson: JSON.stringify({ path: "handoff.json" }) });
+			ctx.trace.at(-1)!.stepIndex = 2;
+		}
+		return ctx;
+	}
 	if (id === "C-fix-01" || id === "C-test-proof-01") {
 		mkdirSync(join(ctx.workspaceDir, "src"), { recursive: true });
 		mkdirSync(join(ctx.workspaceDir, "test"), { recursive: true });

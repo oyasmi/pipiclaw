@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BootstrapPaths } from "../../../src/app/home.js";
 import { createDot } from "../../../src/dot/registry.js";
+import type { Frontend, FrontendCallbacks } from "../../../src/tui/frontend.js";
+import { reply } from "../../support/mock-provider/script.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
 import { cleanupE2ETestHome, createDeterministicHome, type E2ETestHome } from "../../support/setup.js";
 
@@ -13,12 +16,25 @@ import { cleanupE2ETestHome, createDeterministicHome, type E2ETestHome } from ".
 describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 	let model: Awaited<ReturnType<typeof startMockProvider>>;
 	let home: E2ETestHome;
+	let paths: BootstrapPaths;
 	const previousHome = process.env.PIPICLAW_HOME;
 	const previousOffline = process.env.PI_OFFLINE;
 
 	beforeEach(async () => {
 		model = await startMockProvider();
 		home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
+		paths = {
+			appName: "pipiclaw",
+			appHomeDir: home.homeDir,
+			workspaceDir: home.workspaceDir,
+			authConfigPath: join(home.homeDir, "auth.json"),
+			channelConfigPath: join(home.homeDir, "channel.json"),
+			modelsConfigPath: join(home.homeDir, "models.json"),
+			settingsConfigPath: join(home.homeDir, "settings.json"),
+			toolsConfigPath: join(home.homeDir, "tools.json"),
+			securityConfigPath: join(home.homeDir, "security.json"),
+			eventHistoryPath: join(home.homeDir, "state/events/history.jsonl"),
+		};
 		// ChannelRunner resolves auth/models from paths.ts constants derived from
 		// PIPICLAW_HOME at module load, so set it before importing the TUI app.
 		process.env.PIPICLAW_HOME = home.homeDir;
@@ -26,6 +42,7 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		const bad = model.unmatched();
 		await model.close();
 		cleanupE2ETestHome(home.homeDir);
@@ -60,6 +77,7 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 
 		try {
 			await runTuiApp({
+				paths,
 				dot: "tui-e2e",
 				print: true,
 				plain: true,
@@ -75,5 +93,68 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 		expect(out.length).toBeGreaterThan(0);
 		expect(existsSync(eventPath)).toBe(false);
 		expect(model.requests).toHaveLength(0);
+	});
+
+	it("starts a new terminal session while the outgoing provider remains held", async () => {
+		// Catches the TUI busy-command refusal swallowing the emergency /new boundary.
+		// Mutation (2026-10-22): remove the early /new route; no active-session ref is committed and this case fails.
+		const renderer = await import("../../../src/tui/renderer.js");
+		const { runTuiApp } = await import("../../../src/tui/app.js");
+		await createDot(home.workspaceDir, "tui-e2e", new Date());
+		let callbacks!: FrontendCallbacks;
+		let ready!: () => void;
+		const started = new Promise<void>((resolve) => {
+			ready = resolve;
+		});
+		let replied!: () => void;
+		const resetReply = new Promise<void>((resolve) => {
+			replied = resolve;
+		});
+		const frontend: Frontend = {
+			start: (value) => {
+				callbacks = value;
+				ready();
+			},
+			appendProgress() {},
+			showFinal: () => replied(),
+			showNotice() {},
+			clearProgress() {},
+			setWorking() {},
+			setStatus() {},
+			setBusy() {},
+			showBanner() {},
+			stop() {},
+		};
+		vi.spyOn(renderer, "createFrontend").mockReturnValue(frontend);
+		model.script.route({
+			name: "turn",
+			when: (request) => request.isMainTurn,
+			respond: [reply.text("done")],
+			repeat: true,
+		});
+		const old = model.script.hold({
+			when: (request) => request.isMainTurn && request.lastUserText.includes("OLD_TERMINAL"),
+		});
+		const fresh = model.script.hold({
+			when: (request) => request.isMainTurn && request.lastUserText.includes("NEW_TERMINAL"),
+		});
+		const app = runTuiApp({ paths, dot: "tui-e2e", plain: true, io: { log() {}, error() {} } });
+		try {
+			await Promise.race([started, app]);
+			callbacks.onSubmit("OLD_TERMINAL");
+			await old.arrived;
+			callbacks.onSubmit("/new");
+			await resetReply;
+			const reference = join(home.workspaceDir, "dots/tui-e2e/conversations/tui-1/active-session.json");
+			expect(existsSync(reference)).toBe(true);
+			callbacks.onSubmit("NEW_TERMINAL");
+			const request = await fresh.arrived;
+			expect(JSON.stringify(request.messages)).not.toContain("OLD_TERMINAL");
+		} finally {
+			old.release();
+			fresh.release();
+			callbacks?.onEof();
+			await app;
+		}
 	});
 });

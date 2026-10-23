@@ -84,6 +84,7 @@ export interface EventTurnDeps {
 	archiveIncomingMessage: (channelId: string, message: ArchivedMessage, contextLabel: string) => Promise<void>;
 	/** The channel's runner; `undefined` when the channel is not bound to an available dot (no runner is built). */
 	getRunner: (channelId: string) => AgentRunner | undefined;
+	isCurrentRunner: (runner: AgentRunner) => boolean;
 	resolveChannel: (channelId: string) => ChannelResolution;
 	/** Events whose `reserveEvent` began a turn: a turn rejected at admission releases exactly these. */
 	reservedTurns: WeakSet<ChannelEvent>;
@@ -397,6 +398,7 @@ export function createEventTurnRunner(
 		}
 		if (!backgroundOnly && !taskStep) ctx.primeCard(3500);
 		const result = await runner.run(ctx, store);
+		if (!deps.isCurrentRunner(runner)) return;
 		turn.mergedWakesHandled = result.stopReason !== "aborted" && result.stopReason !== "error";
 		if (taskStep) await finishTaskStep(runner, turn.event.channelId, taskStep.taskId, bot);
 
@@ -414,6 +416,10 @@ export function createEventTurnRunner(
 				reason: errorMessage(error),
 			});
 		});
+		if (!deps.isCurrentRunner(runner)) {
+			runner.endTurn();
+			return;
+		}
 		if (turn.structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
 		else await getDurableDispatch()?.markRetryable(event.dispatchId);
 		// A stopped turn has not finished handling its merged notifications. Release their

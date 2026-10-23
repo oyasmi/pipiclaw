@@ -4,6 +4,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { DotConversation } from "../dot/types.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { hasBoundaryReflectWork } from "./boundary-work.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState } from "./maintenance-state.js";
 import { type MemoryMaintenanceInput, resolveMemoryMaintenanceSettings } from "./maintenance-tuning.js";
@@ -56,6 +57,8 @@ async function mightReflectBeDue(input: {
 	settings: { memoryMaintenance: MemoryMaintenanceInput };
 	now: Date;
 }): Promise<boolean> {
+	if (await hasBoundaryReflectWork(input.conversation)) return true;
+	if (!input.settings.memoryMaintenance.enabled) return false;
 	const state = await readMemoryMaintenanceState(input.appHomeDir, input.conversation);
 	return shouldRunReflect({
 		now: input.now,
@@ -100,7 +103,7 @@ export class MemoryMaintenanceScheduler {
 
 	async runOnce(now = new Date()): Promise<void> {
 		const settings = this.options.getSettings();
-		if (!settings.memoryMaintenance.enabled || this.running) {
+		if (this.running) {
 			return;
 		}
 

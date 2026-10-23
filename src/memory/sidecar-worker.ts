@@ -4,6 +4,7 @@ import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { formatModelReference } from "../models/reference.js";
 import { extractAssistantText } from "../shared/text-utils.js";
+import { withAbortSignal } from "../shared/with-timeout.js";
 import { getUsageLedger } from "../usage/ledger.js";
 
 export interface SidecarTask<T> {
@@ -139,100 +140,53 @@ function recordSidecarUsage(task: SidecarTask<unknown>, message: { usage?: Maybe
 }
 
 export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarResult<T>> {
-	const apiKey = await task.resolveApiKey(task.model);
-	const worker = new Agent({
-		initialState: {
-			systemPrompt: task.systemPrompt,
-			model: task.model,
-			thinkingLevel: "off",
-			tools: [],
-		},
-		convertToLlm,
-		getApiKey: async () => apiKey,
-		streamFn: streamSimple,
-	});
-
+	const controller = new AbortController();
+	const signal = task.signal ? AbortSignal.any([task.signal, controller.signal]) : controller.signal;
+	const timeout =
+		task.timeoutMs && task.timeoutMs > 0
+			? setTimeout(() => controller.abort(new SidecarTimeoutError(task.name, task.timeoutMs!)), task.timeoutMs)
+			: undefined;
+	let worker: Agent | undefined;
 	const abortWorker = () => {
 		try {
-			worker.abort();
+			worker?.abort();
 		} catch {
-			/* ignore */
+			/* cancellation still releases the caller */
 		}
 	};
-
-	let removeAbortListener = () => {};
-	let timeoutHandle: NodeJS.Timeout | null = null;
-
-	const runPromise = (async () => {
-		await worker.prompt(task.prompt);
-		await worker.waitForIdle();
-
-		const lastMessage = worker.state.messages[worker.state.messages.length - 1];
-		if (!lastMessage || lastMessage.role !== "assistant") {
-			throw new Error(`Sidecar task "${task.name}" returned no assistant message`);
-		}
-
-		if (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted") {
-			// Record before throwing: a timed-out or aborted rerank still consumed provider tokens.
-			// Skipping it made every timeout invisible spend — `/usage`'s sidecar line was
-			// systematically low by exactly the calls we were paying for and discarding.
-			recordSidecarUsage(task, lastMessage);
-			throw new Error(lastMessage.errorMessage || `Sidecar task "${task.name}" failed`);
-		}
-
-		recordSidecarUsage(task, lastMessage);
-
-		const rawText = extractAssistantText(lastMessage);
-		try {
-			return {
-				output: task.parse(rawText),
-				rawText,
-			};
-		} catch (error) {
-			throw new SidecarParseError(task.name, rawText, error);
-		}
-	})();
-	void runPromise.catch(() => {});
-
-	const blockers: Array<Promise<never>> = [];
-	if (task.timeoutMs && task.timeoutMs > 0) {
-		blockers.push(
-			new Promise<never>((_, reject) => {
-				timeoutHandle = setTimeout(() => {
-					abortWorker();
-					reject(new SidecarTimeoutError(task.name, task.timeoutMs!));
-				}, task.timeoutMs);
-			}),
-		);
-	}
-
-	if (task.signal) {
-		const signal = task.signal;
-		blockers.push(
-			new Promise<never>((_, reject) => {
-				const abort = () => {
-					abortWorker();
-					reject(createAbortError(task.name, signal.reason));
-				};
-
-				if (signal.aborted) {
-					abort();
-					return;
-				}
-
-				signal.addEventListener("abort", abort, { once: true });
-				removeAbortListener = () => signal.removeEventListener("abort", abort);
-			}),
-		);
-	}
-
+	signal.addEventListener("abort", abortWorker, { once: true });
 	try {
-		return blockers.length > 0 ? await Promise.race([runPromise, ...blockers]) : await runPromise;
+		return await withAbortSignal(signal, async () => {
+			// Auth is part of the same deadline as inference. A late credential cannot start a request.
+			const apiKey = await task.resolveApiKey(task.model);
+			signal.throwIfAborted();
+			worker = new Agent({
+				initialState: { systemPrompt: task.systemPrompt, model: task.model, thinkingLevel: "off", tools: [] },
+				convertToLlm,
+				getApiKey: async () => apiKey,
+				streamFn: streamSimple,
+			});
+			await worker.prompt(task.prompt);
+			await worker.waitForIdle();
+			const lastMessage = worker.state.messages[worker.state.messages.length - 1];
+			if (!lastMessage || lastMessage.role !== "assistant") {
+				throw new Error(`Sidecar task "${task.name}" returned no assistant message`);
+			}
+			recordSidecarUsage(task, lastMessage);
+			signal.throwIfAborted();
+			if (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted") {
+				throw new Error(lastMessage.errorMessage || `Sidecar task "${task.name}" failed`);
+			}
+			const rawText = extractAssistantText(lastMessage);
+			try {
+				return { output: task.parse(rawText), rawText };
+			} catch (error) {
+				throw new SidecarParseError(task.name, rawText, error);
+			}
+		});
 	} finally {
-		if (timeoutHandle) {
-			clearTimeout(timeoutHandle);
-		}
-		removeAbortListener();
+		if (timeout) clearTimeout(timeout);
+		signal.removeEventListener("abort", abortWorker);
 	}
 }
 
@@ -247,6 +201,7 @@ export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<Si
 	// this prompt instead of the original.
 	let repairedPrompt: string | undefined;
 	let attempt = 0;
+	const deadline = task.timeoutMs && task.timeoutMs > 0 ? Date.now() + task.timeoutMs : undefined;
 
 	for (;;) {
 		attempt += 1;
@@ -254,7 +209,9 @@ export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<Si
 			throw createAbortError(task.name, task.signal?.reason);
 		}
 
-		const current: SidecarTask<T> = repairedPrompt === undefined ? task : { ...task, prompt: repairedPrompt };
+		const remaining = deadline === undefined ? task.timeoutMs : deadline - Date.now();
+		if (remaining !== undefined && remaining <= 0) throw new SidecarTimeoutError(task.name, task.timeoutMs!);
+		const current: SidecarTask<T> = { ...task, prompt: repairedPrompt ?? task.prompt, timeoutMs: remaining };
 
 		try {
 			return await runSidecarTask(current);
@@ -262,19 +219,35 @@ export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<Si
 			// A parse failure is recoverable exactly once when the caller supplies a
 			// repair hint: retry with the nudge appended so a malformed-but-fixable
 			// output (e.g. a misspelled JSON key) gets one targeted correction pass.
-			if (error instanceof SidecarParseError && repairedPrompt === undefined && typeof task.repair === "function") {
+			if (
+				error instanceof SidecarParseError &&
+				attempt < SIDE_CAR_MAX_ATTEMPTS &&
+				repairedPrompt === undefined &&
+				typeof task.repair === "function"
+			) {
 				repairedPrompt = withRepairSuffix(task.prompt, task.repair(error));
-				await delay(SIDE_CAR_RETRY_DELAY_MS, task);
+				await delay(
+					Math.min(SIDE_CAR_RETRY_DELAY_MS, Math.max(0, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
+					task,
+				);
 				continue;
 			}
 
 			// Parse failures are otherwise fatal — a blind retry would reproduce the
 			// same bad output. Transient failures get the standard retry budget.
-			if (attempt >= SIDE_CAR_MAX_ATTEMPTS || error instanceof SidecarParseError || isExternalAbort(task)) {
+			if (
+				attempt >= SIDE_CAR_MAX_ATTEMPTS ||
+				error instanceof SidecarParseError ||
+				error instanceof SidecarTimeoutError ||
+				isExternalAbort(task)
+			) {
 				throw error;
 			}
 
-			await delay(SIDE_CAR_RETRY_DELAY_MS, task);
+			await delay(
+				Math.min(SIDE_CAR_RETRY_DELAY_MS, Math.max(0, (deadline ?? Number.POSITIVE_INFINITY) - Date.now())),
+				task,
+			);
 		}
 	}
 }

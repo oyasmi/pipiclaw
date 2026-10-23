@@ -59,6 +59,27 @@ describe("sidecar-worker", () => {
 		).rejects.toBeInstanceOf(SidecarTimeoutError);
 
 		expect(abortImpl).toHaveBeenCalledTimes(1);
+
+		// Auth used to sit before the deadline; late credentials must never start inference.
+		promptImpl.mockClear();
+		let release!: (key: string) => void;
+		const auth = new Promise<string>((resolve) => {
+			release = resolve;
+		});
+		await expect(
+			runSidecarTask({
+				name: "stuck-auth",
+				model: { provider: "test", id: "noop" } as never,
+				resolveApiKey: () => auth,
+				systemPrompt: "",
+				prompt: "",
+				parse: String,
+				timeoutMs: 10,
+			}),
+		).rejects.toBeInstanceOf(SidecarTimeoutError);
+		release("late");
+		await Promise.resolve();
+		expect(promptImpl).not.toHaveBeenCalled();
 	});
 
 	it("wraps parser failures with raw text context", async () => {
@@ -233,7 +254,7 @@ describe("sidecar-worker", () => {
 		});
 		const rejection = expect(taskPromise).rejects.toThrow("caller aborted");
 
-		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(0);
 		controller.abort(new Error("caller aborted"));
 		await vi.runAllTimersAsync();
 		await rejection;
