@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { AssistantMessage, StopReason } from "@earendil-works/pi-ai";
 import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolveActiveSessionFile } from "../../channel/active-session-store.js";
-import type { DotConversation } from "../../dot/types.js";
+import type { DeskConversation } from "../../desk/types.js";
 
 /**
  * Repairs a session branch left with a declared-but-unfulfilled tool call by a process that
@@ -201,22 +201,22 @@ export function recoverInterruptedTurn(
 export interface ConversationRecoveryReport {
 	scanned: number;
 	repaired: Array<{
-		conversation: DotConversation;
+		conversation: DeskConversation;
 		outcome: Extract<TurnRecoveryOutcome, { kind: "repaired" }>;
 	}>;
-	blocked: Array<{ conversation: DotConversation; reason: string }>;
+	blocked: Array<{ conversation: DeskConversation; reason: string }>;
 }
 
 /**
- * Activation half of D10 (spec 058, D6): when a dot is activated — at daemon startup, or when it
+ * Activation half of D10 (spec 058, D6): when a desk is activated — at daemon startup, or when it
  * gains its first binding — every currently bound conversation in it is repaired *before* the
  * channel can take traffic. Each conversation gets its own fresh `SessionManager`: safe because a
- * conversation of a dormant dot has no `ChannelRunner` yet, so nothing else holds a competing
+ * conversation of a dormant desk has no `ChannelRunner` yet, so nothing else holds a competing
  * in-memory instance over the same file. `ChannelRunner`'s own constructor (D10 point 2) covers
  * everything this scan cannot, and re-running the barrier is idempotent either way.
  */
 export async function scanConversationsForInterruptedTurns(
-	conversations: readonly DotConversation[],
+	conversations: readonly DeskConversation[],
 	fallbackModel: FallbackModelIdentity,
 ): Promise<ConversationRecoveryReport> {
 	const report: ConversationRecoveryReport = { scanned: 0, repaired: [], blocked: [] };

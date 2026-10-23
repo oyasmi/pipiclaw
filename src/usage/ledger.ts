@@ -31,8 +31,8 @@ export interface UsageLedgerEntry {
 	ts: string;
 	/** The channel the spend happened in. */
 	channelId: string;
-	/** The dot it is attributed to (spec 058, D19); absent on entries older than the migration. */
-	dot?: string;
+	/** The desk it is attributed to (spec 058, D19); optional only for process-wide usage without a desk. */
+	desk?: string;
 	kind: UsageKind;
 	model: string;
 	label?: string;
@@ -73,8 +73,8 @@ export interface UsageSummaryQuery {
 	since: Date;
 	until?: Date;
 	channelId?: string;
-	/** Only entries attributed to this dot (spec 058, D19). */
-	dot?: string;
+	/** Only entries attributed to this desk (spec 058, D19). */
+	desk?: string;
 }
 
 export const UNTRACKED_CHANNEL_ID = "(untracked)";
@@ -204,7 +204,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 					const tsMs = parseLocalTime(entry.ts);
 					if (tsMs === undefined || tsMs < sinceMs || tsMs > untilMs) continue;
 					if (query.channelId && entry.channelId !== query.channelId) continue;
-					if (query.dot && entry.dot !== query.dot) continue;
+					if (query.desk && entry.desk !== query.desk) continue;
 					const cost = entry.cost?.total ?? 0;
 					summary.totalCost += cost;
 					summary.totalTokens += entry.usage?.total ?? 0;

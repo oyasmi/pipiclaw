@@ -220,10 +220,10 @@ export class DurableDispatchService {
 	}
 
 	async dispatch(event: ChannelEvent): Promise<boolean> {
-		// Spec 058, D7: every in-process producer stamps its dot. An event without one cannot be
+		// Spec 058, D7: every in-process producer stamps its desk. An event without one cannot be
 		// checked against the channel's binding at admission, so it is refused here, at the door.
-		if (!event.dot) {
-			log.logWarn("dispatch.event.missing_dot", "Dispatch refused: synthetic event carries no dot", {
+		if (!event.desk) {
+			log.logWarn("dispatch.event.missing_desk", "Dispatch refused: synthetic event carries no desk", {
 				channelId: event.channelId,
 				fields: { dispatchId: event.dispatchId, producer: event.user },
 			});

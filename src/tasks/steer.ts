@@ -18,34 +18,34 @@ import { withTaskMutation } from "./mutation-lock.js";
  * Each read-modify-write runs under the task's mutation lock: a TUI's `/tasks steer` appending
  * while the daemon's step consumes would otherwise lose the appended line.
  */
-function steerDir(dotDir: string): string {
-	return join(dotDir, "tasks", ".steer");
+function steerDir(deskDir: string): string {
+	return join(deskDir, "tasks", ".steer");
 }
 
-function steerPath(dotDir: string, id: string): string {
-	return join(steerDir(dotDir), `${normalizeTaskId(id)}.md`);
+function steerPath(deskDir: string, id: string): string {
+	return join(steerDir(deskDir), `${normalizeTaskId(id)}.md`);
 }
 
 /** Queue guidance for the task's next step. Repeated calls append, so nothing is silently lost. */
-export async function queueTaskSteer(dotDir: string, id: string, text: string, label = "用户指示"): Promise<void> {
+export async function queueTaskSteer(deskDir: string, id: string, text: string, label = "用户指示"): Promise<void> {
 	const trimmed = text.trim();
 	if (!trimmed) return;
-	await withTaskMutation(dotDir, id, async () => {
-		await mkdir(steerDir(dotDir), { recursive: true });
-		const path = steerPath(dotDir, id);
+	await withTaskMutation(deskDir, id, async () => {
+		await mkdir(steerDir(deskDir), { recursive: true });
+		const path = steerPath(deskDir, id);
 		const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n` : "";
 		await writeFileAtomically(path, `${existing}- [${formatLocalTime()}] ${label}：${trimmed}\n`);
 	});
 }
 
 /** Read and clear the pending guidance. Returns `undefined` when there is none. */
-export async function consumeTaskSteer(dotDir: string, id: string): Promise<string | undefined> {
-	return consumeOnce(dotDir, id, steerPath(dotDir, id));
+export async function consumeTaskSteer(deskDir: string, id: string): Promise<string | undefined> {
+	return consumeOnce(deskDir, id, steerPath(deskDir, id));
 }
 
-async function consumeOnce(dotDir: string, id: string, path: string): Promise<string | undefined> {
+async function consumeOnce(deskDir: string, id: string, path: string): Promise<string | undefined> {
 	if (!existsSync(path)) return undefined;
-	return withTaskMutation(dotDir, id, async () => {
+	return withTaskMutation(deskDir, id, async () => {
 		try {
 			const text = (await readFile(path, "utf-8")).trim();
 			await rm(path, { force: true });
@@ -57,8 +57,8 @@ async function consumeOnce(dotDir: string, id: string, path: string): Promise<st
 }
 
 /** Whether guidance is waiting, without consuming it (for `/tasks show`). */
-export function hasTaskSteer(dotDir: string, id: string): boolean {
-	return existsSync(steerPath(dotDir, id));
+export function hasTaskSteer(deskDir: string, id: string): boolean {
+	return existsSync(steerPath(deskDir, id));
 }
 
 /**
@@ -66,21 +66,21 @@ export function hasTaskSteer(dotDir: string, id: string): boolean {
  * `notify`). Held in a file rather than returned inline because the tool result never reaches the
  * transport — the runtime reads and clears this after the step ends, and delivers it once.
  */
-function noticePath(dotDir: string, id: string): string {
-	return join(steerDir(dotDir), `${normalizeTaskId(id)}.out.md`);
+function noticePath(deskDir: string, id: string): string {
+	return join(steerDir(deskDir), `${normalizeTaskId(id)}.out.md`);
 }
 
-export async function queueTaskNotice(dotDir: string, id: string, text: string): Promise<void> {
+export async function queueTaskNotice(deskDir: string, id: string, text: string): Promise<void> {
 	const trimmed = text.trim();
 	if (!trimmed) return;
-	await withTaskMutation(dotDir, id, async () => {
-		await mkdir(steerDir(dotDir), { recursive: true });
-		const path = noticePath(dotDir, id);
+	await withTaskMutation(deskDir, id, async () => {
+		await mkdir(steerDir(deskDir), { recursive: true });
+		const path = noticePath(deskDir, id);
 		const existing = existsSync(path) ? `${await readFile(path, "utf-8")}\n\n` : "";
 		await writeFileAtomically(path, `${existing}${trimmed}`);
 	});
 }
 
-export async function consumeTaskNotice(dotDir: string, id: string): Promise<string | undefined> {
-	return consumeOnce(dotDir, id, noticePath(dotDir, id));
+export async function consumeTaskNotice(deskDir: string, id: string): Promise<string | undefined> {
+	return consumeOnce(deskDir, id, noticePath(deskDir, id));
 }

@@ -18,7 +18,7 @@ export type BuiltInCommandName =
 	| "steer"
 	| "followup"
 	| "stop"
-	| "dot"
+	| "desk"
 	| "events"
 	| "tasks"
 	| "status"
@@ -127,19 +127,19 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		runnerHandled: true,
 	},
 	{
-		name: "dot",
-		argumentHint: "[list|new <dot>|bind <dot>]",
-		description: "查看、创建 dot，把本频道绑定到一个 dot；未绑定的频道也能用",
+		name: "desk",
+		argumentHint: "[list|new <desk>|bind <desk>]",
+		description: "进阶：创建隔离工作区，或切换本频道的工作区",
 		// list/new answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
 		availableWhileBusy: true,
 		subcommands: [
-			{ name: "list", description: "列出所有 dot 和各自绑定的频道（默认动作，可省略）", example: "/dot" },
-			{ name: "new", args: "<dot>", description: "创建一个空 dot，不绑定任何频道", example: "/dot new research" },
+			{ name: "list", description: "列出所有工位和各自绑定的频道（默认动作，可省略）", example: "/desk" },
+			{ name: "new", args: "<工位>", description: "创建一个空工位，不绑定任何频道", example: "/desk new research" },
 			{
 				name: "bind",
-				args: "<dot>",
-				description: "把本频道绑定到这个 dot，同时解除原来的绑定；回合进行中不能执行",
-				example: "/dot bind research",
+				args: "<desk>",
+				description: "把本频道绑定到这个工位，同时解除原来的绑定；回合进行中不能执行",
+				example: "/desk bind research",
 			},
 		],
 	},
@@ -169,10 +169,10 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		name: "tasks",
 		argumentHint:
 			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|archive|doctor]",
-		description: "查看、指挥并诊断本 dot 的长程任务；pause 只停止自动执行，保留等待条件",
+		description: "查看、指挥并诊断本工位的长程任务；pause 只停止自动执行，保留等待条件",
 		availableWhileBusy: true,
 		subcommands: [
-			{ name: "list", description: "列出本 dot 进行中的任务（默认动作，可省略）", example: "/tasks" },
+			{ name: "list", description: "列出本工位进行中的任务（默认动作，可省略）", example: "/tasks" },
 			{
 				name: "show",
 				args: "<id>",
@@ -222,7 +222,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "usage",
 		argumentHint: "[7d|month]",
-		description: "显示本 dot 与全局的模型花费和 token，按类型与模型分解",
+		description: "显示本工位与全局的模型花费和 token，按类型与模型分解",
 		examples: ["/usage", "/usage 7d", "/usage month"],
 		availableWhileBusy: true,
 	},
@@ -302,7 +302,7 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "memory",
 		argumentHint: "[status|list [type]|show <name>|forget <name>|journal [date]]",
-		description: "查看本 dot 的记忆、观察期条目与后台整理状态；不经过模型的记忆管理入口",
+		description: "查看本工位的记忆、观察期条目与后台整理状态；不经过模型的记忆管理入口",
 		subcommands: [
 			{
 				name: "status",

@@ -5,7 +5,7 @@ import type { PipiclawSessionSearchSettings } from "../config/settings.js";
 import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { DotJobManager } from "../jobs/manager.js";
+import type { DeskJobManager } from "../jobs/manager.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createBashTool } from "./bash.js";
@@ -50,9 +50,9 @@ export interface ToolBuildContext {
 	securityConfig: SecurityConfig;
 	securityContext: SecurityRuntimeContext;
 	channelId: string;
-	/** Main path only: the dot this tool set acts for; its name keys the memory queue (spec 058, INV-8). */
-	dot?: string;
-	dotDir: string;
+	/** Main path only: the desk this tool set acts for; its name keys the memory queue (spec 058, INV-8). */
+	desk?: string;
+	deskDir: string;
 	workspaceDir: string;
 	/** Main set: `toolsConfig.tools.web`; sub-agent set: the sub-agent's own webConfig. */
 	webConfig?: PipiclawWebToolsConfig;
@@ -64,7 +64,7 @@ export interface ToolBuildContext {
 	rtkEnabled?: boolean;
 	/**
 	 * Set by `buildToolSet` from `BuildToolSetOptions.forSubagent`. A sub-agent works in its own
-	 * working directory, so tools that would otherwise write into the dot directory (bash/job
+	 * working directory, so tools that would otherwise write into the desk directory (bash/job
 	 * output spill) fall back to a neutral location for it.
 	 */
 	forSubagent?: boolean;
@@ -72,13 +72,13 @@ export interface ToolBuildContext {
 	 * Present only on the main path. Enables bash `async` and the `job` tool.
 	 * The sub-agent set never supplies it, so sub-agents get neither.
 	 */
-	jobManager?: DotJobManager;
+	jobManager?: DeskJobManager;
 	runManager?: SubAgentRunManager;
 	getCurrentModel?: () => Model<Api>;
 	getAvailableModels?: () => Model<Api>[];
 	resolveApiKey?: (model: Model<Api>) => Promise<string>;
 	getSessionSearchSettings?: () => PipiclawSessionSearchSettings;
-	/** Names a conversation directory of this dot after its channel, for `session_search` results. */
+	/** Names a conversation directory of this desk after its channel, for `session_search` results. */
 	describeConversation?: (conversation: string) => string | undefined;
 	/**
 	 * Present only on the main path, and only when the driving transport can deliver
@@ -123,8 +123,8 @@ function fileToolOptions(ctx: ToolBuildContext) {
 function memoryToolOptions(ctx: ToolBuildContext) {
 	return {
 		channelId: ctx.channelId,
-		dot: req(ctx.dot, "dot"),
-		dotDir: ctx.dotDir,
+		desk: req(ctx.desk, "desk"),
+		deskDir: ctx.deskDir,
 		workspaceDir: ctx.workspaceDir,
 	};
 }
@@ -133,7 +133,7 @@ function taskToolOptions(ctx: ToolBuildContext) {
 	return {
 		jobManager: req(ctx.jobManager, "jobManager"),
 		runManager: req(ctx.runManager, "runManager"),
-		dotDir: ctx.dotDir,
+		deskDir: ctx.deskDir,
 		channelId: ctx.channelId,
 	};
 }
@@ -161,7 +161,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				rtkEnabled: ctx.rtkEnabled === true,
 				interceptorEnabled: ctx.toolsConfig?.tools.bashInterceptor.enabled === true,
 				// Sub-agents get no channel dir (their guard context has none); their spill stays in tmpdir.
-				...(ctx.forSubagent ? {} : { dotDir: ctx.dotDir }),
+				...(ctx.forSubagent ? {} : { deskDir: ctx.deskDir }),
 				...(ctx.taskLoop ? { boundTaskId: ctx.taskLoop.taskId } : {}),
 				...(ctx.jobManager ? { jobManager: ctx.jobManager } : {}),
 				...(ctx.bashDefaultTimeoutSeconds !== undefined
@@ -205,7 +205,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				securityConfig: ctx.securityConfig,
 				workspaceDir: ctx.workspaceDir,
 				channelId: ctx.channelId,
-				dotDir: ctx.dotDir,
+				deskDir: ctx.deskDir,
 			}),
 	},
 	{
@@ -226,8 +226,8 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		create: (ctx) =>
 			createSessionSearchTool({
 				channelId: ctx.channelId,
-				dot: ctx.dot,
-				dotDir: ctx.dotDir,
+				desk: ctx.desk,
+				deskDir: ctx.deskDir,
 				describeConversation: ctx.describeConversation,
 				getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
 				resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
@@ -255,7 +255,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "event_manage",
 		create: (ctx) =>
 			createEventManageTool({
-				dotDir: ctx.dotDir,
+				deskDir: ctx.deskDir,
 				channelId: ctx.channelId,
 				commandGuardConfig: ctx.securityConfig.commandGuard,
 			}),

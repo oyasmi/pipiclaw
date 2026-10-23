@@ -78,16 +78,16 @@ function unknownNote(summary: UsageSummary): string | null {
 	return parts.length > 0 ? `（另有 ${parts.join("，")}，未计入以上合计）` : null;
 }
 
-/** Whose spend `/usage` reports: the asking channel's dot, with that channel's share of it. */
+/** Whose spend `/usage` reports: the asking channel's desk, with that channel's share of it. */
 export interface UsageScope {
-	dot: string;
+	desk: string;
 	channelId: string;
 }
 
 async function renderWindow(window: UsageWindow, ledger: UsageLedger, scope: UsageScope): Promise<string> {
-	const [global, dot] = await Promise.all([
+	const [global, desk] = await Promise.all([
 		ledger.summarize({ since: window.since, until: window.until }),
-		ledger.summarize({ since: window.since, until: window.until, dot: scope.dot }),
+		ledger.summarize({ since: window.since, until: window.until, desk: scope.desk }),
 	]);
 
 	const lines: string[] = [`**${window.title}**`];
@@ -98,21 +98,21 @@ async function renderWindow(window: UsageWindow, ledger: UsageLedger, scope: Usa
 
 	// Tokens are reported next to cost because a local or pricing-less model bills nothing while
 	// still consuming context — "$0.0000" alone would read as "nothing happened".
-	// Tasks and delegations belong to the dot, so spend is reported for the dot as a whole; the
-	// asking channel's share is shown only when other channels share the dot.
-	let dotLine = `- 本 dot（\`${scope.dot}\`）：${money(dot.totalCost)} · ${tokens(dot.totalTokens)}`;
-	const dotKinds = renderKindBreakdown(dot);
-	if (dotKinds) {
-		dotLine += ` · ${dotKinds}`;
+	// Tasks and delegations belong to the desk, so spend is reported for the desk as a whole; the
+	// asking channel's share is shown only when other channels share the desk.
+	let deskLine = `- 本工位（\`${scope.desk}\`）：${money(desk.totalCost)} · ${tokens(desk.totalTokens)}`;
+	const deskKinds = renderKindBreakdown(desk);
+	if (deskKinds) {
+		deskLine += ` · ${deskKinds}`;
 	}
-	if (Object.keys(dot.byChannel).length > 1) {
-		dotLine += ` · 其中本频道 ${money(dot.byChannel[scope.channelId] ?? 0)}`;
+	if (Object.keys(desk.byChannel).length > 1) {
+		deskLine += ` · 其中本频道 ${money(desk.byChannel[scope.channelId] ?? 0)}`;
 	}
-	const dotUnknown = unknownNote(dot);
-	if (dotUnknown) {
-		dotLine += dotUnknown;
+	const deskUnknown = unknownNote(desk);
+	if (deskUnknown) {
+		deskLine += deskUnknown;
 	}
-	lines.push(dotLine);
+	lines.push(deskLine);
 
 	const channelCount = Object.keys(global.byChannel).length;
 	let globalLine = `- 全局：${money(global.totalCost)} · ${tokens(global.totalTokens)}，覆盖 ${channelCount} 个频道`;

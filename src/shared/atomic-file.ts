@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -89,4 +89,16 @@ export function writeFileAtomicallySync(path: string, content: string | Buffer):
 		} catch {}
 		throw error;
 	}
+}
+
+/** The publication already succeeded; unsupported directory fsync must not turn it into a failure. */
+export function syncDirectoryBestEffort(path: string): void {
+	try {
+		const fd = openSync(path, "r");
+		try {
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+	} catch {}
 }

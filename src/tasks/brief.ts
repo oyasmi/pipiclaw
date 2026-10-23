@@ -17,7 +17,7 @@ export const BRIEF_LOG_LINES = 8;
 export const PREVIOUS_OCCURRENCE_MAX_CHARS = 1_200;
 
 export interface TaskBriefInput {
-	dotDir: string;
+	deskDir: string;
 	taskId: string;
 	/** Why this step is running, when the caller knows. */
 	reason?: string;
@@ -39,11 +39,11 @@ interface PreviousOccurrence {
  * since one event name can be a prefix of another's.
  */
 async function findPreviousOccurrence(
-	dotDir: string,
+	deskDir: string,
 	origin: string,
 	currentId: string,
 ): Promise<PreviousOccurrence | undefined> {
-	const archiveDir = join(tasksDir(dotDir), "archive");
+	const archiveDir = join(tasksDir(deskDir), "archive");
 	if (!existsSync(archiveDir)) return undefined;
 	const candidates = (await readdir(archiveDir))
 		.filter((name) => name.endsWith(".md") && name.startsWith(`${origin}-`))
@@ -52,9 +52,9 @@ async function findPreviousOccurrence(
 		.sort()
 		.reverse();
 	for (const id of candidates) {
-		const document = await readStoredTask(dotDir, id, true).catch(() => undefined);
+		const document = await readStoredTask(deskDir, id, true).catch(() => undefined);
 		if (!document || document.fields.origin !== origin) continue;
-		const latestFirst = (await readTaskLog(dotDir, id, { kinds: ["close", "step"] })).reverse();
+		const latestFirst = (await readTaskLog(deskDir, id, { kinds: ["close", "step"] })).reverse();
 		const close = latestFirst.find((record) => record.kind === "close");
 		const reported = latestFirst.find((record) => record.kind === "step" && record.report);
 		return {
@@ -80,13 +80,13 @@ async function findPreviousOccurrence(
  * the brief that is genuinely new since the previous step.
  */
 export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string | undefined> {
-	const document = await readStoredTask(input.dotDir, input.taskId);
+	const document = await readStoredTask(input.deskDir, input.taskId);
 	if (!document) return undefined;
 
-	const steer = await consumeTaskSteer(input.dotDir, input.taskId);
-	const log = await readTaskLog(input.dotDir, input.taskId, { kinds: ["step", "expired", "close"] });
+	const steer = await consumeTaskSteer(input.deskDir, input.taskId);
+	const log = await readTaskLog(input.deskDir, input.taskId, { kinds: ["step", "expired", "close"] });
 	const recent = log.slice(-BRIEF_LOG_LINES);
-	const board = await buildTaskBoard(input.dotDir, input.taskId, document.body);
+	const board = await buildTaskBoard(input.deskDir, input.taskId, document.body);
 
 	const blocks: string[] = [`[TASK_STEP:${input.taskId}]`];
 	if (input.reason) blocks.push(input.reason);
@@ -102,7 +102,7 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string 
 
 	const isFirstStep = !log.some((record) => record.kind === "step");
 	if (isFirstStep && document.fields.origin) {
-		const previous = await findPreviousOccurrence(input.dotDir, document.fields.origin, input.taskId);
+		const previous = await findPreviousOccurrence(input.deskDir, document.fields.origin, input.taskId);
 		if (previous) {
 			const parts = [`收尾记录：${clipText(previous.note, PREVIOUS_OCCURRENCE_MAX_CHARS)}`];
 			if (previous.report) parts.push(`上次汇报：${clipText(previous.report, PREVIOUS_OCCURRENCE_MAX_CHARS)}`);

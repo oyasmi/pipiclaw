@@ -346,7 +346,7 @@ export const memoryRecallQualityCases: EvalCase[] = [
 				graderVersion: "1",
 				severity: "quality",
 				grade: (ctx) => {
-					const memoryDir = join(ctx.dotDir, "memory");
+					const memoryDir = join(ctx.deskDir, "memory");
 					const files = existsSync(memoryDir) ? readdirSync(memoryDir).filter((f) => f.endsWith(".md")) : [];
 					return {
 						schemaVersion: 1,

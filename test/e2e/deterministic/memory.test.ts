@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDotMemoryQueue } from "../../../src/memory/dot-memory-queue.js";
+import { getDeskMemoryQueue } from "../../../src/memory/desk-memory-queue.js";
 import { createTaskDriverEvent } from "../../../src/runtime/task-driver.js";
 import { localDayKey } from "../../../src/shared/local-time.js";
 import { readActiveTasks } from "../../../src/tasks/contract.js";
@@ -20,9 +20,9 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		return users.at(-1)?.content ?? "";
 	};
 
-	it("M2/DOT-1: two channels of one dot share memory and journal, never each other's conversation", async () => {
-		// Spec 058, G1/D1: memory belongs to the dot, conversations to the channel. Catches (a) a
-		// first-turn bootstrap built from the conversation directory instead of the dot, and (b) two
+	it("M2/DESK-1: two channels of one desk share memory and journal, never each other's conversation", async () => {
+		// Spec 058, G1/D1: memory belongs to the desk, conversations to the channel. Catches (a) a
+		// first-turn bootstrap built from the conversation directory instead of the desk, and (b) two
 		// channels resolving to one conversation. Mutation checks (2026-10-18): building
 		// `<memory_bootstrap>` from `conversation.conversationDir` drops the fact from B's request;
 		// making `findConversation` return `dm-1` for every channel leaks A_PRIVATE_TEXT into B.
@@ -30,13 +30,13 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// fails the tool-message assertion.
 		const peer = "dm_e2e_peer";
 		harness = await createDeterministicHarness({ extraChannels: [{ channelId: peer }] });
-		mkdirSync(join(harness.dotDir, "journal"), { recursive: true });
-		writeFileSync(join(harness.dotDir, "journal", "2020-01-02.md"), "- release checkpoint: JOURNAL-EVIDENCE-73\n");
+		mkdirSync(join(harness.deskDir, "journal"), { recursive: true });
+		writeFileSync(join(harness.deskDir, "journal", "2020-01-02.md"), "- release checkpoint: JOURNAL-EVIDENCE-73\n");
 		harness.model.script.route({
 			name: "a-saves",
 			when: (r) => r.isMainTurn && r.lastUserText.includes("A_PRIVATE_TEXT"),
 			respond: [
-				reply.toolCall("memory_save", { content: "DOT-SHARED-FACT 发布窗口是周四", name: "release-window" }),
+				reply.toolCall("memory_save", { content: "DESK-SHARED-FACT 发布窗口是周四", name: "release-window" }),
 				reply.text("好的"),
 			],
 		});
@@ -52,7 +52,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		const bRequests = harness.mainTurnRequests().filter((r) => r.lastUserText.includes("B_ASKS"));
 		expect(bRequests.length).toBeGreaterThan(0);
 		const bFirst = JSON.stringify(bRequests[0]?.messages);
-		expect(bFirst).toContain("DOT-SHARED-FACT");
+		expect(bFirst).toContain("DESK-SHARED-FACT");
 		for (const request of bRequests) expect(JSON.stringify(request.messages)).not.toContain("A_PRIVATE_TEXT");
 		const toolMessages = bRequests.at(-1)?.messages.filter((message) => message.role === "tool") ?? [];
 		expect(
@@ -63,7 +63,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		).toBe(true);
 	});
 
-	it("DOT-2: memory writes from two channels of one dot are serialized on the dot", async () => {
+	it("DESK-2: memory writes from two channels of one desk are serialized on the desk", async () => {
 		// Spec 058, INV-8: channel A's boundary reflect and channel B's memory_save write the same
 		// memory/ and MEMORY.md, so B's write must wait for A's reflect to finish. Mutation check
 		// (2026-10-18): letting memory_save run its job without `queue.run` makes B's fact appear
@@ -113,7 +113,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 			when: (r) => r.isMainTurn && r.lastUserText.includes("B_SAVES") && r.messages.some((m) => m.role === "tool"),
 		});
 		// Observe the real queue: B's write is "waiting" exactly when its job has been handed to it.
-		const queue = getDotMemoryQueue();
+		const queue = getDeskMemoryQueue();
 		const run = queue.run.bind(queue);
 		let bSent = false;
 		let bQueued!: () => void;
@@ -131,21 +131,21 @@ describe("E2E deterministic: memory (spec 050)", () => {
 
 			bSent = true;
 			await harness.sendUserMessageNoWait("B_SAVES 记住值班表", { channelId: peer });
-			// Either B's write is waiting on the dot queue (correct), or it already finished.
+			// Either B's write is waiting on the desk queue (correct), or it already finished.
 			await Promise.race([bEntered, bFinished.arrived]);
-			const memoryFiles = () => readdirSync(join(harness.dotDir, "memory")).filter((f) => f.endsWith(".md"));
+			const memoryFiles = () => readdirSync(join(harness.deskDir, "memory")).filter((f) => f.endsWith(".md"));
 			const hasFact = (fact: string) =>
-				existsSync(join(harness.dotDir, "memory")) &&
-				memoryFiles().some((f) => readFileSync(join(harness.dotDir, "memory", f), "utf8").includes(fact));
+				existsSync(join(harness.deskDir, "memory")) &&
+				memoryFiles().some((f) => readFileSync(join(harness.deskDir, "memory", f), "utf8").includes(fact));
 			expect(hasFact("FACT-FROM-B")).toBe(false);
 
 			reflect.release();
 			bFinished.release();
 			await harness.waitForIdle();
-			await getDotMemoryQueue().run(harness, async () => {});
+			await getDeskMemoryQueue().run(harness, async () => {});
 			expect(hasFact("FACT-FROM-A")).toBe(true);
 			expect(hasFact("FACT-FROM-B")).toBe(true);
-			const index = readFileSync(join(harness.dotDir, "MEMORY.md"), "utf8");
+			const index = readFileSync(join(harness.deskDir, "MEMORY.md"), "utf8");
 			expect(index).toContain("oncall-wiki");
 		} finally {
 			reflect.release();
@@ -177,7 +177,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("记住：生产库端口 6432。");
 
 		const saved = await waitForFileContent(
-			join(harness.dotDir, "memory", "prod-db-port.md"),
+			join(harness.deskDir, "memory", "prod-db-port.md"),
 			(c) => c.includes("6432"),
 			{ timeoutMs: 10_000, intervalMs: 100 },
 		);
@@ -252,10 +252,10 @@ describe("E2E deterministic: memory (spec 050)", () => {
 
 		// One task step in between. The task cycle gets its own session, so it gets its own
 		// bootstrap — that part is correct and stays.
-		const tasksDir = join(harness.dotDir, "tasks");
+		const tasksDir = join(harness.deskDir, "tasks");
 		const entry = (await readActiveTasks(tasksDir)).find((e) => e.id === taskId);
 		expect(entry).toBeDefined();
-		const driver = createTaskDriverEvent(harness.dot, harness.channelId, entry!, Date.now());
+		const driver = createTaskDriverEvent(harness.desk, harness.channelId, entry!, Date.now());
 		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
 		expect(lastUserContent()).toContain("<memory_bootstrap>");
 
@@ -299,7 +299,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("部署脚本在哪？");
 		await harness.sendUserMessage("/new"); // boundary reflect, runs detached in the background
 
-		const indexPath = join(harness.dotDir, "MEMORY.md");
+		const indexPath = join(harness.deskDir, "MEMORY.md");
 		await waitForFileContent(indexPath, (c) => c.includes("部署脚本是 scripts/deploy.sh"), {
 			timeoutMs: 10_000,
 			intervalMs: 100,
@@ -307,20 +307,20 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// The journal filename is the *local* calendar day (`localDayKey`), not the UTC one — deriving
 		// it from `toISOString()` made this case fail for every hour the two disagree (found 2026-09-06).
 		const today = localDayKey();
-		const journalPath = join(harness.dotDir, "journal", `${today}.md`);
+		const journalPath = join(harness.deskDir, "journal", `${today}.md`);
 		const journal = await waitForFileContent(journalPath, (c) => c.includes("完成一次部署"), {
 			timeoutMs: 10_000,
 			intervalMs: 100,
 		});
 		expect(journal).toContain("01:00 完成一次部署");
-		expect(readdirSync(join(harness.dotDir, "memory")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
+		expect(readdirSync(join(harness.deskDir, "memory")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
 
 		// A second /new with nothing said in between reflects on an empty window — no new call.
 		// Instantiate the empty session: /new alone can take the runner-free runtime path.
 		await harness.sendUserMessage("/session");
 		await harness.sendUserMessage("/new");
 		// Drain the queue used by the detached boundary reflect; no observation-time guess.
-		await getDotMemoryQueue().run(harness, async () => {});
+		await getDeskMemoryQueue().run(harness, async () => {});
 		expect(harness.model.requests.filter((r) => r.matchedRoute === "reflect-once")).toHaveLength(1);
 	});
 
@@ -358,20 +358,20 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		});
 
 		await harness.sendUserMessage("记住：生产密钥保管在保险柜。");
-		await waitForFileContent(join(harness.dotDir, "memory", "prod-key-location.md"), () => true, {
+		await waitForFileContent(join(harness.deskDir, "memory", "prod-key-location.md"), () => true, {
 			timeoutMs: 10_000,
 			intervalMs: 100,
 		});
 
 		await harness.sendUserMessage("/new");
-		const reviewLogPath = join(harness.dotDir, "memory-review.jsonl");
+		const reviewLogPath = join(harness.deskDir, "memory-review.jsonl");
 		await waitForFileContent(
 			reviewLogPath,
 			(c) => c.includes("prod-key-location") && c.includes("cannot be auto-deleted"),
 			{ timeoutMs: 10_000, intervalMs: 100 },
 		);
 
-		expect(existsSync(join(harness.dotDir, "memory", "prod-key-location.md"))).toBe(true);
+		expect(existsSync(join(harness.deskDir, "memory", "prod-key-location.md"))).toBe(true);
 	});
 
 	it("M8: touch clears probation; an untouched, already-expired entry is deleted before the next reflect", async () => {
@@ -386,7 +386,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// First turn establishes the channel (and its migration) before we hand-seed entries.
 		await harness.sendUserMessage("你好");
 
-		const memoryDir = join(harness.dotDir, "memory");
+		const memoryDir = join(harness.deskDir, "memory");
 		mkdirSync(memoryDir, { recursive: true });
 		const yesterday = localDayKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
 		const farFuture = localDayKey(new Date(Date.now() + 20 * 24 * 60 * 60 * 1000));
@@ -412,7 +412,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("/new");
 
 		await waitForFileContent(
-			join(harness.dotDir, "MEMORY.md"),
+			join(harness.deskDir, "MEMORY.md"),
 			(c) => c.includes("touched probationary fact") && !c.includes("already-expired"),
 			{ timeoutMs: 10_000, intervalMs: 100 },
 		);

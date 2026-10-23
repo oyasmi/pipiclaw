@@ -128,7 +128,7 @@ export const coreRenovatedCases: EvalCase[] = [
 		setup: (ctx) =>
 			writeTask(ctx, "release-plan", {
 				started: true,
-				body: `# Task\n\n## Goal\nCreate ${join(ctx.dotDir, "release-plan.txt")} only after the user supplies the environment and release window. These values cannot be guessed.\n\n## DoD\n- [ ] release-plan.txt records the user's latest environment and window\n`,
+				body: `# Task\n\n## Goal\nCreate ${join(ctx.deskDir, "release-plan.txt")} only after the user supplies the environment and release window. These values cannot be guessed.\n\n## DoD\n- [ ] release-plan.txt records the user's latest environment and window\n`,
 			}),
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
@@ -141,7 +141,7 @@ export const coreRenovatedCases: EvalCase[] = [
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
-				predicate: (ctx) => existsSync(join(ctx.dotDir, "tasks/archive/release-plan.md")),
+				predicate: (ctx) => existsSync(join(ctx.deskDir, "tasks/archive/release-plan.md")),
 			},
 		],
 		graders: [
@@ -157,7 +157,7 @@ export const coreRenovatedCases: EvalCase[] = [
 		invariants: [
 			tracePredicate(
 				"no-write-before-answer",
-				(ctx) => checkpointHasFile(ctx, "parked-on-ask", "dots/eval/release-plan.txt") === false,
+				(ctx) => checkpointHasFile(ctx, "parked-on-ask", "desk-eval/release-plan.txt") === false,
 				"no release plan may be written before the user supplies the target",
 			),
 		],
@@ -170,12 +170,12 @@ export const coreRenovatedCases: EvalCase[] = [
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 14 },
 		setup: async (ctx) => {
-			await mkdir(join(ctx.dotDir, ".eval"), { recursive: true });
-			await writeFile(join(ctx.dotDir, "run-input.txt"), `${fixtureToken(ctx.seed, "RUN-RESULT")}\n`);
+			await mkdir(join(ctx.deskDir, ".eval"), { recursive: true });
+			await writeFile(join(ctx.deskDir, "run-input.txt"), `${fixtureToken(ctx.seed, "RUN-RESULT")}\n`);
 			await mkdir(join(ctx.workspaceDir, "sub-agents"), { recursive: true });
 			await writeFile(
 				join(ctx.workspaceDir, "external-reader.mjs"),
-				controlledProducer(join(ctx.dotDir, ".eval/run-release"), fixtureToken(ctx.seed, "RUN-RESULT")),
+				controlledProducer(join(ctx.deskDir, ".eval/run-release"), fixtureToken(ctx.seed, "RUN-RESULT")),
 			);
 			await writeFile(
 				join(ctx.workspaceDir, "sub-agents/run-reader.md"),
@@ -183,19 +183,19 @@ export const coreRenovatedCases: EvalCase[] = [
 			);
 			await writeTask(ctx, "delegated-read", {
 				started: true,
-				body: `# Task\n\n## Goal\nDelegate reading ${join(ctx.dotDir, "run-input.txt")} to external role run-reader. Park on the task's bound work. After its completion wake, inspect the run result and deliver the actual value through task_step_end report. Never guess it.\n\n## DoD\n- [ ] settled run output delivered\n\n## Work Items\n- [ ] W1: Read the controlled input through run-reader and verify its actual output\n`,
+				body: `# Task\n\n## Goal\nDelegate reading ${join(ctx.deskDir, "run-input.txt")} to external role run-reader. Park on the task's bound work. After its completion wake, inspect the run result and deliver the actual value through task_step_end report. Never guess it.\n\n## DoD\n- [ ] settled run output delivered\n\n## Work Items\n- [ ] W1: Read the controlled input through run-reader and verify its actual output\n`,
 			});
 		},
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
 			{ kind: "checkpoint", id: "run-must-be-parked" },
-			{ kind: "environment", action: "writeFile", path: "dots/eval/.eval/run-release", content: "released\n" },
+			{ kind: "environment", action: "writeFile", path: "desk-eval/.eval/run-release", content: "released\n" },
 			{
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
 				predicate: (ctx) =>
-					existsSync(join(ctx.dotDir, "tasks/archive/delegated-read.md")) &&
+					existsSync(join(ctx.deskDir, "tasks/archive/delegated-read.md")) &&
 					ctx.deliveries.some((item) => (item.text ?? "").includes(fixtureToken(ctx.seed, "RUN-RESULT"))),
 			},
 		],
@@ -205,7 +205,7 @@ export const coreRenovatedCases: EvalCase[] = [
 				graderId: "single-settled-run",
 				graderVersion: "1",
 				grade: (ctx) => {
-					const path = join(ctx.dotDir, "subagent-runs.jsonl");
+					const path = join(ctx.deskDir, "subagent-runs.jsonl");
 					const runs = existsSync(path)
 						? readFileSync(path, "utf8")
 								.split("\n")

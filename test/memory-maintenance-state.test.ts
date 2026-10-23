@@ -1,8 +1,8 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getDotLockPath } from "../src/dot/paths.js";
-import { createDotMemoryQueue } from "../src/memory/dot-memory-queue.js";
+import { getDeskLockPath } from "../src/desk/paths.js";
+import { createDeskMemoryQueue } from "../src/memory/desk-memory-queue.js";
 import {
 	applyMemoryActivityToState,
 	createMemoryActivityRecorder,
@@ -17,16 +17,16 @@ import { spawnLockHolder } from "./helpers/lock-holder.js";
 
 const createTempDir = useTempDirs("pipiclaw-maintenance-state-");
 
-const REF: MaintenanceStateRef = { dot: "news", conversation: "dm-1", channelId: "dm_1" };
+const REF: MaintenanceStateRef = { desk: "news", conversation: "dm-1", channelId: "dm_1" };
 
 function activity(kind: MemoryActivityEvent["kind"], ref: MaintenanceStateRef = REF): MemoryActivityEvent {
 	return { kind, ref, timestamp: "2026-04-19T00:00:00.000Z" };
 }
 
-describe("dot memory queue", () => {
-	it("serializes same-dot jobs and continues after failures", async () => {
-		const queue = createDotMemoryQueue();
-		const target = { dot: "news", dotDir: createTempDir() };
+describe("desk memory queue", () => {
+	it("serializes same-desk jobs and continues after failures", async () => {
+		const queue = createDeskMemoryQueue();
+		const target = { desk: "news", deskDir: createTempDir() };
 		const events: string[] = [];
 		let releaseFirst!: () => void;
 		let firstStarted!: () => void;
@@ -60,13 +60,13 @@ describe("dot memory queue", () => {
 		expect(events).toEqual(["first-start", "first-end", "second", "third"]);
 	});
 
-	it("waits while another process holds the dot's memory lock", async () => {
+	it("waits while another process holds the desk's memory lock", async () => {
 		// Failure caught (INV-6/INV-8): an in-process queue alone cannot see a TUI writing the same
-		// dot, so both would rewrite memory/ and the generated MEMORY.md from stale reads.
-		const target = { dot: "news", dotDir: createTempDir() };
-		const holder = await spawnLockHolder(getDotLockPath(target.dotDir, "memory.lock"));
+		// desk, so both would rewrite memory/ and the generated MEMORY.md from stale reads.
+		const target = { desk: "news", deskDir: createTempDir() };
+		const holder = await spawnLockHolder(getDeskLockPath(target.deskDir, "memory.lock"));
 		let ran = false;
-		const job = createDotMemoryQueue().run(target, async () => {
+		const job = createDeskMemoryQueue().run(target, async () => {
 			ran = true;
 		});
 		await new Promise((resolve) => setTimeout(resolve, 150));
@@ -125,11 +125,11 @@ describe("memory maintenance state", () => {
 		expect(state).toMatchObject({ dirty: true });
 	});
 
-	it("files state by dot and conversation, never by channel id", async () => {
+	it("files state by desk and conversation, never by channel id", async () => {
 		// Failure caught (INV-3): a base64 group id carries `/`; any path derived from it nests
 		// or escapes the state directory.
 		const appHomeDir = createTempDir();
-		const ref = { dot: "news", conversation: "group-1", channelId: "group_cidYDhGqxhJOzS7VDv/eDInUw==" };
+		const ref = { desk: "news", conversation: "group-1", channelId: "group_cidYDhGqxhJOzS7VDv/eDInUw==" };
 
 		await updateMemoryMaintenanceState(appHomeDir, ref, (state) => ({ ...state, dirty: true }));
 
@@ -215,8 +215,8 @@ describe("memory activity recorder", () => {
 	it("flush is idempotent and covers every buffered conversation", async () => {
 		const appHomeDir = createTempDir();
 		const recorder = createMemoryActivityRecorder({ appHomeDir, debounceMs: 60_000 });
-		const a = { dot: "news", conversation: "dm-1", channelId: "dm_a" };
-		const b = { dot: "news", conversation: "dm-2", channelId: "dm_b" };
+		const a = { desk: "news", conversation: "dm-1", channelId: "dm_a" };
+		const b = { desk: "news", conversation: "dm-2", channelId: "dm_b" };
 
 		recorder.record(activity("tool-call", a));
 		recorder.record(activity("tool-call", b));

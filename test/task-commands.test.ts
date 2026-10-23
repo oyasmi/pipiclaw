@@ -16,13 +16,13 @@ const BODY = renderStandardTaskBody({ title: "Weekly", goal: "Ship it.", dod: "-
 
 describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 	let workspaceDir: string;
-	let dotDir: string;
+	let deskDir: string;
 	let tasksDir: string;
 
 	beforeEach(async () => {
 		workspaceDir = await mkdtemp(join(tmpdir(), "task-commands-v4-"));
-		dotDir = join(workspaceDir, "dm_1");
-		tasksDir = join(dotDir, "tasks");
+		deskDir = join(workspaceDir, "dm_1");
+		tasksDir = join(deskDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
 	});
 	afterEach(async () => {
@@ -40,7 +40,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 	const run = (args: string, dispatchTask?: (id: string) => Promise<boolean>) =>
 		handleTasksCommand({
 			args,
-			dotDir,
+			deskDir,
 			currentChannelId: "dm_1",
 			describeChannel: (channelId) => ({ label: `\`${channelId}\``, boundHere: true }),
 			dispatchTask,
@@ -53,14 +53,14 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		});
 
 		await run("pause weekly");
-		let fields = (await readStoredTask(dotDir, "weekly"))?.fields;
+		let fields = (await readStoredTask(deskDir, "weekly"))?.fields;
 		expect(fields?.paused?.by).toBe("user");
 		// Pausing is orthogonal: the stage and the ticket must survive it untouched.
 		expect(fields?.state).toBe("parked");
 		expect(fields?.ticket?.kind).toBe("time");
 
 		await run("resume weekly");
-		fields = (await readStoredTask(dotDir, "weekly"))?.fields;
+		fields = (await readStoredTask(deskDir, "weekly"))?.fields;
 		expect(fields?.paused).toBeUndefined();
 		// Resuming a user pause keeps the live ticket: the task goes back to waiting, not to open.
 		expect(fields?.state).toBe("parked");
@@ -76,7 +76,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 			paused: { by: "runtime", reason: "budget", at: PAST },
 		});
 		await run("resume spent +steps 10");
-		const fields = (await readStoredTask(dotDir, "spent"))?.fields;
+		const fields = (await readStoredTask(deskDir, "spent"))?.fields;
 		expect(fields?.paused).toBeUndefined();
 		expect(fields?.budget?.steps).toBe(15);
 	});
@@ -85,15 +85,15 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		await writeTask("weekly");
 		await run("steer weekly 先跑一遍 npm run check");
 		expect(await readFile(join(tasksDir, ".steer", "weekly.md"), "utf-8")).toContain("npm run check");
-		expect((await readStoredTask(dotDir, "weekly"))?.fields.state).toBe("open");
+		expect((await readStoredTask(deskDir, "weekly"))?.fields.state).toBe("open");
 	});
 
 	it("reply redeems an ask ticket, and still keeps the words when the task was not asking", async () => {
 		await writeTask("asked");
-		await parkTask(dotDir, "asked", { kind: "ask", asked: "merge?", by: FUTURE });
+		await parkTask(deskDir, "asked", { kind: "ask", asked: "merge?", by: FUTURE });
 		const dispatchTask = vi.fn(async () => true);
 		await run("reply asked 合并吧", dispatchTask);
-		expect((await readStoredTask(dotDir, "asked"))?.fields.state).toBe("open");
+		expect((await readStoredTask(deskDir, "asked"))?.fields.state).toBe("open");
 		expect(dispatchTask).toHaveBeenCalledWith("asked");
 
 		await writeTask("busy");

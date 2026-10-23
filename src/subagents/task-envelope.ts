@@ -103,8 +103,8 @@ export function buildSubAgentTask(
 	const lines = [
 		`Runtime context:`,
 		`- Workspace root: ${runtimeContext.workspaceDir}`,
-		`- Dot: ${runtimeContext.dot}`,
-		`- Dot directory: ${runtimeContext.dotDir}`,
+		`- Desk: ${runtimeContext.desk}`,
+		`- Desk directory: ${runtimeContext.deskDir}`,
 		`- Channel id: ${runtimeContext.channelId}`,
 		`- Working directory: ${runContext.workingDirectory}`,
 		`- Artifact directory: ${runContext.artifactDir}`,
@@ -129,7 +129,7 @@ function verificationTaskPath(
 	runtimeContext: SubAgentToolOptions["runtimeContext"],
 	runContext: SubAgentRunContext,
 ): string | undefined {
-	return runContext.taskId ? join(runtimeContext.dotDir, "tasks", `${runContext.taskId}.md`) : undefined;
+	return runContext.taskId ? join(runtimeContext.deskDir, "tasks", `${runContext.taskId}.md`) : undefined;
 }
 
 /**
@@ -166,7 +166,7 @@ export function buildFollowUpTask(
  */
 async function buildContextualBlocks(
 	config: Pick<SubAgentConfig, "contextMode" | "paths" | "memory">,
-	options: Pick<SubAgentToolOptions, "dotDir" | "workspaceDir">,
+	options: Pick<SubAgentToolOptions, "deskDir" | "workspaceDir">,
 ): Promise<string[]> {
 	if (config.contextMode !== "contextual") {
 		return [];
@@ -190,9 +190,9 @@ async function buildContextualBlocks(
 		}
 	};
 	const [entries, workspaceMemory, journalToday] = await Promise.all([
-		listMemoryEntries(options.dotDir).catch(() => []),
+		listMemoryEntries(options.deskDir).catch(() => []),
 		readOptionalFile(join(options.workspaceDir, "MEMORY.md")),
-		readJournalDay(options.dotDir, today).catch(() => ""),
+		readJournalDay(options.deskDir, today).catch(() => ""),
 	]);
 	const index = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS / 2);
 	const bootstrap = renderMemoryBootstrap({

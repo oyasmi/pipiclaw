@@ -26,7 +26,7 @@ export function conversationTypeOf(channelId: string): "1" | "2" {
 
 /**
  * How a channel is named to a user (spec 053 copy): `群「名称」`, `私聊「昵称」`, `终端`, or the
- * id itself when the channel index has no name for it. The one renderer behind `/dot`, `/tasks`
+ * id itself when the channel index has no name for it. The one renderer behind `/desk`, `/tasks`
  * and `/events`.
  */
 export function formatChannelLabel(channelId: string, name: string | undefined): string {
@@ -36,7 +36,7 @@ export function formatChannelLabel(channelId: string, name: string | undefined):
 	return kind === "group" ? `群「${name}」` : `私聊「${name}」`;
 }
 
-/** What a report needs to say about a delivery channel: its label, and whether it is still bound to this dot. */
+/** What a report needs to say about a delivery channel: its label, and whether it is still bound to this desk. */
 export interface ChannelDescription {
 	label: string;
 	boundHere: boolean;

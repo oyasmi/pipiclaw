@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
-import type { DotJobManager } from "../src/jobs/manager.js";
+import type { DeskJobManager } from "../src/jobs/manager.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createBashTool } from "../src/tools/bash.js";
 import { withToolDetails } from "../src/tools/contract/details.js";
@@ -82,7 +82,7 @@ describe("tool error contract: recoverable failures never throw past withToolDet
 	});
 
 	it("job: cancel without ids is recoverable", async () => {
-		const jobManager = {} as DotJobManager;
+		const jobManager = {} as DeskJobManager;
 		const tool = withToolDetails(createJobTool({ jobManager, channelId: "dm_1" }), "job");
 		const result = await tool.execute("call", { label: "x", op: "cancel" }, undefined, undefined);
 		expect((result.details as { recoverable?: true }).recoverable).toBe(true);

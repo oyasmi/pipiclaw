@@ -14,25 +14,18 @@ const GROUP_ID = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
 const DM_ID = "dm_0123456789";
 
 describe("channel index", () => {
-	it("round-trips entries through render and parse, and reads a pre-058 four-column row", () => {
+	it("round-trips the current channel index", () => {
 		const entries = [
 			{
 				channelId: GROUP_ID,
 				name: "投资理财",
-				dot: "invest",
+				desk: "invest",
 				lastMessageAt: "2026-07-30T14:22:13+08:00",
 				topic: "长期定投",
 			},
-			{ channelId: DM_ID, name: "张三", dot: "", lastMessageAt: "", topic: "" },
+			{ channelId: DM_ID, name: "张三", desk: "", lastMessageAt: "", topic: "" },
 		];
 		expect(parseChannelIndex(renderChannelIndex(entries))).toEqual(entries);
-		// Spec 058, D17: an index written before the `dot` column existed must keep its topic and
-		// timestamp in place instead of shifting them one column left.
-		const legacy =
-			"| 频道 ID | 名称 | 最近消息 | 主题 |\n| --- | --- | --- | --- |\n| `dm_1` | 李四 | 2026-07-30T14:22:13+08:00 | 周报 |\n";
-		expect(parseChannelIndex(legacy)).toEqual([
-			{ channelId: "dm_1", name: "李四", dot: "", lastMessageAt: "2026-07-30T14:22:13+08:00", topic: "周报" },
-		]);
 	});
 });
 
@@ -46,7 +39,7 @@ describe("channel index maintenance", () => {
 	beforeEach(async () => {
 		workspaceDir = await mkdtemp(join(tmpdir(), "pipiclaw-channel-index-"));
 		indexPath = join(workspaceDir, CHANNELS_INDEX_FILENAME);
-		index = createChannelIndex({ workspaceDir, debounceMs: 10_000, getBoundDot: () => "invest" });
+		index = createChannelIndex({ workspaceDir, debounceMs: 10_000, getBoundDesk: () => "invest" });
 	});
 
 	afterEach(async () => {
@@ -58,6 +51,6 @@ describe("channel index maintenance", () => {
 		index.note({ channelId: GROUP_ID, name: "投资理财", at: Date.parse("2026-07-30T06:22:13Z") });
 		await index.flush();
 
-		expect(await rows()).toMatchObject([{ channelId: GROUP_ID, name: "投资理财", dot: "invest" }]);
+		expect(await rows()).toMatchObject([{ channelId: GROUP_ID, name: "投资理财", desk: "invest" }]);
 	});
 });

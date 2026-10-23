@@ -26,13 +26,14 @@ import { CHANNELS_INDEX_FILENAME, type ChannelIndex, createChannelIndex } from "
 import { ChannelStore } from "../channel/store.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
+import { buildDeskList } from "../desk/commands.js";
+import { initializeDefaultDesk } from "../desk/default.js";
+import { getDeskDir } from "../desk/paths.js";
+import { listDesks } from "../desk/registry.js";
+import { StartupRefusal } from "../desk/startup-error.js";
 import { DingTalkBot } from "../dingtalk/bot.js";
 import { type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import type { DingTalkHandler } from "../dingtalk/handler.js";
-import { buildDotList } from "../dot/commands.js";
-import { assertNoLegacyLayout, StartupRefusal } from "../dot/legacy-layout.js";
-import { getDotDir } from "../dot/paths.js";
-import { listDots } from "../dot/registry.js";
 import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
@@ -45,7 +46,7 @@ import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
-import { DotRuntime } from "./dot-runtime.js";
+import { DeskRuntime } from "./desk-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createShutdown } from "./shutdown.js";
 import { TaskDriver } from "./task-driver.js";
@@ -71,8 +72,8 @@ export interface AppContext {
 export interface RuntimeContext {
 	jobs: JobRuntime;
 	runs: SubAgentRuntime;
-	/** Bindings and active dots (spec 058, D6); exposed for the e2e harness and evals. */
-	dots: DotRuntime;
+	/** Bindings and active desks (spec 058, D6); exposed for the e2e harness and evals. */
+	desks: DeskRuntime;
 	handler: DingTalkHandler;
 	store: ChannelStore;
 	/** Production driver instance, exposed so evals can invoke the real scan path. */
@@ -115,8 +116,8 @@ async function evictIdleRunnersOverCap(channelRunners: Map<string, AgentRunner>)
 
 /**
  * Take a channel's runner out of the cache, then dispose it: the next message builds a fresh one
- * from the channel's current binding. Used by LRU eviction and by `/dot bind` (spec 058, D5 step
- * 5), whose final reflect writes into the dot the runner belonged to.
+ * from the channel's current binding. Used by LRU eviction and by `/desk bind` (spec 058, D5 step
+ * 5), whose final reflect writes into the desk the runner belonged to.
  */
 async function releaseCachedRunner(channelRunners: Map<string, AgentRunner>, channelId: string): Promise<void> {
 	const runner = channelRunners.get(channelId);
@@ -139,8 +140,8 @@ interface RuntimeContextOptions {
 	paths: BootstrapPaths;
 	dingtalkConfig: DingTalkConfig;
 	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
-	/** Builds one dot's events watcher (tests pass an inert one). */
-	createEventsWatcher?: (target: { dot: string; dotDir: string }) => {
+	/** Builds one desk's events watcher (tests pass an inert one). */
+	createEventsWatcher?: (target: { desk: string; deskDir: string }) => {
 		start(): void;
 		stop(): void;
 		flush?(): Promise<void>;
@@ -172,8 +173,7 @@ interface RuntimeContextOptions {
 export async function createRuntimeContext(
 	options: RuntimeContextOptions,
 ): Promise<RuntimeContext & { bot: DingTalkBot }> {
-	// D21: nothing may start on top of the pre-dot layout.
-	assertNoLegacyLayout(options.paths);
+	initializeDefaultDesk(options.paths);
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const { workspaceDir, appHomeDir } = options.paths;
@@ -191,9 +191,9 @@ export async function createRuntimeContext(
 	const executor = options.executor ?? createExecutor();
 	const dispatch = (event: ChannelEvent) => durableDispatch?.dispatch(event) ?? false;
 
-	// The one authority on bindings and active dots (spec 058, D6). `bot`, `taskDriver` and the
+	// The one authority on bindings and active desks (spec 058, D6). `bot`, `taskDriver` and the
 	// spawner are resolved lazily by its callbacks: none of them runs before this function returns.
-	const dotRuntime: DotRuntime = new DotRuntime({
+	const deskRuntime: DeskRuntime = new DeskRuntime({
 		workspaceDir,
 		recover: async (conversations) => {
 			// Spec 043, D10 point 1: repair turns interrupted by the last shutdown/crash before any of
@@ -224,16 +224,16 @@ export async function createRuntimeContext(
 				? options.createEventsWatcher(target)
 				: createEventsWatcher({
 						...target,
-						isBound: (channelId) => dotRuntime.isBoundTo(channelId, target.dot),
+						isBound: (channelId) => deskRuntime.isBoundTo(channelId, target.desk),
 						bot,
 						executor,
 						commandGuardConfig: loadSecurityConfigWithDiagnostics(appHomeDir).config.commandGuard,
 						historyPath: options.paths.eventHistoryPath,
 						dispatch,
 						spawnTask: createTaskSpawner({
-							getDotDir: (dot) => getDotDir(workspaceDir, dot),
+							getDeskDir: (desk) => getDeskDir(workspaceDir, desk),
 							nudge: () => getTaskDriver().nudge?.(),
-							notify: (dot, channelId, text) => dotRuntime.sendFromDot(dot, channelId, text),
+							notify: (desk, channelId, text) => deskRuntime.sendFromDesk(desk, channelId, text),
 						}),
 					}),
 		send: (channelId, text) => bot.sendPlain(channelId, text),
@@ -241,25 +241,25 @@ export async function createRuntimeContext(
 		releaseRunner: (channelId) => releaseCachedRunner(channelRunners, channelId),
 		onBindingChanged: () => channelIndex.noteBindingChanged(),
 	});
-	await dotRuntime.load();
-	const isBoundTo = (channelId: string, dot: string) => dotRuntime.isBoundTo(channelId, dot);
+	await deskRuntime.load();
+	const isBoundTo = (channelId: string, desk: string) => deskRuntime.isBoundTo(channelId, desk);
 
 	const store = new ChannelStore({
 		resolveArchiveDir: (channelId) => {
-			const resolution = dotRuntime.resolve(channelId);
+			const resolution = deskRuntime.resolve(channelId);
 			return resolution.kind === "bound" ? resolution.conversation.conversationDir : undefined;
 		},
 	});
-	// `workspace/CHANNELS.md`: names every channel id (and shows its dot) so the workspace, the logs
-	// and `/dot` stop dealing in `group_cid...`. Writes are debounced internally.
+	// `workspace/CHANNELS.md`: names every channel id (and shows its desk) so the workspace, the logs
+	// and `/desk` stop dealing in `group_cid...`. Writes are debounced internally.
 	const channelIndex: ChannelIndex = createChannelIndex({
 		workspaceDir,
-		getBoundDot: (channelId) => dotRuntime.boundDot(channelId),
+		getBoundDesk: (channelId) => deskRuntime.boundDesk(channelId),
 	});
 	await channelIndex.load();
-	const describeChannel = (dot: string, channelId: string) => ({
+	const describeChannel = (desk: string, channelId: string) => ({
 		label: formatChannelLabel(channelId, channelIndex.nameOf(channelId)),
-		boundHere: dotRuntime.isBoundTo(channelId, dot),
+		boundHere: deskRuntime.isBoundTo(channelId, desk),
 	});
 
 	const archiveIncomingMessage = async (
@@ -279,15 +279,15 @@ export async function createRuntimeContext(
 	};
 
 	/**
-	 * The channel's runner, or `undefined` when it is not bound to an available dot — the runtime
+	 * The channel's runner, or `undefined` when it is not bound to an available desk — the runtime
 	 * never builds a runner (or a directory) for an unbound channel (INV-2).
 	 */
 	const getRunner = (channelId: string): AgentRunner | undefined => {
-		const resolution = dotRuntime.resolve(channelId);
+		const resolution = deskRuntime.resolve(channelId);
 		if (resolution.kind !== "bound") return undefined;
 		const { conversation } = resolution;
 		const existing = channelRunners.get(channelId);
-		if (existing && existing.conversation.dot === conversation.dot) {
+		if (existing && existing.conversation.desk === conversation.desk) {
 			// Re-insert to move this channel to the end (most-recently-used) of the Map's
 			// iteration order, which evictIdleRunnersOverCap relies on.
 			channelRunners.delete(channelId);
@@ -296,8 +296,8 @@ export async function createRuntimeContext(
 		}
 
 		const runner = createRunner(conversation, {
-			jobManager: jobs.get(conversation.dot),
-			runManager: runs.get(conversation.dot),
+			jobManager: jobs.get(conversation.desk),
+			runManager: runs.get(conversation.desk),
 			appHomeDir,
 			workspaceDir,
 			authConfigPath: options.paths.authConfigPath,
@@ -306,7 +306,7 @@ export async function createRuntimeContext(
 			onSessionEvent: options.observer,
 			describeChannel: (id) => channelIndex.nameOf(id),
 			describeConversation: (dir) => {
-				const owner = dotRuntime.channelOfConversation(conversation.dot, dir);
+				const owner = deskRuntime.channelOfConversation(conversation.desk, dir);
 				return owner ? formatChannelLabel(owner, channelIndex.nameOf(owner)) : undefined;
 			},
 			// The DingTalk bot is the media sender for this transport; enables `send_media`.
@@ -336,21 +336,21 @@ export async function createRuntimeContext(
 		channelIndex,
 		archiveIncomingMessage,
 		getRunner,
-		resolveChannel: (channelId) => dotRuntime.resolve(channelId),
-		dotPort: (channelId) => ({
+		resolveChannel: (channelId) => deskRuntime.resolve(channelId),
+		prepareChannel: (channelId) => deskRuntime.ensureDefaultBinding(channelId),
+		deskPort: (channelId) => ({
 			list: async () =>
-				buildDotList(
-					await listDots(workspaceDir),
-					dotRuntime.bindingTable(),
-					dotRuntime.boundDot(channelId),
+				buildDeskList(
+					await listDesks(workspaceDir),
+					deskRuntime.bindingTable(),
+					deskRuntime.boundDesk(channelId),
 					(id) => formatChannelLabel(id, channelIndex.nameOf(id)),
 				),
 			channelIndexPath: join(workspaceDir, CHANNELS_INDEX_FILENAME),
-			create: (name) => dotRuntime.create(name),
-			bind: (name) => dotRuntime.bind(channelId, name),
+			create: (name) => deskRuntime.create(name),
+			bind: (name) => deskRuntime.bind(channelId, name),
 		}),
 		describeChannel,
-		dotChannelIds: (dot) => dotRuntime.conversationChannels(dot),
 		cliVersion,
 		startedAt,
 		isShuttingDown,
@@ -370,23 +370,23 @@ export async function createRuntimeContext(
 		// A structured wake that keeps failing before it can mark itself complete would otherwise
 		// redeliver forever. Surface it once instead of looping silently; the record stays on disk
 		// for inspection until a human clears it. Like every background notice, only to a channel
-		// still bound to the wake's dot (D7).
+		// still bound to the wake's desk (D7).
 		onExhausted: async (record) => {
 			log.logEvent("warn", "dispatch.exhausted", "Dispatch exhausted", {
 				ctx: { channelId: record.event.channelId },
 				details: record.event.text.slice(0, 500),
 				fields: { dispatchId: record.id, deliveries: record.deliveries, producer: record.event.user },
 			});
-			if (record.event.dot) {
-				await dotRuntime.sendFromDot(
-					record.event.dot,
+			if (record.event.desk) {
+				await deskRuntime.sendFromDesk(
+					record.event.desk,
 					record.event.channelId,
 					renderDispatchExhaustedNotice(record, dispatchStateDir),
 				);
 			}
 		},
 	});
-	// Background jobs and delegation runs are owned per dot (spec 058, D15); their completion wakes
+	// Background jobs and delegation runs are owned per desk (spec 058, D15); their completion wakes
 	// pass the producer-side binding check before they are dispatched.
 	const jobs = createJobRuntime(executor, {
 		jobsStateDir: join(appHomeDir, "state", "jobs"),
@@ -402,34 +402,34 @@ export async function createRuntimeContext(
 		isBoundTo,
 		// A best-effort out-of-band notice, independent of the completion wake. `notices: "off"`
 		// (settings.json) restores the silent behavior.
-		notify: (dot, channelId, notice) => {
+		notify: (desk, channelId, notice) => {
 			const level = runtimeSettingsManager.getDelegationSettings().notices;
 			if (level === "off") return;
 			if (level === "settled" && notice.kind === "progress") return;
 			const text = renderRunNotice(notice);
-			if (text) void dotRuntime.sendFromDot(dot, channelId, text);
+			if (text) void deskRuntime.sendFromDesk(desk, channelId, text);
 		},
 		ledger: getUsageLedger(),
 		store,
 	});
 	// Admission (bot.start() below) must not open until every persisted job and run is back in
-	// memory, and restore is independent of bindings (D6): a dormant dot's runs still settle.
+	// memory, and restore is independent of bindings (D6): a dormant desk's runs still settle.
 	await jobs.restore();
 	await runs.restore();
 	runs.start();
-	// Activation repairs each bound dot's conversations before its channels can take traffic.
-	await dotRuntime.activateBound();
+	// Activation repairs each bound desk's conversations before its channels can take traffic.
+	await deskRuntime.activateBound();
 
 	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
 		? options.createMemoryMaintenanceScheduler()
 		: new MemoryMaintenanceScheduler({
 				appHomeDir,
-				getConversations: () => dotRuntime.boundConversations(),
+				getConversations: () => deskRuntime.boundConversations(),
 				// Conversations active this boot reuse their runner's in-memory context; every other one
 				// gets a lightweight disk-backed context instead of resurrecting a full runner.
 				getRuntimeContext: async (conversation) => {
 					const runner = channelRunners.get(conversation.channelId);
-					if (runner && runner.conversation.dot === conversation.dot) {
+					if (runner && runner.conversation.desk === conversation.desk) {
 						return runner.getMemoryMaintenanceContext();
 					}
 					return loadDetachedMaintenanceContext({
@@ -462,13 +462,13 @@ export async function createRuntimeContext(
 	const taskDriver = options.createTaskDriver
 		? options.createTaskDriver()
 		: new TaskDriver({
-				getActiveDots: () => dotRuntime.activeDots(),
+				getActiveDesks: () => deskRuntime.activeDesks(),
 				isBoundTo,
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				dispatch,
 				onDispatch: options.onTaskDriverDispatch,
 				notify: (receipt) =>
-					receipt.dot ? dotRuntime.sendFromDot(receipt.dot, receipt.channelId, receipt.text) : false,
+					receipt.desk ? deskRuntime.sendFromDesk(receipt.desk, receipt.channelId, receipt.text) : false,
 				isEnabled: tasksToolEnabled,
 			});
 
@@ -476,7 +476,7 @@ export async function createRuntimeContext(
 		taskDriver,
 		getDurableDispatch,
 		memoryMaintenanceScheduler,
-		dotRuntime,
+		deskRuntime,
 		runs,
 		jobs,
 		bot,
@@ -504,7 +504,7 @@ export async function createRuntimeContext(
 	}
 
 	if (startServices) {
-		dotRuntime.startServices();
+		deskRuntime.startServices();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();
 		durableDispatch.start();
@@ -515,7 +515,7 @@ export async function createRuntimeContext(
 		handler,
 		jobs,
 		runs,
-		dots: dotRuntime,
+		desks: deskRuntime,
 		store,
 		bot,
 		taskDriver,

@@ -3,7 +3,7 @@ import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { getDotDir, isDotName } from "../dot/paths.js";
+import { getDeskDir, isDeskName } from "../desk/paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -19,14 +19,14 @@ import { buildLaunchScript, type JobArtifacts, jobArtifacts, parseLaunchOutput }
 import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobRecord, toSnapshot } from "./record.js";
 
 /**
- * Per-dot manager for background bash jobs. A long command that ran synchronously would hold
+ * Per-desk manager for background bash jobs. A long command that ran synchronously would hold
  * the channel's run queue for its whole duration, blocking `/steer`, `/followup`, and every other
  * message. A background job instead returns immediately and the model can end its turn.
  *
  * Jobs live on the host, managed through shell commands (`setsid` to launch as its own process
  * group with a startup handshake, a three-state identity probe, a confirmed kill) with no
  * in-process child handles. Records
- * are mirrored to `state/jobs/<dot>/<id>.json` so they survive a restart: a detached
+ * are mirrored to `state/jobs/<desk>/<id>.json` so they survive a restart: a detached
  * process outlives the daemon, and losing the record while the process kept running meant orphaned
  * work, leaked slots, and unreachable output (spec 031, D6).
  *
@@ -58,28 +58,28 @@ const KILL_CONFIRMED_GONE: ReadonlySet<KillOutcome> = new Set<KillOutcome>([
 
 export interface JobStartOptions {
 	/** The channel the job was started from: its completion wake goes back there (spec 058, D7). */
-	channelId?: string;
+	channelId: string;
 	signal?: AbortSignal;
 	notify?: boolean;
 	taskId?: string;
 }
 
 export interface JobManagerOptions {
-	/** Directory for this dot's persisted job records. Omit to run without persistence. */
+	/** Directory for this desk's persisted job records. Omit to run without persistence. */
 	stateDir?: string;
-	/** Is a job's channel still bound to this dot (spec 058, D7)? Omitted (TUI, tests): always. */
-	isBoundTo?: (channelId: string, dot: string) => boolean;
+	/** Is a job's channel still bound to this desk (spec 058, D7)? Omitted (TUI, tests): always. */
+	isBoundTo?: (channelId: string, desk: string) => boolean;
 	/** Delivers the completion wake. Omit to disable waking (sub-agent and test paths). */
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	sweepIntervalMs?: number;
 	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
 	fileStore?: FileStore;
 	/** Directory the full-output spill (and its `.exit`/`.ready`/`.meta` siblings) is written to.
-	 * Defaults to the OS temp dir; the runtime passes `<dotDir>/logs` so the model can read it. */
+	 * Defaults to the OS temp dir; the runtime passes `<deskDir>/logs` so the model can read it. */
 	spillDir?: string;
 }
 
-/** Cap on concurrently running jobs per dot, so a runaway model can't spawn unbounded processes. */
+/** Cap on concurrently running jobs per desk, so a runaway model can't spawn unbounded processes. */
 export const MAX_RUNNING_JOBS = 5;
 /** Longest a single `poll` call blocks before returning a snapshot; the model can poll again. */
 export const POLL_WAIT_MS = 30_000;
@@ -121,7 +121,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-export class DotJobManager {
+export class DeskJobManager {
 	private readonly jobs = new Map<string, JobRecord>();
 	private readonly wakeQueue = createSerialQueue<string>();
 	/**
@@ -143,7 +143,7 @@ export class DotJobManager {
 
 	/** `target` owns these jobs (task logs live in its directory); each job's own channel gets its wake. */
 	constructor(
-		private readonly target: { dot: string; dotDir?: string },
+		private readonly target: { desk: string; deskDir?: string },
 		private readonly executor: Executor,
 		options: JobManagerOptions | number = {},
 	) {
@@ -258,12 +258,7 @@ export class DotJobManager {
 	 * 0. A failed handshake, a non-zero launch, or an interrupted launch never creates a `running`
 	 * record; a persist failure right after a successful launch terminates the process (see below).
 	 */
-	async start(
-		command: string,
-		label: string,
-		timeoutSeconds: number,
-		options: JobStartOptions = {},
-	): Promise<JobSnapshot> {
+	async start(command: string, label: string, timeoutSeconds: number, options: JobStartOptions): Promise<JobSnapshot> {
 		if (this.runningCount() >= MAX_RUNNING_JOBS) {
 			throw new Error(
 				`Too many background jobs already running (>= ${MAX_RUNNING_JOBS}). Poll or cancel some with the job tool first.`,
@@ -283,7 +278,7 @@ export class DotJobManager {
 		} catch (error) {
 			// The launch was aborted (or the executor could not run it). A detached child may
 			// already be running — try to recover its pid and clean it up honestly.
-			throw await this.recoverInterruptedLaunch(command, art, error);
+			throw await this.recoverInterruptedLaunch(art, error);
 		}
 
 		const launched = parseLaunchOutput(result.stdout);
@@ -329,7 +324,7 @@ export class DotJobManager {
 			exitFile: art.exitFile,
 			timeoutSeconds,
 			contract: { notify: options.notify ?? true, ...(options.taskId ? { taskId: options.taskId } : {}) },
-			...(options.channelId ? { channelId: options.channelId } : {}),
+			channelId: options.channelId,
 		};
 		this.jobs.set(id, record);
 		// The persisted record is the only thing that survives a restart — a detached process
@@ -364,8 +359,8 @@ export class DotJobManager {
 			});
 			throw failure;
 		}
-		if (options.taskId && this.target.dotDir) {
-			await logTaskDispatch(this.target.dotDir, options.taskId, {
+		if (options.taskId && this.target.deskDir) {
+			await logTaskDispatch(this.target.deskDir, options.taskId, {
 				ref: id,
 				agent: "job",
 				label,
@@ -386,7 +381,7 @@ export class DotJobManager {
 	 * its readiness handshake, so even an interrupted launch usually leaves a recoverable pid;
 	 * clean it up with no caller signal and return an error that is honest about what is known.
 	 */
-	private async recoverInterruptedLaunch(command: string, art: JobArtifacts, error: unknown): Promise<Error> {
+	private async recoverInterruptedLaunch(art: JobArtifacts, error: unknown): Promise<Error> {
 		const cause = errorMessage(error);
 		const partialStdout =
 			typeof (error as { stdout?: unknown }).stdout === "string" ? (error as { stdout: string }).stdout : "";
@@ -408,20 +403,10 @@ export class DotJobManager {
 			);
 		}
 
-		const provisional: JobRecord = {
-			id: "(interrupted-launch)",
-			label: "(interrupted launch)",
-			command,
-			status: "running",
-			startedAt: Date.now(),
-			durationMs: 0,
+		const provisional: Pick<JobRecord, "pid" | "pgid" | "pidStartedAt"> = {
 			pid,
 			...(launched.pgid !== undefined ? { pgid: launched.pgid } : {}),
 			...(launched.pidStartedAt ? { pidStartedAt: launched.pidStartedAt } : {}),
-			spillFile: art.spillFile,
-			exitFile: art.exitFile,
-			timeoutSeconds: 0,
-			contract: { notify: false },
 		};
 		const outcome = await this.runKill(provisional); // deliberately no signal
 		await this.unlinkArtifacts(art);
@@ -672,11 +657,11 @@ export class DotJobManager {
 	 */
 	private async logSettlementToTask(record: JobRecord): Promise<void> {
 		const taskId = record.contract.taskId;
-		const dotDir = this.target.dotDir;
-		if (!taskId || !dotDir || record.taskLogged) return;
+		const deskDir = this.target.deskDir;
+		if (!taskId || !deskDir || record.taskLogged) return;
 		record.taskLogged = true;
 		const output = await this.readOutput(record.id).catch(() => undefined);
-		await logTaskSettlement(dotDir, taskId, {
+		await logTaskSettlement(deskDir, taskId, {
 			ref: record.id,
 			status: record.status,
 			exitCode: record.exitCode,
@@ -705,13 +690,13 @@ export class DotJobManager {
 		}
 
 		const channelId = record.channelId;
-		if (!channelId || (this.options.isBoundTo && !this.options.isBoundTo(channelId, this.target.dot))) {
+		if (this.options.isBoundTo && !this.options.isBoundTo(channelId, this.target.desk)) {
 			await this.suppressWake(record);
 			return;
 		}
 		const output = await this.readOutput(record.id, signal);
 		const tail = output?.text.slice(-WAKE_OUTPUT_TAIL_BYTES).trim();
-		const event = buildJobCompletionWake({ dot: this.target.dot, channelId, record, tail });
+		const event = buildJobCompletionWake({ desk: this.target.desk, channelId, record, tail });
 		try {
 			await this.options.dispatch(event);
 		} catch (error) {
@@ -727,13 +712,13 @@ export class DotJobManager {
 
 	/** Same contract as `SubAgentRunManager.suppressWake`: drop the wake, still redeem the `work` ticket. */
 	private async suppressWake(record: JobRecord): Promise<void> {
-		log.logInfoEvent("job.wake.suppressed", "Completion wake dropped: channel not bound to the job's dot", {
+		log.logInfoEvent("job.wake.suppressed", "Completion wake dropped: channel not bound to the job's desk", {
 			channelId: record.channelId,
-			fields: { jobId: record.id, dot: this.target.dot, taskId: record.contract.taskId },
+			fields: { jobId: record.id, desk: this.target.desk, taskId: record.contract.taskId },
 		});
 		const taskId = record.contract.taskId;
-		if (taskId && this.target.dotDir) {
-			await redeemTicket(this.target.dotDir, taskId, (ticket) => ticket.kind === "work").catch((error) => {
+		if (taskId && this.target.deskDir) {
+			await redeemTicket(this.target.deskDir, taskId, (ticket) => ticket.kind === "work").catch((error) => {
 				log.logWarn("job.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
 					reason: errorMessage(error),
 					fields: { jobId: record.id, taskId },
@@ -755,7 +740,7 @@ export class DotJobManager {
 	 * that `kill -0` says is alive reads as `UNCONFIRMED` (do not signal what we cannot prove is
 	 * ours). Legacy / nohup records have only `kill -0` liveness and a plain pid kill.
 	 */
-	private killCommand(record: JobRecord): string | undefined {
+	private killCommand(record: Pick<JobRecord, "pid" | "pgid" | "pidStartedAt">): string | undefined {
 		const pid = record.pid;
 		if (!Number.isFinite(pid) || pid <= 1) return undefined;
 		const groupSafe = record.pgid !== undefined && record.pgid === pid;
@@ -778,7 +763,10 @@ export class DotJobManager {
 	 * from "the shell exited 0". Used by cancel, timeout, the persist-failure rollback and the
 	 * interrupted-launch recovery; the last two pass no signal so an aborted caller cannot skip it.
 	 */
-	private async runKill(record: JobRecord, signal?: AbortSignal): Promise<KillOutcome> {
+	private async runKill(
+		record: Pick<JobRecord, "pid" | "pgid" | "pidStartedAt">,
+		signal?: AbortSignal,
+	): Promise<KillOutcome> {
 		const command = this.killCommand(record);
 		if (!command) return "no-target";
 		let result: ExecResult;
@@ -812,7 +800,7 @@ export class DotJobManager {
 	async beginWakeConsumption(id: string, taskId: string, dispatchId: string): Promise<boolean> {
 		return this.wakeQueue.run(id, async () => {
 			const record = this.jobs.get(id);
-			const expected = jobWakeDispatchId(this.target.dot, id);
+			const expected = jobWakeDispatchId(this.target.desk, id);
 			if (!record) return false;
 			const eligible = record.status !== "running" && record.contract.taskId === taskId && dispatchId === expected;
 			const previousClaim = record.wakeClaimDispatchId;
@@ -995,56 +983,56 @@ export class DotJobManager {
 }
 
 interface JobRuntimeConfig {
-	/** Root of the per-dot record directories (`<jobsStateDir>/<dot>/`). */
+	/** Root of the per-desk record directories (`<jobsStateDir>/<desk>/`). */
 	jobsStateDir?: string;
 	/**
-	 * The agent workspace root. A job's full-output spill goes to `<dot>/logs/` so the
+	 * The agent workspace root. A job's full-output spill goes to `<desk>/logs/` so the
 	 * "Full output: …" pointer is a file the model can read (fix plan §2.2). The path is stable
 	 * across restarts, so a re-adopted job's spill is still found.
 	 */
 	workspaceDir?: string;
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	isBoundTo?: JobManagerOptions["isBoundTo"];
-	/** Sweep cadence override for the lazily-built dot managers (tests). */
+	/** Sweep cadence override for the lazily-built desk managers (tests). */
 	sweepIntervalMs?: number;
 }
 
 /** One application's jobs; the executor and configuration cannot change after construction. */
 export function createJobRuntime(executor: Executor, options: JobRuntimeConfig = {}) {
 	const config = { ...options };
-	const managers = new Map<string, DotJobManager>();
+	const managers = new Map<string, DeskJobManager>();
 	let stopped = false;
 
-	function get(dot: string): DotJobManager {
-		let manager = managers.get(dot);
+	function get(desk: string): DeskJobManager {
+		let manager = managers.get(desk);
 		if (!manager) {
-			const dotDir = config.workspaceDir ? getDotDir(config.workspaceDir, dot) : undefined;
-			manager = new DotJobManager({ dot, dotDir }, executor, {
-				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, dot) } : {}),
-				...(dotDir ? { spillDir: join(dotDir, "logs") } : {}),
+			const deskDir = config.workspaceDir ? getDeskDir(config.workspaceDir, desk) : undefined;
+			manager = new DeskJobManager({ desk, deskDir }, executor, {
+				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, desk) } : {}),
+				...(deskDir ? { spillDir: join(deskDir, "logs") } : {}),
 				...(config.dispatch ? { dispatch: config.dispatch } : {}),
 				...(config.isBoundTo ? { isBoundTo: config.isBoundTo } : {}),
 				...(config.sweepIntervalMs ? { sweepIntervalMs: config.sweepIntervalMs } : {}),
 			});
-			managers.set(dot, manager);
+			managers.set(desk, manager);
 			if (stopped) manager.stop();
 		}
 		return manager;
 	}
 
 	/**
-	 * Re-adopt every dot's persisted jobs at startup. Dots are the record directories themselves,
-	 * and restore does not depend on bindings (spec 058, D6): a job still running when its dot went
+	 * Re-adopt every desk's persisted jobs at startup. Desks are the record directories themselves,
+	 * and restore does not depend on bindings (spec 058, D6): a job still running when its desk went
 	 * dormant survives the restart too.
 	 */
 	async function restore(): Promise<number> {
 		const jobsStateDir = config.jobsStateDir;
 		if (!jobsStateDir) return 0;
-		let dots: string[];
+		let desks: string[];
 		try {
 			await mkdir(jobsStateDir, { recursive: true });
-			dots = (await readdir(jobsStateDir, { withFileTypes: true }))
-				.filter((entry) => entry.isDirectory() && isDotName(entry.name))
+			desks = (await readdir(jobsStateDir, { withFileTypes: true }))
+				.filter((entry) => entry.isDirectory() && isDeskName(entry.name))
 				.map((entry) => entry.name);
 		} catch (error) {
 			log.logWarn("job.scan.failed", "Persisted background job scan failed", { reason: errorMessage(error) });
@@ -1052,8 +1040,8 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 		}
 
 		let restored = 0;
-		for (const dot of dots) {
-			restored += await get(dot).restore();
+		for (const desk of desks) {
+			restored += await get(desk).restore();
 		}
 		if (restored > 0) {
 			log.logInfoEvent("job.restore.done", "Background job records restored", { fields: { count: restored } });

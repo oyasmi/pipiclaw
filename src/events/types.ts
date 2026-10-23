@@ -22,7 +22,7 @@ export interface EventPayload {
 
 export interface OneShotEvent extends EventPayload {
 	type: "one-shot";
-	/** The delivery channel (spec 058, D14); the event's dot is the one whose `events/` holds the file. */
+	/** The delivery channel (spec 058, D14); the event's desk is the one whose `events/` holds the file. */
 	channelId: string;
 	at: string; // local time (host timezone if no offset given), e.g. 2026-07-27T07:30:00+08:00
 	preAction?: EventAction;
@@ -30,7 +30,7 @@ export interface OneShotEvent extends EventPayload {
 
 export interface PeriodicEvent extends EventPayload {
 	type: "periodic";
-	/** The delivery channel (spec 058, D14); the event's dot is the one whose `events/` holds the file. */
+	/** The delivery channel (spec 058, D14); the event's desk is the one whose `events/` holds the file. */
 	channelId: string;
 	schedule: string; // cron syntax, always interpreted in the host timezone
 	preAction?: EventAction;
@@ -60,8 +60,8 @@ export interface EventHistoryRecord {
 	eventName: string;
 	eventPath: string;
 	eventType: ScheduledEvent["type"] | "unknown";
-	/** The dot that owns the event; absent on records written before spec 058. */
-	dot?: string;
+	/** The desk that owns the event; absent on records written before spec 058. */
+	desk?: string;
 	channelId?: string;
 	action: EventHistoryAction;
 	result: EventHistoryResult;
@@ -86,8 +86,8 @@ export interface EventHistoryRecord {
 export interface SpawnTaskRequest {
 	/** The event's name (filename without `.json`); becomes the instance's `origin`. */
 	eventName: string;
-	/** The dot whose event fired: the instance is created in its `tasks/`. */
-	dot: string;
+	/** The desk whose event fired: the instance is created in its `tasks/`. */
+	desk: string;
 	channelId: string;
 	template: TaskCreateInput;
 	/** The moment this occurrence was due — deterministic per occurrence, so a replay maps to the same instance. */
@@ -103,10 +103,10 @@ export type SpawnTaskResult =
 	| { outcome: "skipped"; id: string };
 
 export interface EventsWatcherOptions {
-	/** The dot this watcher serves; stamped on every dispatch, history record and spawn request. */
-	dot: string;
+	/** The desk this watcher serves; stamped on every dispatch, history record and spawn request. */
+	desk: string;
 	/**
-	 * Whether a delivery channel is still bound to this dot (spec 058, D7's producer-side check).
+	 * Whether a delivery channel is still bound to this desk (spec 058, D7's producer-side check).
 	 * An occurrence whose channel is not bound is skipped, never redirected.
 	 */
 	isBound: (channelId: string) => boolean;

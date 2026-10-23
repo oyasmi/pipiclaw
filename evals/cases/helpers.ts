@@ -39,13 +39,13 @@ export async function writeTask(
 		budget: options.budget,
 		usage: options.started ? createUsage() : undefined,
 	};
-	const tasksDir = join(ctx.dotDir, "tasks");
+	const tasksDir = join(ctx.deskDir, "tasks");
 	await mkdir(tasksDir, { recursive: true });
 	await writeFile(join(tasksDir, `${id}.md`), renderTaskDocument(fields, options.body));
 }
 
 /**
- * Seed one durable dot memory (spec 050): writes straight into `memory/<name>.md` and
+ * Seed one durable desk memory (spec 050): writes straight into `memory/<name>.md` and
  * regenerates the index, the same primitive `memory_save`/the reflect pass use — so a seeded
  * case sees the exact shape production writes, not a hand-rolled approximation.
  */
@@ -54,7 +54,7 @@ export async function seedChannelMemory(
 	description: string,
 	options: { name?: string; type?: MemoryType; source?: MemorySource; details?: string } = {},
 ): Promise<void> {
-	await applyMemoryOps(ctx.dotDir, [
+	await applyMemoryOps(ctx.deskDir, [
 		{
 			op: "add",
 			name: options.name,

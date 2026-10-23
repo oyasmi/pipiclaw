@@ -41,8 +41,8 @@ export interface TaskBoard {
 /** Ref lines the board renders before folding old, already-seen results away. */
 export const BOARD_REF_LINE_BUDGET = 12;
 
-export async function buildTaskBoard(dotDir: string, taskId: string, body: string): Promise<TaskBoard | undefined> {
-	const records = await readTaskLog(dotDir, taskId, { kinds: ["dispatch", "settle", "step"] });
+export async function buildTaskBoard(deskDir: string, taskId: string, body: string): Promise<TaskBoard | undefined> {
+	const records = await readTaskLog(deskDir, taskId, { kinds: ["dispatch", "settle", "step"] });
 	const dispatches = new Map<string, TaskDispatchRecord>();
 	const settles = new Map<string, { record: TaskSettleRecord; index: number }>();
 	let lastStepIndex = -1;

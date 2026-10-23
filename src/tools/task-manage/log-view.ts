@@ -18,8 +18,8 @@ export async function readTaskLogTool(
 ): Promise<TaskManageResult> {
 	const id = normalizeTaskId(request.id);
 	const limit = Math.min(Math.max(1, Math.trunc(request.limit ?? DEFAULT_LIMIT)), MAX_LIMIT);
-	const archived = taskLogIsArchived(options.dotDir, id);
-	const records = await readTaskLog(options.dotDir, id, { limit });
+	const archived = taskLogIsArchived(options.deskDir, id);
+	const records = await readTaskLog(options.deskDir, id, { limit });
 	const entries = records.map(renderTaskLogLine);
 	const archivedTag = archived ? "（已归档任务）" : "";
 	return {

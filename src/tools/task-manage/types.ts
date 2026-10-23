@@ -1,5 +1,5 @@
 import type { Static } from "typebox";
-import type { DotJobManager } from "../../jobs/manager.js";
+import type { DeskJobManager } from "../../jobs/manager.js";
 import type { SubAgentRunManager } from "../../subagents/runs.js";
 import type {
 	taskCloseSchema,
@@ -43,9 +43,9 @@ export type TaskLogRequest = Static<typeof taskLogSchema>;
 export type TaskStepEndRequest = Static<typeof taskStepEndSchema>;
 
 export interface TaskManageToolOptions {
-	jobManager: DotJobManager;
+	jobManager: DeskJobManager;
 	runManager: SubAgentRunManager;
-	dotDir: string;
+	deskDir: string;
 	/** The current turn's channel: a task created here delivers to it (spec 058, D13). */
 	channelId: string;
 	/** Present only inside a task session: which task's loop this tool set belongs to. */

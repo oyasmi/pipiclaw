@@ -30,7 +30,7 @@ describe("E2E deterministic: completion-wake failure boundaries", () => {
 		const dir = join(current.homeDir, "state", "dispatch");
 		mkdirSync(dir, { recursive: true });
 		return ["run_a", "run_b", "run_c"].map((runId, index) => {
-			const dispatchId = `subagent:${current.dot}:${runId}:done`;
+			const dispatchId = `subagent:${current.desk}:${runId}:done`;
 			const event: ChannelEvent = {
 				type: "dm",
 				channelId: current.channelId,
@@ -41,8 +41,8 @@ describe("E2E deterministic: completion-wake failure boundaries", () => {
 				conversationId: "conv_e2e",
 				conversationType: "1",
 				dispatchId,
-				// Every producer stamps its dot; admission drops an unstamped wake (spec 058, D7).
-				dot: current.dot,
+				// Every producer stamps its desk; admission drops an unstamped wake (spec 058, D7).
+				desk: current.desk,
 			};
 			const record: DurableDispatchRecord = {
 				version: 1,

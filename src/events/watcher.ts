@@ -1,5 +1,5 @@
 /**
- * Watches one dot's `events/`, validates each definition, schedules one-shot and periodic events
+ * Watches one desk's `events/`, validates each definition, schedules one-shot and periodic events
  * (cron, optional pre-action gate) and enqueues every occurrence through the injected event sink.
  */
 import { Cron } from "croner";
@@ -54,10 +54,10 @@ function truncateTextPreview(text: string): string {
 	return clipText(text, TEXT_PREVIEW_MAX_CHARS, { headRatio: 1, omitHint: "…", collapseWhitespace: true });
 }
 
-function eventDispatchId(dot: string, filename: string, event: ScheduledEvent, occurrence: Date): string {
+function eventDispatchId(desk: string, filename: string, event: ScheduledEvent, occurrence: Date): string {
 	const name = eventNameFromFilename(filename);
 	const when = event.type === "one-shot" ? event.at : occurrence.toISOString();
-	return `event:${dot}:${name}:${when}`;
+	return `event:${desk}:${name}:${when}`;
 }
 
 class EventPreActionError extends Error {
@@ -178,7 +178,7 @@ export class EventsWatcher {
 			ts: formatLocalTime(),
 			eventName: eventNameFromFilename(filename),
 			eventPath: resolve(this.eventsDir, filename),
-			dot: this.options.dot,
+			desk: this.options.desk,
 			...rest,
 		};
 		if (!this.historyAppender?.tryAppend(fullRecord, "critical")) {
@@ -336,7 +336,7 @@ export class EventsWatcher {
 		}
 
 		// `stop()` cannot cancel a load already past its `readFile`; a stopped watcher is never started
-		// again (a reactivated dot gets a new one), so a load finishing late must not schedule a timer
+		// again (a reactivated desk gets a new one), so a load finishing late must not schedule a timer
 		// or cron that nothing would ever stop.
 		if (this.stopped) return;
 
@@ -560,7 +560,7 @@ export class EventsWatcher {
 				}
 				return;
 			}
-			// The gate can run for minutes; the dot may have gone dormant or lost this channel meanwhile.
+			// The gate can run for minutes; the desk may have gone dormant or lost this channel meanwhile.
 			if (!this.admits(filename, event, deleteAfter)) return;
 		}
 
@@ -596,8 +596,8 @@ export class EventsWatcher {
 			text: message,
 			ts: Date.now().toString(),
 			conversationType: "1",
-			dispatchId: eventDispatchId(this.options.dot, filename, event, occurrence),
-			dot: this.options.dot,
+			dispatchId: eventDispatchId(this.options.desk, filename, event, occurrence),
+			desk: this.options.desk,
 		};
 
 		const enqueued = this.options.dispatch
@@ -631,13 +631,13 @@ export class EventsWatcher {
 		}
 	}
 
-	/** Whether the watcher may still act on an occurrence (dot active, channel bound); records a skip. */
+	/** Whether the watcher may still act on an occurrence (desk active, channel bound); records a skip. */
 	private admits(filename: string, event: ScheduledEvent, deleteAfter: boolean): boolean {
-		if (this.stopped) return false; // a load `stop()` could not cancel: the dot went dormant meanwhile
+		if (this.stopped) return false; // a load `stop()` could not cancel: the desk went dormant meanwhile
 		if (this.options.isBound(event.channelId)) return true;
 		this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "channel_not_bound" });
 		// A one-shot has no next occurrence: keep the file with a marker, as a full queue does.
-		const reason = `Delivery channel ${event.channelId} was not bound to dot ${this.options.dot} at ${new Date().toISOString()}; this occurrence was skipped.`;
+		const reason = `Delivery channel ${event.channelId} was not bound to desk ${this.options.desk} at ${new Date().toISOString()}; this occurrence was skipped.`;
 		if (deleteAfter) this.markInvalid(filename, reason);
 		return false;
 	}
@@ -661,7 +661,7 @@ export class EventsWatcher {
 			if (!spawn) throw new Error("this runtime cannot create task instances");
 			const result = await spawn({
 				eventName: eventNameFromFilename(filename),
-				dot: this.options.dot,
+				desk: this.options.desk,
 				channelId: event.channelId,
 				template,
 				occurrence: due,
@@ -786,15 +786,15 @@ export class EventsWatcher {
 	}
 }
 
-/** Create the events watcher of one dot: it watches `<dotDir>/events/` (spec 058, D14). */
+/** Create the events watcher of one desk: it watches `<deskDir>/events/` (spec 058, D14). */
 export function createEventsWatcher(
 	input: EventsWatcherOptions & {
-		dotDir: string;
+		deskDir: string;
 		bot: ChannelEventSink;
 		executor: Executor;
 		commandGuardConfig?: SecurityConfig["commandGuard"];
 	},
 ): EventsWatcher {
-	const { dotDir, bot, executor, commandGuardConfig, ...options } = input;
-	return new EventsWatcher(join(dotDir, "events"), bot, executor, commandGuardConfig, options);
+	const { deskDir, bot, executor, commandGuardConfig, ...options } = input;
+	return new EventsWatcher(join(deskDir, "events"), bot, executor, commandGuardConfig, options);
 }

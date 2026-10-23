@@ -21,7 +21,7 @@ export const MAX_INBOUND_IMAGE_BYTES = 5 * 1024 * 1024;
  * happened.
  */
 export interface InboundImage {
-	/** Absolute path under the bound dot's `inbox/`. */
+	/** Absolute path under the bound desk's `inbox/`. */
 	path: string;
 	/**
 	 * Sniffed MIME type ("image/jpeg", …), or `"application/octet-stream"` when magic-byte
@@ -66,12 +66,12 @@ export interface ChannelEvent {
 	/** Runtime-owned durable-dispatch record, absent for normal inbound messages. */
 	dispatchId?: string;
 	/**
-	 * The dot this synthetic event was produced for (spec 058, D7). Every in-process producer —
+	 * The desk this synthetic event was produced for (spec 058, D7). Every in-process producer —
 	 * the task driver, the event watchers, run and job completion wakes — must set it; durable
 	 * dispatch refuses an event without it, and admission drops a wake whose channel is no longer
-	 * bound to this dot. DingTalk inbound parsing never writes it.
+	 * bound to this desk. DingTalk inbound parsing never writes it.
 	 */
-	dot?: string;
+	desk?: string;
 	/** Structured wake provenance created only by in-process producers. DingTalk inbound parsing
 	 * never copies arbitrary payload fields into this event, so user text cannot manufacture it. */
 	internalWake?: {

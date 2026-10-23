@@ -50,7 +50,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-1",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", desk: "news", deskDir: "/tmp/channel" });
 		const result = await tool.execute("call-1", { op: "list" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		expect(text).toContain("run-1");
@@ -112,7 +112,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-still-going",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", desk: "news", deskDir: "/tmp/channel" });
 		const result = await tool.execute("call-cap", { op: "list" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		const details = result.details as { runs: Array<{ runId: string }> };
@@ -139,7 +139,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-2",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", desk: "news", deskDir: "/tmp/channel" });
 		const result = await tool.execute("call-2", { op: "cancel", runId: "run-2" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		expect(text).toContain("lost");
@@ -178,7 +178,7 @@ describe("subagent_manage tool", () => {
 			artifactDir: "/tmp/artifacts/run-running",
 		});
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", desk: "news", deskDir: "/tmp/channel" });
 		await expect(
 			tool.execute("call-4", { op: "follow_up", runId: "run-internal", task: "keep going" }),
 		).rejects.toThrow("does not support follow_up yet");
@@ -227,7 +227,7 @@ describe("subagent_manage tool", () => {
 			{ announce: false },
 		);
 
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", dot: "news", dotDir: "/tmp/channel" });
+		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", desk: "news", deskDir: "/tmp/channel" });
 		await expect(tool.execute("call-6", { op: "follow_up", runId: "run-5", task: "keep going" })).rejects.toThrow(
 			"cannot be resumed",
 		);
@@ -277,8 +277,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			dot: "news",
-			dotDir: "/workspace/dm_manage_followup_ok",
+			desk: "news",
+			deskDir: "/workspace/dm_manage_followup_ok",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -376,8 +376,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			dot: "news",
-			dotDir: "/workspace/dm_manage",
+			desk: "news",
+			deskDir: "/workspace/dm_manage",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -459,8 +459,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			dot: "news",
-			dotDir: "/workspace/dm_manage",
+			desk: "news",
+			deskDir: "/workspace/dm_manage",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -546,8 +546,8 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({
 			channelId,
 			workspaceDir: "/workspace",
-			dot: "news",
-			dotDir: "/workspace/dm_manage_followup_verify_mutated",
+			desk: "news",
+			deskDir: "/workspace/dm_manage_followup_verify_mutated",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -649,8 +649,8 @@ describe("subagent_manage tool", () => {
 			return createSubAgentManageTool({
 				channelId,
 				workspaceDir: "/workspace",
-				dot: "news",
-				dotDir: "/workspace/dm_manage_fp",
+				desk: "news",
+				deskDir: "/workspace/dm_manage_fp",
 				getSubAgentDiscovery: () => ({
 					directory: "/workspace/sub-agents",
 					warnings: [],

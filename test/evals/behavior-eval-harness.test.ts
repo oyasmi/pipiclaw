@@ -160,7 +160,7 @@ describe("behavior eval registry and reproducibility", () => {
 const trialContext = (overrides: Partial<TrialContext> = {}): TrialContext => ({
 	homeDir: "/tmp/eval",
 	workspaceDir: "/tmp/eval/workspace",
-	dotDir: "/tmp/eval/workspace/dots/eval",
+	deskDir: "/tmp/eval/workspace/desk-eval",
 	deliveries: [],
 	trace: [],
 	snapshot: { schemaVersion: 1, deliveries: [], fileTree: [], canaries: [], externalRequests: [] },
@@ -258,24 +258,24 @@ describe("behavior eval multi-turn graders", () => {
 		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "error" });
 	});
 
-	it("seeds a durable dot memory the same way memory_save/the reflect pass write one", async () => {
+	it("seeds a durable desk memory the same way memory_save/the reflect pass write one", async () => {
 		const root = temp();
-		const dotDir = join(root, "workspace", "dots", "eval");
+		const deskDir = join(root, "workspace", "desk-eval");
 		await seedChannelMemory(
 			{
 				homeDir: root,
 				workspaceDir: join(root, "workspace"),
-				dotDir,
+				deskDir,
 				canaryPath: join(root, "canary"),
 				externalBaseUrl: "",
 			},
 			"Durable preference: cobalt.",
 			{ name: "durable-preference-cobalt", type: "user" },
 		);
-		expect(readFileSync(join(dotDir, "memory", "durable-preference-cobalt.md"), "utf8")).toMatch(
+		expect(readFileSync(join(deskDir, "memory", "durable-preference-cobalt.md"), "utf8")).toMatch(
 			/description: Durable preference: cobalt\.[\s\S]*type: user[\s\S]*source: user/,
 		);
-		expect(readFileSync(join(dotDir, "MEMORY.md"), "utf8")).toContain("Durable preference: cobalt.");
+		expect(readFileSync(join(deskDir, "MEMORY.md"), "utf8")).toContain("Durable preference: cobalt.");
 	});
 });
 
@@ -658,7 +658,7 @@ describe("behavior eval artifacts", () => {
 		writeFileSync(join(channel, "tasks", "t.jsonl"), '{"outcome":"continue"}\n');
 		writeFileSync(join(channel, "big.md"), "x".repeat(9 * 1024 * 1024));
 		const target = join(root, "archive");
-		const index = captureArtifacts({ homeDir: root, workspaceDir: channel, dotDir: channel }, target);
+		const index = captureArtifacts({ homeDir: root, workspaceDir: channel, deskDir: channel }, target);
 		expect(index.entries.filter((entry) => entry.status === "complete")).toHaveLength(3);
 		expect(readFileSync(join(target, "artifacts/workspace/MEMORY.md"), "utf8")).toBe("- durable fact\n");
 		expect(readFileSync(join(target, "artifacts/workspace/tasks/t.jsonl"), "utf8")).toContain("continue");
@@ -785,7 +785,7 @@ describe("behavior eval artifacts", () => {
 		writeFileSync(join(source, "report.md"), "report\n");
 		writeFileSync(join(source, "trials.jsonl"), `${JSON.stringify(trial)}\n`);
 		const homeDir = temp();
-		const index = captureArtifacts({ homeDir, workspaceDir: homeDir, dotDir: homeDir }, trialDir);
+		const index = captureArtifacts({ homeDir, workspaceDir: homeDir, deskDir: homeDir }, trialDir);
 		for (const file of ["trace.jsonl", "outcome.json", "grades.json", "agent-usage.json"])
 			writeFileSync(join(trialDir, file), "{}\n");
 		writeFileSync(join(trialDir, "record.json"), JSON.stringify(trial));

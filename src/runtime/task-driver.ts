@@ -13,13 +13,13 @@ import { readTaskLog } from "../tasks/loop-log.js";
 import { expireTicket, pauseTask, redeemTicket } from "../tasks/store.js";
 
 export interface TaskDriverOptions {
-	/** The dots this driver scans — the active ones (spec 058, D6). A dormant dot's tasks are never touched. */
-	getActiveDots: () => ReadonlyArray<{ dot: string; dotDir: string }>;
+	/** The desks this driver scans — the active ones (spec 058, D6). A dormant desk's tasks are never touched. */
+	getActiveDesks: () => ReadonlyArray<{ desk: string; deskDir: string }>;
 	/**
-	 * Whether a delivery channel is bound to a dot right now. A task whose `channel` is missing or
-	 * not bound to its own dot is suspended: frozen entirely, not merely undelivered (D8).
+	 * Whether a delivery channel is bound to a desk right now. A task whose `channel` is missing or
+	 * not bound to its own desk is suspended: frozen entirely, not merely undelivered (D8).
 	 */
-	isBoundTo: (channelId: string, dot: string) => boolean;
+	isBoundTo: (channelId: string, desk: string) => boolean;
 	isChannelActive: (channelId: string) => boolean;
 	dispatch: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Optional observability hook. It runs after every production dispatch attempt. */
@@ -41,8 +41,8 @@ const MIN_SLEEP_MS = 250;
 /** A task dispatched this recently is assumed still in flight; do not queue it twice. */
 const REDISPATCH_GUARD_MS = 30_000;
 
-function attemptKey(dot: string, taskId: string): string {
-	return `${dot}\0${taskId}`;
+function attemptKey(desk: string, taskId: string): string {
+	return `${desk}\0${taskId}`;
 }
 
 function channelType(channelId: string): { type: ChannelEvent["type"]; conversationType: string } {
@@ -55,8 +55,8 @@ function channelType(channelId: string): { type: ChannelEvent["type"]; conversat
  * Each step is genuinely new work, so the dispatch moment disambiguates it; collapsing two steps
  * onto one durable record would silently drop the later one.
  */
-function stepDispatchId(dot: string, entry: TaskLedgerEntry, nowMs: number): string {
-	return `task:${dot}:${entry.id}:${nowMs}`;
+function stepDispatchId(desk: string, entry: TaskLedgerEntry, nowMs: number): string {
+	return `task:${desk}:${entry.id}:${nowMs}`;
 }
 
 /** The task a `[TASK_DRIVER:<id>]` dispatch text names, if it is one. */
@@ -65,7 +65,7 @@ export function parseDriverTaskId(text: string | undefined): string | undefined 
 }
 
 export function createTaskDriverEvent(
-	dot: string,
+	desk: string,
 	channelId: string,
 	entry: TaskLedgerEntry,
 	nowMs: number,
@@ -97,8 +97,8 @@ export function createTaskDriverEvent(
 				: "Advance the next concrete step under the task's current goal, work items and acceptance state. ") +
 			"End the step with task_step_end (continue / park / done).",
 		ts: String(nowMs),
-		dispatchId: stepDispatchId(dot, entry, nowMs),
-		dot,
+		dispatchId: stepDispatchId(desk, entry, nowMs),
+		desk,
 	};
 }
 
@@ -109,7 +109,7 @@ export function createTaskDriverEvent(
  * how to resume with more of the dimension that ran out (spec 053, D6).
  */
 export function taskStopReceipt(
-	dot: string,
+	desk: string,
 	channelId: string,
 	entry: TaskLedgerEntry,
 	reason: string,
@@ -132,8 +132,8 @@ export function taskStopReceipt(
 		ts: String(nowMs),
 		// Keyed on the cause, not the moment: re-detecting the same stop before the user has acted
 		// must not queue a second identical receipt, while a different cause still does.
-		dispatchId: `task:${dot}:${entry.id}:stop:${createHash("sha256").update(reason).digest("hex").slice(0, 12)}`,
-		dot,
+		dispatchId: `task:${desk}:${entry.id}:stop:${createHash("sha256").update(reason).digest("hex").slice(0, 12)}`,
+		desk,
 	};
 }
 
@@ -146,7 +146,7 @@ interface LiveTask {
 /**
  * Native, ticket-driven scheduler for the persistent task ledger (spec 051, D9; spec 052).
  *
- * Three jobs, in this order per dot: redeem due `time` tickets, apply the backstop to expired
+ * Three jobs, in this order per desk: redeem due `time` tickets, apply the backstop to expired
  * ones, and queue one step for a runnable task. `work` and `ask` tickets are never polled — their
  * owners push them (a settling delegation or job, `/tasks reply`) — so the scan stays a cheap read
  * of a handful of frontmatters. Recurring work is not the driver's business: an event spawns a
@@ -164,14 +164,14 @@ export class TaskDriver {
 	private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
 	private loopActive = false;
 	private running = false;
-	private nextDotIndex = 0;
+	private nextDeskIndex = 0;
 	/** Absolute ms of the next moment worth waking for, recomputed each scan. */
 	private nextWakeMs: number | undefined;
 	/** Last dispatch time per task, so one in-flight step is not queued again on the next tick. */
 	private readonly lastDispatchMs = new Map<string, number>();
 	/**
-	 * Last task id dispatched per dot. Starting the search just after it gives every ready task in
-	 * a dot the same round-robin fairness an actively-progressing task would otherwise monopolise.
+	 * Last task id dispatched per desk. Starting the search just after it gives every ready task in
+	 * a desk the same round-robin fairness an actively-progressing task would otherwise monopolise.
 	 */
 	private readonly lastDispatchedTaskId = new Map<string, string>();
 	/** Tasks currently suspended (D8), so the transition is logged once rather than every scan. */
@@ -258,7 +258,7 @@ export class TaskDriver {
 
 	/** Stop one task and notify. Delivery failure is logged, never fatal: the durable stop already happened. */
 	private async notifyStop(
-		dot: string,
+		desk: string,
 		channelId: string,
 		entry: TaskLedgerEntry,
 		reason: string,
@@ -266,7 +266,7 @@ export class TaskDriver {
 		breach?: BudgetBreach,
 	): Promise<void> {
 		try {
-			await this.options.notify?.(taskStopReceipt(dot, channelId, entry, reason, nowMs, breach));
+			await this.options.notify?.(taskStopReceipt(desk, channelId, entry, reason, nowMs, breach));
 		} catch (error) {
 			log.logWarn("taskdriver.receipt.failed", "Task stop receipt failed", {
 				channelId: channelId,
@@ -276,11 +276,11 @@ export class TaskDriver {
 	}
 
 	/**
-	 * Deterministic, zero-token maintenance for one dot's live tasks: redeem due tickets and apply
+	 * Deterministic, zero-token maintenance for one desk's live tasks: redeem due tickets and apply
 	 * expiry backstops. Runs whether or not the delivery channel is busy — only model dispatch is
 	 * gated on an idle channel.
 	 */
-	private async maintain(dot: string, dotDir: string, entries: LiveTask[], now: Date): Promise<boolean> {
+	private async maintain(desk: string, deskDir: string, entries: LiveTask[], now: Date): Promise<boolean> {
 		const nowMs = now.getTime();
 		let changed = false;
 		for (const { entry, channelId } of entries) {
@@ -290,22 +290,22 @@ export class TaskDriver {
 
 			// A due timer redeems into an open task.
 			if (entry.dueMs !== undefined && entry.dueMs <= nowMs) {
-				if (await redeemTicket(dotDir, entry.id, (current) => current.kind === ticket.kind)) changed = true;
+				if (await redeemTicket(deskDir, entry.id, (current) => current.kind === ticket.kind)) changed = true;
 				continue;
 			}
 
 			if (entry.expired) {
-				const expiry = await expireTicket(dotDir, entry.id);
+				const expiry = await expireTicket(deskDir, entry.id);
 				if (!expiry) continue;
 				changed = true;
 				if (expiry.outcome === "paused") {
 					log.logWarn("taskdriver.task.paused", "Task paused: ticket expired twice", {
 						channelId: channelId,
 						reason: expiry.ticket,
-						fields: { taskId: entry.id, dot, cause: "ticket_expired" },
+						fields: { taskId: entry.id, desk, cause: "ticket_expired" },
 					});
 					await this.notifyStop(
-						dot,
+						desk,
 						channelId,
 						entry,
 						`等待条件一直未满足（${expiry.ticket}），已连续两次超过最晚检查时间`,
@@ -315,7 +315,7 @@ export class TaskDriver {
 					log.logInfoEvent("taskdriver.task.reopened", "Task reopened after its ticket expired", {
 						channelId: channelId,
 						reason: expiry.ticket,
-						fields: { taskId: entry.id, dot },
+						fields: { taskId: entry.id, desk },
 					});
 				}
 				continue;
@@ -333,45 +333,45 @@ export class TaskDriver {
 	 * each step actually did, so "no progress" is an observed fact rather than a fingerprint
 	 * comparison a `echo x` could defeat.
 	 */
-	private async detectIdleLoop(dot: string, dotDir: string, entries: LiveTask[], nowMs: number): Promise<boolean> {
+	private async detectIdleLoop(desk: string, deskDir: string, entries: LiveTask[], nowMs: number): Promise<boolean> {
 		let paused = false;
 		for (const { entry, channelId } of entries) {
 			const usage = entry.fields.usage;
 			if (!usage || usage.steps < IDLE_STEP_LIMIT) continue;
-			const steps = (await readTaskLog(dotDir, entry.id, { kinds: ["step"] })).slice(-IDLE_STEP_LIMIT);
+			const steps = (await readTaskLog(deskDir, entry.id, { kinds: ["step"] })).slice(-IDLE_STEP_LIMIT);
 			if (steps.length < IDLE_STEP_LIMIT) continue;
 			const idle = steps.every((record) => record.kind === "step" && record.tools.length === 0);
 			if (!idle) continue;
 			const reason = `连续 ${IDLE_STEP_LIMIT} 步没有任何工具调用，已停下等你确认`;
-			if (await pauseTask(dotDir, entry.id, { by: "runtime", reason })) {
+			if (await pauseTask(deskDir, entry.id, { by: "runtime", reason })) {
 				paused = true;
 				log.logWarn("taskdriver.task.paused", "Task paused: idle loop", {
 					channelId: channelId,
 					reason: reason,
-					fields: { taskId: entry.id, dot, cause: "idle" },
+					fields: { taskId: entry.id, desk, cause: "idle" },
 				});
-				await this.notifyStop(dot, channelId, entry, reason, nowMs);
+				await this.notifyStop(desk, channelId, entry, reason, nowMs);
 			}
 		}
 		return paused;
 	}
 
 	/**
-	 * The tasks of one dot the driver may touch at all (spec 058, D8): those whose delivery channel
-	 * is bound to this dot. Every other task — no `channel`, or a channel bound elsewhere or nowhere
+	 * The tasks of one desk the driver may touch at all (spec 058, D8): those whose delivery channel
+	 * is bound to this desk. Every other task — no `channel`, or a channel bound elsewhere or nowhere
 	 * — is frozen: no ticket redemption, no backstop, no budget or idle check, no step, no receipt.
 	 * Freezing reads nothing back into the file, so a rebound task resumes from exactly where it was.
 	 */
-	private liveTasks(dot: string, entries: TaskLedgerEntry[]): LiveTask[] {
+	private liveTasks(desk: string, entries: TaskLedgerEntry[]): LiveTask[] {
 		const live: LiveTask[] = [];
 		for (const entry of entries) {
-			const key = attemptKey(dot, entry.id);
+			const key = attemptKey(desk, entry.id);
 			const channelId = entry.fields.channel;
-			if (channelId && this.options.isBoundTo(channelId, dot)) {
+			if (channelId && this.options.isBoundTo(channelId, desk)) {
 				if (this.suspended.delete(key)) {
 					log.logInfoEvent("taskdriver.task.resumed", "Task resumed: delivery channel bound again", {
 						channelId,
-						fields: { taskId: entry.id, dot },
+						fields: { taskId: entry.id, desk },
 					});
 				}
 				live.push({ entry, channelId });
@@ -379,9 +379,9 @@ export class TaskDriver {
 			}
 			if (!this.suspended.has(key)) {
 				this.suspended.add(key);
-				log.logInfoEvent("taskdriver.task.suspended", "Task suspended: delivery channel not bound to its dot", {
+				log.logInfoEvent("taskdriver.task.suspended", "Task suspended: delivery channel not bound to its desk", {
 					channelId,
-					fields: { taskId: entry.id, dot, reason: channelId ? "channel_not_bound" : "channel_missing" },
+					fields: { taskId: entry.id, desk, reason: channelId ? "channel_not_bound" : "channel_missing" },
 				});
 			}
 		}
@@ -396,26 +396,26 @@ export class TaskDriver {
 		this.running = true;
 		this.nextWakeMs = undefined;
 		try {
-			const dots = this.options.getActiveDots();
-			if (dots.length === 0) {
+			const desks = this.options.getActiveDesks();
+			if (desks.length === 0) {
 				this.lastDispatchMs.clear();
 				return;
 			}
 
 			const seen = new Set<string>();
-			const start = this.nextDotIndex % dots.length;
+			const start = this.nextDeskIndex % desks.length;
 			let dispatched = 0;
 			let lastDispatchOffset = -1;
-			for (let offset = 0; offset < dots.length; offset++) {
-				const target = dots[(start + offset) % dots.length];
+			for (let offset = 0; offset < desks.length; offset++) {
+				const target = desks[(start + offset) % desks.length];
 				if (!target) continue;
-				const { dot, dotDir } = target;
-				const tasksDir = join(dotDir, "tasks");
-				const readLive = async () => this.liveTasks(dot, await readActiveTasks(tasksDir, nowMs));
+				const { desk, deskDir } = target;
+				const tasksDir = join(deskDir, "tasks");
+				const readLive = async () => this.liveTasks(desk, await readActiveTasks(tasksDir, nowMs));
 				let live = await readLive();
-				for (const { entry } of live) seen.add(attemptKey(dot, entry.id));
+				for (const { entry } of live) seen.add(attemptKey(desk, entry.id));
 
-				if (await this.maintain(dot, dotDir, live, now)) live = await readLive();
+				if (await this.maintain(desk, deskDir, live, now)) live = await readLive();
 
 				if (dispatched >= settings.maxDispatchesPerTick) continue;
 
@@ -431,58 +431,58 @@ export class TaskDriver {
 						budgeted.push(task);
 						continue;
 					}
-					if (await pauseTask(dotDir, entry.id, { by: "runtime", reason: status.reason })) {
+					if (await pauseTask(deskDir, entry.id, { by: "runtime", reason: status.reason })) {
 						log.logWarn("taskdriver.task.paused", "Task paused: budget exhausted", {
 							channelId: channelId,
 							reason: status.reason,
-							fields: { taskId: entry.id, dot, cause: `budget_${status.breach}` },
+							fields: { taskId: entry.id, desk, cause: `budget_${status.breach}` },
 						});
-						await this.notifyStop(dot, channelId, entry, status.reason, nowMs, status.breach);
+						await this.notifyStop(desk, channelId, entry, status.reason, nowMs, status.breach);
 					}
 				}
-				const idled = await this.detectIdleLoop(dot, dotDir, budgeted, nowMs);
+				const idled = await this.detectIdleLoop(desk, deskDir, budgeted, nowMs);
 				const ready = idled ? (await readLive()).filter(({ entry }) => entry.runnable) : budgeted;
-				// The busy check is per task: a dot's tasks may deliver to different channels.
+				// The busy check is per task: a desk's tasks may deliver to different channels.
 				const candidates = ready.filter(
 					({ entry, channelId }) => !entry.fields.paused && !this.options.isChannelActive(channelId),
 				);
 				if (candidates.length === 0) continue;
-				const lastId = this.lastDispatchedTaskId.get(dot);
+				const lastId = this.lastDispatchedTaskId.get(desk);
 				const lastIndex = lastId ? candidates.findIndex(({ entry }) => entry.id === lastId) : -1;
 				const rotated =
 					lastIndex >= 0
 						? [...candidates.slice(lastIndex + 1), ...candidates.slice(0, lastIndex + 1)]
 						: candidates;
 
-				// One step per delivery channel per pass: a dot's tasks may deliver to different channels,
+				// One step per delivery channel per pass: a desk's tasks may deliver to different channels,
 				// whose queues run independently, so one channel's step must not hold back another's.
 				// Tasks sharing a channel still take turns (D6 rotation).
 				const usedChannels = new Set<string>();
 				for (const { entry, channelId } of rotated) {
 					if (dispatched >= settings.maxDispatchesPerTick) break;
 					if (usedChannels.has(channelId)) continue;
-					const previous = this.lastDispatchMs.get(attemptKey(dot, entry.id));
+					const previous = this.lastDispatchMs.get(attemptKey(desk, entry.id));
 					if (previous !== undefined && nowMs - previous < REDISPATCH_GUARD_MS) {
 						this.noteHorizon(previous + REDISPATCH_GUARD_MS, nowMs);
 						continue;
 					}
 					usedChannels.add(channelId);
-					const event = createTaskDriverEvent(dot, channelId, entry, nowMs);
+					const event = createTaskDriverEvent(desk, channelId, entry, nowMs);
 					const accepted = await this.options.dispatch(event);
 					this.observeDispatch(event, accepted);
-					this.lastDispatchMs.set(attemptKey(dot, entry.id), nowMs);
-					this.lastDispatchedTaskId.set(dot, entry.id);
+					this.lastDispatchMs.set(attemptKey(desk, entry.id), nowMs);
+					this.lastDispatchedTaskId.set(desk, entry.id);
 					if (accepted) {
 						dispatched++;
 						lastDispatchOffset = offset;
 						log.logDebugEvent("taskdriver.step.enqueued", "Task step enqueued", {
 							channelId: channelId,
-							fields: { taskId: entry.id, dot },
+							fields: { taskId: entry.id, desk },
 						});
 					} else {
 						log.logWarn("taskdriver.step.enqueue_failed", "Task step not enqueued: channel queue unavailable", {
 							channelId: channelId,
-							fields: { taskId: entry.id, dot },
+							fields: { taskId: entry.id, desk },
 						});
 					}
 				}
@@ -491,11 +491,11 @@ export class TaskDriver {
 			for (const key of this.lastDispatchMs.keys()) {
 				if (!seen.has(key)) this.lastDispatchMs.delete(key);
 			}
-			const dotSet = new Set(dots.map((target) => target.dot));
-			for (const dot of this.lastDispatchedTaskId.keys()) {
-				if (!dotSet.has(dot)) this.lastDispatchedTaskId.delete(dot);
+			const deskSet = new Set(desks.map((target) => target.desk));
+			for (const desk of this.lastDispatchedTaskId.keys()) {
+				if (!deskSet.has(desk)) this.lastDispatchedTaskId.delete(desk);
 			}
-			this.nextDotIndex = (start + (lastDispatchOffset >= 0 ? lastDispatchOffset + 1 : 1)) % dots.length;
+			this.nextDeskIndex = (start + (lastDispatchOffset >= 0 ? lastDispatchOffset + 1 : 1)) % desks.length;
 		} finally {
 			this.running = false;
 		}

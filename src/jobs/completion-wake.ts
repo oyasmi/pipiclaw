@@ -7,22 +7,22 @@ import { conversationTypeOf } from "../channel/channel-id.js";
 import type { JobRecord } from "./record.js";
 
 /** The wake's dispatch id — the only id `beginWakeConsumption` accepts for it. */
-export function jobWakeDispatchId(dot: string, jobId: string): string {
-	return `job:${dot}:${jobId}:done`;
+export function jobWakeDispatchId(desk: string, jobId: string): string {
+	return `job:${desk}:${jobId}:done`;
 }
 
 export function buildJobCompletionWake(input: {
-	dot: string;
+	desk: string;
 	channelId: string;
 	record: JobRecord;
 	tail: string | undefined;
 }): ChannelEvent {
-	const { dot, channelId, record, tail } = input;
+	const { desk, channelId, record, tail } = input;
 	const exit = record.exitCode !== undefined ? `exit ${record.exitCode}` : record.status;
 	const seconds = Math.round(record.durationMs / 1000);
 	const belongsTo = record.contract.taskId ? ` It belongs to task ${record.contract.taskId}.` : "";
 	const conversationType = conversationTypeOf(channelId);
-	const dispatchId = jobWakeDispatchId(dot, record.id);
+	const dispatchId = jobWakeDispatchId(desk, record.id);
 	return {
 		type: conversationType === "2" ? "group" : "dm",
 		channelId,
@@ -37,7 +37,7 @@ export function buildJobCompletionWake(input: {
 		ts: String(Date.now()),
 		conversationType,
 		dispatchId,
-		dot,
+		desk,
 		// The result is awaited; the wake itself still runs without a progress card.
 		presentation: "awaited",
 		...(record.contract.taskId

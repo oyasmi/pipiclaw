@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { DotJobManager } from "../jobs/manager.js";
+import type { DeskJobManager } from "../jobs/manager.js";
 import type { JobSnapshot } from "../jobs/record.js";
 import { formatDuration } from "../shared/format.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -21,8 +21,8 @@ const jobSchema = Type.Object({
 });
 
 export interface JobToolOptions {
-	jobManager: DotJobManager;
-	/** The calling channel: a job another channel of this dot started is labelled with its origin. */
+	jobManager: DeskJobManager;
+	/** The calling channel: a job another channel of this desk started is labelled with its origin. */
 	channelId: string;
 }
 
@@ -70,7 +70,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 		name: "job",
 		label: "job",
 		description:
-			"Inspect and control this dot's background bash jobs (started with bash async:true), shared by every " +
+			"Inspect and control this desk's background bash jobs (started with bash async:true), shared by every " +
 			"channel bound to it. op=list shows a snapshot; op=poll waits briefly for a running job to finish and " +
 			"returns its output; op=cancel stops jobs by id. A job's completion wakes the channel that started it " +
 			'(a job from another channel is marked "started in <channel>"); for your own jobs, finish independent ' +

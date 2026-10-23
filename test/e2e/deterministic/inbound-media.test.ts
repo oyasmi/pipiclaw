@@ -1,8 +1,10 @@
-import { mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InboundImage } from "../../../src/channel/channel-event.js";
 import { MAX_INBOUND_IMAGE_BYTES } from "../../../src/channel/channel-event.js";
+import type { DingTalkBot } from "../../../src/dingtalk/bot.js";
+import type { InboundMessages } from "../../../src/dingtalk/inbound.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 // Valid 1x1 PNG: the SDK now decodes attachments before sending them.
@@ -11,8 +13,8 @@ const PNG_BYTES = Buffer.from(
 	"base64",
 );
 
-function writeTestImage(dotDir: string, name: string, bytes: Buffer = PNG_BYTES): InboundImage {
-	const dir = join(dotDir, "inbox");
+function writeTestImage(deskDir: string, name: string, bytes: Buffer = PNG_BYTES): InboundImage {
+	const dir = join(deskDir, "inbox");
 	mkdirSync(dir, { recursive: true });
 	const path = join(dir, name);
 	writeFileSync(path, bytes);
@@ -37,6 +39,7 @@ function requestCarriesImage(raw: Record<string, unknown>): boolean {
 describe("E2E deterministic: inbound image attachments", () => {
 	let harness: DeterministicHarness;
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		await harness.shutdown();
 	});
 
@@ -47,9 +50,23 @@ describe("E2E deterministic: inbound image attachments", () => {
 			when: (r) => r.isMainTurn,
 			respond: [reply.text("图里是一只猫。")],
 		});
-		const image = writeTestImage(harness.dotDir, "photo.png");
-
-		await harness.sendUserMessage("[图片1]", { images: [image] });
+		// First contact is an image: the default binding must exist before media persistence,
+		// not just when the resulting event reaches routeInboundEvent.
+		// Mutation (2026-10-23): remove prepareChannel in inbound.ts; the image part is lost.
+		const bot = (harness.runtime as typeof harness.runtime & { bot: DingTalkBot }).bot as unknown as {
+			inbound: InboundMessages;
+			downloadMessageFile(code: string): Promise<{ data: Buffer }>;
+		};
+		vi.spyOn(bot, "downloadMessageFile").mockResolvedValue({ data: PNG_BYTES });
+		await bot.inbound.onStreamMessage({
+			senderStaffId: "new-image-user",
+			conversationType: "1",
+			msgtype: "picture",
+			content: { downloadCode: "offline-image" },
+		});
+		await harness.waitForIdle();
+		expect(harness.runtime.desks.boundDesk("dm_new-image-user")).toBe("default");
+		expect(existsSync(join(harness.workspaceDir, "desk-default", "inbox"))).toBe(true);
 
 		const request = harness.lastMainTurnRequest();
 		expect(request).toBeDefined();
@@ -67,7 +84,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			when: (r) => r.isMainTurn,
 			respond: [reply.text("师兄，这条消息里我没有收到图片。")],
 		});
-		const image = writeTestImage(harness.dotDir, "photo.png");
+		const image = writeTestImage(harness.deskDir, "photo.png");
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
 
@@ -89,7 +106,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			respond: [reply.text("ok")],
 		});
 		// Catches accepting oversized declared metadata because the actual file happens to be small.
-		const image = writeTestImage(harness.dotDir, "huge.png");
+		const image = writeTestImage(harness.deskDir, "huge.png");
 		image.byteSize = MAX_INBOUND_IMAGE_BYTES + 1;
 
 		await harness.sendUserMessage("[图片1]", { images: [image] });
@@ -114,7 +131,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 		await harness.sendUserMessageNoWait("开始 ORIGINAL 任务");
 		await gate.arrived;
 
-		const image = writeTestImage(harness.dotDir, "steer.png");
+		const image = writeTestImage(harness.deskDir, "steer.png");
 		await harness.sendUserMessageNoWait("这张图 STEER_IMG [图片1]", { images: [image] });
 
 		gate.release();

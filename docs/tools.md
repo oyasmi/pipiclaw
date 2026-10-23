@@ -4,7 +4,7 @@
 > **前置**：已完成 [README](../README.md) 的安装与配置。
 > **读完你能**：说出每个工具的用途、开关位置，以及它对子代理是否可见。
 
-工具是 agent 在一个回合里能采取的**动作**。Pipiclaw 的工具集在 `src/tools/registry.ts` 里单点注册，每个 runner（一个已绑定频道在其 dot 中的会话）启动时按当前配置构建一份——所以同一个实例上，开关不同的部署看到的工具集也不同。
+工具是 agent 在一个回合里能采取的**动作**。Pipiclaw 的工具集在 `src/tools/registry.ts` 里单点注册，每个 runner（一个已绑定频道在其工位中的会话）启动时按当前配置构建一份——所以同一个实例上，开关不同的部署看到的工具集也不同。
 
 关于每个工具的参数细节，不需要查文档：agent 拿到的是带完整 schema 的工具定义。这份文档回答的是**有哪些能力、谁能用、怎么开关**。
 
@@ -22,7 +22,7 @@
 | `web_fetch` | 抓取 URL 并提取正文 | **关** | `tools.web.enable` | 是 |
 | `send_media` | 把本地文件作为附件发进当前会话 | 随渠道 | 传输层是否支持（钉钉/TUI 都支持） | 否 |
 | `job` | 查看/等待/取消 `bash async` 后台作业 | 恒开 | — | 否 |
-| `session_search` | 检索本 dot 所有频道的冷存储历史对话 | 恒开 | — | 否 |
+| `session_search` | 检索本工位所有频道的冷存储历史对话 | 恒开 | — | 否 |
 | `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
 | `skill` | 只读列出/加载 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
 | `event_manage` | 列出/查看/创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
@@ -46,7 +46,7 @@
 
 `grep` 优于 `bash` 里的 `grep`：结果分组、分页、有 token 上限，不会因为一次宽泛匹配把上下文冲爆。`pattern` 默认按 ERE 正则，`literal: true` 走字面量；`mode: "files"` 只返回命中文件路径、`mode: "count"` 返回每文件命中数，只想定位时远比返回内容省 token。`glob` 字段匹配 basename，支持 `*` `?` `[abc]` `{a,b}`。落在 `readDeny` 或敏感路径下的命中文件会被排除并在 footer 说明。
 
-`bash` 执行的是真正的 `bash`（宿主机若无 bash 才回退 POSIX `/bin/sh`，工具描述会如实标注）。截断输出的完整副本写在 dot 目录的 `logs/`（主智能体两种 path-guard 边界下都可 `read`），是命令输出末尾的真实尾部而非捕获窗口的中间部分。
+`bash` 执行的是真正的 `bash`（宿主机若无 bash 才回退 POSIX `/bin/sh`，工具描述会如实标注）。截断输出的完整副本写在工位目录的 `logs/`（主智能体两种 path-guard 边界下都可 `read`），是命令输出末尾的真实尾部而非捕获窗口的中间部分。
 
 `glob` 优于 `bash find`/`ls -R`：按 glob 模式做路径发现（不读文件内容，这是它和 `grep` 的分工），排除 VCS/构建目录，命中数在阈值内时按修改时间从新到旧排序，超出条数上限时给出下一步提示。裸 `find … -name …` 和 `ls -R` 会被 bash 拦截器引导到这个工具。模式支持 `*`、`?`、`**`（跨路径段）与 `{a,b}`（可嵌套）；匹配按路径段逐段进行、不编译成正则，所以任意模式的匹配代价都是线性的。模式长度上限 512 字符，花括号展开上限 64 种组合，超出即报错并提示收窄模式。
 
@@ -61,7 +61,7 @@
 
 `bash` 传 `async: true` 立即返回 job id，命令在后台继续跑；`job` 负责之后的 `list` / `poll` / `cancel`。
 
-关键约束：每个 dot 最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<dot>/`，重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，完成后自动唤醒启动它的频道并带上输出尾部（该频道已换绑到别的 dot 时不唤醒）。TUI 不提供这套常驻恢复与完成投递，退出前应取回所需结果。已结束作业保留 24 小时供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
+关键约束：每个工位最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`，重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，完成后自动唤醒启动它的频道并带上输出尾部（该频道已换绑到别的工位时不唤醒）。TUI 不提供这套常驻恢复与完成投递，退出前应取回所需结果。已结束作业保留 24 小时供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
 
 ## 网页工具（`web_search` / `web_fetch`）
 
@@ -84,7 +84,7 @@
 
 | 工具 | 写到哪 | 什么时候用 |
 |---|---|---|
-| `memory_save` / `memory_forget` | dot 的 `memory/<name>.md`，并重建 `MEMORY.md` 索引 | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
+| `memory_save` / `memory_forget` | 工位的 `memory/<name>.md`，并重建 `MEMORY.md` 索引 | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
 | `skill` (只读) + `write`/`edit` | `workspace/skills/` | 某个流程跨任务可复用时沉淀 |
 | `session_search` | 只读 `log.jsonl` / `context.jsonl` | 用户引用较早的对话、而工作记忆里没有时 |
 
@@ -94,7 +94,7 @@
 
 ## 调度与长程类
 
-`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个 dot，只能修改投递到当前频道的事件；`action: "show"` 读回完整定义以便安全更新。`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——成功收尾直接结束本轮，不再多一次模型请求；`task_log` 会在活动日志缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
+`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个工位，只能修改投递到当前频道的事件；`action: "show"` 读回完整定义以便安全更新。`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——成功收尾直接结束本轮，不再多一次模型请求；`task_log` 会在活动日志缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
 
 `tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、内建 task driver 和每回合的任务摘要注入。
 
@@ -107,7 +107,7 @@
 
 委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。
 
-`subagent_list` 给出本 dot 委派 run 的快照；`subagent_run` 对单个 run 执行 `show`（自诊断）/`cancel`（终止）/`follow_up`（在支持续接的已结束 Claude Code / Codex run 上开启新一轮）。用户侧不必经过模型，可直接使用 `/subagents` 命令。
+`subagent_list` 给出本工位委派 run 的快照；`subagent_run` 对单个 run 执行 `show`（自诊断）/`cancel`（终止）/`follow_up`（在支持续接的已结束 Claude Code / Codex run 上开启新一轮）。用户侧不必经过模型，可直接使用 `/subagents` 命令。
 
 完整角色格式、并发、产物、验收和安全边界见 [sub-agents.md](./sub-agents.md)。
 

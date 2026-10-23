@@ -205,9 +205,9 @@ describe("scanConversationsForInterruptedTurns", () => {
 	});
 
 	it("reports a blocked conversation without touching the others", async () => {
-		const dotDir = makeTempDir();
-		const blockedConversation = testConversation(dotDir, { conversation: "dm-1", channelId: "dm_blocked" });
-		const cleanConversation = testConversation(dotDir, { conversation: "dm-2", channelId: "dm_clean" });
+		const deskDir = makeTempDir();
+		const blockedConversation = testConversation(deskDir, { conversation: "dm-1", channelId: "dm_blocked" });
+		const cleanConversation = testConversation(deskDir, { conversation: "dm-2", channelId: "dm_clean" });
 		const blockedDir = blockedConversation.conversationDir;
 		const cleanDir = cleanConversation.conversationDir;
 

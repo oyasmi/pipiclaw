@@ -7,7 +7,7 @@ import { useTempDirs } from "./helpers/fixtures.js";
 import { spawnLockHolder, spawnPausedReclaimer } from "./helpers/lock-holder.js";
 
 /**
- * Spec 058, D6/INV-6: the daemon and a TUI may write the same dot, so memory, task and dot.json
+ * Spec 058, D6/INV-6: the daemon and a TUI may write the same desk, so memory, task and desk.json
  * writers hold a cross-process lock. Every case here uses a real second process — an in-process
  * fake could pass while the on-disk protocol is broken.
  */
@@ -48,7 +48,7 @@ describe("cross-process file lock", () => {
 	});
 
 	it("reclaims a lock whose holder died, one reclaimer at a time", async () => {
-		const lockPath = join(makeDir(), "dot-json.lock");
+		const lockPath = join(makeDir(), "desk-json.lock");
 		const holder = await spawnLockHolder(lockPath);
 		await holder.kill();
 		// A reclaimer took the guard and was descheduled just before unlinking the dead lock — for
@@ -66,7 +66,7 @@ describe("cross-process file lock", () => {
 		expect(existsSync(guard)).toBe(true);
 		await reclaimer.resume();
 		await reclaimer.release();
-		// Failure caught: a crashed TUI would otherwise lock its dot's memory until a human intervened.
+		// Failure caught: a crashed TUI would otherwise lock its desk's memory until a human intervened.
 		await expect(withFileLock(lockPath, async () => "ran", { timeoutMs: 2_000 })).resolves.toBe("ran");
 		expect(existsSync(guard)).toBe(false);
 	});

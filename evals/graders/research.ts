@@ -8,7 +8,7 @@ export function researchDecision(): CodeGrader {
 		graderId: "research-decision",
 		graderVersion: "1",
 		grade: (ctx) => {
-			const path = join(ctx.dotDir, "operator-decision.json");
+			const path = join(ctx.deskDir, "operator-decision.json");
 			let ok = false;
 			try {
 				const value = existsSync(path)

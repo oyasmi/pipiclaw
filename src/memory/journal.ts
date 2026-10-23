@@ -9,21 +9,21 @@ import { isNodeError, readOptionalTextFile } from "../shared/os.js";
  * rewritten, so it stays a plain, growing record.
  */
 
-export function getJournalDir(dotDir: string): string {
-	return join(dotDir, "journal");
+export function getJournalDir(deskDir: string): string {
+	return join(deskDir, "journal");
 }
 
-export function getJournalPath(dotDir: string, date: string): string {
-	return join(getJournalDir(dotDir), `${date}.md`);
+export function getJournalPath(deskDir: string, date: string): string {
+	return join(getJournalDir(deskDir), `${date}.md`);
 }
 
-export async function readJournalDay(dotDir: string, date: string = localDayKey()): Promise<string> {
-	return readOptionalTextFile(getJournalPath(dotDir, date));
+export async function readJournalDay(deskDir: string, date: string = localDayKey()): Promise<string> {
+	return readOptionalTextFile(getJournalPath(deskDir, date));
 }
 
-export async function listJournalDates(dotDir: string): Promise<string[]> {
+export async function listJournalDates(deskDir: string): Promise<string[]> {
 	try {
-		const files = await readdir(getJournalDir(dotDir));
+		const files = await readdir(getJournalDir(deskDir));
 		return files
 			.filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
 			.map((f) => f.slice(0, -3))
@@ -45,8 +45,8 @@ export interface JournalSearchWindow {
 }
 
 /** Newest day files first; retain only whole lines when a day's older bytes are omitted. */
-export async function readJournalForSearch(dotDir: string): Promise<JournalSearchWindow> {
-	const dates = (await listJournalDates(dotDir)).reverse();
+export async function readJournalForSearch(deskDir: string): Promise<JournalSearchWindow> {
+	const dates = (await listJournalDates(deskDir)).reverse();
 	const window: JournalSearchWindow = {
 		days: [],
 		omittedDays: Math.max(0, dates.length - JOURNAL_SEARCH_MAX_DAYS),
@@ -54,7 +54,7 @@ export async function readJournalForSearch(dotDir: string): Promise<JournalSearc
 	};
 	for (const date of dates.slice(0, JOURNAL_SEARCH_MAX_DAYS)) {
 		try {
-			const file = await open(getJournalPath(dotDir, date), "r");
+			const file = await open(getJournalPath(deskDir, date), "r");
 			try {
 				const stat = await file.stat();
 				if (!stat.isFile()) continue;
@@ -101,7 +101,7 @@ export interface JournalAppendResult {
  * hand-edited file too.
  */
 export async function appendJournalEntries(
-	dotDir: string,
+	deskDir: string,
 	date: string,
 	lines: string[],
 ): Promise<JournalAppendResult> {
@@ -110,8 +110,8 @@ export async function appendJournalEntries(
 		return { appended: 0, skippedDuplicate: 0 };
 	}
 
-	await mkdir(getJournalDir(dotDir), { recursive: true });
-	const path = getJournalPath(dotDir, date);
+	await mkdir(getJournalDir(deskDir), { recursive: true });
+	const path = getJournalPath(deskDir, date);
 	const existing = await readOptionalTextFile(path);
 	const existingNormalized = new Set(
 		existing

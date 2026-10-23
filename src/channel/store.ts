@@ -1,6 +1,6 @@
 /**
  * The message archive: each channel's `log.jsonl` (inbound messages, bot responses) in its
- * conversation directory, and each dot's `subagent-runs.jsonl`, with de-duplication, size
+ * conversation directory, and each desk's `subagent-runs.jsonl`, with de-duplication, size
  * rotation and a debounced flush.
  */
 import { writeFile } from "fs/promises";
@@ -24,7 +24,7 @@ export interface LoggedMessage {
 	deliveryMode?: "steer" | "followUp";
 	skipContextSync?: boolean;
 	/**
-	 * Paths of any images the user sent alongside `text` (spec 049), relative to the dot
+	 * Paths of any images the user sent alongside `text` (spec 049), relative to the desk
 	 * directory. Kept even for an image that never made it into the model's context (unsupported
 	 * format, oversized, model without vision support) — this is the only place that record
 	 * survives once the turn's `[图片N: ...]` marker has scrolled out of `HISTORY.md`.
@@ -35,7 +35,7 @@ export interface LoggedMessage {
 export interface ChannelStoreConfig {
 	/**
 	 * Where a channel's archive goes right now (spec 058, D17): its conversation directory in the
-	 * dot it is bound to. `undefined` for an unbound channel, which is not archived at all.
+	 * desk it is bound to. `undefined` for an unbound channel, which is not archived at all.
 	 */
 	resolveArchiveDir: (channelId: string) => string | undefined;
 }
@@ -121,7 +121,7 @@ export class ChannelStore {
 		// writes, and memoizes it — a sync mkdir here would block on every progress update.
 		const archiveDir = this.resolveArchiveDir(channelId);
 		if (!archiveDir) {
-			log.logDebugEvent("channel.archive.skipped", "Archive skipped: channel not bound to a dot", { channelId });
+			log.logDebugEvent("channel.archive.skipped", "Archive skipped: channel not bound to a desk", { channelId });
 			return false;
 		}
 		const dedupeKey = `${channelId}:${message.ts}`;
@@ -149,12 +149,12 @@ export class ChannelStore {
 	}
 
 	/**
-	 * Archive a settled run in the dot it ran in. Takes the dot directory rather than resolving the
-	 * channel: a run that settles after its channel was rebound still belongs to its own dot.
+	 * Archive a settled run in the desk it ran in. Takes the desk directory rather than resolving the
+	 * channel: a run that settles after its channel was rebound still belongs to its own desk.
 	 */
-	async logSubAgentRun(dotDir: string, run: LoggedSubAgentRun): Promise<void> {
+	async logSubAgentRun(deskDir: string, run: LoggedSubAgentRun): Promise<void> {
 		if (this.closed) return;
-		const logPath = join(dotDir, "subagent-runs.jsonl");
+		const logPath = join(deskDir, "subagent-runs.jsonl");
 		if (!this.archiveAppender.tryAppend({ filePath: logPath, value: run })) {
 			throw new Error("Sub-agent archive queue is full. Retry after pending log writes drain.");
 		}

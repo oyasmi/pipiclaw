@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_HARD_UNITS } from "../src/agent/prompt/builder.js";
@@ -116,13 +116,12 @@ describe("workspace resources in the prompt", () => {
 		expect(build.text.match(/<workspace_identity/g)).toHaveLength(1);
 		expect(build.text.match(/<workspace_instructions/g)).toHaveLength(1);
 
-		// A dot's own SOUL.md replaces the workspace one whole; its missing AGENTS.md falls back.
-		const dotDir = makeTempDir();
-		writeFileSync(join(dotDir, "SOUL.md"), "I serve the investment group.");
-		const own = loadWorkspacePromptResources(workspaceDir, dotDir);
-		expect(own.soul?.path).toBe(join(dotDir, "SOUL.md"));
-		expect(own.soul?.content).toBe("I serve the investment group.");
-		expect(own.agents?.path).toBe(join(workspaceDir, "AGENTS.md"));
+		// A local file must not replace the one assistant's shared identity.
+		mkdirSync(join(workspaceDir, "desk-research"));
+		writeFileSync(join(workspaceDir, "desk-research", "SOUL.md"), "I serve the investment group.");
+		const shared = loadWorkspacePromptResources(workspaceDir);
+		expect(shared.soul?.path).toBe(join(workspaceDir, "SOUL.md"));
+		expect(shared.soul?.content).toBe("Answer in Chinese. Be direct.");
 	});
 
 	it("injects SOUL and AGENTS whole under their unit budgets, clips only just over, and never lets one shrink the other", () => {

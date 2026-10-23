@@ -47,7 +47,7 @@ export type {
  */
 
 async function withLock<T>(options: TaskManageToolOptions, id: string, mutate: () => Promise<T>): Promise<T> {
-	return withTaskMutation(options.dotDir, normalizeTaskId(id), mutate);
+	return withTaskMutation(options.deskDir, normalizeTaskId(id), mutate);
 }
 
 export function createTaskListTool(options: TaskManageToolOptions): AgentTool<typeof taskListSchema> {
@@ -55,7 +55,7 @@ export function createTaskListTool(options: TaskManageToolOptions): AgentTool<ty
 		name: "task_list",
 		label: "task_list",
 		description:
-			"List this dot's persistent tasks, including those created from other channels (each reports to its own `channel`; `deliversHere` marks the ones that report to this chat).",
+			"List this desk's persistent tasks, including those created from other channels (each reports to its own `channel`; `deliversHere` marks the ones that report to this chat).",
 		parameters: taskListSchema,
 		execute: async () => {
 			const result = await listTasks(options);

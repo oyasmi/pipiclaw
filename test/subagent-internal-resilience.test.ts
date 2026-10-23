@@ -81,8 +81,8 @@ function scriptedWorker(script: AssistantMessage[], seen: { continues: number; m
 
 function makeTool(overrides: Partial<SubAgentToolOptions> & Pick<SubAgentToolOptions, "createWorker">) {
 	const workspaceDir = createTempWorkspace();
-	const dotDir = join(workspaceDir, "dm_123");
-	mkdirSync(dotDir, { recursive: true });
+	const deskDir = join(workspaceDir, "dm_123");
+	mkdirSync(deskDir, { recursive: true });
 	return createSubAgentInlineTool({
 		...testManagers("dm_123"),
 		executor: fakeExecutor,
@@ -91,8 +91,8 @@ function makeTool(overrides: Partial<SubAgentToolOptions> & Pick<SubAgentToolOpt
 		getAvailableModels: () => [model, backupModel],
 		resolveApiKey: async () => "test-key",
 		workspaceDir,
-		dotDir,
-		runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
+		deskDir,
+		runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
 		retryBaseDelayMs: 1,
 		...overrides,
 	});

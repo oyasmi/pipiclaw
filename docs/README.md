@@ -28,6 +28,7 @@
 |---|---|
 | 决定文件、命令、网络和外部智能体能碰什么 | [安全指南](./security.md) |
 | 部署常驻进程、看日志、升级、备份或排障 | [部署与运维](./deployment-and-operations.md) |
+| 让 AI agent 按具体数据完成一次性存储迁移 | [迁移说明](./desk-migration.md)，执行前核对目标版本 |
 | 理解 fallback、记忆维护、后台作业、委派和任务 driver | [运行机制](./runtime-mechanisms.md) |
 | 评估并发、资源占用和拆分实例的时机 | [并发与容量](./scaling-and-concurrency.md) |
 
@@ -39,7 +40,7 @@
 | [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
 | [行为评测使用指南](./evals.md) | 无人参与的 `cycle`、评分器校验、短报告、证据重放与兼容参照 |
-| [设计记录](./specs/README.md) | 保留的 spec 050–057（055 离线实施完成，真实发布验收待执行）及当前行为的判断顺序 |
+| [设计记录](./specs/README.md) | 保留的 spec 050–060、实施状态及当前行为的判断顺序 |
 | [历史文档归档](./archive/README.md) | 编号 050 之前的完整 spec，以及已完成的实施清单、review 和快照 |
 | [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
 

@@ -16,16 +16,16 @@ function maintenanceSettings(enabled = true) {
 	};
 }
 
-/** Bound conversations of an active dot, as the runtime would inject them (spec 058, D12). */
+/** Bound conversations of an active desk, as the runtime would inject them (spec 058, D12). */
 function conv(channelId: string) {
 	const index = channelId.slice(channelId.lastIndexOf("_") + 1);
 	return {
-		dot: "news",
-		dotDir: "/tmp/dots/news",
-		cwd: "/tmp/dots/news",
+		desk: "news",
+		deskDir: "/tmp/desk-news",
+		cwd: "/tmp/desk-news",
 		channelId,
 		conversation: `dm-${index}`,
-		conversationDir: `/tmp/dots/news/conversations/dm-${index}`,
+		conversationDir: `/tmp/desk-news/conversations/dm-${index}`,
 	};
 }
 

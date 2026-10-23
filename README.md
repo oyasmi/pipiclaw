@@ -22,13 +22,13 @@ Pipiclaw 同时支持两类委派：内置子智能体在进程内完成检索�
 
 ### 工作不会随着一次对话结束
 
-你可以创建多个 **dot**——各自独立的助手个体，拥有自己的长期记忆、按天日志、任务、定时事件和工作文件。私聊和群聊绑定到某个 dot 上使用：绑定到同一个 dot 的频道共享记忆和任务，各自保留独立的对话；没有绑定的频道不会被服务。任务是一次性项目，用 Markdown 保存目标、完成标准和工作项，用 JSONL 循环日志记录步骤、派发与结算；内建 task driver 推进可运行任务、兑现到期等待票并处理兜底超时，周期与定时工作由事件模板每次生成独立任务实例，预算耗尽、空转或连续无法兑现等待时会停止并告诉你。
+Pipiclaw 默认就是你的同一个个人助手：终端、钉钉私聊和多个群聊共享长期记忆、按天日志、任务、定时事件和工作文件，各自保留独立对话，直接聊天即可。需要隔离项目或用途时，再使用进阶的 [工位机制](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md#按需隔离工作区)：每个工位有独立的记忆、任务和文件。任务是一次性项目，用 Markdown 保存目标、完成标准和工作项，用 JSONL 循环日志记录步骤、派发与结算；内建 task driver 推进可运行任务、兑现到期等待票并处理兜底超时，周期与定时工作由事件模板每次生成独立任务实例，预算耗尽、空转或连续无法兑现等待时会停止并告诉你。
 
 ### 原生工作在钉钉里
 
 Pipiclaw 使用钉钉 Stream Mode，不需要自建消息中转服务或公网 IP。AI Card 可以持续显示思考、工具执行和状态更新；任务进行中仍可用 `/steer` 调整方向、`/followup` 排队下一件事、`/stop` 中止当前回合。生成的报表、截图和导出文件可以作为钉钉原生附件直接交付。
 
-同一个机器人实例可以同时服务多个私聊和群聊：每个私聊、每个群都是一个频道，不同频道的模型回合可以并行推进；同一频道内则串行执行，避免一段对话的上下文被多个回合同时修改。需要注意的是，dot 之间的隔离不等于代码目录隔离；如果多个频道指向同一个项目目录，仍应避免让主智能体同时修改同一批文件，或为并行实现准备独立的 Git worktree。完整边界见[并发与容量](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md)。
+同一个机器人实例可以同时服务多个私聊和群聊：每个私聊、每个群都是一个频道，不同频道的模型回合可以并行推进；同一频道内则串行执行，避免一段对话的上下文被多个回合同时修改。需要注意的是，工位之间的隔离不等于代码目录隔离；如果多个频道指向同一个项目目录，仍应避免让主智能体同时修改同一批文件，或为并行实现准备独立的 Git worktree。完整边界见[并发与容量](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md)。
 
 ### 能自主，也能随时接管
 
@@ -69,7 +69,7 @@ pipiclaw tui --help
 ├── settings.json     # 默认模型与运行设置
 ├── tools.json        # Web 工具、任务等能力开关
 ├── security.json     # 命令、路径与网络守卫
-└── workspace/        # skills、智能体角色，以及 dots/（每个 dot 的记忆、任务、事件和会话）
+└── workspace/        # 共享配置与扩展；个人助手的数据在 desk-default/
 ```
 
 设置 `PIPICLAW_HOME=/your/path` 可以整体迁移这个目录。
@@ -86,16 +86,16 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw auth login
 ```
 
-然后创建一个 dot 并在终端里打开它（dot 是一个独立的助手个体，拥有自己的记忆、任务和文件）：
+然后直接在终端里聊天（首次运行自动初始化个人助手）：
 
 ```bash
-pipiclaw tui --dot main --create
+pipiclaw tui
 ```
 
 也可以用于脚本化的一次性请求：
 
 ```bash
-pipiclaw tui --dot main --print "只回复：Pipiclaw 模型调用成功"
+pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
 ```
 
 看到模型实际回复才表示调用链路已经跑通；`pipiclaw tui --help` 或 `/model` 只能证明 CLI 或模型目录可见。如需接入企业网关、本地模型或指定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
@@ -134,14 +134,7 @@ pipiclaw tui --dot main --print "只回复：Pipiclaw 模型调用成功"
 pipiclaw
 ```
 
-在钉钉里先创建一个 dot，把当前私聊绑定上去（每个要使用的私聊或群都绑定一次；没有绑定的频道只会提示你绑定）：
-
-```text
-/dot new main
-/dot bind main
-```
-
-然后发送 `/model` 检查模型引用，再发送一条普通消息验证真实调用：
+在钉钉中直接私聊，或把机器人拉进群后 @它，无需创建或绑定工作区。新私聊和新群默认使用同一个助手；`allowFrom` 仍控制哪些发送者可以使用。发送 `/model` 检查模型引用，再发送一条普通消息验证真实调用：
 
 ```text
 请介绍一下你自己，并说明你现在能做什么
@@ -203,7 +196,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.m
 3. 运行一次 pipiclaw 初始化 ~/.pipiclaw/；它因 channel.json 仍是模板而提示补全并退出是正常现象。
 4. 询问我要使用 API key、自定义 provider，还是 pipiclaw auth login 支持的订阅登录；不要编造缺失值。
 5. 如果我要接入钉钉，逐项收集 clientId、clientSecret、可选的 cardTemplateId 和 allowFrom，写入 channel.json，并清除所有 your-* 占位值。
-6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui --dot main --create（之后用 --dot main 打开）；钉钉模式用 pipiclaw，启动后在钉钉里先发 /dot new main 和 /dot bind main。
+6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui；钉钉模式用 pipiclaw，启动后直接私聊或在群里 @机器人，无需创建或绑定工作区。
 7. 如实列出做过的操作、修改的文件、验证结果和仍缺少的信息，不要假装成功。
 ```
 
@@ -217,15 +210,15 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.m
 | `/stop` | 停止当前回合；任务驱动的回合会同时暂停对应任务 |
 | `/steer <消息>` | 调整正在执行的回合 |
 | `/followup <消息>` | 排队下一条请求 |
-| `/dot [list\|new <名字>\|bind <名字>]` | 查看、创建 dot，把当前频道绑定到一个 dot |
+| `/desk [list\|new <名字>\|bind <名字>]` | 进阶：创建隔离工作区，或切换当前频道的工作区 |
 | `/status` | 查看执行状态、模型、上下文、运行时长和版本 |
-| `/usage [7d\|month]` | 查看当前 dot 与全局的模型用量和成本 |
+| `/usage [7d\|month]` | 查看当前工位与全局的模型用量和成本 |
 | `/tasks ...` | 查看、诊断和控制长期任务 |
 | `/subagents ...` | 查看、控制委派 run 和角色目录 |
-| `/memory ...` | 查看当前 dot 的长期记忆 |
+| `/memory ...` | 查看当前工位的长期记忆 |
 | `/model [引用]` | 查看或切换模型 |
 
-`/help`、`/stop`、`/steer`、`/followup`、`/dot`、`/events`、`/tasks`、`/status`、`/usage`、`/context` 和 `/subagents` 由运行时直接处理，回合进行中也能使用。`/stop` 不会取消已经派发的委派 run；请使用 `/subagents cancel`。
+`/help`、`/stop`、`/steer`、`/followup`、`/desk`、`/events`、`/tasks`、`/status`、`/usage`、`/context` 和 `/subagents` 由运行时直接处理，回合进行中也能使用。`/stop` 不会取消已经派发的委派 run；请使用 `/subagents cancel`。
 
 完整交互说明见[交互与命令](https://github.com/oyasmi/pipiclaw/blob/main/docs/interaction-and-commands.md)。
 

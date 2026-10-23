@@ -289,11 +289,11 @@ describe("runtime stop handling", () => {
 
 		const paths = createBootstrapPaths();
 		const conversation = await bindTestChannel(paths.workspaceDir, "dm_tester");
-		const { dotDir } = conversation;
+		const { deskDir } = conversation;
 		Object.assign(runner, { conversation });
 		bootstrapAppHome(paths);
-		const taskPath = join(dotDir, "tasks", "long-run.md");
-		mkdirSync(join(dotDir, "tasks"), { recursive: true });
+		const taskPath = join(deskDir, "tasks", "long-run.md");
+		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(taskPath, "---\nstate: open\n---\n\n# Long running task\n", "utf-8");
 
 		const bot = new FakeTestBot();

@@ -10,11 +10,11 @@ import type { AgentRunner } from "../src/agent/types.js";
 import { BUILT_IN_COMMANDS, formatBusyHint, renderBuiltInHelp, SESSION_COMMANDS } from "../src/commands/catalog.js";
 import {
 	type BindOutcome,
-	type DotCommandPort,
-	formatUnavailableDotReply,
+	type DeskCommandPort,
+	formatUnavailableDeskReply,
 	formatUnboundChannelReply,
-	handleDotCommand,
-} from "../src/dot/commands.js";
+	handleDeskCommand,
+} from "../src/desk/commands.js";
 import { handleEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { applyMemoryOps } from "../src/memory/store.js";
@@ -100,8 +100,8 @@ function expectUserCopyShape(label: string, text: string, options: ShapeOptions 
 	}
 }
 
-async function seedTasks(dotDir: string): Promise<void> {
-	const tasksDir = join(dotDir, "tasks");
+async function seedTasks(deskDir: string): Promise<void> {
+	const tasksDir = join(deskDir, "tasks");
 	await mkdir(join(tasksDir, "archive"), { recursive: true });
 	const longGoal = `${"把季度报表的每一张表都核对一遍，并记录差异。".repeat(40)}`;
 	const body = renderStandardTaskBody({
@@ -129,14 +129,14 @@ async function seedTasks(dotDir: string): Promise<void> {
 		);
 	}
 	for (let index = 0; index < 30; index++) {
-		await appendTaskLog(dotDir, "task-0", {
+		await appendTaskLog(deskDir, "task-0", {
 			kind: "dispatch",
 			ref: `run_${index}`,
 			item: `W${(index % 12) + 1}`,
 			agent: "builder",
 			purpose: index % 4 ? "work" : "verify",
 		});
-		await appendTaskLog(dotDir, "task-0", {
+		await appendTaskLog(deskDir, "task-0", {
 			kind: "settle",
 			ref: `run_${index}`,
 			item: `W${(index % 12) + 1}`,
@@ -145,7 +145,7 @@ async function seedTasks(dotDir: string): Promise<void> {
 			exitCode: index % 3 ? 0 : 1,
 			output: `/tmp/runs/run_${index}/output.md`,
 		});
-		await appendTaskLog(dotDir, "task-0", {
+		await appendTaskLog(deskDir, "task-0", {
 			kind: "step",
 			seq: index + 1,
 			outcome: index % 2 ? "park" : "continue",
@@ -212,15 +212,15 @@ function fakeRunManager(records: RunRecord[]): SubAgentRunManager {
 
 describe("user-facing copy shape (spec 053, D13)", () => {
 	it("keeps every /tasks report in shape and inside the budget", async () => {
-		const dotDir = tempDir();
-		await seedTasks(dotDir);
+		const deskDir = tempDir();
+		await seedTasks(deskDir);
 		for (const args of ["", "show task-0", "log task-0", "archive", "doctor", "show missing", "bogus"]) {
-			expectUserCopyShape(`/tasks ${args}`, await handleTasksCommand({ args, dotDir, ...TASK_CHANNELS }));
+			expectUserCopyShape(`/tasks ${args}`, await handleTasksCommand({ args, deskDir, ...TASK_CHANNELS }));
 		}
 		// Empty state, too.
 		expectUserCopyShape(
 			"/tasks (empty)",
-			await handleTasksCommand({ args: "", dotDir: tempDir(), ...TASK_CHANNELS }),
+			await handleTasksCommand({ args: "", deskDir: tempDir(), ...TASK_CHANNELS }),
 		);
 	});
 
@@ -248,12 +248,12 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		}
 	});
 
-	it("keeps /memory, /events, /skills and /dot in shape", async () => {
-		const dotDir = tempDir();
+	it("keeps /memory, /events, /skills and /desk in shape", async () => {
+		const deskDir = tempDir();
 		const workspaceDir = tempDir();
 		const appHomeDir = tempDir();
 		await applyMemoryOps(
-			dotDir,
+			deskDir,
 			Array.from({ length: 60 }, (_, index) => ({
 				op: "add" as const,
 				name: `fact-${index}`,
@@ -267,20 +267,20 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		for (const args of ["status", "list", "list project", "show fact-1", "journal", "forget nope", "bogus"]) {
 			expectUserCopyShape(
 				`/memory ${args}`,
-				await handleMemoryCommand({ conversation: testConversation(dotDir), args }),
+				await handleMemoryCommand({ conversation: testConversation(deskDir), args }),
 			);
 		}
 
-		const eventsDotDir = join(workspaceDir, "dots", "news");
-		mkdirSync(join(eventsDotDir, "events"), { recursive: true });
+		const eventsDeskDir = join(workspaceDir, "desk-news");
+		mkdirSync(join(eventsDeskDir, "events"), { recursive: true });
 		for (let index = 0; index < 50; index++) {
 			const event =
 				index % 7 === 0
 					? { type: "periodic", channelId: "dm_1", schedule: "* * * * *", text: "too often" }
 					: { type: "periodic", channelId: "dm_1", schedule: "0 9 * * 1", text: `周报 ${"内容".repeat(30)}` };
-			writeFileSync(join(eventsDotDir, "events", `event-${index}.json`), JSON.stringify(event));
+			writeFileSync(join(eventsDeskDir, "events", `event-${index}.json`), JSON.stringify(event));
 		}
-		writeFileSync(join(eventsDotDir, "events", "broken.json"), "{ not json");
+		writeFileSync(join(eventsDeskDir, "events", "broken.json"), "{ not json");
 		const historyPath = join(appHomeDir, "history.jsonl");
 		writeFileSync(
 			historyPath,
@@ -301,10 +301,9 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 				`/events ${args}`,
 				await handleEventsCommand({
 					args,
-					dot: "news",
-					dotDir: eventsDotDir,
+					desk: "news",
+					deskDir: eventsDeskDir,
 					historyPath,
-					dotChannelIds: ["dm_1"],
 					// Every other event delivers to an unbound channel: the suspended mark must fit too.
 					describeChannel: (channelId) => ({ label: `\`${channelId}\``, boundHere: channelId !== "dm_1" }),
 				}),
@@ -327,8 +326,8 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			await handleSkillsCommand({ args: "", workspaceDir: tempDir(), appHomeDir }),
 		);
 
-		const dots = Array.from({ length: 40 }, (_, index) => ({
-			name: `dot-${index}`,
+		const desks = Array.from({ length: 40 }, (_, index) => ({
+			name: `desk-${index}`,
 			availability: index % 7 === 3 ? ("invalid" as const) : ("available" as const),
 			current: index === 0,
 			channels: Array.from({ length: index % 4 }, (_, channel) => ({
@@ -337,33 +336,33 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			})),
 		}));
 		const bindOutcomes: BindOutcome[] = [
-			{ kind: "bound", dot: "lab" },
-			{ kind: "bound", dot: "lab", previousDot: "news", previousDotDormant: true },
-			{ kind: "bound", dot: "lab", previousDot: "news", suspendedTasks: 2, suspendedEvents: 1 },
-			{ kind: "same", dot: "lab" },
-			{ kind: "busy", dot: "lab" },
-			{ kind: "unknown", dot: "lab" },
-			{ kind: "unavailable", dot: "lab" },
-			{ kind: "invalid", dot: "lab" },
+			{ kind: "bound", desk: "lab" },
+			{ kind: "bound", desk: "lab", previousDesk: "news", previousDeskDormant: true },
+			{ kind: "bound", desk: "lab", previousDesk: "news", suspendedTasks: 2, suspendedEvents: 1 },
+			{ kind: "same", desk: "lab" },
+			{ kind: "busy", desk: "lab" },
+			{ kind: "unknown", desk: "lab" },
+			{ kind: "unavailable", desk: "lab" },
+			{ kind: "invalid", desk: "lab" },
 		];
-		const port = (bind: boolean, outcome?: BindOutcome): DotCommandPort => ({
-			list: async () => dots,
+		const port = (bind: boolean, outcome?: BindOutcome): DeskCommandPort => ({
+			list: async () => desks,
 			channelIndexPath: "/home/u/.pipiclaw/workspace/CHANNELS.md",
 			create: async (name) => ({ kind: "created", record: { version: 1, name, createdAt: "", conversations: {} } }),
 			...(bind ? { bind: async () => outcome ?? bindOutcomes[0] } : {}),
 		});
 		for (const args of ["", "list", "new lab", "bogus", "new"]) {
-			expectUserCopyShape(`/dot ${args}`, await handleDotCommand(args, port(true)));
+			expectUserCopyShape(`/desk ${args}`, await handleDeskCommand(args, port(true)));
 		}
-		expectUserCopyShape("/dot (empty)", await handleDotCommand("", { ...port(true), list: async () => [] }));
-		expectUserCopyShape("/dot (tui)", await handleDotCommand("", port(false)));
-		expectUserCopyShape("/dot new (tui)", await handleDotCommand("new lab", port(false)));
-		expectUserCopyShape("/dot bind (tui)", await handleDotCommand("bind lab", port(false)));
+		expectUserCopyShape("/desk (empty)", await handleDeskCommand("", { ...port(true), list: async () => [] }));
+		expectUserCopyShape("/desk (tui)", await handleDeskCommand("", port(false)));
+		expectUserCopyShape("/desk new (tui)", await handleDeskCommand("new lab", port(false)));
+		expectUserCopyShape("/desk bind (tui)", await handleDeskCommand("bind lab", port(false)));
 		for (const outcome of bindOutcomes) {
-			expectUserCopyShape(`/dot bind ${outcome.kind}`, await handleDotCommand("bind lab", port(true, outcome)));
+			expectUserCopyShape(`/desk bind ${outcome.kind}`, await handleDeskCommand("bind lab", port(true, outcome)));
 		}
 		expectUserCopyShape("unbound channel", formatUnboundChannelReply());
-		expectUserCopyShape("unavailable dot", formatUnavailableDotReply("news"));
+		expectUserCopyShape("unavailable desk", formatUnavailableDeskReply("news"));
 	});
 
 	it("keeps /help, /status, /usage and /context in shape", async () => {
@@ -399,7 +398,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		for (const mode of ["default", "7d", "month"] as const) {
 			expectUserCopyShape(
 				`/usage ${mode}`,
-				await renderUsageReport(ledger, { dot: "news", channelId: "dm_1" }, mode, new Date()),
+				await renderUsageReport(ledger, { desk: "news", channelId: "dm_1" }, mode, new Date()),
 			);
 		}
 

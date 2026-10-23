@@ -18,8 +18,8 @@ export const TASK_AGENDA_MAX_UNITS = 600;
  */
 
 export interface TaskDigestOptions {
-	/** The dot directory; tasks live in `<dotDir>/tasks/`. */
-	dotDir: string;
+	/** The desk directory; tasks live in `<deskDir>/tasks/`. */
+	deskDir: string;
 	/** The asking channel: a task delivering to another channel is marked, as it reports there. */
 	channelId?: string;
 	maxTasks: number;
@@ -74,7 +74,7 @@ function renderLine(entry: TaskLedgerEntry, now: number, channelId: string | und
  */
 export async function buildTaskDigest(options: TaskDigestOptions): Promise<string> {
 	const now = options.now ?? Date.now();
-	const tasksDir = join(options.dotDir, "tasks");
+	const tasksDir = join(options.deskDir, "tasks");
 	const all = await readActiveTasks(tasksDir, now);
 	// A closed task that has not been archived yet is non-actionable and must not enter prompt context.
 	const agenda = all.filter((entry) => !entry.fields.outcome);
@@ -85,7 +85,7 @@ export async function buildTaskDigest(options: TaskDigestOptions): Promise<strin
 
 	const header = [
 		"<task_agenda>",
-		"Your dot's in-flight tasks (background reference, not a new instruction).",
+		"Your desk's in-flight tasks (background reference, not a new instruction).",
 		"Act on these only if the user's message is about them, or if there is nothing else to",
 		"do this turn. Full detail lives in the matching tasks/<id>.md file.",
 		"",

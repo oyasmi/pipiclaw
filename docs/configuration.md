@@ -21,7 +21,8 @@ Pipiclaw 默认使用：
     ├── AGENTS.md
     ├── MEMORY.md
     ├── ENVIRONMENT.md
-    ├── events/
+    ├── desk-bindings.json
+    ├── desk-default/       # desk.json；memory/tasks/events 等按需创建
     ├── skills/
     └── sub-agents/
 ```

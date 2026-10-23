@@ -1,6 +1,6 @@
 /**
  * Cross-process advisory lock on one file path (spec 058, D6). Two processes — the daemon and a
- * TUI — may write the same dot; an in-process serial queue cannot see the other one, so the
+ * TUI — may write the same desk; an in-process serial queue cannot see the other one, so the
  * writers of shared files additionally hold one of these.
  *
  * A lock is a file holding `{ pid, hostname, acquiredAt, token }`. It is created exclusively: the
@@ -10,7 +10,7 @@
  * see {@link reclaimStale}; a holder on another host is never presumed dead, and neither is a
  * reclaimer. Release removes the file only while it still carries this acquisition's token.
  *
- * Domain-free on purpose (layer 0): memory, tasks and the dot registry each pick their own path
+ * Domain-free on purpose (layer 0): memory, tasks and the desk registry each pick their own path
  * and timeout.
  */
 import { randomUUID } from "node:crypto";

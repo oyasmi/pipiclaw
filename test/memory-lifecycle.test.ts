@@ -16,12 +16,12 @@ import { appendMemoryReviewLog } from "../src/memory/review-log.js";
 const tempDir = useTempDirs("pipiclaw-boundary-work-");
 
 const CONVERSATION = {
-	dot: "news",
-	dotDir: "/tmp/dots/news",
-	cwd: "/tmp/dots/news",
+	desk: "news",
+	deskDir: "/tmp/desk-news",
+	cwd: "/tmp/desk-news",
 	channelId: "dm_123",
 	conversation: "dm-1",
-	conversationDir: "/tmp/dots/news/conversations/dm-1",
+	conversationDir: "/tmp/desk-news/conversations/dm-1",
 };
 
 const DEFAULT_REFLECT_RESULT = {
@@ -93,7 +93,7 @@ describe("MemoryLifecycle", () => {
 	it("contains boundary discovery I/O failures before they escape detached lifecycle work", async () => {
 		// Regression: discovery used to reject outside the worker's catch, risking an unhandled rejection.
 		const root = tempDir();
-		const conversation = { ...CONVERSATION, dotDir: root };
+		const conversation = { ...CONVERSATION, deskDir: root };
 		const appHomeDir = join(root, "app");
 		await writeFile(join(root, ".memory-work"), "unavailable directory");
 		await expect(
@@ -147,7 +147,7 @@ describe("MemoryLifecycle", () => {
 
 	it("persists compaction memory without waiting on inference and resumes the work after recreation", async () => {
 		const root = tempDir();
-		const conversation = { ...CONVERSATION, dotDir: root, conversationDir: join(root, "conversations/dm-1") };
+		const conversation = { ...CONVERSATION, deskDir: root, conversationDir: join(root, "conversations/dm-1") };
 		const entries = [
 			{
 				type: "message",

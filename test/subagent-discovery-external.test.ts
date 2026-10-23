@@ -372,7 +372,9 @@ Body.
 		const optedIn = discover(workspaceDir);
 		const declared = optedIn.agents.find((a) => a.name === "memory-declared");
 		expect(declared?.memory).toBe("index");
-		expect(optedIn.warnings).toEqual(expect.arrayContaining([expect.stringContaining("sends the dot memory index")]));
+		expect(optedIn.warnings).toEqual(
+			expect.arrayContaining([expect.stringContaining("sends the desk memory index")]),
+		);
 	});
 
 	it("ignores a README in the role directory instead of warning about its missing frontmatter", () => {

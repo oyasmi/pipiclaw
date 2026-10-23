@@ -154,6 +154,7 @@ export class InboundMessages {
 		this.pendingInboundIngestCount++;
 		try {
 			await this.inboundIngestQueue.run(channelId, async () => {
+				if (handler.prepareChannel) await handler.prepareChannel(channelId);
 				const { text: content, images } = await this.deps.resolveInboundAttachments(channelId, parsed);
 
 				log.logEvent("info", "runtime.dingtalk.message_received", "Accepted incoming message", {

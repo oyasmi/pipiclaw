@@ -20,7 +20,7 @@ let eventsDir: string;
 
 function opts(overrides: Partial<EventManageToolOptions> = {}): EventManageToolOptions {
 	return {
-		dotDir: workspaceDir,
+		deskDir: workspaceDir,
 		channelId: "dm_1",
 		commandGuardConfig: guard(),
 		...overrides,
@@ -328,7 +328,7 @@ describe("manageEvent delete", () => {
 	});
 
 	describe("action: list", () => {
-		it("lists every event of this dot, one line each, marking those that deliver elsewhere", async () => {
+		it("lists every event of this desk, one line each, marking those that deliver elsewhere", async () => {
 			await manageEvent(opts(), { action: "create", name: "mine-periodic", definition: validPeriodic });
 			await manageEvent(opts(), {
 				action: "create",
@@ -342,7 +342,7 @@ describe("manageEvent delete", () => {
 				JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
 			);
 
-			// Spec 058, D14: events belong to the dot, so another channel's event is listed too — as
+			// Spec 058, D14: events belong to the desk, so another channel's event is listed too — as
 			// read-only, since changing it here would retarget its delivery channel.
 			const result = await manageEvent(opts(), { action: "list" });
 			expect(result.count).toBe(3);

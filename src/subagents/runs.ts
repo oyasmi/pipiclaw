@@ -21,7 +21,7 @@ import {
 	applyPendingSettlement,
 	createPendingSettlement,
 	isTerminal,
-	MAX_RUNNING_SUBAGENT_RUNS_PER_DOT,
+	MAX_RUNNING_SUBAGENT_RUNS_PER_DESK,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
 	normalizeRunIdQuery,
 	parseRunRecord,
@@ -54,10 +54,10 @@ import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLe
 type ProcessIdentity = "same" | "different" | "unknown";
 
 export interface RunManagerOptions {
-	/** Root of the per-dot record directories (`<stateDir>/<dot>/`). Omit to skip persistence. */
+	/** Root of the per-desk record directories (`<stateDir>/<desk>/`). Omit to skip persistence. */
 	stateDir?: string;
-	/** Is a run's channel still bound to this dot (spec 058, D7)? Omitted (TUI, tests): always. */
-	isBoundTo?: (channelId: string, dot: string) => boolean;
+	/** Is a run's channel still bound to this desk (spec 058, D7)? Omitted (TUI, tests): always. */
+	isBoundTo?: (channelId: string, desk: string) => boolean;
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Best-effort out-of-band notice sink (see `RunNotice`). Never awaited by settlement or the
 	 *  progress tail — a slow or failing notifier must not delay either. */
@@ -82,9 +82,9 @@ async function unlinkIfPresent(path: string): Promise<void> {
 }
 
 /**
- * Per-dot manager for delegation runs — the single settlement/usage/wake authority for both
+ * Per-desk manager for delegation runs — the single settlement/usage/wake authority for both
  * internal sub-agents and (once wired) external harnesses (D7). Modeled directly on
- * `DotJobManager`; the two are not unified because a run's terminal status depends on a
+ * `DeskJobManager`; the two are not unified because a run's terminal status depends on a
  * protocol verdict, not just process exit (D4), so the state machines genuinely differ.
  */
 export class SubAgentRunManager {
@@ -111,13 +111,13 @@ export class SubAgentRunManager {
 
 	/** `target` owns these runs; each run's own `channelId` is where it reports back. */
 	constructor(
-		private readonly target: { dot: string; dotDir: string },
+		private readonly target: { desk: string; deskDir: string },
 		private readonly options: RunManagerOptions,
 	) {}
 
 	/** The completion wake's dispatch id — the only id `beginWakeConsumption` accepts for it. */
 	private wakeDispatchId(runId: string): string {
-		return `subagent:${this.target.dot}:${runId}:done`;
+		return `subagent:${this.target.desk}:${runId}:done`;
 	}
 
 	/** Release observation timers without cancelling dispatched work or its settlement. */
@@ -128,8 +128,8 @@ export class SubAgentRunManager {
 	}
 
 	private recordDir(): string | undefined {
-		// The dot name is a validated path segment; a channel id never is (spec 058, INV-3).
-		return this.options.stateDir ? join(this.options.stateDir, this.target.dot) : undefined;
+		// The desk name is a validated path segment; a channel id never is (spec 058, INV-3).
+		return this.options.stateDir ? join(this.options.stateDir, this.target.desk) : undefined;
 	}
 
 	private recordPath(runId: string): string | undefined {
@@ -177,7 +177,7 @@ export class SubAgentRunManager {
 		const notify = this.options.notify;
 		if (!notify) return;
 		void Promise.resolve()
-			.then(() => notify(this.target.dot, record.channelId, notice))
+			.then(() => notify(this.target.desk, record.channelId, notice))
 			.catch((error) =>
 				log.logWarn("subagent.notice.failed", "Run notice failed", {
 					reason: errorMessage(error),
@@ -311,12 +311,12 @@ export class SubAgentRunManager {
 	async register(input: RegisterRunInput): Promise<RunRecord> {
 		return hostAdmissionQueue.run("host", () =>
 			this.queue.run(input.runId, async () => {
-				// D10.2: a per-dot and a host-wide cap, both code constants (a local response to a
+				// D10.2: a per-desk and a host-wide cap, both code constants (a local response to a
 				// runaway model, not a global cross-subsystem admission scheme — see the design doc's
 				// non-goals). Checked before anything is persisted, so a rejected run costs nothing.
-				if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_DOT) {
+				if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_DESK) {
 					throw new RecoverableToolError(
-						`Too many delegation runs already running in this dot (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_DOT}). ` +
+						`Too many delegation runs already running in this desk (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_DESK}). ` +
 							"Wait for one to finish, or cancel one with subagent_run op=cancel first.",
 					);
 				}
@@ -327,7 +327,7 @@ export class SubAgentRunManager {
 					);
 				}
 				if (this.runs.has(input.runId)) {
-					throw new RecoverableToolError(`Run id "${input.runId}" is already registered in this dot.`);
+					throw new RecoverableToolError(`Run id "${input.runId}" is already registered in this desk.`);
 				}
 				const record: RunRecord = {
 					...input,
@@ -347,7 +347,7 @@ export class SubAgentRunManager {
 					throw error;
 				}
 				if (record.taskId) {
-					await logTaskDispatch(this.target.dotDir, record.taskId, {
+					await logTaskDispatch(this.target.deskDir, record.taskId, {
 						ref: record.runId,
 						item: record.item,
 						agent: record.agent,
@@ -401,7 +401,7 @@ export class SubAgentRunManager {
 			 *  would, not a thinner subset. */
 			maxWallTimeSec?: number;
 			processStartedAt?: number;
-			dotDir?: string;
+			deskDir?: string;
 			/** Spec 042 D10: non-fatal invocation warnings from argv assembly (e.g. a dropped
 			 *  placeholder token), so they survive on the run rather than only ever hitting a log line. */
 			invocationWarnings?: string[];
@@ -426,7 +426,7 @@ export class SubAgentRunManager {
 			if (info.sessionId) record.sessionId = info.sessionId;
 			record.maxWallTimeSec = info.maxWallTimeSec;
 			record.processStartedAt = info.processStartedAt;
-			record.dotDir = info.dotDir;
+			record.deskDir = info.deskDir;
 			record.invocationWarnings = info.invocationWarnings;
 			record.roleFingerprint = info.roleFingerprint;
 			record.parserVersion = info.parserVersion;
@@ -554,11 +554,11 @@ export class SubAgentRunManager {
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
-				this.options.ledger?.record(runLedgerEntry(this.target.dot, record, input));
+				this.options.ledger?.record(runLedgerEntry(this.target.desk, record, input));
 				// Archive is an observability write, not a settlement fact — a full queue must not
 				// swallow the completion wake below (P0-2).
 				await this.options.store
-					?.logSubAgentRun(this.target.dotDir, runArchiveEntry(record, input, pending.status))
+					?.logSubAgentRun(this.target.deskDir, runArchiveEntry(record, input, pending.status))
 					.catch((error) => {
 						log.logWarn("subagent.archive.failed", "Run archive failed", {
 							reason: errorMessage(error),
@@ -602,7 +602,7 @@ export class SubAgentRunManager {
 		const taskId = record.taskId;
 		if (!taskId) return;
 		await logTaskSettlement(
-			this.target.dotDir,
+			this.target.deskDir,
 			taskId,
 			{
 				ref: record.runId,
@@ -637,13 +637,13 @@ export class SubAgentRunManager {
 			durationMs: record.durationMs ?? 0,
 		});
 		if (!this.options.dispatch) return;
-		if (this.options.isBoundTo && !this.options.isBoundTo(record.channelId, this.target.dot)) {
+		if (this.options.isBoundTo && !this.options.isBoundTo(record.channelId, this.target.desk)) {
 			await this.suppressWake(record);
 			return;
 		}
 		const siblingCount = countWakeSiblings(record, this.runs.values());
 		const event = buildRunCompletionWake({
-			dot: this.target.dot,
+			desk: this.target.desk,
 			dispatchId: this.wakeDispatchId(record.runId),
 			record,
 			outputText,
@@ -670,18 +670,18 @@ export class SubAgentRunManager {
 	}
 
 	/**
-	 * Spec 058, D8: the run's channel left this dot, so the wake has no recipient. Settlement and the
+	 * Spec 058, D8: the run's channel left this desk, so the wake has no recipient. Settlement and the
 	 * task's settle record already happened; the wake is dropped (marker set, never replayed), and the
 	 * `work` ticket it would have redeemed is redeemed here via `redeemTicket`, so the suspended task
 	 * resumes as soon as its delivery channel is bound again.
 	 */
 	private async suppressWake(record: RunRecord): Promise<void> {
-		log.logInfoEvent("subagent.wake.suppressed", "Completion wake dropped: channel not bound to the run's dot", {
+		log.logInfoEvent("subagent.wake.suppressed", "Completion wake dropped: channel not bound to the run's desk", {
 			channelId: record.channelId,
-			fields: { runId: record.runId, dot: this.target.dot, taskId: record.taskId },
+			fields: { runId: record.runId, desk: this.target.desk, taskId: record.taskId },
 		});
 		if (record.taskId) {
-			await redeemTicket(this.target.dotDir, record.taskId, (ticket) => ticket.kind === "work").catch((error) => {
+			await redeemTicket(this.target.deskDir, record.taskId, (ticket) => ticket.kind === "work").catch((error) => {
 				log.logWarn("subagent.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
 					reason: errorMessage(error),
 					fields: { runId: record.runId, taskId: record.taskId },
@@ -1113,6 +1113,12 @@ export class SubAgentRunManager {
 				this.externalRecoveryTimers.delete(record.runId);
 				const current = this.runs.get(record.runId);
 				if (!current || current.status !== "running") return;
+				// Timers can fire just before their wall-clock deadline. Re-arm rather than losing
+				// the only recovery check and leaving an adopted process running indefinitely.
+				if (current.deadlineAt && Date.now() < current.deadlineAt) {
+					this.scheduleExternalRecovery(current);
+					return;
+				}
 				void this.reconcileExternalRunAtDeadline(current).catch((error) => {
 					log.logWarn("subagent.reconcile.failed", "Adopted external run reconcile failed", {
 						reason: errorMessage(error),

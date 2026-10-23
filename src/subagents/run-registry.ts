@@ -1,20 +1,20 @@
 /**
- * The application's registry of per-dot run managers: lazy creation, the host-wide admission
- * count, startup restore across every persisted dot, and the daily garbage-collection timer.
+ * The application's registry of per-desk run managers: lazy creation, the host-wide admission
+ * count, startup restore across every persisted desk, and the daily garbage-collection timer.
  */
 import { mkdir, readdir } from "node:fs/promises";
-import { getDotDir, isDotName } from "../dot/paths.js";
+import { getDeskDir, isDeskName } from "../desk/paths.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type RunManagerOptions, SubAgentRunManager } from "./runs.js";
 
-/** Owns this application's dot managers and their maintenance timer. */
+/** Owns this application's desk managers and their maintenance timer. */
 export function createSubAgentRuntime(options: RunManagerOptions & { workspaceDir: string }) {
 	const { workspaceDir, ...config } = options;
 	const managers = new Map<string, SubAgentRunManager>();
 	let stopped = false;
 
-	/** Host-wide running count for the D10.2 admission check, summed across every known dot. */
+	/** Host-wide running count for the D10.2 admission check, summed across every known desk. */
 	function totalRunningSubAgentRuns(): number {
 		let total = 0;
 		for (const manager of managers.values()) {
@@ -60,33 +60,33 @@ export function createSubAgentRuntime(options: RunManagerOptions & { workspaceDi
 		}
 	}
 
-	function get(dot: string): SubAgentRunManager {
-		let manager = managers.get(dot);
+	function get(desk: string): SubAgentRunManager {
+		let manager = managers.get(desk);
 		if (!manager) {
 			manager = new SubAgentRunManager(
-				{ dot, dotDir: getDotDir(workspaceDir, dot) },
+				{ desk, deskDir: getDeskDir(workspaceDir, desk) },
 				{ ...config, runningCount: totalRunningSubAgentRuns },
 			);
-			managers.set(dot, manager);
+			managers.set(desk, manager);
 			if (stopped) manager.stop();
 		}
 		return manager;
 	}
 
 	/**
-	 * Re-adopt every dot's persisted runs at startup, settling any internal run still marked
-	 * `running` as `lost` (D10.3). Dots are the record directories themselves — a dot name *is* the
+	 * Re-adopt every desk's persisted runs at startup, settling any internal run still marked
+	 * `running` as `lost` (D10.3). Desks are the record directories themselves — a desk name *is* the
 	 * directory name — and restore does not depend on bindings (spec 058, D6): a run still going
-	 * when its dot went dormant still has an owner to adopt and settle it.
+	 * when its desk went dormant still has an owner to adopt and settle it.
 	 */
 	async function restore(): Promise<number> {
 		const stateDir = config.stateDir;
 		if (!stateDir) return 0;
-		let dots: string[];
+		let desks: string[];
 		try {
 			await mkdir(stateDir, { recursive: true });
-			dots = (await readdir(stateDir, { withFileTypes: true }))
-				.filter((entry) => entry.isDirectory() && isDotName(entry.name))
+			desks = (await readdir(stateDir, { withFileTypes: true }))
+				.filter((entry) => entry.isDirectory() && isDeskName(entry.name))
 				.map((entry) => entry.name);
 		} catch (error) {
 			log.logWarn("subagent.scan.failed", "Persisted run scan failed", { reason: errorMessage(error) });
@@ -94,8 +94,8 @@ export function createSubAgentRuntime(options: RunManagerOptions & { workspaceDi
 		}
 
 		let restored = 0;
-		for (const dot of dots) {
-			restored += await get(dot).restore();
+		for (const desk of desks) {
+			restored += await get(desk).restore();
 		}
 		// Reclaim stale runs once as a host-wide startup batch; subsequent batches run daily.
 		await collectGarbageAllChannels();

@@ -120,7 +120,7 @@ export interface LaunchExternalRunInput {
 	runId: string;
 	channelId: string;
 	/** Where a task-bound run logs its dispatch and settlement (spec 052, D4). */
-	dotDir?: string;
+	deskDir?: string;
 	label: string;
 	agent: string;
 	source: "predefined" | "inline";
@@ -237,7 +237,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	const spawnedArgv = [invocation.executable, ...invocation.args];
 
 	// Spec 042 D11: admission (inside register(), including the concurrency-limit checks) happens
-	// *before* the audit write, not after — previously a run rejected for being over the per-dot
+	// *before* the audit write, not after — previously a run rejected for being over the per-desk
 	// or host-wide cap still left behind an `external-agent` audit record claiming a process that
 	// never existed. `external-agent` records what was *executed* (D8.1), so the record must not
 	// precede the point where this run is actually admitted to run.
@@ -257,7 +257,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		item: input.item,
 		workingDirectory: input.workingDirectory,
 		artifactDir: input.artifactDir,
-		dotDir: input.dotDir,
+		deskDir: input.deskDir,
 		leaseKey: input.leaseKey,
 		mutates: input.mutates,
 		workspaceBaseline: input.workspaceBaseline,
@@ -385,7 +385,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			// with an inaccurate timeout message and an unestimatable duration.
 			maxWallTimeSec: input.maxWallTimeSec,
 			processStartedAt,
-			dotDir: input.dotDir,
+			deskDir: input.deskDir,
 			invocationWarnings: mergeInvocationWarnings(invocation.warnings, envFilterResult.dropped),
 			// Spec 042 D12: distinguishes "the target CLI's schema drifted" from "the agent failed".
 			parserVersion: harness.parserVersion,

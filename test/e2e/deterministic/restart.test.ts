@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getDotMemoryQueue } from "../../../src/memory/dot-memory-queue.js";
+import { getDeskMemoryQueue } from "../../../src/memory/desk-memory-queue.js";
 import {
 	createDeterministicHarness,
 	type DeterministicHarness,
@@ -15,13 +15,13 @@ describe("E2E deterministic: restart & persistence", () => {
 		await harness.shutdown();
 	});
 
-	it("A12: a daemon restart resumes the same session file and keeps dot memory", async () => {
+	it("A12: a daemon restart resumes the same session file and keeps desk memory", async () => {
 		// Mutation check: point resolveActiveSessionFile at a fresh name instead of the
 		// existing context.jsonl and the post-restart turn branches from root — its
 		// entry's parentId no longer chains onto the pre-restart assistant message.
 		harness = await createDeterministicHarness({
-			seed: ({ dotDir, conversationDir }) => {
-				seedLegacySession("branch", join(conversationDir, "context.jsonl"), dotDir);
+			seed: ({ deskDir, conversationDir }) => {
+				seedLegacySession("branch", join(conversationDir, "context.jsonl"), deskDir);
 			},
 		});
 		harness.model.script.route({ name: "t", when: (r) => r.isMainTurn, respond: [reply.text("好的")], repeat: true });
@@ -58,8 +58,8 @@ describe("E2E deterministic: restart & persistence", () => {
 		await harness.shutdown();
 		for (const name of ["fork", "interrupted", "azure"]) {
 			harness = await createDeterministicHarness({
-				seed: ({ dotDir, conversationDir, homeDir }) => {
-					seedLegacySession(name, join(conversationDir, "context.jsonl"), dotDir);
+				seed: ({ deskDir, conversationDir, homeDir }) => {
+					seedLegacySession(name, join(conversationDir, "context.jsonl"), deskDir);
 					if (name === "azure") {
 						const modelsPath = join(homeDir, "models.json");
 						const models = JSON.parse(readFileSync(modelsPath, "utf8"));
@@ -160,10 +160,10 @@ describe("E2E deterministic: restart & persistence", () => {
 			gate.release();
 		}
 		// Drain the actual channel maintenance queue: provider arrival alone precedes persistence.
-		await getDotMemoryQueue().run(harness, async () => {});
+		await getDeskMemoryQueue().run(harness, async () => {});
 
-		expect(readFileSync(join(harness.dotDir, "MEMORY.md"), "utf-8")).not.toContain(secret);
-		const memoryDir = join(harness.dotDir, "memory");
+		expect(readFileSync(join(harness.deskDir, "MEMORY.md"), "utf-8")).not.toContain(secret);
+		const memoryDir = join(harness.deskDir, "memory");
 		if (existsSync(memoryDir)) {
 			for (const file of readdirSync(memoryDir)) {
 				expect(

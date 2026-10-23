@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -21,7 +21,7 @@ export interface MemoryMaintenanceState {
  * Which conversation a maintenance state belongs to (spec 058, D12): reflect works one
  * conversation at a time, so its dirty flag, idle clock and checkpoint are per conversation.
  */
-export type MaintenanceStateRef = Pick<DotConversation, "dot" | "conversation" | "channelId">;
+export type MaintenanceStateRef = Pick<DeskConversation, "desk" | "conversation" | "channelId">;
 
 export type MemoryActivityKind = "user-turn-started" | "tool-call" | "assistant-turn-completed" | "boundary";
 
@@ -49,13 +49,13 @@ export function getMemoryMaintenanceStateDir(appHomeDir: string): string {
 	return join(appHomeDir, "state", "memory");
 }
 
-/** `state/memory/<dot>/<conversation>.json`: both segments are validated names, never a channel id. */
+/** `state/memory/<desk>/<conversation>.json`: both segments are validated names, never a channel id. */
 export function getMemoryMaintenanceStatePath(appHomeDir: string, ref: MaintenanceStateRef): string {
-	return join(getMemoryMaintenanceStateDir(appHomeDir), ref.dot, `${ref.conversation}.json`);
+	return join(getMemoryMaintenanceStateDir(appHomeDir), ref.desk, `${ref.conversation}.json`);
 }
 
 function refKey(ref: MaintenanceStateRef): string {
-	return `${ref.dot}/${ref.conversation}`;
+	return `${ref.desk}/${ref.conversation}`;
 }
 
 function createDefaultState(channelId: string): MemoryMaintenanceState {
@@ -106,7 +106,7 @@ export async function readMemoryMaintenanceState(
 		log.logWarn("memory.state.read_failed", "Memory maintenance state unreadable; rebuilding defaults", {
 			channelId: channelId,
 			reason: message,
-			fields: { dot: ref.dot, conversation: ref.conversation },
+			fields: { desk: ref.desk, conversation: ref.conversation },
 		});
 		return createDefaultState(channelId);
 	}

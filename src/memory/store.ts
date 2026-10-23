@@ -61,20 +61,20 @@ export interface MemoryTombstoneRecord {
 	revoked?: boolean;
 }
 
-export function getMemoryDir(dotDir: string): string {
-	return join(dotDir, "memory");
+export function getMemoryDir(deskDir: string): string {
+	return join(deskDir, "memory");
 }
 
-export function getMemoryIndexPath(dotDir: string): string {
-	return join(dotDir, "MEMORY.md");
+export function getMemoryIndexPath(deskDir: string): string {
+	return join(deskDir, "MEMORY.md");
 }
 
-export function getMemoryEntryPath(dotDir: string, name: string): string {
-	return join(getMemoryDir(dotDir), `${name}.md`);
+export function getMemoryEntryPath(deskDir: string, name: string): string {
+	return join(getMemoryDir(deskDir), `${name}.md`);
 }
 
-function getTombstonesPath(dotDir: string): string {
-	return join(getMemoryDir(dotDir), ".tombstones.jsonl");
+function getTombstonesPath(deskDir: string): string {
+	return join(getMemoryDir(deskDir), ".tombstones.jsonl");
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -232,8 +232,8 @@ export function clearMemoryStoreCache(): void {
 	fileCache.clear();
 }
 
-export async function listMemoryEntries(dotDir: string): Promise<MemoryEntry[]> {
-	const dir = getMemoryDir(dotDir);
+export async function listMemoryEntries(deskDir: string): Promise<MemoryEntry[]> {
+	const dir = getMemoryDir(deskDir);
 	let names: string[];
 	try {
 		names = await readdir(dir);
@@ -273,8 +273,8 @@ export async function listMemoryEntries(dotDir: string): Promise<MemoryEntry[]> 
 	return entries;
 }
 
-export async function readMemoryEntry(dotDir: string, name: string): Promise<MemoryEntry | undefined> {
-	const path = getMemoryEntryPath(dotDir, name);
+export async function readMemoryEntry(deskDir: string, name: string): Promise<MemoryEntry | undefined> {
+	const path = getMemoryEntryPath(deskDir, name);
 	const raw = await readOptionalTextFile(path);
 	if (!raw) {
 		return undefined;
@@ -293,7 +293,7 @@ export async function readMemoryEntry(dotDir: string, name: string): Promise<Mem
 // -------------------------------------------------------------------------------------------------
 
 export function renderMemoryIndex(entries: MemoryEntry[]): string {
-	const lines = ["# Dot Memory", ""];
+	const lines = ["# Desk Memory", ""];
 	for (const type of MEMORY_TYPE_ORDER) {
 		const group = entries.filter((entry) => entry.type === type).sort((a, b) => a.name.localeCompare(b.name));
 		if (group.length === 0) {
@@ -306,7 +306,7 @@ export function renderMemoryIndex(entries: MemoryEntry[]): string {
 		lines.push("");
 	}
 	if (lines.length === 2) {
-		lines.push("_No stored memory in this dot yet._", "");
+		lines.push("_No stored memory in this desk yet._", "");
 	}
 	return `${lines.join("\n").trimEnd()}\n`;
 }
@@ -316,9 +316,9 @@ export function renderIndexLine(entry: MemoryEntry): string {
 	return `- ${entry.name} — ${entry.description}${marker}`;
 }
 
-export async function rebuildMemoryIndex(dotDir: string): Promise<MemoryEntry[]> {
-	const entries = await listMemoryEntries(dotDir);
-	await writeFileAtomically(getMemoryIndexPath(dotDir), renderMemoryIndex(entries));
+export async function rebuildMemoryIndex(deskDir: string): Promise<MemoryEntry[]> {
+	const entries = await listMemoryEntries(deskDir);
+	await writeFileAtomically(getMemoryIndexPath(deskDir), renderMemoryIndex(entries));
 	return entries;
 }
 
@@ -326,8 +326,8 @@ export async function rebuildMemoryIndex(dotDir: string): Promise<MemoryEntry[]>
 // Tombstones
 // -------------------------------------------------------------------------------------------------
 
-export async function readMemoryTombstoneRecords(dotDir: string): Promise<MemoryTombstoneRecord[]> {
-	const raw = await readOptionalTextFile(getTombstonesPath(dotDir));
+export async function readMemoryTombstoneRecords(deskDir: string): Promise<MemoryTombstoneRecord[]> {
+	const raw = await readOptionalTextFile(getTombstonesPath(deskDir));
 	if (!raw) {
 		return [];
 	}
@@ -348,16 +348,16 @@ export async function readMemoryTombstoneRecords(dotDir: string): Promise<Memory
 	return records;
 }
 
-export async function appendMemoryTombstoneRecord(dotDir: string, record: MemoryTombstoneRecord): Promise<void> {
-	const path = getTombstonesPath(dotDir);
-	await mkdir(getMemoryDir(dotDir), { recursive: true });
+export async function appendMemoryTombstoneRecord(deskDir: string, record: MemoryTombstoneRecord): Promise<void> {
+	const path = getTombstonesPath(deskDir);
+	await mkdir(getMemoryDir(deskDir), { recursive: true });
 	await appendFile(path, `${JSON.stringify(record)}\n`, "utf-8");
 }
 
-export async function isDescriptionTombstoned(dotDir: string, description: string): Promise<boolean> {
+export async function isDescriptionTombstoned(deskDir: string, description: string): Promise<boolean> {
 	const hash = hashMemoryContent(description);
 	let tombstoned = false;
-	for (const record of await readMemoryTombstoneRecords(dotDir)) {
+	for (const record of await readMemoryTombstoneRecords(deskDir)) {
 		if (record.contentHash === hash) {
 			tombstoned = record.revoked !== true;
 		}
@@ -367,11 +367,11 @@ export async function isDescriptionTombstoned(dotDir: string, description: strin
 
 /** Cancel the tombstone for `description` (append-only): a user re-authorized the fact. */
 export async function revokeMemoryTombstone(
-	dotDir: string,
+	deskDir: string,
 	description: string,
 	today: string = localDayKey(),
 ): Promise<void> {
-	await appendMemoryTombstoneRecord(dotDir, {
+	await appendMemoryTombstoneRecord(deskDir, {
 		contentHash: hashMemoryContent(description),
 		deletedAt: today,
 		reason: "re-authorized by explicit user save",
@@ -422,7 +422,7 @@ export interface ApplyMemoryOpsResult {
 }
 
 export async function applyMemoryOps(
-	dotDir: string,
+	deskDir: string,
 	ops: MemoryStoreOp[],
 	options: { today?: string } = {},
 ): Promise<ApplyMemoryOpsResult> {
@@ -441,8 +441,8 @@ export async function applyMemoryOps(
 		return result;
 	}
 
-	await mkdir(getMemoryDir(dotDir), { recursive: true });
-	const existing = await listMemoryEntries(dotDir);
+	await mkdir(getMemoryDir(deskDir), { recursive: true });
+	const existing = await listMemoryEntries(deskDir);
 	const byName = new Map(existing.map((entry) => [entry.name, entry]));
 	const liveNames = new Set(byName.keys());
 
@@ -456,7 +456,7 @@ export async function applyMemoryOps(
 				}
 				if (entry.expires) {
 					const next: MemoryEntry = { ...entry, expires: undefined, updated: today };
-					await writeEntryFile(dotDir, next);
+					await writeEntryFile(deskDir, next);
 					byName.set(name, next);
 				}
 				result.touched.push(name);
@@ -478,13 +478,13 @@ export async function applyMemoryOps(
 			// Recording the tombstone before the delete means the worst case after a failure here is
 			// the reverse — file still present, already tombstoned — which is recoverable: the file
 			// is still there to retry deleting, and it is already protected from re-learning either way.
-			await appendMemoryTombstoneRecord(dotDir, {
+			await appendMemoryTombstoneRecord(deskDir, {
 				name: op.name,
 				contentHash: hashMemoryContent(entry.description),
 				deletedAt: today,
 				reason: op.reason?.trim() || "deleted",
 			});
-			await rm(getMemoryEntryPath(dotDir, op.name), { force: true });
+			await rm(getMemoryEntryPath(deskDir, op.name), { force: true });
 			byName.delete(op.name);
 			liveNames.delete(op.name);
 			result.deleted.push(op.name);
@@ -511,7 +511,7 @@ export async function applyMemoryOps(
 				expires: op.expires === undefined ? entry.expires : op.expires === null ? undefined : op.expires,
 				malformed: false,
 			};
-			await writeEntryFile(dotDir, next);
+			await writeEntryFile(deskDir, next);
 			byName.set(op.name, next);
 			result.updated.push(op.name);
 			continue;
@@ -530,7 +530,7 @@ export async function applyMemoryOps(
 		// the user deleted. It must not also block the user's own explicit `memory_save` (source
 		// "user") — that path is the user re-authorizing the fact, and a successful save here
 		// revokes the tombstone so the background pass stops fighting it too.
-		const tombstoned = await isDescriptionTombstoned(dotDir, description);
+		const tombstoned = await isDescriptionTombstoned(deskDir, description);
 		if (tombstoned && op.source !== "user") {
 			result.skippedTombstone++;
 			continue;
@@ -551,22 +551,22 @@ export async function applyMemoryOps(
 			body: op.details?.trim() ?? "",
 			malformed: false,
 		};
-		await writeEntryFile(dotDir, entry);
+		await writeEntryFile(deskDir, entry);
 		if (tombstoned && op.source === "user") {
-			await revokeMemoryTombstone(dotDir, description, today);
+			await revokeMemoryTombstone(deskDir, description, today);
 		}
 		byName.set(name, entry);
 		liveNames.add(name);
 		result.added.push(name);
 	}
 
-	await rebuildMemoryIndex(dotDir);
+	await rebuildMemoryIndex(deskDir);
 	return result;
 }
 
-async function writeEntryFile(dotDir: string, entry: MemoryEntry): Promise<void> {
-	await mkdir(getMemoryDir(dotDir), { recursive: true });
-	await writeFileAtomically(getMemoryEntryPath(dotDir, entry.name), serializeMemoryEntry(entry));
+async function writeEntryFile(deskDir: string, entry: MemoryEntry): Promise<void> {
+	await mkdir(getMemoryDir(deskDir), { recursive: true });
+	await writeFileAtomically(getMemoryEntryPath(deskDir, entry.name), serializeMemoryEntry(entry));
 }
 
 /**
@@ -575,15 +575,15 @@ async function writeEntryFile(dotDir: string, entry: MemoryEntry): Promise<void>
  * tokens on an entry about to disappear. No tombstone: probation lapsing means "not needed
  * right now", not "must never be learned again" (037, D8's rationale, carried over unchanged).
  */
-export async function expireProbationaryEntries(dotDir: string, today: string = localDayKey()): Promise<string[]> {
-	const entries = await listMemoryEntries(dotDir);
+export async function expireProbationaryEntries(deskDir: string, today: string = localDayKey()): Promise<string[]> {
+	const entries = await listMemoryEntries(deskDir);
 	const expired = entries.filter((entry) => entry.expires && entry.expires < today);
 	if (expired.length === 0) {
 		return [];
 	}
 	for (const entry of expired) {
-		await rm(getMemoryEntryPath(dotDir, entry.name), { force: true });
+		await rm(getMemoryEntryPath(deskDir, entry.name), { force: true });
 	}
-	await rebuildMemoryIndex(dotDir);
+	await rebuildMemoryIndex(deskDir);
 	return expired.map((entry) => entry.name);
 }

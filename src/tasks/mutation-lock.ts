@@ -14,33 +14,33 @@ const heldKeys = new AsyncLocalStorage<ReadonlySet<string>>();
  */
 const TASK_LOCK_TIMEOUT_MS = 30_000;
 
-function taskMutationKey(dotDir: string, id: string): string {
-	return join(dotDir, "tasks", `${normalizeTaskId(id)}.md`);
+function taskMutationKey(deskDir: string, id: string): string {
+	return join(deskDir, "tasks", `${normalizeTaskId(id)}.md`);
 }
 
-/** `<dotDir>/.locks/task-<id>.lock` — the layout `dot/paths.ts` defines; tasks stays a leaf and does not import it. */
-function taskLockPath(dotDir: string, id: string): string {
-	return join(dotDir, ".locks", `task-${normalizeTaskId(id)}.lock`);
+/** `<deskDir>/.locks/task-<id>.lock` — the layout `desk/paths.ts` defines; tasks stays a leaf and does not import it. */
+function taskLockPath(deskDir: string, id: string): string {
+	return join(deskDir, ".locks", `task-${normalizeTaskId(id)}.lock`);
 }
 
 /**
  * Serialize mutations of one task: inside this process with a serial queue, and across processes
- * with the task's file lock (spec 058, D6) — the daemon and a TUI can open the same dot, and both
+ * with the task's file lock (spec 058, D6) — the daemon and a TUI can open the same desk, and both
  * may write its tasks. Every writer of a task's contract, loop log or steer/notice files goes
  * through here.
  *
  * Re-entrant: a command/tool transaction may call a lower-level store helper for the same task,
  * and the inner call then runs inside the outer one's hold on both layers.
  */
-export function withTaskMutation<T>(dotDir: string, id: string, mutate: () => Promise<T>): Promise<T> {
-	const key = taskMutationKey(dotDir, id);
+export function withTaskMutation<T>(deskDir: string, id: string, mutate: () => Promise<T>): Promise<T> {
+	const key = taskMutationKey(deskDir, id);
 	const current = heldKeys.getStore();
 	if (current?.has(key)) return mutate();
 
 	return mutationQueue.run(key, () =>
 		heldKeys.run(new Set([...(current ?? []), key]), async () => {
 			try {
-				return await withFileLock(taskLockPath(dotDir, id), mutate, { timeoutMs: TASK_LOCK_TIMEOUT_MS });
+				return await withFileLock(taskLockPath(deskDir, id), mutate, { timeoutMs: TASK_LOCK_TIMEOUT_MS });
 			} catch (error) {
 				if (!(error instanceof FileLockTimeoutError)) throw error;
 				throw new RecoverableToolError(

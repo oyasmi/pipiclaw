@@ -5,12 +5,12 @@ import { recencyBoostByAge, tokenizeRecallText } from "./search.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
-export interface SearchDotSessionsRequest {
+export interface SearchDeskSessionsRequest {
 	channelId?: string;
-	/** Attributes the optional summarization's spend to the dot. */
-	dot?: string;
-	/** Every conversation in this dot is searched (spec 058, D12). */
-	dotDir: string;
+	/** Attributes the optional summarization's spend to the desk. */
+	desk?: string;
+	/** Every conversation in this desk is searched (spec 058, D12). */
+	deskDir: string;
 	/** A human name for a conversation directory (the channel's name), for labelling results. */
 	describeConversation?: (conversation: string) => string | undefined;
 	query: string;
@@ -28,7 +28,7 @@ export interface SearchDotSessionsRequest {
 export interface SessionSearchResult {
 	source: string;
 	path: string;
-	/** Which conversation of the dot the hit came from, and that channel's name when known. */
+	/** Which conversation of the desk the hit came from, and that channel's name when known. */
 	conversation?: string;
 	channel?: string;
 	when?: string;
@@ -55,7 +55,7 @@ interface ScoredDocument {
 	exactHit: boolean;
 }
 
-const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = `You summarize transcript search hits from one Pipiclaw dot's conversations.
+const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = `You summarize transcript search hits from one Pipiclaw desk's conversations.
 
 Return plain text only.
 
@@ -163,7 +163,7 @@ function windowAroundMatch(text: string, query: string, queryTokens: string[], m
 }
 
 async function summarizeHit(
-	request: SearchDotSessionsRequest,
+	request: SearchDeskSessionsRequest,
 	document: SessionSearchDocument,
 	query: string,
 	queryTokens: string[],
@@ -185,7 +185,7 @@ ${query}
 Transcript hit:
 ${fallback}`,
 			timeoutMs: request.timeoutMs,
-			usageContext: request.channelId ? { channelId: request.channelId, dot: request.dot } : undefined,
+			usageContext: request.channelId ? { channelId: request.channelId, desk: request.desk } : undefined,
 			parse: (text) => text.trim(),
 		});
 		return result.output || fallback;
@@ -195,7 +195,7 @@ ${fallback}`,
 }
 
 function toResult(
-	request: SearchDotSessionsRequest,
+	request: SearchDeskSessionsRequest,
 	document: SessionSearchDocument,
 	score: number,
 	matches: string[],
@@ -203,7 +203,7 @@ function toResult(
 ): SessionSearchResult {
 	return {
 		source: document.source,
-		path: relative(request.dotDir, document.path) || document.path,
+		path: relative(request.deskDir, document.path) || document.path,
 		...(document.conversation
 			? { conversation: document.conversation, channel: request.describeConversation?.(document.conversation) }
 			: {}),
@@ -216,7 +216,7 @@ function toResult(
 }
 
 interface CorpusCacheEntry {
-	dotDir: string;
+	deskDir: string;
 	maxFiles: number;
 	maxCharsPerChunk: number;
 	documents: SessionSearchDocument[];
@@ -227,16 +227,16 @@ const CORPUS_CACHE_TTL_MS = 30_000;
 const CORPUS_CACHE_MAX_CHANNELS = 8;
 const corpusCache = new Map<string, CorpusCacheEntry>();
 
-function corpusCacheKey(dotDir: string, maxFiles: number, maxCharsPerChunk: number): string {
-	return JSON.stringify([dotDir, maxFiles, maxCharsPerChunk]);
+function corpusCacheKey(deskDir: string, maxFiles: number, maxCharsPerChunk: number): string {
+	return JSON.stringify([deskDir, maxFiles, maxCharsPerChunk]);
 }
 
 async function getCachedCorpus(
-	dotDir: string,
+	deskDir: string,
 	maxFiles: number,
 	maxCharsPerChunk: number,
 ): Promise<SessionSearchDocument[]> {
-	const key = corpusCacheKey(dotDir, maxFiles, maxCharsPerChunk);
+	const key = corpusCacheKey(deskDir, maxFiles, maxCharsPerChunk);
 	const cached = corpusCache.get(key);
 	if (cached && Date.now() - cached.timestamp < CORPUS_CACHE_TTL_MS) {
 		corpusCache.delete(key);
@@ -245,12 +245,12 @@ async function getCachedCorpus(
 	}
 
 	const documents = await buildSessionCorpus({
-		dotDir,
+		deskDir,
 		maxFiles,
 		maxCharsPerDocument: maxCharsPerChunk,
 	});
 	corpusCache.delete(key);
-	corpusCache.set(key, { dotDir, maxFiles, maxCharsPerChunk, documents, timestamp: Date.now() });
+	corpusCache.set(key, { deskDir, maxFiles, maxCharsPerChunk, documents, timestamp: Date.now() });
 	if (corpusCache.size > CORPUS_CACHE_MAX_CHANNELS) {
 		const oldestKey = corpusCache.keys().next().value;
 		if (oldestKey) corpusCache.delete(oldestKey);
@@ -258,12 +258,12 @@ async function getCachedCorpus(
 	return documents;
 }
 
-export async function searchDotSessions(request: SearchDotSessionsRequest): Promise<SessionSearchResponse> {
+export async function searchDeskSessions(request: SearchDeskSessionsRequest): Promise<SessionSearchResponse> {
 	const limit = clampInteger(request.limit, 1, 5);
 	const maxChunks = clampInteger(request.maxChunks, 1, 500);
 	const query = request.query.trim();
 	const roleFilter = normalizeRoleFilter(request.roleFilter);
-	const documents = (await getCachedCorpus(request.dotDir, request.maxFiles, request.maxCharsPerChunk))
+	const documents = (await getCachedCorpus(request.deskDir, request.maxFiles, request.maxCharsPerChunk))
 		.filter((document) => roleFilter.size === 0 || roleFilter.has(document.role))
 		.sort(sortRecentDocuments)
 		.slice(0, maxChunks);

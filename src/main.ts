@@ -2,6 +2,7 @@
 
 import { runAuth } from "./app/auth-command.js";
 import { formatCliCommandsHelp, isBootstrapExitError } from "./app/home.js";
+import { StartupRefusal } from "./desk/startup-error.js";
 import * as log from "./log.js";
 import { bootstrap } from "./runtime/bootstrap.js";
 import { errorMessage } from "./shared/text-utils.js";
@@ -38,7 +39,7 @@ function handleError(error: unknown): never {
 	if (isBootstrapExitError(error)) {
 		process.exit(error.code);
 	}
-	console.error(error);
+	console.error(error instanceof StartupRefusal ? error.message : error);
 	process.exit(1);
 }
 

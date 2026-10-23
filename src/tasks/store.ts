@@ -32,26 +32,26 @@ export interface StoredTaskDocument {
  */
 export const MAX_CONTRACT_BYTES = 4 * 1024;
 
-export function tasksDir(dotDir: string): string {
-	return join(dotDir, "tasks");
+export function tasksDir(deskDir: string): string {
+	return join(deskDir, "tasks");
 }
 
-export function taskPath(dotDir: string, id: string): string {
-	return join(tasksDir(dotDir), `${normalizeTaskId(id)}.md`);
+export function taskPath(deskDir: string, id: string): string {
+	return join(tasksDir(deskDir), `${normalizeTaskId(id)}.md`);
 }
 
-export function archivedTaskPath(dotDir: string, id: string): string {
-	return join(tasksDir(dotDir), "archive", `${normalizeTaskId(id)}.md`);
+export function archivedTaskPath(deskDir: string, id: string): string {
+	return join(tasksDir(deskDir), "archive", `${normalizeTaskId(id)}.md`);
 }
 
 export async function readStoredTask(
-	dotDir: string,
+	deskDir: string,
 	idInput: string,
 	includeArchive = false,
 ): Promise<StoredTaskDocument | undefined> {
 	const id = normalizeTaskId(idInput);
-	const activePath = taskPath(dotDir, id);
-	const archivePath = archivedTaskPath(dotDir, id);
+	const activePath = taskPath(deskDir, id);
+	const archivePath = archivedTaskPath(deskDir, id);
 	const path = existsSync(activePath)
 		? activePath
 		: includeArchive && existsSync(archivePath)
@@ -76,13 +76,13 @@ export async function writeStoredTask(document: StoredTaskDocument): Promise<voi
 }
 
 export async function updateStoredTask(
-	dotDir: string,
+	deskDir: string,
 	id: string,
 	update: (document: StoredTaskDocument) => void,
 	includeArchive = false,
 ): Promise<StoredTaskDocument | undefined> {
-	return withTaskMutation(dotDir, id, async () => {
-		const document = await readStoredTask(dotDir, id, includeArchive);
+	return withTaskMutation(deskDir, id, async () => {
+		const document = await readStoredTask(deskDir, id, includeArchive);
 		if (!document) return undefined;
 		update(document);
 		await writeStoredTask(document);
@@ -94,8 +94,8 @@ export async function updateStoredTask(
  * Park a task on a ticket. The ticket must already have been through `resolveTicket` — this
  * function persists a decision, it does not make one.
  */
-export async function parkTask(dotDir: string, id: string, ticket: Ticket): Promise<StoredTaskDocument | undefined> {
-	return updateStoredTask(dotDir, id, (task) => {
+export async function parkTask(deskDir: string, id: string, ticket: Ticket): Promise<StoredTaskDocument | undefined> {
+	return updateStoredTask(deskDir, id, (task) => {
 		task.fields.state = "parked";
 		task.fields.ticket = ticket;
 	});
@@ -111,12 +111,12 @@ export async function parkTask(dotDir: string, id: string, ticket: Ticket): Prom
  * duplicate delivery, and this guards duplicate application.
  */
 export async function redeemTicket(
-	dotDir: string,
+	deskDir: string,
 	id: string,
 	matches: (ticket: Ticket) => boolean,
 ): Promise<{ document: StoredTaskDocument; ticket: Ticket } | undefined> {
 	let redeemed: Ticket | undefined;
-	const document = await updateStoredTask(dotDir, id, (task) => {
+	const document = await updateStoredTask(deskDir, id, (task) => {
 		if (task.fields.state !== "parked" || !task.fields.ticket || task.fields.paused) return;
 		if (!matches(task.fields.ticket)) return;
 		redeemed = task.fields.ticket;
@@ -130,11 +130,11 @@ export async function redeemTicket(
 
 /** Disable a task without losing its stage. `paused` present *is* the disabled state (D1). */
 export async function pauseTask(
-	dotDir: string,
+	deskDir: string,
 	id: string,
 	paused: Omit<TaskPaused, "at"> & { at?: string },
 ): Promise<StoredTaskDocument | undefined> {
-	return updateStoredTask(dotDir, id, (task) => {
+	return updateStoredTask(deskDir, id, (task) => {
 		task.fields.paused = { ...paused, at: paused.at ?? formatLocalTime() };
 	});
 }
@@ -144,8 +144,8 @@ export async function pauseTask(
  * (the double-expiry stop) is reopened and its expiry count cleared: the user has looked at it,
  * and resuming onto the same dead ticket would just expire — and pause — it a third time.
  */
-export async function resumeTask(dotDir: string, id: string): Promise<StoredTaskDocument | undefined> {
-	return updateStoredTask(dotDir, id, (task) => {
+export async function resumeTask(deskDir: string, id: string): Promise<StoredTaskDocument | undefined> {
+	return updateStoredTask(deskDir, id, (task) => {
 		task.fields.paused = undefined;
 		if (task.fields.state === "parked" && task.fields.ticket && ticketExpired(task.fields.ticket)) {
 			task.fields.state = "open";
@@ -165,13 +165,13 @@ export async function resumeTask(dotDir: string, id: string): Promise<StoredTask
 export type TicketExpiryOutcome = "reopened" | "paused";
 
 export async function expireTicket(
-	dotDir: string,
+	deskDir: string,
 	id: string,
 	limit = 2,
 ): Promise<{ document: StoredTaskDocument; outcome: TicketExpiryOutcome; ticket: string } | undefined> {
 	let outcome: TicketExpiryOutcome | undefined;
 	let summary = "";
-	const document = await updateStoredTask(dotDir, id, (task) => {
+	const document = await updateStoredTask(deskDir, id, (task) => {
 		const ticket = task.fields.ticket;
 		if (task.fields.state !== "parked" || !ticket || task.fields.paused) return;
 		summary = describeTicket(ticket);
@@ -192,7 +192,7 @@ export async function expireTicket(
 		task.fields.ticket = undefined;
 	});
 	if (!document || !outcome) return undefined;
-	await appendTaskLog(dotDir, id, {
+	await appendTaskLog(deskDir, id, {
 		kind: "expired",
 		ticket: summary,
 		action: outcome,
@@ -228,17 +228,17 @@ export class ArchiveUndoError extends Error {
  * log shard are in the archive, and "rejected" to mean the pre-call state still stands (or, if the
  * undo itself failed, the error says so).
  */
-export function archiveTask(dotDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
-	return withTaskMutation(dotDir, id, () => moveToArchive(dotDir, id, outcome));
+export function archiveTask(deskDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
+	return withTaskMutation(deskDir, id, () => moveToArchive(deskDir, id, outcome));
 }
 
-async function moveToArchive(dotDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
+async function moveToArchive(deskDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
 	const normalized = normalizeTaskId(id);
-	const archiveDir = join(tasksDir(dotDir), "archive");
+	const archiveDir = join(tasksDir(deskDir), "archive");
 	await mkdir(archiveDir, { recursive: true });
-	const document = await readStoredTask(dotDir, normalized);
+	const document = await readStoredTask(deskDir, normalized);
 	if (!document) return;
-	const archiveMd = archivedTaskPath(dotDir, normalized);
+	const archiveMd = archivedTaskPath(deskDir, normalized);
 	const archiveLog = join(archiveDir, `${normalized}.jsonl`);
 	for (const target of [archiveMd, ...LOG_SUFFIXES.map((suffix) => `${archiveLog}${suffix}`)]) {
 		if (existsSync(target)) throw new Error(`archive entry already exists, refusing to overwrite: ${target}`);
@@ -250,7 +250,7 @@ async function moveToArchive(dotDir: string, id: string, outcome: TaskArchiveOut
 	// whatever has already rotated into `.1`/`.2` (R9). Moving only the current file stranded
 	// those shards in the now-empty active `tasks/` dir, permanently split from the record they
 	// belong to and outside anywhere `readTaskLog` looks for an archived task.
-	const logFrom = taskLogPath(dotDir, normalized);
+	const logFrom = taskLogPath(deskDir, normalized);
 	const movedLogs: Array<[string, string]> = [];
 	let wroteArchive = false;
 	try {
@@ -263,7 +263,7 @@ async function moveToArchive(dotDir: string, id: string, outcome: TaskArchiveOut
 		}
 		await writeStoredTask({ ...document, path: archiveMd });
 		wroteArchive = true;
-		await rm(taskPath(dotDir, normalized), { force: true });
+		await rm(taskPath(deskDir, normalized), { force: true });
 	} catch (error) {
 		const undoFailures: string[] = [];
 		if (wroteArchive || existsSync(archiveMd)) {

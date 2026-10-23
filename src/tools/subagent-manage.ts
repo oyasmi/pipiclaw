@@ -45,8 +45,8 @@ export interface SubAgentManageToolOptions {
 	 * only tightens what was already true rather than changing production behavior.
 	 */
 	workspaceDir: string;
-	dot: string;
-	dotDir: string;
+	desk: string;
+	deskDir: string;
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	securityConfig?: SecurityConfig;
@@ -64,7 +64,7 @@ const LIST_CAP = 50;
  *  failure without dumping an unbounded log into the model's context. */
 const STDERR_TAIL_CHARS = 2_000;
 
-/** `here` is the calling channel: a run another channel of this dot started is labelled with its origin. */
+/** `here` is the calling channel: a run another channel of this desk started is labelled with its origin. */
 function formatRunLine(record: RunRecord, here: string): string {
 	const task = record.taskId ? `, task ${record.taskId}` : "";
 	const origin = record.channelId !== here ? `, started in ${record.channelId}` : "";
@@ -138,7 +138,7 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 		name: "subagent_list",
 		label: "subagent_list",
 		description:
-			"Snapshot of this dot's delegation runs, shared by every channel bound to it. A run's completion wakes the " +
+			"Snapshot of this desk's delegation runs, shared by every channel bound to it. A run's completion wakes the " +
 			'channel that started it (a run from another channel is marked "started in <channel>"); inspect when a ' +
 			"decision needs current status, not in a polling loop.",
 		parameters: subagentListSchema,
@@ -185,11 +185,11 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			const resolution = manager.resolveRef(runId);
 			if (resolution.kind === "ambiguous") {
 				throw new RecoverableToolError(
-					`"${runId}" matches multiple runs in this dot: ${resolution.candidates.map((candidate) => candidate.runId).join(", ")}. Use the full runId.`,
+					`"${runId}" matches multiple runs in this desk: ${resolution.candidates.map((candidate) => candidate.runId).join(", ")}. Use the full runId.`,
 				);
 			}
 			if (resolution.kind === "not_found") {
-				throw new RecoverableToolError(`Run "${runId}" was not found in this dot.`);
+				throw new RecoverableToolError(`Run "${runId}" was not found in this desk.`);
 			}
 			const resolvedRunId = resolution.record.runId;
 
@@ -319,8 +319,8 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 					task,
 					{
 						workspaceDir: options.workspaceDir,
-						dot: options.dot,
-						dotDir: options.dotDir,
+						desk: options.desk,
+						deskDir: options.deskDir,
 						channelId: options.channelId,
 					},
 					runContext,
@@ -331,7 +331,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 					runManager: manager,
 					runId: newRunId,
 					channelId: options.channelId,
-					dotDir: options.dotDir,
+					deskDir: options.deskDir,
 					label: `follow-up: ${task.slice(0, 80)}`,
 					agent: role.name,
 					source: role.source,

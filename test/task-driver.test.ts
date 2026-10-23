@@ -26,13 +26,13 @@ function taskDoc(fields: TaskFrontmatter): string {
 
 describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	let workspaceDir: string;
-	let dotDir: string;
-	/** Channels bound to the dot; a task whose `channel` is not in here is suspended (spec 058, D8). */
+	let deskDir: string;
+	/** Channels bound to the desk; a task whose `channel` is not in here is suspended (spec 058, D8). */
 	let bound: Set<string>;
 
 	beforeEach(async () => {
 		workspaceDir = await mkdtemp(join(tmpdir(), "task-driver-v4-"));
-		dotDir = join(workspaceDir, "news");
+		deskDir = join(workspaceDir, "news");
 		bound = new Set(["dm_a"]);
 	});
 	afterEach(async () => {
@@ -41,9 +41,9 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		await rm(workspaceDir, { recursive: true, force: true });
 	});
 
-	/** A task of the `news` dot delivering to `channelId` (its frontmatter `channel:`). */
+	/** A task of the `news` desk delivering to `channelId` (its frontmatter `channel:`). */
 	async function writeTask(channelId: string, id: string, content: string): Promise<string> {
-		const dir = join(dotDir, "tasks");
+		const dir = join(deskDir, "tasks");
 		await mkdir(dir, { recursive: true });
 		const path = join(dir, `${id}.md`);
 		await writeFile(path, content.replace(/^---\n/, `---\nchannel: ${channelId}\n`));
@@ -55,8 +55,8 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		extra: Partial<ConstructorParameters<typeof TaskDriver>[0]> = {},
 	): TaskDriver {
 		return new TaskDriver({
-			getActiveDots: () => [{ dot: "news", dotDir }],
-			isBoundTo: (channelId, dot) => dot === "news" && bound.has(channelId),
+			getActiveDesks: () => [{ desk: "news", deskDir }],
+			isBoundTo: (channelId, desk) => desk === "news" && bound.has(channelId),
 			isChannelActive: () => false,
 			dispatch,
 			settings: SETTINGS,
@@ -82,7 +82,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 
 	it("delivers a step to the task's own channel, a base64 group id included, one step per channel per pass", async () => {
 		// Spec 058, D13: the delivery channel is read from the task, never derived from a path —
-		// a group id with `/` and `=` must arrive intact, stamped with the task's dot. A dot's
+		// a group id with `/` and `=` must arrive intact, stamped with the task's desk. A desk's
 		// channels run independently: one channel's ready task must not wait behind another
 		// channel's step, while two tasks of one channel still take turns.
 		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
@@ -94,7 +94,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch.mock.calls.map(([event]) => event.channelId).sort()).toEqual(["dm_a", channelId].sort());
 		expect(dispatch.mock.calls.find(([event]) => event.channelId === channelId)?.[0]).toMatchObject({
-			dot: "news",
+			desk: "news",
 			type: "group",
 			conversationType: "2",
 		});
@@ -121,13 +121,13 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		bound.delete("dm_a");
 		await instance.runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
-		expect((await readStoredTask(dotDir, "timed"))?.fields.state).toBe("parked");
+		expect((await readStoredTask(deskDir, "timed"))?.fields.state).toBe("parked");
 
 		// Bound again: it resumes from exactly where it froze.
 		bound.add("dm_a");
 		await instance.runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledOnce();
-		expect((await readStoredTask(dotDir, "timed"))?.fields.state).toBe("open");
+		expect((await readStoredTask(deskDir, "timed"))?.fields.state).toBe("open");
 		expect(path).toContain("timed.md");
 	});
 
@@ -144,13 +144,13 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		const instance = driver(dispatch, { notify });
 
 		await instance.runOnce(NOW);
-		expect((await readStoredTask(dotDir, "stuck"))?.fields.state).toBe("open");
+		expect((await readStoredTask(deskDir, "stuck"))?.fields.state).toBe("open");
 		expect(notify).not.toHaveBeenCalled();
 
 		// Re-park on the same dead ticket, preserving the consecutive-expiry count.
-		await parkTask(dotDir, "stuck", { kind: "work", refs: ["run_never"], by: PAST });
+		await parkTask(deskDir, "stuck", { kind: "work", refs: ["run_never"], by: PAST });
 		await instance.runOnce(NOW);
-		const fields = (await readStoredTask(dotDir, "stuck"))?.fields;
+		const fields = (await readStoredTask(deskDir, "stuck"))?.fields;
 		expect(fields?.paused?.by).toBe("runtime");
 		expect(notify).toHaveBeenCalledOnce();
 		expect(notify.mock.calls[0]?.[0].text).toContain("/tasks resume stuck");
@@ -167,13 +167,13 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		await driver(dispatch, { notify }).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledOnce();
-		expect((await readStoredTask(dotDir, "spent"))?.fields.paused?.by).toBe("runtime");
+		expect((await readStoredTask(deskDir, "spent"))?.fields.paused?.by).toBe("runtime");
 	});
 
 	it("stops a loop whose last two steps called no tool at all", async () => {
 		await writeTask("dm_a", "idle", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
-			await appendTaskLog(dotDir, "idle", {
+			await appendTaskLog(deskDir, "idle", {
 				kind: "step",
 				seq,
 				outcome: "continue",
@@ -185,13 +185,13 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		const notify = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch, { notify }).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
-		expect((await readStoredTask(dotDir, "idle"))?.fields.paused?.reason).toContain("没有任何工具调用");
+		expect((await readStoredTask(deskDir, "idle"))?.fields.paused?.reason).toContain("没有任何工具调用");
 	});
 
 	it("keeps driving a loop whose steps actually used tools", async () => {
 		await writeTask("dm_a", "busy", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
-			await appendTaskLog(dotDir, "busy", {
+			await appendTaskLog(deskDir, "busy", {
 				kind: "step",
 				seq,
 				outcome: "continue",

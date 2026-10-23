@@ -21,8 +21,8 @@ describe("E2E deterministic: model fallback", () => {
 		// 017 fallback logic. Mutation check: make shouldFallback() return false for a 429
 		// message and the turn ends with an error delivery instead of the backup's answer.
 		harness = await createDeterministicHarness({
-			seed: ({ dotDir, conversationDir }) => {
-				seedLegacySession("chat", join(conversationDir, "context.jsonl"), dotDir);
+			seed: ({ deskDir, conversationDir }) => {
+				seedLegacySession("chat", join(conversationDir, "context.jsonl"), deskDir);
 			},
 		});
 		harness.model.script.route({

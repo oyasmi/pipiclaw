@@ -683,7 +683,7 @@ function parseExternalAgent(
 	if (memoryMode.error) return { warning: `${entryName}: ${memoryMode.error}` };
 	const memoryDisclosureWarning =
 		memoryMode.value !== "none"
-			? `${entryName}: memory: ${memoryMode.value} sends the dot memory index / journal content to this external process`
+			? `${entryName}: memory: ${memoryMode.value} sends the desk memory index / journal content to this external process`
 			: undefined;
 
 	const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC);

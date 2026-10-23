@@ -23,6 +23,7 @@ const makeTempDir = useTempDirs("pipiclaw-playbooks-");
 describe("runtime playbook catalog", () => {
 	it("offers a playbook only when a tool can reach the mechanism it documents", () => {
 		const catalog = loadRuntimePlaybookCatalog(TOOL_NAMES);
+		expect(selectRuntimePlaybooks(catalog, []).map((item) => item.filename)).toContain("runtime-orientation.md");
 
 		const withoutTasks = selectRuntimePlaybooks(
 			catalog,
@@ -53,6 +54,7 @@ describe("runtime playbook catalog", () => {
 		const directory = join(output, "playbooks");
 		mkdirSync(directory);
 		writeFileSync(join(directory, "retired-guide.md"), "old guide");
+		writeFileSync(join(directory, "runtime-orientation.md"), "old instructions");
 		writeFileSync(join(directory, "catalog.js"), "compiled code");
 		execFileSync(process.execPath, ["scripts/copy-md-assets.mjs", output]);
 		expect(
@@ -65,6 +67,9 @@ describe("runtime playbook catalog", () => {
 				.sort(),
 		);
 		expect(readFileSync(join(directory, "catalog.js"), "utf8")).toBe("compiled code");
+		for (const file of readdirSync(PLAYBOOKS_DIR).filter((file) => file.endsWith(".md"))) {
+			expect(readFileSync(join(directory, file), "utf8")).toBe(readFileSync(join(PLAYBOOKS_DIR, file), "utf8"));
+		}
 	});
 
 	it("validates the published event examples with the real parser and admission rules", () => {

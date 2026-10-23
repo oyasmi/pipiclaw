@@ -27,10 +27,10 @@ import { commitActiveSessionRef, resolveActiveSessionFile } from "../../channel/
 import type { MediaSender } from "../../channel/channel-context.js";
 import type { PipiclawSettingsManager } from "../../config/settings.js";
 import { loadToolsConfigWithDiagnostics } from "../../config/tools.js";
-import type { DotConversation } from "../../dot/types.js";
+import type { DeskConversation } from "../../desk/types.js";
 import type { Executor } from "../../executor.js";
 import type { FileStore } from "../../file-store.js";
-import type { DotJobManager } from "../../jobs/manager.js";
+import type { DeskJobManager } from "../../jobs/manager.js";
 import * as log from "../../log.js";
 import { handleMemoryCommand } from "../../memory/commands.js";
 import type { MemoryLifecycle } from "../../memory/lifecycle.js";
@@ -81,13 +81,13 @@ function plainTextOf(content: unknown): string {
 		.join("\n");
 }
 
-/** Task sessions live under `<dotDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
+/** Task sessions live under `<deskDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
 function isTaskSessionPath(sessionFile: string | undefined): boolean {
 	return sessionFile?.replace(/\\/g, "/").includes(`/${TASK_SESSIONS_DIRNAME}/`) === true;
 }
 
 export interface SessionHostDeps {
-	conversation: DotConversation;
+	conversation: DeskConversation;
 	workspaceDir: string;
 	appHomeDir: string;
 	authConfigPath: string;
@@ -103,7 +103,7 @@ export interface SessionHostDeps {
 	loadSecurityConfig: () => LoadedSecurityConfig;
 	executor: Executor;
 	fileStore: FileStore;
-	jobManager: DotJobManager;
+	jobManager: DeskJobManager;
 	runManager: SubAgentRunManager;
 	memoryLifecycle: MemoryLifecycle;
 	models: ModelSelection;
@@ -117,10 +117,10 @@ export interface SessionHostDeps {
 }
 
 export class SessionHost {
-	private readonly conversation: DotConversation;
+	private readonly conversation: DeskConversation;
 	private readonly channelId: string;
-	private readonly dotDir: string;
-	/** Sessions and the active-session pointer live here; tasks, memory and tools use `dotDir`. */
+	private readonly deskDir: string;
+	/** Sessions and the active-session pointer live here; tasks, memory and tools use `deskDir`. */
 	private readonly conversationDir: string;
 	private readonly workspaceDir: string;
 	private readonly describeConversation?: (conversation: string) => string | undefined;
@@ -134,7 +134,7 @@ export class SessionHost {
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
 	private readonly executor: Executor;
 	private readonly fileStore: FileStore;
-	private readonly jobManager: DotJobManager;
+	private readonly jobManager: DeskJobManager;
 	private readonly runManager: SubAgentRunManager;
 	private readonly memoryLifecycle: MemoryLifecycle;
 	private readonly models: ModelSelection;
@@ -185,7 +185,7 @@ export class SessionHost {
 	constructor(private readonly deps: SessionHostDeps) {
 		this.conversation = deps.conversation;
 		this.channelId = deps.conversation.channelId;
-		this.dotDir = deps.conversation.dotDir;
+		this.deskDir = deps.conversation.deskDir;
 		this.conversationDir = deps.conversation.conversationDir;
 		this.workspaceDir = deps.workspaceDir;
 		this.describeConversation = deps.describeConversation;
@@ -450,7 +450,7 @@ export class SessionHost {
 	/** Build the shared Pipiclaw prompt; channel facts stay in turn context and pi appends its tail. */
 	buildSystemPrompt(): PromptBuildResult {
 		const toolNames = this.currentTools.map((tool) => tool.name);
-		const resources = loadWorkspacePromptResources(this.workspaceDir, this.conversation.dotDir);
+		const resources = loadWorkspacePromptResources(this.workspaceDir);
 		this.lastWorkspaceResources = resources;
 		const build = buildPipiclawSystemPrompt({
 			tools: this.currentTools.map((tool) => ({
@@ -642,7 +642,7 @@ export class SessionHost {
 	async bindTaskSession(taskId: string): Promise<void> {
 		await this.sessionReady;
 		if (this.retired) return;
-		const path = taskSessionPath(this.dotDir, taskId);
+		const path = taskSessionPath(this.deskDir, taskId);
 		await mkdir(dirname(path), { recursive: true });
 		this.taskLoop = { taskId };
 		await this.sessionRuntime.switchSession(path);
@@ -693,8 +693,8 @@ export class SessionHost {
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
 			cwd: this.cwd,
-			dot: this.conversation.dot,
-			dotDir: this.dotDir,
+			desk: this.conversation.desk,
+			deskDir: this.deskDir,
 			channelId: this.channelId,
 			describeConversation: this.describeConversation,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,

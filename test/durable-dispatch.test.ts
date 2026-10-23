@@ -14,7 +14,7 @@ import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import * as atomicFile from "../src/shared/atomic-file.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readStoredTask } from "../src/tasks/store.js";
-import { configureSubAgentRuntime, getSubAgentRunManager, testDot } from "./helpers/background-runtime.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, testDesk } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const tempDir = useTempDirs("pipiclaw-dispatch-");
@@ -34,7 +34,7 @@ function event(): DingTalkEvent {
 		text: "[EVENT:once] do work",
 		conversationId: "",
 		conversationType: "1",
-		dot: "news",
+		desk: "news",
 	};
 }
 
@@ -83,7 +83,7 @@ describe("DurableDispatchService", () => {
 		}
 	});
 
-	it("persists a queue-rejected dispatch and later delivers it, but refuses an event with no dot", async () => {
+	it("persists a queue-rejected dispatch and later delivers it, but refuses an event with no desk", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const received: DingTalkEvent[] = [];
 		let accept = false;
@@ -107,10 +107,10 @@ describe("DurableDispatchService", () => {
 		expect(received).toHaveLength(1);
 		expect(received[0]?.dispatchId).toBeTruthy();
 
-		// Spec 058, D7: a producer that forgot its dot is refused before anything is persisted —
+		// Spec 058, D7: a producer that forgot its desk is refused before anything is persisted —
 		// admission could never check such a wake against the channel's binding.
 		const before = readdirSync(stateDir).length;
-		await expect(service.dispatch({ ...event(), dot: undefined, ts: "456" })).resolves.toBe(false);
+		await expect(service.dispatch({ ...event(), desk: undefined, ts: "456" })).resolves.toBe(false);
 		expect(readdirSync(stateDir)).toHaveLength(before);
 		expect(received).toHaveLength(1);
 	});
@@ -182,10 +182,10 @@ describe("DurableDispatchService", () => {
 		const stateDir = join(root, "state", "dispatch");
 		const workspaceDir = join(root, "workspace");
 		const channelId = "dm_redelivery_task";
-		const dotDir = join(workspaceDir, channelId);
-		await mkdir(join(dotDir, "tasks", "archive"), { recursive: true });
+		const deskDir = join(workspaceDir, channelId);
+		await mkdir(join(deskDir, "tasks", "archive"), { recursive: true });
 		await writeFile(
-			join(dotDir, "tasks", "T-redelivery.md"),
+			join(deskDir, "tasks", "T-redelivery.md"),
 			renderTaskDocument(
 				{
 					state: "parked",
@@ -232,7 +232,7 @@ describe("DurableDispatchService", () => {
 			},
 			{ announce: false },
 		);
-		const dispatchId = `subagent:${testDot(channelId)}:run-redelivery:done`;
+		const dispatchId = `subagent:${testDesk(channelId)}:run-redelivery:done`;
 		const wake: DingTalkEvent = {
 			...event(),
 			channelId,
@@ -255,10 +255,10 @@ describe("DurableDispatchService", () => {
 		await service.drainOnce(Date.now() + 11);
 		expect(delivered[1]?.text).toContain("[REDELIVERY:2]");
 
-		const claimed = await claimVerifiedWake(delivered[1]!, dotDir, manager);
+		const claimed = await claimVerifiedWake(delivered[1]!, deskDir, manager);
 		expect(claimed?.activated).toBe(true);
 		await claimed?.finish();
-		expect((await readStoredTask(dotDir, "T-redelivery"))?.fields.state).toBe("open");
+		expect((await readStoredTask(deskDir, "T-redelivery"))?.fields.state).toBe("open");
 
 		await service.drainOnce(Date.now() + 22);
 		expect(delivered[2]?.text).toContain("[REDELIVERY:3]");
@@ -266,7 +266,7 @@ describe("DurableDispatchService", () => {
 		// manager's dispatchId-scoped wake claim is what makes this idempotent, not any per-task
 		// attempt counter (that mechanism was retired).
 		await expect(claimVerifiedWake(delivered[2]!, workspaceDir, manager)).resolves.toBeUndefined();
-		expect((await readStoredTask(dotDir, "T-redelivery"))?.fields.state).toBe("open");
+		expect((await readStoredTask(deskDir, "T-redelivery"))?.fields.state).toBe("open");
 	});
 
 	it("renews a running turn's lease — persisting only past the half-life — so it never redelivers itself (spec 031, D2)", async () => {
@@ -579,7 +579,7 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 			conversationId: "",
 			conversationType: "1",
 			dispatchId: `subagent:${channelId}:${runId}:done`,
-			dot: "news",
+			desk: "news",
 		};
 	}
 

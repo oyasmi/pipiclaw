@@ -82,7 +82,7 @@ const eventManageSchema = Type.Object({
 		],
 		{
 			description:
-				'"list" this dot\'s events (those delivering to other channels are read-only), "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name.',
+				'"list" this desk\'s events (those delivering to other channels are read-only), "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name.',
 		},
 	),
 	name: Type.Optional(
@@ -129,8 +129,8 @@ export interface EventManageRequest {
 }
 
 export interface EventManageToolOptions {
-	/** Events belong to the dot: they live in `<dotDir>/events/` (spec 058, D14). */
-	dotDir: string;
+	/** Events belong to the desk: they live in `<deskDir>/events/` (spec 058, D14). */
+	deskDir: string;
 	/** The current channel: a created event delivers here; only its own events can be changed. */
 	channelId: string;
 	commandGuardConfig: SecurityConfig["commandGuard"];
@@ -144,11 +144,11 @@ function parseAction(action: string): EventManageAction {
 }
 
 /**
- * One line per event of this dot; unparseable files are listed and flagged so the model can still
- * clean them up, and an event delivering to another of the dot's channels says so.
+ * One line per event of this desk; unparseable files are listed and flagged so the model can still
+ * clean them up, and an event delivering to another of the desk's channels says so.
  */
-async function listDotEvents(options: EventManageToolOptions): Promise<EventManageListEntry[]> {
-	const dir = join(options.dotDir, "events");
+async function listDeskEvents(options: EventManageToolOptions): Promise<EventManageListEntry[]> {
+	const dir = join(options.deskDir, "events");
 	if (!existsSync(dir)) return [];
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".json")).sort();
 	const entries: EventManageListEntry[] = [];
@@ -262,7 +262,7 @@ async function readOwnedEvent(
 	const existing = await readEvent(eventPath, name);
 	if (existing.channelId !== options.channelId) {
 		throw new RecoverableToolError(
-			`Event "${name}" delivers to another channel of this dot and cannot be modified from here.`,
+			`Event "${name}" delivers to another channel of this desk and cannot be modified from here.`,
 		);
 	}
 	return existing;
@@ -279,9 +279,9 @@ export async function manageEvent(
 	request: EventManageRequest,
 ): Promise<EventManageResult> {
 	if (request.action === "list") {
-		const entries = await listDotEvents(options);
+		const entries = await listDeskEvents(options);
 		const notice =
-			entries.length === 0 ? "No scheduled events in this dot." : entries.map((entry) => entry.line).join("\n");
+			entries.length === 0 ? "No scheduled events in this desk." : entries.map((entry) => entry.line).join("\n");
 		return {
 			action: "list",
 			count: entries.length,
@@ -293,8 +293,8 @@ export async function manageEvent(
 	if (!request.name || request.name.trim().length === 0) {
 		throw new RecoverableToolError(`${request.action} requires a non-empty event name.`);
 	}
-	const { eventName, eventPath } = resolveEventPath(options.dotDir, request.name);
-	const eventsDir = join(options.dotDir, "events");
+	const { eventName, eventPath } = resolveEventPath(options.deskDir, request.name);
+	const eventsDir = join(options.deskDir, "events");
 
 	if (request.action === "show") {
 		if (!existsSync(eventPath)) {
@@ -348,7 +348,7 @@ export async function manageEvent(
 		}
 		if ((await countEventFiles(eventsDir)) >= MAX_EVENT_FILES) {
 			throw new RecoverableToolError(
-				`Too many event files (>= ${MAX_EVENT_FILES}) in this dot's events/; clean up stale events before creating more.`,
+				`Too many event files (>= ${MAX_EVENT_FILES}) in this desk's events/; clean up stale events before creating more.`,
 			);
 		}
 	} else {

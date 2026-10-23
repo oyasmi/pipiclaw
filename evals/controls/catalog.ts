@@ -195,7 +195,7 @@ const cases: Record<string, OracleControl[]> = {
 			"A failed persisted execution cannot support successful completion",
 			["single-settled-run"],
 			(ctx) => {
-				const path = join(ctx.dotDir, "subagent-runs.jsonl");
+				const path = join(ctx.deskDir, "subagent-runs.jsonl");
 				const run = JSON.parse(readFileSync(path, "utf8").trim());
 				run.failed = true;
 				run.status = "failed";
@@ -212,7 +212,7 @@ const cases: Record<string, OracleControl[]> = {
 			},
 		),
 		reject("double-execution", "Two settled executions must not pass as one", ["single-settled-run"], (ctx) => {
-			const file = join(ctx.dotDir, "subagent-runs.jsonl");
+			const file = join(ctx.deskDir, "subagent-runs.jsonl");
 			const row = readFileSync(file, "utf8").trim();
 			writeFileSync(file, `${row}\n${row}\n`);
 		}),
@@ -246,7 +246,7 @@ const cases: Record<string, OracleControl[]> = {
 			["report-not-premature"],
 			(ctx) => {
 				ctx.trace.find((entry) => entry.fields?.checkpoint === "before-c")!.fields!.fileTree = JSON.stringify([
-					{ path: "dots/eval/migration-report.json" },
+					{ path: "desk-eval/migration-report.json" },
 				]);
 			},
 		),
@@ -290,7 +290,7 @@ const cases: Record<string, OracleControl[]> = {
 			"Repeated records for one execution cannot establish two independent results",
 			["both-fragments-settled"],
 			(ctx) => {
-				const path = join(ctx.dotDir, "subagent-runs.jsonl");
+				const path = join(ctx.deskDir, "subagent-runs.jsonl");
 				const rows = readFileSync(path, "utf8")
 					.trim()
 					.split("\n")
@@ -376,7 +376,7 @@ const cases: Record<string, OracleControl[]> = {
 			"A grammatical brief must not present the superseded transport as current",
 			["research-decision"],
 			(ctx) => {
-				const path = join(ctx.dotDir, "operator-decision.json");
+				const path = join(ctx.deskDir, "operator-decision.json");
 				const value = JSON.parse(readFileSync(path, "utf8"));
 				value.primaryTransport = "Slack";
 				writeFileSync(path, JSON.stringify(value));
@@ -387,14 +387,14 @@ const cases: Record<string, OracleControl[]> = {
 			"Recognizing document facts must not excuse dispatching an exhausted incident",
 			["research-decision"],
 			(ctx) => {
-				const path = join(ctx.dotDir, "operator-decision.json");
+				const path = join(ctx.deskDir, "operator-decision.json");
 				const value = JSON.parse(readFileSync(path, "utf8"));
 				value.incident.dispatch = true;
 				writeFileSync(path, JSON.stringify(value));
 			},
 		),
 		pass("decision-key-order", "JSON key/list ordering is not research quality", (ctx) => {
-			const path = join(ctx.dotDir, "operator-decision.json");
+			const path = join(ctx.deskDir, "operator-decision.json");
 			const value = JSON.parse(readFileSync(path, "utf8"));
 			value.memoryLayers.reverse();
 			value.incident.blockers.reverse();

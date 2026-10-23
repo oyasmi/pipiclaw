@@ -25,12 +25,12 @@ function context(): TrialContext {
 	const homeDir = mkdtempSync(join(tmpdir(), "pipiclaw-core-control-"));
 	temporary.push(homeDir);
 	const workspaceDir = join(homeDir, "workspace");
-	const dotDir = join(workspaceDir, "dots", "eval");
-	mkdirSync(dotDir, { recursive: true });
+	const deskDir = join(workspaceDir, "desk-eval");
+	mkdirSync(deskDir, { recursive: true });
 	return {
 		homeDir,
 		workspaceDir,
-		dotDir,
+		deskDir,
 		deliveries: [],
 		trace: [],
 		snapshot: {

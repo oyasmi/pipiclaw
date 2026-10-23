@@ -21,8 +21,8 @@ import {
 } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
-/** One dot owns these runs; each record keeps its own originating channel (spec 058, D15). */
-const DOT = { dot: "news", dotDir: join(tmpdir(), "pipiclaw-subagent-runs-dot") };
+/** One desk owns these runs; each record keeps its own originating channel (spec 058, D15). */
+const DESK = { desk: "news", deskDir: join(tmpdir(), "pipiclaw-subagent-runs-desk") };
 
 const createTempDir = useTempDirs("pipiclaw-subagent-runs-");
 
@@ -118,8 +118,8 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 	it("keeps identical channel/run ids isolated between application instances and their wake sinks", async () => {
 		const firstWake = makeDispatch();
 		const secondWake = makeDispatch();
-		const first = createSubAgentRuntime({ workspaceDir: DOT.dotDir, dispatch: firstWake.dispatch });
-		const second = createSubAgentRuntime({ workspaceDir: DOT.dotDir, dispatch: secondWake.dispatch });
+		const first = createSubAgentRuntime({ workspaceDir: DESK.deskDir, dispatch: firstWake.dispatch });
+		const second = createSubAgentRuntime({ workspaceDir: DESK.deskDir, dispatch: secondWake.dispatch });
 		try {
 			await register(first.get("news"), { artifactDir: createTempDir() });
 			await register(second.get("news"), { artifactDir: createTempDir() });
@@ -176,7 +176,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const { ledger, records } = makeLedger();
 		const { store, archived } = makeStore();
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager(DOT, { ledger, store, dispatch });
+		const manager = new SubAgentRunManager(DESK, { ledger, store, dispatch });
 		await register(manager);
 
 		await manager.settle("run-1", baseSettleInput(), { announce: false });
@@ -194,7 +194,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const { ledger } = makeLedger();
 		const { store } = makeStore();
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager(DOT, { ledger, store, dispatch });
+		const manager = new SubAgentRunManager(DESK, { ledger, store, dispatch });
 		await register(manager, { taskId: "T-7" });
 
 		await manager.settle("run-1", baseSettleInput({ outputText: "Found the bug in src/index.ts." }), {
@@ -218,25 +218,25 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(events[0]?.presentation).toBe("awaited");
 	});
 
-	it("drops the wake for a channel rebound to another dot, but still redeems its task's work ticket", async () => {
+	it("drops the wake for a channel rebound to another desk, but still redeems its task's work ticket", async () => {
 		// Spec 058, D8. Failure caught: a dropped wake leaving the task parked on `work` with nothing
 		// left to redeem it — on rebind the task would sit until its backstop expired.
-		const dotDir = createTempDir();
-		mkdirSync(join(dotDir, "tasks"), { recursive: true });
+		const deskDir = createTempDir();
+		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(
-			join(dotDir, "tasks", "T-8.md"),
+			join(deskDir, "tasks", "T-8.md"),
 			renderTaskDocument({ state: "open", usage: createUsage() }, "# T\n"),
 		);
-		await parkTask(dotDir, "T-8", { kind: "work", refs: ["run-1"], by: "2099-01-01T00:00:00+08:00" });
+		await parkTask(deskDir, "T-8", { kind: "work", refs: ["run-1"], by: "2099-01-01T00:00:00+08:00" });
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager({ dot: "news", dotDir }, { dispatch, isBoundTo: () => false });
+		const manager = new SubAgentRunManager({ desk: "news", deskDir }, { dispatch, isBoundTo: () => false });
 		await register(manager, { taskId: "T-8" });
 
 		await manager.settle("run-1", baseSettleInput(), { announce: true });
 
 		expect(events).toHaveLength(0);
 		expect(manager.get("run-1")?.wakeEnqueued).toBe(true);
-		expect((await readStoredTask(dotDir, "T-8"))?.fields.state).toBe("open");
+		expect((await readStoredTask(deskDir, "T-8"))?.fields.state).toBe("open");
 		await resetTaskLogAppenders();
 	});
 
@@ -245,7 +245,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const { store } = makeStore();
 		const { dispatch } = makeDispatch();
 		const notices: Array<{ channelId: string; notice: unknown }> = [];
-		const manager = new SubAgentRunManager(DOT, {
+		const manager = new SubAgentRunManager(DESK, {
 			ledger,
 			store,
 			dispatch,
@@ -271,11 +271,11 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 	// wake is the last one and re-checks with subagent_list every time.
 	it("tells a chat-level wake how many sibling runs on the channel are still running", async () => {
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager(DOT, { dispatch });
+		const manager = new SubAgentRunManager(DESK, { dispatch });
 		await register(manager, { runId: "run-a" });
 		await register(manager, { runId: "run-b" });
 		await register(manager, { runId: "run-task", taskId: "T-1" });
-		// Another channel of the same dot: its wake goes there, so it is no sibling of this one's
+		// Another channel of the same desk: its wake goes there, so it is no sibling of this one's
 		// (counting it would leave this channel waiting, [SILENT], for a wake it never gets).
 		await register(manager, { runId: "run-elsewhere", channelId: "group_cidOTHER" });
 
@@ -291,7 +291,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		vi.useFakeTimers();
 		try {
 			const notices: Array<{ kind: string; step?: string }> = [];
-			const manager = new SubAgentRunManager(DOT, {
+			const manager = new SubAgentRunManager(DESK, {
 				notify: (_dot, _channelId, notice) => {
 					notices.push(notice);
 				},
@@ -326,7 +326,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const { ledger, records } = makeLedger();
 		const { store, archived } = makeStore();
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager(DOT, {
+		const manager = new SubAgentRunManager(DESK, {
 			ledger,
 			store,
 			dispatch,
@@ -348,7 +348,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const { ledger, records } = makeLedger();
 		const { store, archived } = makeStore();
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager(DOT, { ledger, store, dispatch });
+		const manager = new SubAgentRunManager(DESK, { ledger, store, dispatch });
 		await register(manager);
 
 		const input = baseSettleInput();
@@ -362,7 +362,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 	});
 
 	it("refuses a wake claim that does not match the run's own record", async () => {
-		const manager = new SubAgentRunManager(DOT, {});
+		const manager = new SubAgentRunManager(DESK, {});
 		await register(manager, { taskId: "T-1" });
 		const dispatchId = "subagent:news:run-1:done";
 		// Not settled yet: it cannot have produced a completion wake.
@@ -379,7 +379,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 	it("cancel invokes the registered handle and does not itself dispatch a wake", async () => {
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager(DOT, { dispatch });
+		const manager = new SubAgentRunManager(DESK, { dispatch });
 		await register(manager);
 		let cancelled = false;
 		manager.registerCancelHandle("run-1", () => {
@@ -398,7 +398,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 	it("cancel with no live handle marks the run lost without dispatching", async () => {
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager(DOT, { dispatch });
+		const manager = new SubAgentRunManager(DESK, { dispatch });
 		await register(manager);
 
 		const status = await manager.cancel("run-1");
@@ -415,7 +415,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const { store } = makeStore();
 		const { dispatch, events } = makeDispatch();
 
-		const writer = new SubAgentRunManager(DOT, { stateDir });
+		const writer = new SubAgentRunManager(DESK, { stateDir });
 		await writer.register({
 			runId: "run-orphan",
 			channelId: "dm_123",
@@ -430,7 +430,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		});
 
 		// A fresh manager, as if the daemon just restarted: only the persisted record exists.
-		const restored = new SubAgentRunManager(DOT, { stateDir, ledger, store, dispatch });
+		const restored = new SubAgentRunManager(DESK, { stateDir, ledger, store, dispatch });
 		const count = await restored.restore();
 
 		expect(count).toBe(1);
@@ -449,7 +449,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		mkdirSync(join(stateDir, "news"), { recursive: true });
 		const { dispatch, events } = makeDispatch();
 
-		const writer = new SubAgentRunManager(DOT, { stateDir });
+		const writer = new SubAgentRunManager(DESK, { stateDir });
 		await writer.register({
 			runId: "run-done",
 			channelId: "dm_123",
@@ -464,7 +464,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		});
 		await writer.settle("run-done", baseSettleInput(), { announce: false });
 
-		const restored = new SubAgentRunManager(DOT, { stateDir, dispatch });
+		const restored = new SubAgentRunManager(DESK, { stateDir, dispatch });
 		await restored.restore();
 
 		expect(events).toHaveLength(0);
@@ -480,7 +480,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		async () => {
 			const stateDir = createTempDir();
 			mkdirSync(join(stateDir, "news"), { recursive: true });
-			const writer = new SubAgentRunManager(DOT, { stateDir });
+			const writer = new SubAgentRunManager(DESK, { stateDir });
 			await writer.register({
 				runId: "run-locked",
 				channelId: "dm_123",
@@ -497,7 +497,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 			chmodSync(path, 0o000);
 			try {
 				const { dispatch, events } = makeDispatch();
-				const restored = new SubAgentRunManager(DOT, { stateDir, dispatch });
+				const restored = new SubAgentRunManager(DESK, { stateDir, dispatch });
 				expect(await restored.restore()).toBe(0);
 				expect(events).toHaveLength(0);
 				expect(restored.get("run-locked")).toBeUndefined();
@@ -517,7 +517,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		writeFileSync(path, "{not valid json");
 
 		const { dispatch, events } = makeDispatch();
-		const restored = new SubAgentRunManager(DOT, { stateDir, dispatch });
+		const restored = new SubAgentRunManager(DESK, { stateDir, dispatch });
 		expect(await restored.restore()).toBe(0);
 		expect(events).toHaveLength(0);
 		// The evidence survives — quarantined next to where it was, not deleted — and a
@@ -533,7 +533,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const artifactDir = join(workspaceDir, "artifacts", "run-pending");
 		mkdirSync(join(stateDir, "news"), { recursive: true });
 		mkdirSync(artifactDir, { recursive: true });
-		const writer = new SubAgentRunManager(DOT, { stateDir });
+		const writer = new SubAgentRunManager(DESK, { stateDir });
 		const lease = acquireWorkspaceLease({
 			runId: "run-pending",
 			channelId: "dm_123",
@@ -576,7 +576,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		});
 		expect(otherLease.ok).toBe(true);
 
-		const restored = new SubAgentRunManager(DOT, { stateDir });
+		const restored = new SubAgentRunManager(DESK, { stateDir });
 		await restored.restore();
 
 		expect(restored.get("run-pending")).toMatchObject({
@@ -598,7 +598,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 				throw new Error("Sub-agent archive queue is full.");
 			},
 		} as unknown as import("../src/channel/store.js").ChannelStore;
-		const manager = new SubAgentRunManager(DOT, { ledger, store: failingStore, dispatch });
+		const manager = new SubAgentRunManager(DESK, { ledger, store: failingStore, dispatch });
 		await register(manager);
 
 		await manager.settle("run-1", baseSettleInput(), { announce: true });
@@ -615,7 +615,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 		// Simulate a crash between settlement and dispatch: settle with a dispatch that always
 		// fails, so `wakeEnqueued` is never set, then persist that half-finished state.
-		const writer = new SubAgentRunManager(DOT, {
+		const writer = new SubAgentRunManager(DESK, {
 			stateDir,
 			dispatch: () => {
 				throw new Error("dispatch unavailable");
@@ -637,7 +637,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(writer.get("run-unwoken")?.wakeEnqueued).toBeUndefined();
 
 		const { dispatch, events } = makeDispatch();
-		const restored = new SubAgentRunManager(DOT, { stateDir, dispatch });
+		const restored = new SubAgentRunManager(DESK, { stateDir, dispatch });
 		await restored.restore();
 
 		expect(events).toHaveLength(1);
@@ -649,7 +649,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 /** spec 041: short, human-typeable run ids, and prefix resolution for the commands that use them. */
 describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
 	it("mintRunId never reuses an id held by a known record, and register rejects a duplicate id", async () => {
-		const manager = new SubAgentRunManager(DOT, {});
+		const manager = new SubAgentRunManager(DESK, {});
 		const minted = new Set<string>();
 		for (let i = 0; i < 20; i++) {
 			const id = manager.mintRunId();
@@ -662,24 +662,24 @@ describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
 			await manager.settle(id, baseSettleInput(), { announce: false });
 		}
 
-		const dup = new SubAgentRunManager(DOT, {});
+		const dup = new SubAgentRunManager(DESK, {});
 		await register(dup, { runId: "run-dup", channelId: "dm_dup" });
 		await expect(register(dup, { runId: "run-dup", channelId: "dm_dup" })).rejects.toThrow("already registered");
 	});
 
 	it("resolveRef prefers an exact id, then unique prefixes (case-insensitive, run_ optional), and reports ambiguous/not_found", async () => {
-		const exact = new SubAgentRunManager(DOT, {});
+		const exact = new SubAgentRunManager(DESK, {});
 		await register(exact, { runId: "run_abc123", channelId: "dm_resolve" });
 		await register(exact, { runId: "run_abc123xyz", channelId: "dm_resolve" });
 		expect(exact.resolveRef("run_abc123")).toMatchObject({ kind: "found", record: { runId: "run_abc123" } });
 
-		const prefix = new SubAgentRunManager(DOT, {});
+		const prefix = new SubAgentRunManager(DESK, {});
 		await register(prefix, { runId: "run_qwe789", channelId: "dm_resolve_prefix" });
 		expect(prefix.resolveRef("qwe7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
 		expect(prefix.resolveRef("run_qwe7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
 		expect(prefix.resolveRef("QWE7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
 
-		const ambiguous = new SubAgentRunManager(DOT, {});
+		const ambiguous = new SubAgentRunManager(DESK, {});
 		await register(ambiguous, { runId: "run_zzz111", channelId: "dm_resolve_ambiguous" });
 		await register(ambiguous, { runId: "run_zzz222", channelId: "dm_resolve_ambiguous" });
 		const resolution = ambiguous.resolveRef("zzz");
@@ -708,7 +708,7 @@ describe("SubAgentRunManager daily GC", () => {
 		}
 		writeFileSync(join(artifactDir, "task-created.txt"), "keep me", "utf-8");
 
-		const manager = new SubAgentRunManager(DOT, { stateDir });
+		const manager = new SubAgentRunManager(DESK, { stateDir });
 		await manager.register({
 			runId: "run-gc",
 			channelId,
@@ -760,7 +760,7 @@ describe("SubAgentRunManager daily GC", () => {
 		const artifactDir = join(workspaceDir, "not-a-directory");
 		writeFileSync(artifactDir, "blocks child unlinks", "utf-8");
 
-		const manager = new SubAgentRunManager(DOT, { stateDir });
+		const manager = new SubAgentRunManager(DESK, { stateDir });
 		await manager.register({
 			runId: "run-gc-retry",
 			channelId,
@@ -784,14 +784,14 @@ describe("SubAgentRunManager daily GC", () => {
 	});
 });
 
-describe("sub-agent run persistence per dot (spec 058, D15)", () => {
-	it("restores a dot's records from its own directory and wakes each run's own channel", async () => {
+describe("sub-agent run persistence per desk (spec 058, D15)", () => {
+	it("restores a desk's records from its own directory and wakes each run's own channel", async () => {
 		// Failure caught: a channel id is never a path segment (INV-3), so a base64 group id with `/`
 		// must neither nest the record directory nor lose the channel the wake goes back to.
 		const stateDir = createTempDir();
 		const channelId = `group_cid${Date.now()}/eDInUw==`;
 
-		const writer = new SubAgentRunManager(DOT, { stateDir });
+		const writer = new SubAgentRunManager(DESK, { stateDir });
 		await writer.register({
 			runId: "run-slash",
 			channelId,
@@ -810,7 +810,7 @@ describe("sub-agent run persistence per dot (spec 058, D15)", () => {
 		const { dispatch, events } = makeDispatch();
 		configureSubAgentRuntime({ stateDir, dispatch });
 		expect(await restoreAllSubAgentRuns()).toBe(1);
-		expect(events[0]).toMatchObject({ channelId, dot: "news", dispatchId: "subagent:news:run-slash:done" });
+		expect(events[0]).toMatchObject({ channelId, desk: "news", dispatchId: "subagent:news:run-slash:done" });
 		configureSubAgentRuntime({});
 	});
 });

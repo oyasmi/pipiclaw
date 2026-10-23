@@ -28,21 +28,21 @@ export async function regradeTrial(
 	const homeDir = mkdtempSync(join(tmpdir(), "eval-regrade-"));
 	try {
 		const workspaceDir = join(homeDir, "workspace");
-		const dotRelative = relative(index.mounts.workspaceDir, index.mounts.dotDir ?? index.mounts.channelDir ?? "");
-		if (isAbsolute(dotRelative) || dotRelative.startsWith(".."))
-			throw new Error("Invalid archived dot mount; restore the original artifact index.");
-		const dotDir = join(workspaceDir, dotRelative);
+		const deskRelative = relative(index.mounts.workspaceDir, index.mounts.deskDir);
+		if (isAbsolute(deskRelative) || deskRelative.startsWith(".."))
+			throw new Error("Invalid archived desk mount; restore the original artifact index.");
+		const deskDir = join(workspaceDir, deskRelative);
 		for (const entry of index.entries) {
 			if (
 				entry.status !== "complete" ||
-				(!entry.id.startsWith("home/") && !entry.id.startsWith("workspace/") && !entry.id.startsWith("channel/"))
+				(!entry.id.startsWith("home/") && !entry.id.startsWith("workspace/") && !entry.id.startsWith("desk/"))
 			)
 				continue;
 			const root = entry.id.startsWith("home/")
 				? homeDir
 				: entry.id.startsWith("workspace/")
 					? workspaceDir
-					: dotDir;
+					: deskDir;
 			const target = resolve(root, entry.id.slice(entry.id.indexOf("/") + 1));
 			const rel = relative(homeDir, target);
 			if (isAbsolute(rel) || rel.startsWith(".."))
@@ -66,7 +66,7 @@ export async function regradeTrial(
 			seed: original.fixtureSeed,
 			homeDir,
 			workspaceDir,
-			dotDir,
+			deskDir,
 			trace,
 			deliveries: snapshot.deliveries,
 			snapshot,

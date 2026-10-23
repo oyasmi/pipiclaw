@@ -15,48 +15,48 @@ const createTempDir = useTempDirs("pipiclaw-memory-journal-");
 
 describe("journal", () => {
 	it("appends without duplicating a normalized-equal existing line", async () => {
-		const dotDir = createTempDir();
-		expect(await appendJournalEntries(dotDir, "2026-09-04", ["01:12 完成审查并发邮件"])).toEqual({
+		const deskDir = createTempDir();
+		expect(await appendJournalEntries(deskDir, "2026-09-04", ["01:12 完成审查并发邮件"])).toEqual({
 			appended: 1,
 			skippedDuplicate: 0,
 		});
-		expect(await readFile(getJournalPath(dotDir, "2026-09-04"), "utf-8")).toBe(
+		expect(await readFile(getJournalPath(deskDir, "2026-09-04"), "utf-8")).toBe(
 			"# 2026-09-04\n- 01:12 完成审查并发邮件\n",
 		);
-		const result = await appendJournalEntries(dotDir, "2026-09-04", [
+		const result = await appendJournalEntries(deskDir, "2026-09-04", [
 			"01:12   完成审查并发邮件", // same text, extra whitespace
 			"04:20 简报改为工作日发送",
 		]);
 		expect(result).toEqual({ appended: 1, skippedDuplicate: 1 });
-		const content = await readJournalDay(dotDir, "2026-09-04");
+		const content = await readJournalDay(deskDir, "2026-09-04");
 		expect(content.split("\n").filter((l) => l.startsWith("-"))).toHaveLength(2);
 	});
 
 	it("keeps separate days in separate files and lists them sorted", async () => {
-		const dotDir = createTempDir();
-		await appendJournalEntries(dotDir, "2026-09-02", ["a"]);
-		await appendJournalEntries(dotDir, "2026-09-04", ["b"]);
-		expect(await listJournalDates(dotDir)).toEqual(["2026-09-02", "2026-09-04"]);
+		const deskDir = createTempDir();
+		await appendJournalEntries(deskDir, "2026-09-02", ["a"]);
+		await appendJournalEntries(deskDir, "2026-09-04", ["b"]);
+		expect(await listJournalDates(deskDir)).toEqual(["2026-09-02", "2026-09-04"]);
 	});
 
 	it("reads an absent day as empty text", async () => {
-		const dotDir = createTempDir();
-		expect(await readJournalDay(dotDir, "2026-01-01")).toBe("");
-		expect(await listJournalDates(dotDir)).toEqual([]);
+		const deskDir = createTempDir();
+		expect(await readJournalDay(deskDir, "2026-01-01")).toBe("");
+		expect(await listJournalDates(deskDir)).toEqual([]);
 	});
 
 	it("bounds search by newest files and whole tail lines, including oversized UTF-8 entries", async () => {
-		const dotDir = createTempDir();
-		await mkdir(`${dotDir}/journal`);
+		const deskDir = createTempDir();
+		await mkdir(`${deskDir}/journal`);
 		for (let day = 1; day <= JOURNAL_SEARCH_MAX_DAYS + 1; day++) {
-			await writeFile(getJournalPath(dotDir, `2026-08-${String(day).padStart(2, "0")}`), `- day ${day}\n`);
+			await writeFile(getJournalPath(deskDir, `2026-08-${String(day).padStart(2, "0")}`), `- day ${day}\n`);
 		}
 		await writeFile(
-			getJournalPath(dotDir, "2026-08-31"),
+			getJournalPath(deskDir, "2026-08-31"),
 			`- old evidence\n- ${"汉".repeat(JOURNAL_SEARCH_DAY_BYTES)}\n- newest evidence\n`,
 		);
-		await writeFile(`${dotDir}/journal/unrelated.txt`, "not a journal");
-		const result = await readJournalForSearch(dotDir);
+		await writeFile(`${deskDir}/journal/unrelated.txt`, "not a journal");
+		const result = await readJournalForSearch(deskDir);
 		expect(result.days).toHaveLength(JOURNAL_SEARCH_MAX_DAYS);
 		expect(result.omittedDays).toBe(1);
 		expect(result.truncatedDates).toEqual(["2026-08-31"]);
@@ -66,22 +66,22 @@ describe("journal", () => {
 	});
 
 	it("does not hide a broken journal directory as an empty search", async () => {
-		const dotDir = createTempDir();
-		await writeFile(`${dotDir}/journal`, "not a directory");
-		await expect(readJournalForSearch(dotDir)).rejects.toMatchObject({ code: "ENOTDIR" });
+		const deskDir = createTempDir();
+		await writeFile(`${deskDir}/journal`, "not a directory");
+		await expect(readJournalForSearch(deskDir)).rejects.toMatchObject({ code: "ENOTDIR" });
 		expect(await readJournalForSearch(createTempDir())).toEqual({ days: [], omittedDays: 0, truncatedDates: [] });
 	});
 
 	it("no-ops on an empty or all-duplicate batch", async () => {
-		const dotDir = createTempDir();
-		await appendJournalEntries(dotDir, "2026-09-04", ["01:12 completed review"]);
-		const path = getJournalPath(dotDir, "2026-09-04");
+		const deskDir = createTempDir();
+		await appendJournalEntries(deskDir, "2026-09-04", ["01:12 completed review"]);
+		const path = getJournalPath(deskDir, "2026-09-04");
 		const before = await readFile(path, "utf-8");
-		expect(await appendJournalEntries(dotDir, "2026-09-04", ["  ", ""])).toEqual({
+		expect(await appendJournalEntries(deskDir, "2026-09-04", ["  ", ""])).toEqual({
 			appended: 0,
 			skippedDuplicate: 0,
 		});
-		expect(await appendJournalEntries(dotDir, "2026-09-04", ["01:12   completed review"])).toEqual({
+		expect(await appendJournalEntries(deskDir, "2026-09-04", ["01:12   completed review"])).toEqual({
 			appended: 0,
 			skippedDuplicate: 1,
 		});

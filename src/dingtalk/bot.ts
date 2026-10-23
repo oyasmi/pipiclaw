@@ -328,6 +328,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 	 */
 	async routeInboundEvent(event: DingTalkEvent): Promise<void> {
 		const { channelId } = event;
+		if (this.handler.prepareChannel) await this.handler.prepareChannel(channelId);
 		const content = event.text;
 		const builtInCommand = parseBuiltInCommand(content);
 		const isSlashCommand = content.trim().startsWith("/");

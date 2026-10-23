@@ -4,13 +4,13 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { peekActiveSessionFile } from "../channel/active-session-store.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 
 export interface DetachedMaintenanceContextOptions {
-	conversation: DotConversation;
+	conversation: DeskConversation;
 	workspaceDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;

@@ -130,23 +130,11 @@ function loadResource(
 	};
 }
 
-/**
- * A dot's own `SOUL.md` / `AGENTS.md` replaces the workspace file of the same name as a whole
- * (never merged); a missing or empty one falls back to the workspace file (spec 058 follow-up).
- */
-function resolveInstructionPath(workspaceDir: string, dotDir: string | undefined, filename: string): string {
-	if (dotDir) {
-		const own = join(dotDir, filename);
-		if (readWorkspaceFile(own)) return own;
-	}
-	return join(workspaceDir, filename);
-}
-
-/** Read SOUL.md and AGENTS.md (the dot's own, else the workspace's), budgeted and template-aware. */
-export function loadWorkspacePromptResources(workspaceDir: string, dotDir?: string): WorkspacePromptResources {
+/** Read the workspace-wide identity and rules shared by every desk. */
+export function loadWorkspacePromptResources(workspaceDir: string): WorkspacePromptResources {
 	const diagnostics: PromptDiagnostic[] = [];
 	const soul = loadResource(
-		resolveInstructionPath(workspaceDir, dotDir, "SOUL.md"),
+		join(workspaceDir, "SOUL.md"),
 		DEFAULT_SOUL,
 		{ units: SOUL_BUDGET_UNITS, chars: SOUL_BUDGET_CHARS },
 		"workspace.soul",
@@ -154,7 +142,7 @@ export function loadWorkspacePromptResources(workspaceDir: string, dotDir?: stri
 		diagnostics,
 	);
 	const agents = loadResource(
-		resolveInstructionPath(workspaceDir, dotDir, "AGENTS.md"),
+		join(workspaceDir, "AGENTS.md"),
 		DEFAULT_AGENTS,
 		{ units: AGENTS_BUDGET_UNITS, chars: AGENTS_BUDGET_CHARS },
 		"workspace.agents",

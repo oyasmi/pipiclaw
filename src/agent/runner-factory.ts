@@ -1,4 +1,4 @@
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import { createExecutor } from "../executor.js";
 import { createFileStore } from "../file-store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -12,7 +12,7 @@ import type { AgentRunner, RunnerFactoryPaths } from "./types.js";
  * `const`, one channel per process) — a second cache here just duplicated that ownership and
  * could hold a stale entry the real owner had already disposed.
  */
-export function createRunner(conversation: DotConversation, paths: RunnerFactoryPaths): AgentRunner {
+export function createRunner(conversation: DeskConversation, paths: RunnerFactoryPaths): AgentRunner {
 	return new ChannelRunner(conversation, paths, {
 		executor: createExecutor(),
 		fileStore: createFileStore(),

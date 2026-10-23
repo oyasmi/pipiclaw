@@ -19,17 +19,17 @@ const createTempDir = useTempDirs("pipiclaw-memory-delete-order-");
 // to recompute the hash from, so the deleted fact could quietly come back.
 describe("memory store — delete ordering", () => {
 	it("records the tombstone before removing the file, so a delete that fails after recording it still protects against re-learning", async () => {
-		const dotDir = createTempDir();
-		await applyMemoryOps(dotDir, [{ op: "add", name: "gone", description: "obsolete fact", source: "agent" }]);
+		const deskDir = createTempDir();
+		await applyMemoryOps(deskDir, [{ op: "add", name: "gone", description: "obsolete fact", source: "agent" }]);
 
 		rmMock.mockRejectedValueOnce(new Error("simulated ENOSPC"));
-		await expect(applyMemoryOps(dotDir, [{ op: "delete", name: "gone", reason: "user said so" }])).rejects.toThrow(
+		await expect(applyMemoryOps(deskDir, [{ op: "delete", name: "gone", reason: "user said so" }])).rejects.toThrow(
 			"simulated ENOSPC",
 		);
 
 		// The tombstone landed even though the delete itself failed — the worst case left behind is
 		// "file still present, already protected", which is recoverable (the caller can just retry
 		// the delete), unlike the old order's "file gone, no record it was ever deleted".
-		expect(await isDescriptionTombstoned(dotDir, "obsolete fact")).toBe(true);
+		expect(await isDescriptionTombstoned(deskDir, "obsolete fact")).toBe(true);
 	});
 });

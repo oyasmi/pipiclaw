@@ -12,10 +12,10 @@ import type { InboundImage } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import { isKnownCommandName, type RunnerBuiltInCommand, slashCommandName } from "../commands/catalog.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { DotJobManager } from "../jobs/manager.js";
+import type { DeskJobManager } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
@@ -60,12 +60,12 @@ import {
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
-	private readonly jobManager: DotJobManager;
+	private readonly jobManager: DeskJobManager;
 	private readonly runManager: SubAgentRunManager;
 	private readonly fileStore: FileStore;
-	readonly conversation: DotConversation;
+	readonly conversation: DeskConversation;
 	private readonly channelId: string;
-	/** This channel's conversation directory inside the dot: sessions, active pointer, archive. */
+	/** This channel's conversation directory inside the desk: sessions, active pointer, archive. */
 	private readonly conversationDir: string;
 	private readonly appHomeDir: string;
 	private readonly authConfigPath: string;
@@ -95,7 +95,7 @@ export class ChannelRunner implements AgentRunner {
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
 
-	constructor(conversation: DotConversation, paths: RunnerFactoryPaths, deps: RunnerDeps) {
+	constructor(conversation: DeskConversation, paths: RunnerFactoryPaths, deps: RunnerDeps) {
 		const { channelId, conversationDir } = conversation;
 		this.conversation = conversation;
 		this.channelId = channelId;
@@ -118,7 +118,7 @@ export class ChannelRunner implements AgentRunner {
 
 		// Create session manager, opening whichever session this conversation's active-session ref
 		// (or the context.jsonl default, for a conversation that has never run a topology op) names
-		// (spec 043, D1). The cwd override is the dot's working directory: a session header written
+		// (spec 043, D1). The cwd override is the desk's working directory: a session header written
 		// before spec 058 still names the old project root.
 		const activeSessionFile = resolveActiveSessionFile(conversationDir);
 		const sessionManager = SessionManager.open(
@@ -191,7 +191,7 @@ export class ChannelRunner implements AgentRunner {
 			modelsConfigPath: this.modelsConfigPath,
 			onSessionEvent: this.onSessionEvent,
 			mediaSender: this.mediaSender,
-			// The working directory: the dot directory unless `dot.json` sets `cwd` (spec 058, D9).
+			// The working directory: the desk directory unless `desk.json` sets `cwd` (spec 058, D9).
 			cwd: conversation.cwd,
 			describeConversation: paths.describeConversation,
 			settingsManager: this.settingsManager,
@@ -308,7 +308,7 @@ export class ChannelRunner implements AgentRunner {
 			this.memoryLifecycle.noteUserTurnStarted();
 			const input = await this.pipeline.prepareUserInput(ctx);
 
-			// Ensure the conversation directory (and with it the dot directory) exists.
+			// Ensure the conversation directory (and with it the desk directory) exists.
 			await mkdir(this.conversationDir, { recursive: true });
 
 			const channelCapsule = await this.pipeline.gatherTurnContext(input.preserveRawInput, turn);

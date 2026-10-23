@@ -107,7 +107,7 @@ describe("createRuntimeContext", () => {
 
 		await runtime.handler.handleNewSession(createDmEvent("/new", "1000"), bot as unknown as DingTalkBot);
 
-		// `/new` resets this channel's conversation in its dot (spec 058, D16).
+		// `/new` resets this channel's conversation in its desk (spec 058, D16).
 		const refPath = getActiveSessionRefPath(conversation.conversationDir);
 		const ref = JSON.parse(readFileSync(refPath, "utf-8"));
 		expect(ref).toMatchObject({ version: 1, sessionId: expect.any(String), file: expect.stringMatching(/\.jsonl$/) });
@@ -120,7 +120,7 @@ describe("createRuntimeContext", () => {
 	it("starts the native task driver with the other runtime services", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
-		// Watchers are per active dot (spec 058, D6): one bound dot, one watcher.
+		// Watchers are per active desk (spec 058, D6): one bound desk, one watcher.
 		await bindTestChannel(paths.workspaceDir, "dm_tester");
 		const bot = new FakeTestBot();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };

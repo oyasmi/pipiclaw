@@ -11,10 +11,10 @@ import type { RunRecord, SettleInput } from "./run-record.js";
 /** Archived output is capped; the full text is in the run's `output.md`. */
 const ARCHIVED_OUTPUT_MAX_CHARS = 16_000;
 
-export function runLedgerEntry(dot: string, record: RunRecord, input: SettleInput): Omit<UsageLedgerEntry, "ts"> {
+export function runLedgerEntry(desk: string, record: RunRecord, input: SettleInput): Omit<UsageLedgerEntry, "ts"> {
 	return {
 		channelId: record.channelId,
-		dot,
+		desk,
 		kind: "subagent",
 		model: record.model ?? "unknown",
 		label: record.label,

@@ -10,8 +10,8 @@ const makeTempDir = useTempDirs("pipiclaw-maintenance-context-");
 
 afterEach(() => vi.restoreAllMocks());
 
-function writeTranscript(dotDir: string): void {
-	const dir = testConversation(dotDir).conversationDir;
+function writeTranscript(deskDir: string): void {
+	const dir = testConversation(deskDir).conversationDir;
 	const manager = SessionManager.open(join(dir, "context.jsonl"), dir);
 	manager.appendMessage({ role: "user", content: "请记住我喜欢简洁回复", timestamp: Date.now() } as never);
 	manager.appendMessage({
@@ -36,9 +36,9 @@ describe("loadDetachedMaintenanceContext", () => {
 		clearDetachedMaintenanceCache();
 	});
 
-	function makeOptions(appHomeDir: string, dotDir: string) {
+	function makeOptions(appHomeDir: string, deskDir: string) {
 		return {
-			conversation: testConversation(dotDir, { channelId: "dm_cold" }),
+			conversation: testConversation(deskDir, { channelId: "dm_cold" }),
 			workspaceDir: appHomeDir,
 			authConfigPath: join(appHomeDir, "auth.json"),
 			modelsConfigPath: join(appHomeDir, "models.json"),
@@ -57,11 +57,11 @@ describe("loadDetachedMaintenanceContext", () => {
 
 	it("reuses the cached transcript while context.jsonl is unchanged", async () => {
 		const appHomeDir = makeTempDir();
-		const dotDir = makeTempDir();
-		writeTranscript(dotDir);
+		const deskDir = makeTempDir();
+		writeTranscript(deskDir);
 
 		const openSpy = vi.spyOn(SessionManager, "open");
-		const first = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, dotDir));
+		const first = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, deskDir));
 		// The first load builds a full context from disk alone, without a runner.
 		expect(first?.conversation.channelId).toBe("dm_cold");
 		expect(first?.messages().length).toBeGreaterThanOrEqual(2);
@@ -70,17 +70,17 @@ describe("loadDetachedMaintenanceContext", () => {
 		expect(first?.settings.memoryMaintenance).toBeDefined();
 		const opensAfterInitialRead = openSpy.mock.calls.length;
 		expect(opensAfterInitialRead).toBeGreaterThan(0);
-		const second = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, dotDir));
+		const second = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, deskDir));
 		expect(openSpy).toHaveBeenCalledTimes(opensAfterInitialRead);
 		expect(second?.sessionEntries().map((entry) => entry.id)).toEqual(
 			first?.sessionEntries().map((entry) => entry.id),
 		);
 
-		const dir = testConversation(dotDir).conversationDir;
+		const dir = testConversation(deskDir).conversationDir;
 		const manager = SessionManager.open(join(dir, "context.jsonl"), dir);
 		const opensBeforeInvalidationRead = openSpy.mock.calls.length;
 		manager.appendMessage({ role: "user", content: "再补一句", timestamp: Date.now() } as never);
-		const third = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, dotDir));
+		const third = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, deskDir));
 		expect(openSpy).toHaveBeenCalledTimes(opensBeforeInvalidationRead + 1);
 		expect(third?.sessionEntries().length).toBeGreaterThan(first?.sessionEntries().length ?? 0);
 	});

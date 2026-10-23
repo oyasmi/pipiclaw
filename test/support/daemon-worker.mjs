@@ -45,7 +45,7 @@ const runtime = await createRuntimeContext({
 	createBot: (handler) => new CapturedBot(handler, config),
 	createEventsWatcher: () => ({ start() {}, stop() {} }),
 });
-process.on("message", async ({ action, text, channelId, runId, dot = "e2e" }) => {
+process.on("message", async ({ action, text, channelId, runId, desk = "e2e" }) => {
 	try {
 		let value;
 		if (action === "send") {
@@ -67,8 +67,8 @@ process.on("message", async ({ action, text, channelId, runId, dot = "e2e" }) =>
 		} else if (action === "maintenance") {
 			await runtime.memoryMaintenance.runOnce();
 		} else if (action === "record") {
-			// Runs are owned per dot (spec 058, D15); the record keeps its originating channel.
-			value = runtime.runs.get(dot).get(runId) ?? null;
+			// Runs are owned per desk (spec 058, D15); the record keeps its originating channel.
+			value = runtime.runs.get(desk).get(runId) ?? null;
 		} else {
 			throw new Error(`Unknown worker action: ${action}`);
 		}

@@ -7,7 +7,7 @@ import { isProcessAlive, killProcessGroup } from "../../../src/shared/host-proce
 import type { RunRecord } from "../../../src/subagents/run-record.js";
 import { crash, startDaemon } from "../../support/daemon-process.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
-import { bindChannelOnDisk, E2E_DOT, reply, writeWorkspaceFile } from "../../support/runtime-harness.js";
+import { bindChannelOnDisk, E2E_DESK, reply, writeWorkspaceFile } from "../../support/runtime-harness.js";
 import { cleanupE2ETestHome, createDeterministicHome } from "../../support/setup.js";
 import { waitFor } from "../helpers/wait.js";
 
@@ -16,9 +16,9 @@ describe("E2E deterministic: external process recovery", () => {
 		// Catches missing startup run restoration. The old `echo` fixture often finished before
 		// restart, and graceful same-process restart retained its live callbacks. Mutation: omit
 		// `await runs.restore()` in bootstrap; the new process cannot look up the persisted run.
-		// Spec 058: the new process gets only what is on disk — the run comes back from its dot's
-		// record directory and the dot is reactivated from `bindings.json`, so the channel is served
-		// again, and nothing the first process wrote looks like the pre-dot layout to the startup
+		// Spec 058: the new process gets only what is on disk — the run comes back from its desk's
+		// record directory and the desk is reactivated from `bindings.json`, so the channel is served
+		// again; the restored records and bindings use the same current desk layout on both sides of the
 		// check. Mutation (2026-10-18): archive `log.jsonl` to `join(workspaceDir, channelId)` (the
 		// old per-channel directory) — the restarted daemon refuses to start and the case goes red.
 		const model = await startMockProvider();
@@ -57,7 +57,7 @@ describe("E2E deterministic: external process recovery", () => {
 			daemon = await startDaemon(home.homeDir);
 			await daemon.call("send", { channelId, text: "RUN_EXEC" });
 			await connected;
-			const dir = join(home.homeDir, "state", "subagent-runs", E2E_DOT);
+			const dir = join(home.homeDir, "state", "subagent-runs", E2E_DESK);
 			const record = await waitFor(
 				"durable external launch",
 				() => {

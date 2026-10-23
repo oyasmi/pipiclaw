@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BootstrapPaths } from "../../../src/app/home.js";
-import { createDot } from "../../../src/dot/registry.js";
+import { createDesk } from "../../../src/desk/registry.js";
 import type { Frontend, FrontendCallbacks } from "../../../src/tui/frontend.js";
 import { reply } from "../../support/mock-provider/script.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
@@ -55,10 +55,12 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 
 	it("resolves a built-in slash command under --print without invoking the model", async () => {
 		const { runTuiApp } = await import("../../../src/tui/app.js");
-		// Events belong to the dot the terminal opens (spec 058, D14, D18).
-		await createDot(home.workspaceDir, "tui-e2e", new Date());
-		mkdirSync(join(home.workspaceDir, "dots", "tui-e2e", "events"), { recursive: true });
-		const eventPath = join(home.workspaceDir, "dots", "tui-e2e", "events", "tui-probe.json");
+		// Mutation (2026-10-23): requiring --desk prevents deletion of the default event.
+		// Events belong to the desk the terminal opens (spec 058, D14, D18).
+		await createDesk(home.workspaceDir, "default", new Date());
+		await createDesk(home.workspaceDir, "another", new Date());
+		mkdirSync(join(home.workspaceDir, "desk-default", "events"), { recursive: true });
+		const eventPath = join(home.workspaceDir, "desk-default", "events", "tui-probe.json");
 		writeFileSync(
 			eventPath,
 			JSON.stringify({
@@ -78,7 +80,6 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 		try {
 			await runTuiApp({
 				paths,
-				dot: "tui-e2e",
 				print: true,
 				plain: true,
 				quiet: true,
@@ -100,7 +101,7 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 		// Mutation (2026-10-22): remove the early /new route; no active-session ref is committed and this case fails.
 		const renderer = await import("../../../src/tui/renderer.js");
 		const { runTuiApp } = await import("../../../src/tui/app.js");
-		await createDot(home.workspaceDir, "tui-e2e", new Date());
+		await createDesk(home.workspaceDir, "tui-e2e", new Date());
 		let callbacks!: FrontendCallbacks;
 		let ready!: () => void;
 		const started = new Promise<void>((resolve) => {
@@ -138,14 +139,14 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 		const fresh = model.script.hold({
 			when: (request) => request.isMainTurn && request.lastUserText.includes("NEW_TERMINAL"),
 		});
-		const app = runTuiApp({ paths, dot: "tui-e2e", plain: true, io: { log() {}, error() {} } });
+		const app = runTuiApp({ paths, desk: "tui-e2e", plain: true, io: { log() {}, error() {} } });
 		try {
 			await Promise.race([started, app]);
 			callbacks.onSubmit("OLD_TERMINAL");
 			await old.arrived;
 			callbacks.onSubmit("/new");
 			await resetReply;
-			const reference = join(home.workspaceDir, "dots/tui-e2e/conversations/tui-1/active-session.json");
+			const reference = join(home.workspaceDir, "desk-tui-e2e/conversations/tui-1/active-session.json");
 			expect(existsSync(reference)).toBe(true);
 			callbacks.onSubmit("NEW_TERMINAL");
 			const request = await fresh.arrived;

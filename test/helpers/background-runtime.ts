@@ -2,17 +2,17 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach } from "vitest";
-import { isDotName } from "../../src/dot/paths.js";
+import { isDeskName } from "../../src/desk/paths.js";
 import { createExecutor } from "../../src/executor.js";
-import { createJobRuntime, DotJobManager } from "../../src/jobs/manager.js";
+import { createJobRuntime, DeskJobManager } from "../../src/jobs/manager.js";
 import { createSubAgentRuntime } from "../../src/subagents/run-registry.js";
 import { type RunManagerOptions, SubAgentRunManager } from "../../src/subagents/runs.js";
 import type { WorkerToolRequest } from "../../src/subagents/types.js";
 import { buildToolSet } from "../../src/tools/registry.js";
 
-/** Managers are per dot; tests key them by any label (often a channel id), mapped to a valid dot name. */
-export function testDot(key: string): string {
-	if (isDotName(key)) return key;
+/** Managers are per desk; tests key them by any label (often a channel id), mapped to a valid desk name. */
+export function testDesk(key: string): string {
+	if (isDeskName(key)) return key;
 	const slug = key
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
@@ -32,7 +32,7 @@ export function configureSubAgentRuntime(options: RunManagerOptions & { workspac
 }
 
 export function getSubAgentRunManager(key: string) {
-	return runs.get(testDot(key));
+	return runs.get(testDesk(key));
 }
 
 export function restoreAllSubAgentRuns() {
@@ -40,23 +40,23 @@ export function restoreAllSubAgentRuns() {
 }
 
 /**
- * Explicit test dependencies; never used by the production composition root. With `dotDir`, the
- * managers are rooted at that directory — production always roots a dot's managers at the same
- * dot directory its tools write tasks into, so a test seeding tasks there needs the same.
+ * Explicit test dependencies; never used by the production composition root. With `deskDir`, the
+ * managers are rooted at that directory — production always roots a desk's managers at the same
+ * desk directory its tools write tasks into, so a test seeding tasks there needs the same.
  */
-export function testManagers(key: string = "dm_123", dotDir?: string) {
-	if (dotDir) {
-		const runManager = new SubAgentRunManager({ dot: testDot(key), dotDir }, {});
+export function testManagers(key: string = "dm_123", deskDir?: string) {
+	if (deskDir) {
+		const runManager = new SubAgentRunManager({ desk: testDesk(key), deskDir }, {});
 		return {
 			runManager,
-			jobManager: new DotJobManager({ dot: testDot(key), dotDir }, createExecutor()),
+			jobManager: new DeskJobManager({ desk: testDesk(key), deskDir }, createExecutor()),
 			getRunManager: () => runManager,
 			buildWorkerTools: (request: WorkerToolRequest) => buildToolSet(request, { forSubagent: true }),
 		};
 	}
 	return {
-		runManager: runs.get(testDot(key)),
-		jobManager: jobs.get(testDot(key)),
+		runManager: runs.get(testDesk(key)),
+		jobManager: jobs.get(testDesk(key)),
 		getRunManager: getSubAgentRunManager,
 		// What `tools/index.ts` injects in production.
 		buildWorkerTools: (request: WorkerToolRequest) => buildToolSet(request, { forSubagent: true }),

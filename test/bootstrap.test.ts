@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -105,9 +105,24 @@ describe("bootstrap", () => {
 		expect(existsSync(join(paths.workspaceDir, "MEMORY.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "ENVIRONMENT.md"))).toBe(true);
 
+		const deskPath = join(paths.workspaceDir, "desk-default", "desk.json");
+		const record = readFileSync(deskPath, "utf8");
+		expect(JSON.parse(record)).toMatchObject({ name: "default", conversations: {} });
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);
 		expect(second.created).toEqual([]);
+		expect(readFileSync(deskPath, "utf8")).toBe(record);
+		// An existing broken identity is an operator repair, never an empty replacement.
+		writeFileSync(deskPath, "{broken");
+		bootstrapAppHome(paths);
+		expect(readFileSync(deskPath, "utf8")).toBe("{broken");
+		rmSync(join(paths.workspaceDir, "desk-default"), { recursive: true });
+		writeFileSync(
+			join(paths.workspaceDir, "desk-bindings.json"),
+			JSON.stringify({ version: 1, bindings: { dm_1: { desk: "default", boundAt: "2026-10-23" } } }),
+		);
+		bootstrapAppHome(paths);
+		expect(existsSync(deskPath)).toBe(false);
 	});
 
 	it("creates secret config files owner-only and tightens loose ones", () => {

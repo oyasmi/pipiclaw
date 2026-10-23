@@ -17,17 +17,17 @@ import {
 	renderBuiltInHelp,
 	slashCommandName,
 } from "../commands/catalog.js";
+import { formatUnavailableDeskReply, formatUnboundChannelReply } from "../desk/commands.js";
+import { getDeskDir } from "../desk/paths.js";
 import { createDingTalkContext } from "../dingtalk/delivery.js";
 import type { DingTalkBotPort } from "../dingtalk/handler.js";
-import { formatUnavailableDotReply, formatUnboundChannelReply } from "../dot/commands.js";
-import { getDotDir } from "../dot/paths.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
-import type { ChannelResolution } from "./dot-runtime.js";
+import type { ChannelResolution } from "./desk-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { relativeImagePaths } from "./inbound-images.js";
 import { parseDriverTaskId } from "./task-driver.js";
@@ -53,11 +53,11 @@ function isIdleRuntimeCommandName(name: string): name is Exclude<RuntimeCommandN
 
 /**
  * A wake from an in-process producer rather than a person. Every production producer goes through
- * durable dispatch (so carries a `dispatchId`) and stamps its `dot`; DingTalk inbound parsing sets
+ * durable dispatch (so carries a `dispatchId`) and stamps its `desk`; DingTalk inbound parsing sets
  * neither. `isEvent` is the transport's own flag for its synthetic queue path.
  */
 export function isSyntheticEvent(event: ChannelEvent, isEvent?: boolean): boolean {
-	return Boolean(isEvent) || event.dispatchId !== undefined || event.dot !== undefined;
+	return Boolean(isEvent) || event.dispatchId !== undefined || event.desk !== undefined;
 }
 
 /** One message or wake, written to the message archive (see `ChannelStore.logMessage`). */
@@ -82,7 +82,7 @@ export interface EventTurnDeps {
 	store: ChannelStore;
 	activeTasks: Set<Promise<void>>;
 	archiveIncomingMessage: (channelId: string, message: ArchivedMessage, contextLabel: string) => Promise<void>;
-	/** The channel's runner; `undefined` when the channel is not bound to an available dot (no runner is built). */
+	/** The channel's runner; `undefined` when the channel is not bound to an available desk (no runner is built). */
 	getRunner: (channelId: string) => AgentRunner | undefined;
 	isCurrentRunner: (runner: AgentRunner) => boolean;
 	resolveChannel: (channelId: string) => ChannelResolution;
@@ -131,18 +131,18 @@ export function createEventTurnRunner(
 	): Promise<{ taskId: string; brief: string } | undefined> => {
 		const taskId = parseDriverTaskId(event.text) ?? event.internalWake?.taskId;
 		if (!taskId) return undefined;
-		const { dot, dotDir } = runner.conversation;
-		// Admission already refused a wake for another dot (spec 058, D7); a task step bound to the
-		// wrong dot's session would run a task this runner does not own, so check once more.
-		if (event.dot !== dot) {
-			log.logWarn("taskdriver.step.dot_mismatch", "Task step refused: wake is not for this runner's dot", {
+		const { desk, deskDir } = runner.conversation;
+		// Admission already refused a wake for another desk (spec 058, D7); a task step bound to the
+		// wrong desk's session would run a task this runner does not own, so check once more.
+		if (event.desk !== desk) {
+			log.logWarn("taskdriver.step.desk_mismatch", "Task step refused: wake is not for this runner's desk", {
 				channelId: event.channelId,
-				fields: { taskId, eventDot: event.dot, runnerDot: dot },
+				fields: { taskId, eventDesk: event.desk, runnerDesk: desk },
 			});
 			return undefined;
 		}
 		try {
-			const brief = await buildTaskStepBrief({ dotDir, taskId });
+			const brief = await buildTaskStepBrief({ deskDir, taskId });
 			if (!brief) return undefined;
 			await runner.bindTaskSession(taskId);
 			return { taskId, brief };
@@ -164,7 +164,7 @@ export function createEventTurnRunner(
 		bot: DingTalkBotPort,
 	): Promise<void> => {
 		try {
-			const notice = await consumeTaskNotice(runner.conversation.dotDir, taskId);
+			const notice = await consumeTaskNotice(runner.conversation.deskDir, taskId);
 			if (notice) {
 				// runner.run closes its per-turn delivery context before returning. Sending through that
 				// closed context silently dropped successful task_step_end notifications (T-run-01).
@@ -306,11 +306,11 @@ export function createEventTurnRunner(
 	) => {
 		const { event } = turn;
 		const { kind, resourceId, taskId: wakeTaskId } = internalWake;
-		const { dot, dotDir } = runner.conversation;
+		const { desk, deskDir } = runner.conversation;
 		const claimed = await claimVerifiedWake(
 			event,
-			dotDir,
-			kind === "job" ? getJobs().get(dot) : getRuns().get(dot),
+			deskDir,
+			kind === "job" ? getJobs().get(desk) : getRuns().get(desk),
 			options.wakeTransitionHooks?.[kind],
 		);
 		if (!claimed) {
@@ -351,7 +351,7 @@ export function createEventTurnRunner(
 				text: event.text,
 				isBot: false,
 				skipContextSync: Boolean(builtInCommand),
-				images: relativeImagePaths(runner.conversation.dotDir, event.images),
+				images: relativeImagePaths(runner.conversation.deskDir, event.images),
 			},
 			"user message",
 		);
@@ -436,17 +436,17 @@ export function createEventTurnRunner(
 	};
 
 	/**
-	 * A task-bound wake dropped at admission because its channel left the wake's dot while it was
+	 * A task-bound wake dropped at admission because its channel left the wake's desk while it was
 	 * queued. No turn runs, but the business side settles exactly as when the producer suppresses
 	 * the wake itself: the owner verifies and claims it and the task's `work` ticket is redeemed, so
 	 * the task resumes as soon as its channel is bound back instead of waiting out the backstop.
 	 */
 	const settleDroppedTaskWake = async (event: ChannelEvent): Promise<void> => {
 		const wake = event.internalWake;
-		if (!wake || !event.dot) return;
+		if (!wake || !event.desk) return;
 		try {
-			const owner = wake.kind === "job" ? getJobs().get(event.dot) : getRuns().get(event.dot);
-			const claimed = await claimVerifiedWake(event, getDotDir(options.paths.workspaceDir, event.dot), owner);
+			const owner = wake.kind === "job" ? getJobs().get(event.desk) : getRuns().get(event.desk);
+			const claimed = await claimVerifiedWake(event, getDeskDir(options.paths.workspaceDir, event.desk), owner);
 			await claimed?.finish();
 		} catch (error) {
 			log.logWarn("dispatch.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
@@ -464,11 +464,11 @@ export function createEventTurnRunner(
 	};
 
 	/**
-	 * A human message on a channel with no usable dot (D4): nothing is archived, no runner is built
-	 * and no model is called. `/help` still answers (and `/dot`, before this); everything else gets
+	 * A human message on a channel with no usable desk (D4): nothing is archived, no runner is built
+	 * and no model is called. `/help` still answers (and `/desk`, before this); everything else gets
 	 * the one reason and the next step.
 	 */
-	const replyWithoutDot = async (
+	const replyWithoutDesk = async (
 		event: ChannelEvent,
 		resolution: Exclude<ChannelResolution, { kind: "bound" }>,
 		bot: DingTalkBotPort,
@@ -480,20 +480,23 @@ export function createEventTurnRunner(
 		}
 		await bot.sendPlain(
 			event.channelId,
-			resolution.kind === "unbound" ? formatUnboundChannelReply() : formatUnavailableDotReply(resolution.dot),
+			resolution.kind === "unbound" ? formatUnboundChannelReply() : formatUnavailableDeskReply(resolution.desk),
 			{ markdown: true },
 		);
 	};
 
-	const runDotCommand = async (event: ChannelEvent, args: string, bot: DingTalkBotPort): Promise<void> => {
+	const runDeskCommand = async (event: ChannelEvent, args: string, bot: DingTalkBotPort): Promise<void> => {
 		const logCtx = { channelId: event.channelId, userName: event.userName };
-		log.logEvent("info", "runtime.command.started", "Executing command", { ctx: logCtx, fields: { command: "dot" } });
-		const response = await deps.runRuntimeCommand(event, "dot", args);
-		const delivered = await bot.sendPlain(event.channelId, response, { title: "/dot", markdown: true });
+		log.logEvent("info", "runtime.command.started", "Executing command", {
+			ctx: logCtx,
+			fields: { command: "desk" },
+		});
+		const response = await deps.runRuntimeCommand(event, "desk", args);
+		const delivered = await bot.sendPlain(event.channelId, response, { title: "/desk", markdown: true });
 		if (!delivered) {
 			log.logWarn("delivery.command_reply.failed", "Command reply delivery failed", {
 				channelId: event.channelId,
-				fields: { command: "dot", chars: response.length },
+				fields: { command: "desk", chars: response.length },
 			});
 		}
 	};
@@ -509,20 +512,20 @@ export function createEventTurnRunner(
 		const resolution = deps.resolveChannel(inboundEvent.channelId);
 		if (isSyntheticEvent(inboundEvent, isEvent)) {
 			// D7's authoritative check: a wake is admitted only while its channel is still bound to the
-			// dot it was produced for. Covers wakes queued before a restart, a rebind while queued, and
-			// records left from before the migration (which carry no dot at all).
-			if (!inboundEvent.dot || resolution.kind !== "bound" || resolution.conversation.dot !== inboundEvent.dot) {
-				log.logInfoEvent("dispatch.wake.dot_mismatch", "Wake dropped: channel not bound to the wake's dot", {
+			// desk it was produced for. Covers wakes queued before a restart, a rebind while queued, and
+			// malformed records that carry no owning desk.
+			if (!inboundEvent.desk || resolution.kind !== "bound" || resolution.conversation.desk !== inboundEvent.desk) {
+				log.logInfoEvent("dispatch.wake.desk_mismatch", "Wake dropped: channel not bound to the wake's desk", {
 					channelId: inboundEvent.channelId,
 					fields: {
 						dispatchId: inboundEvent.dispatchId,
-						wakeDot: inboundEvent.dot,
-						boundDot:
+						wakeDesk: inboundEvent.desk,
+						boundDesk:
 							resolution.kind === "unbound"
 								? undefined
 								: resolution.kind === "bound"
-									? resolution.conversation.dot
-									: resolution.dot,
+									? resolution.conversation.desk
+									: resolution.desk,
 					},
 				});
 				releaseReservation(inboundEvent);
@@ -531,17 +534,17 @@ export function createEventTurnRunner(
 				return;
 			}
 		} else {
-			// `/dot` runs outside any turn, bound or not: nothing is archived and no runner is built,
-			// so `/dot bind` sees this channel idle and the next queued message already resolves
+			// `/desk` runs outside any turn, bound or not: nothing is archived and no runner is built,
+			// so `/desk bind` sees this channel idle and the next queued message already resolves
 			// against the new binding (D5).
 			const command = parseBuiltInCommand(inboundEvent.text);
-			if (command?.name === "dot") {
+			if (command?.name === "desk") {
 				releaseReservation(inboundEvent);
-				await runDotCommand(inboundEvent, command.args, bot);
+				await runDeskCommand(inboundEvent, command.args, bot);
 				return;
 			}
 			if (resolution.kind !== "bound") {
-				await replyWithoutDot(inboundEvent, resolution, bot);
+				await replyWithoutDesk(inboundEvent, resolution, bot);
 				return;
 			}
 		}

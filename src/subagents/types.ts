@@ -91,7 +91,7 @@ export interface WorkerToolRequest {
 	securityConfig: SecurityConfig;
 	securityContext: SecurityRuntimeContext;
 	channelId: string;
-	dotDir: string;
+	deskDir: string;
 	workspaceDir: string;
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
@@ -112,7 +112,7 @@ export interface SubAgentToolOptions {
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
-	dotDir: string;
+	deskDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	/** `settings.subagentModel` (spec 032 D5); null/undefined means unset. */
 	getSubAgentModelReference?: () => string | null;
@@ -121,9 +121,9 @@ export interface SubAgentToolOptions {
 	rtkEnabled?: boolean;
 	runtimeContext: {
 		workspaceDir: string;
-		/** The dot the delegating turn belongs to, and its directory (tasks, memory). */
-		dot: string;
-		dotDir: string;
+		/** The desk the delegating turn belongs to, and its directory (tasks, memory). */
+		desk: string;
+		deskDir: string;
 		channelId: string;
 	};
 	createWorker?: (config: {

@@ -6,7 +6,7 @@
 import { writeFile } from "fs/promises";
 import { join } from "path";
 import type { ChannelContext } from "../../channel/channel-context.js";
-import type { DotConversation } from "../../dot/types.js";
+import type { DeskConversation } from "../../desk/types.js";
 import * as log from "../../log.js";
 import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
@@ -33,7 +33,7 @@ function getFinalOutcomeText(outcome: FinalOutcome): string | null {
 }
 
 export interface TurnFinisherDeps {
-	conversation: DotConversation;
+	conversation: DeskConversation;
 	host: SessionHost;
 	models: ModelSelection;
 	ledger: UsageLedger;
@@ -47,8 +47,8 @@ export interface TurnFinisherDeps {
 
 export class TurnFinisher {
 	private readonly channelId: string;
-	private readonly dot: string;
-	/** The debug prompt dump is per conversation: two channels of one dot must not overwrite each other's. */
+	private readonly desk: string;
+	/** The debug prompt dump is per conversation: two channels of one desk must not overwrite each other's. */
 	private readonly conversationDir: string;
 	private readonly host: SessionHost;
 	private readonly models: ModelSelection;
@@ -57,7 +57,7 @@ export class TurnFinisher {
 
 	constructor(private readonly deps: TurnFinisherDeps) {
 		this.channelId = deps.conversation.channelId;
-		this.dot = deps.conversation.dot;
+		this.desk = deps.conversation.desk;
 		this.conversationDir = deps.conversation.conversationDir;
 		this.host = deps.host;
 		this.models = deps.models;
@@ -208,7 +208,7 @@ export class TurnFinisher {
 			// keeping Σ(entries) == real spend with no double counting.
 			this.ledger.record({
 				channelId: this.channelId,
-				dot: this.dot,
+				desk: this.desk,
 				kind: "turn",
 				model: responseModel ?? formatModelReference(currentRunModel),
 				usage: {

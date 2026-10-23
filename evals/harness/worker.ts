@@ -9,7 +9,7 @@ import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import { trialSeed } from "./fixture-seed.js";
 import { traceIdentity, traceToolResultFailed } from "./identity.js";
-import { EVAL_CHANNEL_ID, EVAL_DOT, evalConversationDir, evalDotDir, prepareEvalDot } from "./layout.js";
+import { EVAL_CHANNEL_ID, EVAL_DESK, evalConversationDir, evalDeskDir, prepareEvalDesk } from "./layout.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
 import { modelResultFields } from "./scoring.js";
 import { fallbackCostUsd, hash, tree } from "./util.js";
@@ -324,12 +324,12 @@ class EvalBot implements DingTalkBotPort {
 	}
 }
 
-function interpolate(value: string, canaryPath: string, workspaceDir: string, dotDir: string): string {
+function interpolate(value: string, canaryPath: string, workspaceDir: string, deskDir: string): string {
 	return value
 		.replaceAll("{{CANARY_PATH}}", canaryPath)
 		.replaceAll("{{EXTERNAL_BASE_URL}}", externalBaseUrl ?? "")
 		.replaceAll("{{WORKSPACE_DIR}}", workspaceDir)
-		.replaceAll("{{DOT_DIR}}", dotDir);
+		.replaceAll("{{DESK_DIR}}", deskDir);
 }
 
 async function main(): Promise<void> {
@@ -342,7 +342,7 @@ async function main(): Promise<void> {
 			? createE2ETestHome({ homeDir })
 			: { homeDir, workspaceDir: join(homeDir, "workspace"), channelConfigPath: join(homeDir, "channel.json") };
 	const workspaceDir = home.workspaceDir;
-	const dotDir = evalDotDir(workspaceDir);
+	const deskDir = evalDeskDir(workspaceDir);
 	const canaryPath = join(homeDir, "controlled-canary.txt");
 	if (firstSegment) {
 		writeFileSync(
@@ -356,10 +356,10 @@ async function main(): Promise<void> {
 			)}\n`,
 		);
 	}
-	if (firstSegment) await prepareEvalDot(workspaceDir);
+	if (firstSegment) await prepareEvalDesk(workspaceDir);
 	if (firstSegment && item.setup) {
 		currentPhase = "fixture";
-		await item.setup({ homeDir, workspaceDir, dotDir, canaryPath, externalBaseUrl, seed });
+		await item.setup({ homeDir, workspaceDir, deskDir, canaryPath, externalBaseUrl, seed });
 		currentPhase = "runtime";
 	}
 
@@ -420,7 +420,7 @@ async function main(): Promise<void> {
 				ts: Date.now().toString(),
 				user: "eval",
 				userName: "Evaluator",
-				text: interpolate(step.text, canaryPath, workspaceDir, dotDir),
+				text: interpolate(step.text, canaryPath, workspaceDir, deskDir),
 				conversationId: "eval",
 				conversationType: "1",
 			});
@@ -463,14 +463,14 @@ async function main(): Promise<void> {
 				throw new Error(`Environment path '${step.path}' escapes the fixture workspace.`);
 			currentPhase = "fixture";
 			mkdirSync(join(target, ".."), { recursive: true });
-			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, dotDir));
+			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, deskDir));
 			trace({ kind: "runtime-log", fields: { environment: step.action, path: rel }, ok: true });
 			currentPhase = "runtime";
 		} else if (step.kind === "syntheticTaskTurn") {
-			const entries = await readActiveTasks(join(dotDir, "tasks"), Date.now());
+			const entries = await readActiveTasks(join(deskDir, "tasks"), Date.now());
 			const entry = entries.find((candidate) => candidate.id === step.taskId);
 			if (!entry) throw new Error(`Synthetic task ${step.taskId} is missing; repair the case fixture.`);
-			await sendEvent(createTaskDriverEvent(EVAL_DOT, channelId, entry, Date.now()));
+			await sendEvent(createTaskDriverEvent(EVAL_DESK, channelId, entry, Date.now()));
 		} else if (step.kind === "runTaskDriver") {
 			currentPhase = "scheduler";
 			if (!runtime.taskDriver.runOnce) {
@@ -495,7 +495,7 @@ async function main(): Promise<void> {
 					seed,
 					homeDir,
 					workspaceDir,
-					dotDir,
+					deskDir,
 					deliveries: localDeliveries,
 					trace: localTrace,
 					snapshot: {

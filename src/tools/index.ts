@@ -5,7 +5,7 @@ import type { PipiclawSessionSearchSettings } from "../config/settings.js";
 import type { PipiclawToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { DotJobManager } from "../jobs/manager.js";
+import type { DeskJobManager } from "../jobs/manager.js";
 import type { SecurityConfig } from "../security/types.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
@@ -17,7 +17,7 @@ import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage
 import type { TaskStepCost } from "./task-manage/types.js";
 
 export interface CreatePipiclawToolsOptions {
-	jobManager: DotJobManager;
+	jobManager: DeskJobManager;
 	runManager: SubAgentRunManager;
 	executor: Executor;
 	/** File-content port for the generic file tools (spec 044, D1); `Executor` stays command-only. */
@@ -28,8 +28,8 @@ export interface CreatePipiclawToolsOptions {
 	workspaceDir: string;
 	/** Base for relative paths in the generic file tools, the shell's cwd and the default delegation `workingDirectory`. */
 	cwd: string;
-	dot: string;
-	dotDir: string;
+	desk: string;
+	deskDir: string;
 	channelId: string;
 	describeConversation?: (conversation: string) => string | undefined;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
@@ -74,8 +74,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		securityConfig,
 		securityContext,
 		channelId: options.channelId,
-		dot: options.dot,
-		dotDir: options.dotDir,
+		desk: options.desk,
+		deskDir: options.deskDir,
 		describeConversation: options.describeConversation,
 		workspaceDir: options.workspaceDir,
 		webConfig: toolsConfig.tools.web,
@@ -103,7 +103,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		workspaceDir: options.workspaceDir,
 		// A delegation runs in the parent's cwd unless the model passes an explicit workingDirectory.
 		workingDirectory: options.cwd,
-		dotDir: options.dotDir,
+		deskDir: options.deskDir,
 		getSubAgentDiscovery: options.getSubAgentDiscovery,
 		getSubAgentModelReference: options.getSubAgentModelReference,
 		resolveFallbackModel: options.resolveFallbackModel,
@@ -112,8 +112,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		rtkEnabled: toolsConfig.tools.rtk.enabled,
 		runtimeContext: {
 			workspaceDir: options.workspaceDir,
-			dot: options.dot,
-			dotDir: options.dotDir,
+			desk: options.desk,
+			deskDir: options.deskDir,
 			channelId: options.channelId,
 		},
 		// Inside a task session every delegation binds to that task automatically (spec 052, D4).
@@ -122,8 +122,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	const subAgentManageOptions = {
 		runManager: options.runManager,
 		channelId: options.channelId,
-		dot: options.dot,
-		dotDir: options.dotDir,
+		desk: options.desk,
+		deskDir: options.deskDir,
 		getSubAgentDiscovery: options.getSubAgentDiscovery,
 		workspaceDir: options.workspaceDir,
 		securityConfig,

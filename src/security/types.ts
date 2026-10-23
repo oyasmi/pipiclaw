@@ -45,7 +45,7 @@ void _securityConfigKeysComplete;
 
 export interface SecurityRuntimeContext {
 	agentWorkspaceDir: string;
-	/** Base for relative paths — the dot directory for a dot-bound caller; `process.cwd()` when omitted. */
+	/** Base for relative paths — the desk directory for a desk-bound caller; `process.cwd()` when omitted. */
 	cwd?: string;
 	homeDir?: string;
 }

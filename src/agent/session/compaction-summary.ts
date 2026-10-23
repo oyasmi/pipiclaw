@@ -9,7 +9,7 @@ import {
 	type ModelRuntime,
 	type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import type { DotConversation } from "../../dot/types.js";
+import type { DeskConversation } from "../../desk/types.js";
 import * as log from "../../log.js";
 import { estimateTokens } from "../../shared/format.js";
 import { isRecord } from "../../shared/type-guards.js";
@@ -33,7 +33,7 @@ Older raw conversation remains available via session_search; retain useful searc
 This checkpoint must let the next model continue the task without asking the user to repeat it.`;
 
 export interface CompactionSummaryOptions {
-	conversation: DotConversation;
+	conversation: DeskConversation;
 	getRuntime: () => ModelRuntime;
 	preserveMemory: (event: SessionBeforeCompactEvent) => Promise<void>;
 	ledger: UsageLedger;
@@ -113,7 +113,7 @@ export class CompactionSummary {
 							(message) =>
 								this.options.ledger.record({
 									channelId: this.options.conversation.channelId,
-									dot: this.options.conversation.dot,
+									desk: this.options.conversation.desk,
 									kind: "sidecar",
 									label: "compaction",
 									correlationId: operationId,

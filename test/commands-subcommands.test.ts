@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_COMMANDS, type CommandSubSpec, formatBusyHint, SESSION_COMMANDS } from "../src/commands/catalog.js";
-import { parseDotCommand } from "../src/dot/commands.js";
+import { parseDeskCommand } from "../src/desk/commands.js";
 import { parseEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
@@ -20,7 +20,7 @@ import { testConversation, useTempDirs } from "./helpers/fixtures.js";
  */
 
 const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
-	dot: parseDotCommand,
+	desk: parseDeskCommand,
 	tasks: parseTasksCommand,
 	events: parseEventsCommand,
 	subagents: parseSubagentsCommand,
@@ -28,9 +28,9 @@ const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
 };
 
 const EXPECTED_EXAMPLES: Record<string, unknown> = {
-	"/dot": { action: "list" },
-	"/dot new research": { action: "new", name: "research" },
-	"/dot bind research": { action: "bind", name: "research" },
+	"/desk": { action: "list" },
+	"/desk new research": { action: "new", name: "research" },
+	"/desk bind research": { action: "bind", name: "research" },
 	"/events list": { action: "list" },
 	"/events show weekly-review": { action: "show", name: "weekly-review" },
 	"/events delete weekly-review": { action: "delete", name: "weekly-review" },
@@ -87,8 +87,8 @@ describe("command subcommand examples round-trip through their parser", () => {
 					continue;
 				}
 				if (name === "memory") {
-					const dotDir = makeChannel();
-					await applyMemoryOps(dotDir, [
+					const deskDir = makeChannel();
+					await applyMemoryOps(deskDir, [
 						{
 							op: "add",
 							name: "deploy-window-thursday",
@@ -98,9 +98,9 @@ describe("command subcommand examples round-trip through their parser", () => {
 						},
 					]);
 					if (args.startsWith("journal")) {
-						await appendJournalEntries(dotDir, localDayKey(), ["01:23 memory journal route sentinel"]);
+						await appendJournalEntries(deskDir, localDayKey(), ["01:23 memory journal route sentinel"]);
 					}
-					const result = await handleMemoryCommand({ conversation: testConversation(dotDir), args });
+					const result = await handleMemoryCommand({ conversation: testConversation(deskDir), args });
 					switch (args.trim().split(/\s+/)[0]) {
 						case "status":
 							expect(result).toContain("记忆条目：`1`");
@@ -112,7 +112,7 @@ describe("command subcommand examples round-trip through their parser", () => {
 							expect(result).toContain("memory command route sentinel");
 							break;
 						case "forget":
-							expect(await listMemoryEntries(dotDir)).toHaveLength(0);
+							expect(await listMemoryEntries(deskDir)).toHaveLength(0);
 							break;
 						case "journal":
 							expect(result).toContain("memory journal route sentinel");

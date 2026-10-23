@@ -89,14 +89,14 @@ function mergeSecurityConfig(source: unknown, configPath: string, diagnostics: C
 	const pathGuard = isRecord(source.pathGuard) ? source.pathGuard : {};
 	const networkGuard = isRecord(source.networkGuard) ? source.networkGuard : {};
 	const audit = isRecord(source.audit) ? source.audit : {};
-	// Retired by spec 058 (D9): project scope is gone and a dot's directory is the working
+	// Retired by spec 058 (D9): project scope is gone and a desk's directory is the working
 	// directory. Warned about, then ignored — the same treatment as `RETIRED_SETTINGS_KEYS`.
 	if ("projectAccess" in source) {
 		pushInvalidSecurityDiagnostic(
 			diagnostics,
 			configPath,
 			"projectAccess",
-			"retired key ignored: project scope was removed; the dot directory is now the working directory",
+			"retired key ignored: project scope was removed; the desk directory is now the working directory",
 		);
 	}
 

@@ -19,8 +19,8 @@ export interface JobSnapshot {
 	/** The task this job's completion wake belongs to, if any — lets a caller verify that a
 	 *  `[JOB:<id>] ... belongs to task <taskId>.` wake actually names the job it claims to (T9). */
 	taskId?: string;
-	/** The channel that started the job, where its completion wake goes; jobs are shared per dot. */
-	channelId?: string;
+	/** The channel that started the job, where its completion wake goes; jobs are shared per desk. */
+	channelId: string;
 }
 
 /** What should happen when the job finishes. */
@@ -32,12 +32,6 @@ export interface JobWakeContract {
 }
 
 export interface JobRecord extends JobSnapshot {
-	/**
-	 * The channel that started the job: its completion wake goes back there (spec 058, D7). Absent
-	 * only on records written before spec 058 that the migration did not reach; such a job settles
-	 * normally but has no channel to wake.
-	 */
-	channelId?: string;
 	pid: number;
 	/** Process-group id of the launched job, as `ps` reported it right after spawn. `setsid` makes
 	 *  the job its own session/group leader, so this normally equals `pid` — the precondition for a
@@ -77,6 +71,7 @@ export function parseJobRecord(raw: string): JobRecord | undefined {
 	if (
 		!isRecord(value) ||
 		typeof value.id !== "string" ||
+		typeof value.channelId !== "string" ||
 		typeof value.pid !== "number" ||
 		typeof value.spillFile !== "string" ||
 		typeof value.exitFile !== "string" ||

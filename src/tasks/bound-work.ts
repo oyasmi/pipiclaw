@@ -12,12 +12,12 @@ import { readStoredTask, updateStoredTask } from "./store.js";
 
 /** Record that a delegation or job was bound to the task. A task that no longer exists is skipped. */
 export async function logTaskDispatch(
-	dotDir: string,
+	deskDir: string,
 	taskId: string,
 	record: Omit<TaskDispatchRecord, "ts" | "kind">,
 ): Promise<void> {
-	if (!(await readStoredTask(dotDir, taskId))) return;
-	await appendTaskLog(dotDir, taskId, { kind: "dispatch", ...record });
+	if (!(await readStoredTask(deskDir, taskId))) return;
+	await appendTaskLog(deskDir, taskId, { kind: "dispatch", ...record });
 }
 
 export interface TaskSettlementCost {
@@ -30,13 +30,13 @@ export interface TaskSettlementCost {
  * same budget the leader's own steps spend from, so a runaway fan-out stops the task.
  */
 export async function logTaskSettlement(
-	dotDir: string,
+	deskDir: string,
 	taskId: string,
 	record: Omit<TaskSettleRecord, "ts" | "kind" | "usd" | "usdEstimated">,
 	cost: TaskSettlementCost = { usd: 0, estimated: false },
 ): Promise<void> {
 	if (cost.usd > 0 || cost.estimated) {
-		await updateStoredTask(dotDir, taskId, (task) => {
+		await updateStoredTask(deskDir, taskId, (task) => {
 			const usage = task.fields.usage;
 			if (!usage) return;
 			task.fields.usage = {
@@ -46,8 +46,8 @@ export async function logTaskSettlement(
 			};
 		});
 	}
-	if (!(await readStoredTask(dotDir, taskId))) return;
-	await appendTaskLog(dotDir, taskId, {
+	if (!(await readStoredTask(deskDir, taskId))) return;
+	await appendTaskLog(deskDir, taskId, {
 		kind: "settle",
 		...record,
 		...(cost.usd > 0 ? { usd: cost.usd } : {}),

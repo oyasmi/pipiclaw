@@ -1,8 +1,8 @@
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
 import type { ChannelDescription } from "../channel/channel-id.js";
-import { type DotCommandPort, handleDotCommand } from "../dot/commands.js";
-import type { DotConversation } from "../dot/types.js";
+import { type DeskCommandPort, handleDeskCommand } from "../desk/commands.js";
+import type { DeskConversation } from "../desk/types.js";
 import { handleEventsCommand } from "../events/commands.js";
 import { handleSkillsCommand } from "../skills/commands.js";
 import { handleSubagentsCommand } from "../subagents/commands.js";
@@ -14,7 +14,7 @@ import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import type { RuntimeCommandName } from "./catalog.js";
 
 /**
- * The stateless report commands (`/dot /events /tasks /status /usage /context /subagents /skills`) as
+ * The stateless report commands (`/desk /events /tasks /status /usage /context /subagents /skills`) as
  * one transport-neutral handler. The DingTalk runtime and the terminal TUI both route through it,
  * so a report cannot behave differently depending on where it was typed; each transport supplies
  * only what is genuinely its own (how to find its runner, whether a task can be woken immediately).
@@ -30,14 +30,13 @@ export interface ReportCommandPaths {
 
 export interface ReportCommandContext {
 	kind: "bound";
-	/** The asking channel's conversation in its dot. */
-	conversation: DotConversation;
-	dotPort: DotCommandPort;
+	/** The asking channel's conversation in its desk. */
+	conversation: DeskConversation;
+	deskPort: DeskCommandPort;
 	paths: ReportCommandPaths;
-	/** Names a delivery channel and says whether it is still bound to this dot. */
+	/** Names a delivery channel and says whether it is still bound to this desk. */
 	describeChannel: (channelId: string) => ChannelDescription;
-	/** Channels with a conversation in this dot, for `/events history` records older than spec 058. */
-	dotChannelIds: () => readonly string[];
+	/** Channels with a conversation in this desk, for `/events history` records older than spec 058. */
 	version: string;
 	startedAt: number;
 	/** The channel's live runner, if one exists; never builds one. */
@@ -50,12 +49,12 @@ export interface ReportCommandContext {
 }
 
 /**
- * A channel with no usable dot (spec 058, D4): `/dot` is the one report it can run; every other
- * name gets `refusal` — why there is no dot, and the next step.
+ * A channel with no usable desk (spec 058, D4): `/desk` is the one report it can run; every other
+ * name gets `refusal` — why there is no desk, and the next step.
  */
 export interface UnboundCommandContext {
 	kind: "unbound";
-	dotPort: DotCommandPort;
+	deskPort: DeskCommandPort;
 	refusal: string;
 }
 
@@ -64,24 +63,23 @@ export async function runReportCommand(
 	name: RuntimeCommandName,
 	args: string,
 ): Promise<string> {
-	if (name === "dot") return handleDotCommand(args, context.dotPort);
+	if (name === "desk") return handleDeskCommand(args, context.deskPort);
 	if (context.kind === "unbound") return context.refusal;
 	const { conversation, paths } = context;
-	const { channelId, dot, dotDir } = conversation;
+	const { channelId, desk, deskDir } = conversation;
 	switch (name) {
 		case "events":
 			return handleEventsCommand({
 				args,
-				dot,
-				dotDir,
+				desk,
+				deskDir,
 				historyPath: paths.eventHistoryPath,
-				dotChannelIds: context.dotChannelIds(),
 				describeChannel: context.describeChannel,
 			});
 		case "tasks":
 			return handleTasksCommand({
 				args,
-				dotDir,
+				deskDir,
 				currentChannelId: channelId,
 				describeChannel: context.describeChannel,
 				dispatchTask: context.dispatchTask,
@@ -93,7 +91,7 @@ export async function runReportCommand(
 				uptimeMs: Date.now() - context.startedAt,
 			});
 		case "usage":
-			return renderUsageReport(getUsageLedger(), { dot, channelId }, parseUsageMode(args), new Date());
+			return renderUsageReport(getUsageLedger(), { desk, channelId }, parseUsageMode(args), new Date());
 		// Read-only prompt accounting; safe mid-turn.
 		case "context":
 			return context.getRunner().renderContextReport(args);

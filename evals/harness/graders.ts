@@ -159,12 +159,12 @@ export function fileContains(
 	relativePath: string,
 	pattern: RegExp,
 	severity: Severity = "quality",
-	root: "channel" | "workspace" = "channel",
+	root: "desk" | "workspace" = "desk",
 ): CodeGrader {
 	const grader = codeGrader(
 		graderId,
 		(ctx) => {
-			const path = join(root === "channel" ? ctx.dotDir : ctx.workspaceDir, relativePath);
+			const path = join(root === "desk" ? ctx.deskDir : ctx.workspaceDir, relativePath);
 			const ok = existsSync(path) && pattern.test(readFileSync(path, "utf8"));
 			return result(
 				grader,
@@ -189,7 +189,7 @@ export function fileNotContains(
 	const grader = codeGrader(
 		graderId,
 		(ctx) => {
-			const path = join(ctx.dotDir, relativePath);
+			const path = join(ctx.deskDir, relativePath);
 			const ok = !existsSync(path) || !pattern.test(readFileSync(path, "utf8"));
 			return result(
 				grader,
@@ -217,8 +217,8 @@ export function taskLog(
 ): CodeGrader {
 	const grader = codeGrader(graderId, (ctx) => {
 		const path = [
-			join(ctx.dotDir, "tasks", `${taskId}.jsonl`),
-			join(ctx.dotDir, "tasks", "archive", `${taskId}.jsonl`),
+			join(ctx.deskDir, "tasks", `${taskId}.jsonl`),
+			join(ctx.deskDir, "tasks", "archive", `${taskId}.jsonl`),
 		].find((candidate) => existsSync(candidate));
 		if (!path) return result(grader, "fail", `task ${taskId} wrote no loop log`, "file", `tasks/${taskId}.jsonl`);
 		const log = readFileSync(path, "utf8");
@@ -229,8 +229,11 @@ export function taskLog(
 }
 
 /** The loop log's raw text, for a model grader's artifacts. */
-export function readTaskLoopLog(dotDir: string, taskId: string): string {
-	for (const path of [join(dotDir, "tasks", `${taskId}.jsonl`), join(dotDir, "tasks", "archive", `${taskId}.jsonl`)]) {
+export function readTaskLoopLog(deskDir: string, taskId: string): string {
+	for (const path of [
+		join(deskDir, "tasks", `${taskId}.jsonl`),
+		join(deskDir, "tasks", "archive", `${taskId}.jsonl`),
+	]) {
 		if (existsSync(path)) return readFileSync(path, "utf8");
 	}
 	return "(no loop log)";
@@ -242,8 +245,8 @@ export function taskFrontmatter(
 	predicate: (frontmatter: ReturnType<typeof parseTaskFrontmatter>, content: string) => boolean,
 ): CodeGrader {
 	const grader = codeGrader(graderId, (ctx) => {
-		const active = join(ctx.dotDir, "tasks", `${taskId}.md`);
-		const archived = join(ctx.dotDir, "tasks", "archive", `${taskId}.md`);
+		const active = join(ctx.deskDir, "tasks", `${taskId}.md`);
+		const archived = join(ctx.deskDir, "tasks", "archive", `${taskId}.md`);
 		const path = existsSync(active) ? active : archived;
 		if (!existsSync(path))
 			return result(grader, "fail", `task ${taskId} was not found`, "file", `tasks/${taskId}.md`);

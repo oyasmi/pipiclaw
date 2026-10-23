@@ -34,7 +34,7 @@ const MODULES = [
 const L01 = ["shared", "commands", "foundation"];
 const BELOW_TOOLS = [
 	...L01,
-	"security", "usage", "tasks", "playbooks", "dot", "channel", "tools-contract",
+	"security", "usage", "tasks", "playbooks", "desk", "channel", "tools-contract",
 	"config", "models", "web", "skills", "memory", "events", "jobs", "subagents",
 ];
 const BELOW_AGENT = [...BELOW_TOOLS, "tools"];
@@ -47,17 +47,17 @@ const ALLOWED = {
 	usage: L01,
 	tasks: L01,
 	playbooks: L01,
-	dot: L01,
-	channel: [...L01, "security", "dot"],
+	desk: L01,
+	channel: [...L01, "security", "desk"],
 	"tools-contract": [...L01, "security"],
 	config: [...L01, "channel"],
 	models: [...L01, "config"],
 	web: [...L01, "security", "config"],
 	skills: [...L01, "security"],
-	memory: [...L01, "dot", "channel", "config", "models", "usage"],
-	events: [...L01, "dot", "channel", "security", "tasks"],
-	jobs: [...L01, "dot", "channel", "tasks"],
-	subagents: [...L01, "security", "usage", "tasks", "dot", "channel", "config", "models", "memory", "tools-contract"],
+	memory: [...L01, "desk", "channel", "config", "models", "usage"],
+	events: [...L01, "desk", "channel", "security", "tasks"],
+	jobs: [...L01, "desk", "channel", "tasks"],
+	subagents: [...L01, "security", "usage", "tasks", "desk", "channel", "config", "models", "memory", "tools-contract"],
 	tools: BELOW_TOOLS,
 	agent: BELOW_AGENT,
 	"commands-router": [...BELOW_AGENT, "agent"],

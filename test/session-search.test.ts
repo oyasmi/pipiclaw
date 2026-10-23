@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionCorpus } from "../src/memory/session-corpus.js";
-import { searchDotSessions } from "../src/memory/session-search.js";
+import { searchDeskSessions } from "../src/memory/session-search.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const { runSidecarTaskMock } = vi.hoisted(() => ({
@@ -21,9 +21,9 @@ function createWorkspace(): string {
 	return workspaceDir;
 }
 
-/** A conversation directory inside a dot (spec 058, D2), created on first use. */
-function conv(dotDir: string, name = "dm-1"): string {
-	const dir = join(dotDir, "conversations", name);
+/** A conversation directory inside a desk (spec 058, D2), created on first use. */
+function conv(deskDir: string, name = "dm-1"): string {
+	const dir = join(deskDir, "conversations", name);
 	mkdirSync(dir, { recursive: true });
 	return dir;
 }
@@ -37,23 +37,23 @@ beforeEach(() => {
 });
 
 describe("session search", () => {
-	it("builds a dot corpus from every conversation's context, session jsonl, log, and rotated log", async () => {
+	it("builds a desk corpus from every conversation's context, session jsonl, log, and rotated log", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dm_123");
 		const siblingDir = join(workspaceDir, "dm_other");
-		mkdirSync(dotDir, { recursive: true });
+		mkdirSync(deskDir, { recursive: true });
 		mkdirSync(siblingDir, { recursive: true });
 
-		writeJsonl(join(conv(dotDir), "context.jsonl"), [
+		writeJsonl(join(conv(deskDir), "context.jsonl"), [
 			{
 				type: "message",
 				timestamp: "2026-04-19T00:00:00.000Z",
 				message: { role: "user", content: "context mentions sqlite migration" },
 			},
 		]);
-		writeFileSync(join(conv(dotDir), "session-1.jsonl"), "{bad json}\n", "utf-8");
+		writeFileSync(join(conv(deskDir), "session-1.jsonl"), "{bad json}\n", "utf-8");
 		writeFileSync(
-			join(conv(dotDir), "session-2.jsonl"),
+			join(conv(deskDir), "session-2.jsonl"),
 			`${JSON.stringify({
 				type: "message",
 				timestamp: "2026-04-19T00:01:00.000Z",
@@ -61,18 +61,18 @@ describe("session search", () => {
 			})}\n`,
 			"utf-8",
 		);
-		// A second channel's conversation in the same dot is part of the corpus (spec 058, D12).
-		writeJsonl(join(conv(dotDir, "group-1"), "log.jsonl"), [
+		// A second channel's conversation in the same desk is part of the corpus (spec 058, D12).
+		writeJsonl(join(conv(deskDir, "group-1"), "log.jsonl"), [
 			{ date: "2026-04-19T00:02:00.000Z", userName: "Alice", text: "current log mentions rollout", isBot: false },
 		]);
-		writeJsonl(join(conv(dotDir, "group-1"), "log.jsonl.1"), [
+		writeJsonl(join(conv(deskDir, "group-1"), "log.jsonl.1"), [
 			{ date: "2026-04-18T00:02:00.000Z", text: "rotated log mentions archive", isBot: true },
 		]);
 		writeJsonl(join(conv(siblingDir), "log.jsonl"), [
 			{ date: "2026-04-19T00:02:00.000Z", text: "sibling secret should not appear", isBot: false },
 		]);
 
-		const docs = await buildSessionCorpus({ dotDir, maxFiles: 8 });
+		const docs = await buildSessionCorpus({ deskDir, maxFiles: 8 });
 
 		expect(docs.map((doc) => doc.text).join("\n")).toContain("sqlite migration");
 		expect(docs.map((doc) => doc.text).join("\n")).toContain("OAuth callback");
@@ -85,15 +85,15 @@ describe("session search", () => {
 
 	it("searches Chinese and English terms with role filtering", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_123");
-		mkdirSync(dotDir, { recursive: true });
-		writeJsonl(join(conv(dotDir), "log.jsonl"), [
+		const deskDir = join(workspaceDir, "dm_123");
+		mkdirSync(deskDir, { recursive: true });
+		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-04-19T00:00:00.000Z", userName: "Alice", text: "需要优化记忆管理", isBot: false },
 			{ date: "2026-04-19T00:01:00.000Z", text: "Assistant discussed session_search design", isBot: true },
 		]);
 
-		const chinese = await searchDotSessions({
-			dotDir,
+		const chinese = await searchDeskSessions({
+			deskDir,
 			query: "记忆管理",
 			roleFilter: ["user"],
 			limit: 3,
@@ -105,8 +105,8 @@ describe("session search", () => {
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
 		});
-		const english = await searchDotSessions({
-			dotDir,
+		const english = await searchDeskSessions({
+			deskDir,
 			query: "session_search",
 			limit: 3,
 			maxFiles: 6,
@@ -125,15 +125,15 @@ describe("session search", () => {
 
 	it("returns recent entries when query is empty", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_123");
-		mkdirSync(dotDir, { recursive: true });
-		writeJsonl(join(conv(dotDir), "log.jsonl"), [
+		const deskDir = join(workspaceDir, "dm_123");
+		mkdirSync(deskDir, { recursive: true });
+		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-04-18T00:00:00.000Z", text: "older", isBot: false },
 			{ date: "2026-04-19T00:00:00.000Z", text: "newer", isBot: false },
 		]);
 
-		const result = await searchDotSessions({
-			dotDir,
+		const result = await searchDeskSessions({
+			deskDir,
 			query: "",
 			limit: 1,
 			maxFiles: 6,
@@ -173,27 +173,29 @@ describe("session search", () => {
 			resolveApiKey: async () => "",
 		};
 
-		await searchDotSessions({ ...request, dotDir: firstDir });
-		await searchDotSessions({ ...request, dotDir: secondDir });
+		await searchDeskSessions({ ...request, deskDir: firstDir });
+		await searchDeskSessions({ ...request, deskDir: secondDir });
 		writeJsonl(join(conv(firstDir), "log.jsonl"), [
 			{ date: "2026-04-19T00:01:00.000Z", text: "replacement value", isBot: false },
 		]);
 
-		const cached = await searchDotSessions({ ...request, dotDir: firstDir });
+		const cached = await searchDeskSessions({ ...request, deskDir: firstDir });
 		expect(cached.results[0]?.summary).toContain("first cached value");
 		expect(cached.results[0]?.summary).not.toContain("replacement value");
 	});
 
 	it("falls back to raw preview when model summarization fails", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_123");
-		mkdirSync(dotDir, { recursive: true });
+		const deskDir = join(workspaceDir, "dm_123");
+		mkdirSync(deskDir, { recursive: true });
 		const longText = `session_search fallback ${"detail ".repeat(220)}`;
-		writeJsonl(join(conv(dotDir), "log.jsonl"), [{ date: "2026-04-19T00:00:00.000Z", text: longText, isBot: false }]);
+		writeJsonl(join(conv(deskDir), "log.jsonl"), [
+			{ date: "2026-04-19T00:00:00.000Z", text: longText, isBot: false },
+		]);
 		runSidecarTaskMock.mockRejectedValueOnce(new Error("model unavailable"));
 
-		const result = await searchDotSessions({
-			dotDir,
+		const result = await searchDeskSessions({
+			deskDir,
 			query: "session_search fallback",
 			limit: 1,
 			maxFiles: 6,
@@ -211,24 +213,24 @@ describe("session search", () => {
 
 	it("deduplicates mirrored transcript documents and limits the scored corpus", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_123");
-		mkdirSync(dotDir, { recursive: true });
+		const deskDir = join(workspaceDir, "dm_123");
+		mkdirSync(deskDir, { recursive: true });
 		const duplicate = {
 			type: "message",
 			timestamp: "2026-04-19T00:00:00.000Z",
 			message: { role: "user", content: "duplicate oauth note" },
 		};
-		writeJsonl(join(conv(dotDir), "context.jsonl"), [duplicate]);
-		writeJsonl(join(conv(dotDir), "session-1.jsonl"), [duplicate]);
-		writeJsonl(join(conv(dotDir), "log.jsonl"), [
+		writeJsonl(join(conv(deskDir), "context.jsonl"), [duplicate]);
+		writeJsonl(join(conv(deskDir), "session-1.jsonl"), [duplicate]);
+		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-04-19T00:01:00.000Z", text: "newest unrelated note", isBot: false },
 		]);
 
-		const docs = await buildSessionCorpus({ dotDir, maxFiles: 6 });
+		const docs = await buildSessionCorpus({ deskDir, maxFiles: 6 });
 		expect(docs.filter((doc) => doc.text === "duplicate oauth note")).toHaveLength(1);
 
-		const result = await searchDotSessions({
-			dotDir,
+		const result = await searchDeskSessions({
+			deskDir,
 			query: "oauth",
 			limit: 5,
 			maxFiles: 6,
@@ -245,22 +247,22 @@ describe("session search", () => {
 
 	it("caps documents at maxDocumentsTotal, keeps the newest, and leaves no conversation out", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_123");
-		mkdirSync(dotDir, { recursive: true });
+		const deskDir = join(workspaceDir, "dm_123");
+		mkdirSync(deskDir, { recursive: true });
 		const entries = Array.from({ length: 200 }, (_, i) => ({
 			date: new Date(Date.now() - (200 - i) * 60_000).toISOString(),
 			userName: "Alice",
 			text: `message number ${i}`,
 			isBot: false,
 		}));
-		writeJsonl(join(conv(dotDir), "log.jsonl"), entries);
+		writeJsonl(join(conv(deskDir), "log.jsonl"), entries);
 		// Spec 058, D12: a quiet channel sorted after a busy one is still searched — the budget used
 		// to run out, in directory order, before it was read.
-		writeJsonl(join(conv(dotDir, "group-1"), "log.jsonl"), [
+		writeJsonl(join(conv(deskDir, "group-1"), "log.jsonl"), [
 			{ date: new Date().toISOString(), userName: "Bob", text: "the group's only note", isBot: false },
 		]);
 
-		const docs = await buildSessionCorpus({ dotDir, maxFiles: 6, maxDocumentsTotal: 50 });
+		const docs = await buildSessionCorpus({ deskDir, maxFiles: 6, maxDocumentsTotal: 50 });
 
 		expect(docs.length).toBe(50);
 		expect(docs.filter((doc) => doc.conversation === "group-1").map((doc) => doc.text)).toEqual([
@@ -274,15 +276,15 @@ describe("session search", () => {
 	// message to the small display window at ingest, so widening the query could never recover it.
 	it("finds a keyword in the middle of a long message and centers the preview on it", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_mid");
-		mkdirSync(dotDir, { recursive: true });
+		const deskDir = join(workspaceDir, "dm_mid");
+		mkdirSync(deskDir, { recursive: true });
 		const longMessage = `${"lorem ipsum ".repeat(400)} THE_BURIED_TOKEN decided to use pgbouncer ${"dolor sit ".repeat(400)}`;
-		writeJsonl(join(conv(dotDir), "log.jsonl"), [
+		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-09-01T00:00:00.000Z", userName: "Alice", text: longMessage, isBot: false },
 		]);
 
-		const result = await searchDotSessions({
-			dotDir,
+		const result = await searchDeskSessions({
+			deskDir,
 			query: "THE_BURIED_TOKEN",
 			limit: 3,
 			maxFiles: 6,
@@ -301,14 +303,14 @@ describe("session search", () => {
 
 	it("does not return an unrelated recent message just because it is recent (batch 2.5)", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_recent");
-		mkdirSync(dotDir, { recursive: true });
-		writeJsonl(join(conv(dotDir), "log.jsonl"), [
+		const deskDir = join(workspaceDir, "dm_recent");
+		mkdirSync(deskDir, { recursive: true });
+		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: new Date().toISOString(), userName: "Alice", text: "what's for lunch today", isBot: false },
 		]);
 
-		const result = await searchDotSessions({
-			dotDir,
+		const result = await searchDeskSessions({
+			deskDir,
 			query: "kubernetes ingress controller",
 			limit: 3,
 			maxFiles: 6,

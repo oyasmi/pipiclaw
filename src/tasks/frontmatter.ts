@@ -41,7 +41,7 @@ export interface TaskFrontmatter {
 	paused?: TaskPaused;
 	/**
 	 * The delivery channel: where every step, stop receipt and report of this task goes (spec 058,
-	 * D13). Plain text so a human can retarget it by hand. Missing, or not bound to this task's dot,
+	 * D13). Plain text so a human can retarget it by hand. Missing, or not bound to this task's desk,
 	 * means the task is suspended — the driver leaves it frozen until the channel is bound again.
 	 */
 	channel?: string;

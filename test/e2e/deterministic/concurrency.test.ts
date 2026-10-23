@@ -63,7 +63,7 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 	it("a held channel does not block another channel or leak its history into it", async () => {
 		// Catches a process-wide turn queue or session cache reused across channel ids.
 		// Mutation check: sharing the transport's channel queue across ids blocks the peer request.
-		// Both channels share one dot (spec 058, D1): parallel turns and separate contexts must hold
+		// Both channels share one desk (spec 058, D1): parallel turns and separate contexts must hold
 		// even though their memory, tasks and files are shared.
 		const otherChannel = "dm_isolated_peer";
 		harness = await createDeterministicHarness({ extraChannels: [{ channelId: otherChannel }] });
@@ -92,7 +92,7 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 			peer.release();
 		}
 		await harness.waitForIdle();
-		const transcript = readFileSync(join(harness.dotDir, "conversations", "dm-2", "context.jsonl"), "utf8");
+		const transcript = readFileSync(join(harness.deskDir, "conversations", "dm-2", "context.jsonl"), "utf8");
 		expect(transcript).toContain("CHANNEL_B_ONLY");
 		expect(transcript).not.toContain("CHANNEL_A_ONLY");
 	});

@@ -75,7 +75,7 @@ const subagentInlineSchema = Type.Object({
 	context: Type.Optional(
 		Type.Union([Type.Literal("none"), Type.Literal("index")], {
 			description:
-				'What context to inject. "none" (default) runs fully isolated; "index" adds the workspace background, the dot memory index, and today\'s journal tail.',
+				'What context to inject. "none" (default) runs fully isolated; "index" adds the workspace background, the desk memory index, and today\'s journal tail.',
 		}),
 	),
 	thinkingLevel: Type.Optional(

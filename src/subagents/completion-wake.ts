@@ -18,7 +18,7 @@ export const WAKE_OUTPUT_TAIL_CHARS = 6_000;
  */
 /**
  * Running runs that share this wake's question, "was this the last one?": the other runs of its
- * task, or — for a chat-level run — the other chat-level runs of the same channel. The dot's other
+ * task, or — for a chat-level run — the other chat-level runs of the same channel. The desk's other
  * channels get their own wakes, so counting them would leave this channel waiting for nothing.
  */
 export function countWakeSiblings(record: RunRecord, runs: Iterable<RunRecord>): number {
@@ -32,8 +32,8 @@ export function countWakeSiblings(record: RunRecord, runs: Iterable<RunRecord>):
 }
 
 export function buildRunCompletionWake(input: {
-	/** The run's dot: stamped on the event so admission can drop it once the channel moves (D7). */
-	dot: string;
+	/** The run's desk: stamped on the event so admission can drop it once the channel moves (D7). */
+	desk: string;
 	dispatchId: string;
 	record: RunRecord;
 	outputText: string;
@@ -41,7 +41,7 @@ export function buildRunCompletionWake(input: {
 	/** Other runs of the same task (or, for a chat-level run, the same channel) still running. */
 	siblingCount: number;
 }): ChannelEvent {
-	const { dot, dispatchId, record, outputText, outputSaved, siblingCount } = input;
+	const { desk, dispatchId, record, outputText, outputSaved, siblingCount } = input;
 	const conversationType = conversationTypeOf(record.channelId);
 	const tail = outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim();
 	// P2-1: say so when the tail cut real content, instead of leaving the reader to guess and
@@ -92,7 +92,7 @@ export function buildRunCompletionWake(input: {
 		ts: String(Date.now()),
 		conversationType,
 		dispatchId,
-		dot,
+		desk,
 		// The result is awaited; the wake itself still runs without a progress card.
 		presentation: "awaited",
 		...(record.taskId

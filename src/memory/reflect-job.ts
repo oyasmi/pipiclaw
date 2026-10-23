@@ -1,11 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { drainBoundaryReflectWork } from "./boundary-work.js";
-import { type DotMemoryQueue, getDotMemoryQueue } from "./dot-memory-queue.js";
+import { type DeskMemoryQueue, getDeskMemoryQueue } from "./desk-memory-queue.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
 import {
@@ -26,8 +26,8 @@ import { hasMeaningfulExchange, sanitizeMessagesForMemory } from "./transcript.j
  */
 export interface ReflectJobInput {
 	appHomeDir: string;
-	/** The conversation to reflect on; its maintenance state is per conversation, its memory per dot. */
-	conversation: DotConversation;
+	/** The conversation to reflect on; its maintenance state is per conversation, its memory per desk. */
+	conversation: DeskConversation;
 	workspaceDir: string;
 	channelActive: boolean;
 	now?: Date;
@@ -37,7 +37,7 @@ export interface ReflectJobInput {
 	/** Transcript accessors: only called once the gate has decided the job may actually run. */
 	messages: () => AgentMessage[];
 	sessionEntries: () => SessionEntry[];
-	queue?: DotMemoryQueue;
+	queue?: DeskMemoryQueue;
 }
 
 function backoffUntil(now: Date, settings: MemoryMaintenanceSettings): string {
@@ -45,9 +45,9 @@ function backoffUntil(now: Date, settings: MemoryMaintenanceSettings): string {
 }
 
 export async function runReflectJob(input: ReflectJobInput): Promise<void> {
-	const queue = input.queue ?? getDotMemoryQueue();
+	const queue = input.queue ?? getDeskMemoryQueue();
 	const { conversation } = input;
-	const { channelId, dotDir } = conversation;
+	const { channelId, deskDir } = conversation;
 	await drainBoundaryReflectWork({ ...input, queue });
 	if (!input.settings.memoryMaintenance.enabled) return;
 	return queue.run(conversation, async () => {
@@ -79,7 +79,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 			},
 		});
 		if (!decision.allowed) {
-			await appendMemoryReviewLog(dotDir, {
+			await appendMemoryReviewLog(deskDir, {
 				timestamp: formatLocalTime(now),
 				channelId: channelId,
 				reason: "reflect",
@@ -92,12 +92,12 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 		try {
 			const result = await runReflect({
 				channelId: channelId,
-				dotDir: dotDir,
+				deskDir: deskDir,
 				workspaceDir: input.workspaceDir,
 				model: input.model,
 				resolveApiKey: input.resolveApiKey,
 				messages: sourceWindow.messages,
-				usageContext: { channelId, dot: conversation.dot, correlationId: sourceWindow.windowId },
+				usageContext: { channelId, desk: conversation.desk, correlationId: sourceWindow.windowId },
 			});
 			await updateMemoryMaintenanceState(input.appHomeDir, conversation, (current) => ({
 				...current,
@@ -105,7 +105,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 				lastReflectedEntryId: sourceWindow.throughEntryId ?? current.lastReflectedEntryId,
 				failureBackoffUntil: null,
 			}));
-			await appendMemoryReviewLog(dotDir, {
+			await appendMemoryReviewLog(deskDir, {
 				timestamp: formatLocalTime(now),
 				channelId: channelId,
 				reason: "reflect",
@@ -118,7 +118,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 				failureBackoffUntil: backoffUntil(now, maintenance),
 			}));
 			const message = errorMessage(error);
-			await appendMemoryReviewLog(dotDir, {
+			await appendMemoryReviewLog(deskDir, {
 				timestamp: formatLocalTime(now),
 				channelId: channelId,
 				reason: "reflect",

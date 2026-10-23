@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { hasBoundaryReflectWork } from "./boundary-work.js";
@@ -11,7 +11,7 @@ import { type MemoryMaintenanceInput, resolveMemoryMaintenanceSettings } from ".
 import { runReflectJob } from "./reflect-job.js";
 
 export interface MemoryMaintenanceRuntimeContext {
-	conversation: DotConversation;
+	conversation: DeskConversation;
 	workspaceDir: string;
 	/**
 	 * Transcript accessors, not arrays: the scheduler visits a conversation every tick but almost
@@ -29,11 +29,11 @@ export interface MemoryMaintenanceSchedulerOptions {
 	appHomeDir: string;
 	/**
 	 * The candidates (spec 058, D12): every conversation that is currently bound, in an active
-	 * dot. An unbound conversation already got its last reflect when its runner was disposed at
-	 * rebind, and a dormant dot does no background work.
+	 * desk. An unbound conversation already got its last reflect when its runner was disposed at
+	 * rebind, and a dormant desk does no background work.
 	 */
-	getConversations: () => DotConversation[];
-	getRuntimeContext: (conversation: DotConversation) => Promise<MemoryMaintenanceRuntimeContext | null>;
+	getConversations: () => DeskConversation[];
+	getRuntimeContext: (conversation: DeskConversation) => Promise<MemoryMaintenanceRuntimeContext | null>;
 	isChannelActive: (channelId: string) => boolean;
 	getSettings: () => { memoryMaintenance: MemoryMaintenanceInput };
 	intervalMs?: number;
@@ -53,7 +53,7 @@ const DEFAULT_TICK_INTERVAL_MS = 60_000;
  */
 async function mightReflectBeDue(input: {
 	appHomeDir: string;
-	conversation: DotConversation;
+	conversation: DeskConversation;
 	settings: { memoryMaintenance: MemoryMaintenanceInput };
 	now: Date;
 }): Promise<boolean> {
@@ -115,7 +115,7 @@ export class MemoryMaintenanceScheduler {
 			}
 			// One conversation per tick, round-robin: a reflect pass is an LLM call, and the first
 			// due conversation is as good a place to spend it as any.
-			let selected: DotConversation | undefined;
+			let selected: DeskConversation | undefined;
 			let index = this.nextIndex % conversations.length;
 			for (let scanned = 0; scanned < conversations.length && !selected; scanned++) {
 				const conversation = conversations[index];
@@ -135,7 +135,7 @@ export class MemoryMaintenanceScheduler {
 		}
 	}
 
-	private async runConversationOnce(conversation: DotConversation, now: Date): Promise<void> {
+	private async runConversationOnce(conversation: DeskConversation, now: Date): Promise<void> {
 		if (this.options.isChannelActive(conversation.channelId)) {
 			return;
 		}

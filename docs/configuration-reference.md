@@ -50,7 +50,8 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
     ├── MEMORY.md
     ├── ENVIRONMENT.md
     ├── CHANNELS.md
-    ├── events/
+    ├── desk-bindings.json
+    ├── desk-default/       # desk.json；memory/tasks/events 等按需创建
     ├── skills/
     └── sub-agents/
 ```
@@ -79,9 +80,9 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `~/.pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
 | `~/.pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
 | `~/.pipiclaw/workspace/ENVIRONMENT.md` | 工作区 | 环境事实与重要环境变更记录 | 是 |
-| `~/.pipiclaw/workspace/CHANNELS.md` | 工作区 | 频道索引：ID / 名称 / dot / 最近消息 / 主题。前四列 runtime 自动维护，「主题」列可手工编辑并会被保留 | 首次维护频道索引时 |
-| `~/.pipiclaw/workspace/dots/` | 工作区 | 所有 dot；`dots/bindings.json` 记录频道 id → dot 的绑定。dot 只能显式创建（`/dot new`、`pipiclaw tui --dot <名字> --create`） | 目录是；dot 不会自动创建 |
-| `~/.pipiclaw/workspace/dots/<dot>/events/` | dot | 该 dot 的定时事件目录 | 首次写入事件时 |
+| `~/.pipiclaw/workspace/CHANNELS.md` | 工作区 | 频道索引：ID / 名称 / 工位 / 最近消息 / 主题。前四列 runtime 自动维护，「主题」列可手工编辑并会被保留 | 首次维护频道索引时 |
+| `~/.pipiclaw/workspace/desk-<name>/` | 工作区 | 默认工位位于 `desk-default/`；`desk-bindings.json` 记录频道 id → 工位的绑定。其他工位通过 `/desk new`、`pipiclaw tui --desk <名字> --create` 创建 | 自动创建 `default`；新频道自动绑定 |
+| `~/.pipiclaw/workspace/desk-<name>/events/` | 工位 | 该工位的定时事件目录 | 首次写入事件时 |
 | `~/.pipiclaw/workspace/sub-agents/` | 工作区 | 工作区配置子代理目录 | 是 |
 | `~/.pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
 
@@ -91,7 +92,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 |----------|------|
 | `ANTHROPIC_API_KEY` | Anthropic 默认模型凭据 |
 | `PIPICLAW_HOME` | 覆盖默认的 `~/.pipiclaw/` 根目录 |
-| `PIPICLAW_DEBUG` | 在频道的会话区（`dots/<dot>/conversations/<kind>-<n>/`）中写出 `last_prompt.json` |
+| `PIPICLAW_DEBUG` | 在频道的会话区（`desk-<name>/conversations/<kind>-<n>/`）中写出 `last_prompt.json` |
 | `PIPICLAW_LOG_LEVEL` | 覆盖日志级别（`debug` \| `info` \| `warn` \| `error`），优先于 `settings.json` |
 | `PIPICLAW_LOG_FILE` | `0`/`1` 关闭或开启文件落盘，优先于 `settings.json` |
 | `PIPICLAW_PROXY` | 仅让 LLM 请求（主/子 Agent、记忆 sidecar）走这个 `http://`/`https://` 代理；DingTalk 和 web 工具不受影响。优先于标准 `HTTP_PROXY`/`HTTPS_PROXY`。不支持 SOCKS，详见 [configuration.md](./configuration.md#llm-请求走代理) |
@@ -258,7 +259,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 `bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道轮次；`job` 工具用来 list/poll/cancel。核心能力，无开关、始终注册。
 
 - 作业进程活在 host 上，通过 shell 命令管理（`nohup` 启动、`kill -0` 探活、退出码写入 `.exit` 文件）；每频道最多 5 个并发运行作业，超时沿用 bash 的 `timeout` 预算。
-- 作业状态持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<dot>/`：重启后 runtime 会认领仍在运行的作业，已结束作业保留 24 小时供查看。
+- 作业状态持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`：重启后 runtime 会认领仍在运行的作业，已结束作业保留 24 小时供查看。
 - runtime sweeper 约每 30 秒检查一次后台作业；作业完成后会自动唤醒对应 channel 并带上输出尾部，不需要再排 check-in event。
 - 只发给主 agent；子代理不能起后台作业，也不能使用 `job` 工具。
 
@@ -285,9 +286,9 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 记忆管理工具（`memory_save` / `memory_search` / `memory_forget`，恒开）
 
-三个工具让主 agent 按需 `memory_save`（存一条持久事实，一条记忆一个 `memory/<name>.md` 文件，写入后自动重建索引）、`memory_search`（在 dot 记忆、journal、workspace `MEMORY.md` 里按需查找，索引已在首轮整份注入，中途怀疑"以前可能记过"才用它）、`memory_forget`（按 `name` 精确删除，写入不含原文的 tombstone 防止后台反思复活，不走裸 edit）。`forget` 不清理原始 session/log 或历史归档；工具返回会明确说明这个边界。写操作都走以 dot 为键的记忆串行队列（跨进程另持 `memory.lock`），杜绝与后台反思的竞态。核心能力，无开关、始终注册，只发给主 agent；`memory_save` 撞到相似已有条目（Jaccard 相似度）会先拒绝并要求带 `replaces` 二次调用。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
+三个工具让主 agent 按需 `memory_save`（存一条持久事实，一条记忆一个 `memory/<name>.md` 文件，写入后自动重建索引）、`memory_search`（在工位记忆、journal、workspace `MEMORY.md` 里按需查找，索引已在首轮整份注入，中途怀疑"以前可能记过"才用它）、`memory_forget`（按 `name` 精确删除，写入不含原文的 tombstone 防止后台反思复活，不走裸 edit）。`forget` 不清理原始 session/log 或历史归档；工具返回会明确说明这个边界。写操作都走以工位为键的记忆串行队列（跨进程另持 `memory.lock`），杜绝与后台反思的竞态。核心能力，无开关、始终注册，只发给主 agent；`memory_save` 撞到相似已有条目（Jaccard 相似度）会先拒绝并要求带 `replaces` 二次调用。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
 
-用户可用 `/memory status` 查看记忆条数、按类型分布、观察期条目、上次后台整理时间、索引是否超预算；`/memory list` 按 `name` 列出 dot 记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的工作日记；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
+用户可用 `/memory status` 查看记忆条数、按类型分布、观察期条目、上次后台整理时间、索引是否超预算；`/memory list` 按 `name` 列出工位记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的工作日记；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
 
 ### 出站附件工具（`send_media`，随渠道自动启用）
 
@@ -302,7 +303,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 网页抓取缓存（`web_fetch` offset 分页）
 
-`web_fetch` 会把抓取到的正文按 dot 缓存（`dots/<dot>/web-cache/`，键为 URL+抽取模式的哈希，TTL 15 分钟，LRU 上限 20 个文件）。长页面被截断时尾注会给出下一段的 `offset`；用同一 URL + 该 `offset` 再调一次即从缓存翻页，**不重新抓取**。图片结果原样返回、不缓存。无独立开关，随 `tools.web.enable` 生效。
+`web_fetch` 会把抓取到的正文按工位缓存（`desk-<name>/web-cache/`，键为 URL+抽取模式的哈希，TTL 15 分钟，LRU 上限 20 个文件）。长页面被截断时尾注会给出下一段的 `offset`；用同一 URL + 该 `offset` 再调一次即从缓存翻页，**不重新抓取**。图片结果原样返回、不缓存。无独立开关，随 `tools.web.enable` 生效。
 
 ### 任务摘要注入（Task Digest，恒随任务开关）
 
@@ -323,39 +324,39 @@ DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身�
 
 ## 终端 TUI（Terminal TUI）
 
-除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）。TUI 每次打开一个 dot，与这个 dot 的钉钉频道共享记忆、任务、事件和工作文件，但有自己的会话。
+除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）。TUI 每次打开一个工位，与这个工位的钉钉频道共享记忆、任务、事件和工作文件，但有自己的会话。
 
 ### 启动（Usage）
 
 ```bash
-pipiclaw tui --dot news                       # 交互式，打开 dot `news`
-pipiclaw tui --dot lab --create               # dot 不存在时先创建
-echo "问题" | pipiclaw tui --dot news --print  # 一次性：跑一轮、打印答案、退出（可脚本化）
-pipiclaw tui --dot news --print "总结今天的进展"  # 一次性，prompt 走命令行位置参数
+pipiclaw tui --desk news                       # 交互式，打开工位 `news`
+pipiclaw tui --desk lab --create               # 工位不存在时先创建
+echo "问题" | pipiclaw tui --desk news --print  # 一次性：跑一轮、打印答案、退出（可脚本化）
+pipiclaw tui --desk news --print "总结今天的进展"  # 一次性，prompt 走命令行位置参数
 ```
 
 选项：
 
 | 选项 | 说明 |
 |------|------|
-| `--dot <name>` | 要打开的 dot；只存在一个可用 dot 时可省略。不检查它是否已绑定、daemon 是否在运行。dot 不存在时报错并列出已有的 dot。 |
-| `--create` | dot 不存在时先创建它（与 `/dot new` 相同，不绑定任何频道）。 |
+| `--desk <name>` | 要打开的工位；只存在一个可用工位时可省略。不检查它是否已绑定、daemon 是否在运行。工位不存在时报错并列出已有的工位。 |
+| `--create` | 工位不存在时先创建它（与 `/desk new` 相同，不绑定任何频道）。 |
 | `--print`, `-p` | 一次性非交互模式：运行位置参数（或管道 stdin）作为唯一 prompt，打印最终答案后退出。 |
 | `--quiet`, `-q` | 纯文本模式下只输出最终答案（进度与提示写入 stderr 的部分被静音）。 |
 | `--plain` | 即使在 TTY 下也强制使用纯文本前端（不进入全屏 UI）。 |
 | `--version` / `--help` | 打印版本 / 帮助。 |
 
-**命令**：交互模式支持运行时命令 `/help` `/stop` `/dot` `/status` `/usage` `/events` `/tasks` `/subagents` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前 dot 的记忆。`/dot list` 和 `/dot new` 可用；`/dot bind` 只在钉钉频道里可用。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
+**命令**：交互模式支持运行时命令 `/help` `/stop` `/desk` `/status` `/usage` `/events` `/tasks` `/subagents` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前工位的记忆。`/desk list` 和 `/desk new` 可用；`/desk bind` 只在钉钉频道里可用。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
 
 非 TTY（管道 / 重定向）或 `--print` 会自动使用纯文本前端；真实终端下使用带滚动记录、状态行、斜杠命令补全的富界面。
 
 ### 会话续接（Resume）
 
-TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 dot 的终端会话区而不是靠挑选历史会话：
+TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠工位的终端会话区而不是靠挑选历史会话：
 
-- **退出重进即自动续上次对话。** 当前聊天上下文由 `workspace/dots/<dot>/conversations/tui-N/active-session.json` 指向的 session JSONL 持久化；没有指针时使用 `context.jsonl`。`/new` 会创建新文件并更新指针，旧会话仍保留。再次 `pipiclaw tui --dot <dot>` 会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
-- **同一个 dot 同一时间只能开一个 TUI。** 运行期间 TUI 持有 `conversations/tui-N/.lock`，第二个 TUI 打开同一个 dot 会报错退出并给出持有者的 pid。进程被杀掉留下的锁，下次启动时（同一主机、pid 已不存在）自动回收。
-- **钉钉频道的对话不会出现在 TUI 里。** TUI 与 dot 的钉钉频道共享记忆、任务和文件，但会话各自独立；要在终端里接着某件事做，靠的是记忆层和任务，而不是接管频道的会话。
+- **退出重进即自动续上次对话。** 当前聊天上下文由 `workspace/desk-<name>/conversations/tui-N/active-session.json` 指向的 session JSONL 持久化；没有指针时使用 `context.jsonl`。`/new` 会创建新文件并更新指针，旧会话仍保留。再次 `pipiclaw tui --desk <name>` 会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
+- **同一个工位同一时间只能开一个 TUI。** 运行期间 TUI 持有 `conversations/tui-N/.lock`，第二个 TUI 打开同一个工位会报错退出并给出持有者的 pid。进程被杀掉留下的锁，下次启动时（同一主机、pid 已不存在）自动回收。
+- **钉钉频道的对话不会出现在 TUI 里。** TUI 与工位的钉钉频道共享记忆、任务和文件，但会话各自独立；要在终端里接着某件事做，靠的是记忆层和任务，而不是接管频道的会话。
 - **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `memory/*.md`（生成 `MEMORY.md` 索引）与 `journal/`（见「记忆分层」），会在下一次会话首轮整份带回。
 - **暂无会话选择器**，即不能在 TUI 里从多个历史会话之间挑一个切过去。
 
@@ -375,12 +376,12 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 dot
 
 ### 与钉钉常驻服务的并发约束（Concurrency Caveat）
 
-TUI 可以打开一个正由钉钉常驻服务使用的 dot：
+TUI 可以打开一个正由钉钉常驻服务使用的工位：
 
-- dot 的记忆（`memory/*.md`、`MEMORY.md`、`journal/`）、任务文件和 `dot.json` 的写入都持有 `dots/<dot>/.locks/` 下的跨进程短锁，两个进程会排队而不是交错写坏。
+- 工位的记忆（`memory/*.md`、`MEMORY.md`、`journal/`）、任务文件和 `desk.json` 的写入都持有 `desk-<name>/.locks/` 下的跨进程短锁，两个进程会排队而不是交错写坏。
 - TUI 的会话在它自己的会话区 `conversations/tui-N/`，daemon 从不写它；钉钉频道的会话区也只由 daemon 写。
 - 定时事件文件是整文件原子写，两个进程同时改同名事件时以后写的为准。
-- 同一个 dot 同时只能开一个 TUI；第二个会报错退出，并给出持有者的 pid。
+- 同一个工位同时只能开一个 TUI；第二个会报错退出，并给出持有者的 pid。
 
 ## 钉钉配置文件 `channel.json`（`channel.json`）
 
@@ -841,7 +842,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 `security.json` 的 `projectAccess` 也已退役（spec 058）：项目边界与 `/project` 命令整体删除。留在文件里不会导致启动失败，启动时会打印一条 warning：
 
 ```
-security.json: projectAccess: retired key ignored: project scope was removed; the dot directory is now the working directory
+security.json: projectAccess: retired key ignored: project scope was removed; the desk directory is now the working directory
 ```
 
 ### 在 Pipiclaw 中暂时不要依赖的 pi-mono 字段（Fields From pi-mono That You Should Not Rely On in Pipiclaw）
@@ -1087,7 +1088,7 @@ web 工具的代理顺序是：
 
 定义助手是谁、说话风格如何、默认语言和回复偏好是什么。
 
-所有 dot 默认共用 workspace 的 `SOUL.md`。某个 dot 需要不同的身份时，在 `dots/<dot>/SOUL.md` 放一份：它存在且非空时**整份替换**（不合并）workspace 的同名文件，只对这个 dot 生效；`AGENTS.md` 同理，两者各自独立回退。修改在下一次建立会话时生效。
+Pipiclaw 只有一套人格。所有工位共同使用 workspace 根目录的 `SOUL.md` 和 `AGENTS.md`；工位目录里的同名文件不会替代根文件。工位只划分工作的状态与资料。共享身份和规则在下一次建立会话时重新加载。
 
 适合放：
 
@@ -1123,9 +1124,9 @@ web 工具的代理顺序是：
 
 详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 
-## 事件目录 `dots/<dot>/events/`（`dots/<dot>/events/`）
+## 事件目录 `desk-<name>/events/`
 
-每个 dot 有自己的事件目录，放定时事件 JSON；事件的 `channelId` 是投递频道，必须绑定在这个 dot 上，否则到点跳过。可用于：
+每个工位有自己的事件目录，放定时事件 JSON；事件的 `channelId` 是投递频道，必须绑定在这个工位上，否则到点跳过。可用于：
 
 - 周期性检查
 - 提醒
@@ -1137,7 +1138,7 @@ web 工具的代理顺序是：
 
 ## 技能目录 `workspace/skills/`（`workspace/skills/`）
 
-放工作区级技能资源。Pipiclaw 只支持 workspace 级技能，所有 dot 共享，不支持 dot 级或频道级 skills。
+放工作区级技能资源。Pipiclaw 只支持 workspace 级技能，所有工位共享，不支持工位级或频道级 skills。
 
 相关工具：
 
@@ -1146,26 +1147,26 @@ web 工具的代理顺序是：
 
 创建或修改直接用 `write`/`edit` 在 `workspace/skills/<name>/SKILL.md` 上操作，frontmatter 需要非空的 `name`（与目录名一致）和 `description`；支持文件放在 `references/`、`templates/`、`scripts/`、`assets/` 下，按需用 `read` 加载。skill 内容在加载进系统提示前会跑一次安全扫描，未通过的 skill 不会出现在目录里，原因体现在 `skill list` 的 warning 字段中。
 
-## dot 级与会话区级运行时文件（Dot- and Conversation-Level Runtime Files）
+## 工位级与会话区级运行时文件（Desk- and Conversation-Level Runtime Files）
 
-每个 dot 是 `workspace/dots/<dot>/` 下的一个目录，也是 agent 的工作目录；与它对话过的每个频道在其中有一个会话区：
+每个工位是 `workspace/desk-<name>/` 下的一个目录，也是 agent 的工作目录；与它对话过的每个频道在其中有一个会话区：
 
 ```text
-~/.pipiclaw/workspace/dots/<dot>/                       # dot 级：记忆、任务、事件、委派记录、工作文件
-~/.pipiclaw/workspace/dots/<dot>/dot.json               # 名字与各频道的会话区登记；可选 "cwd"（见下）
-~/.pipiclaw/workspace/dots/<dot>/conversations/dm-1/    # 会话区级：某个频道的会话文件
-~/.pipiclaw/workspace/dots/<dot>/conversations/group-1/
+~/.pipiclaw/workspace/desk-<name>/                       # 工位级：记忆、任务、事件、委派记录、工作文件
+~/.pipiclaw/workspace/desk-<name>/desk.json               # 名字与各频道的会话区登记；可选 "cwd"（见下）
+~/.pipiclaw/workspace/desk-<name>/conversations/dm-1/    # 会话区级：某个频道的会话文件
+~/.pipiclaw/workspace/desk-<desk>/conversations/group-1/
 ```
 
-会话区里是 `active-session.json`、会话 JSONL、`context.jsonl`、`log.jsonl`（及轮转的 `log.jsonl.1`）和 `last_prompt.json`；其余都在 dot 目录下。
+会话区里是 `active-session.json`、会话 JSONL、`context.jsonl`、`log.jsonl`（及轮转的 `log.jsonl.1`）和 `last_prompt.json`；其余都在工位目录下。
 
-**把工作目录指到别处。** 默认情况下 dot 目录就是 agent 的工作目录（shell 的 cwd、相对路径的基准、委派默认的 `workingDirectory`）。dot 的工作文件需要放在别处（比如你的主目录或一个代码仓库）时，在 `dot.json` 里加一个绝对路径：
+**把工作目录指到别处。** 默认情况下工位目录就是 agent 的工作目录（shell 的 cwd、相对路径的基准、委派默认的 `workingDirectory`）。工位的工作文件需要放在别处（比如你的主目录或一个代码仓库）时，在 `desk.json` 里加一个绝对路径：
 
 ```json
 { "version": 1, "name": "main", "createdAt": "…", "conversations": { … }, "cwd": "/home/me" }
 ```
 
-记忆、日记、任务、事件、会话和委派记录仍然放在 dot 目录里，只有"在哪里干活"变了；相对路径不是绝对路径时该 dot 不可用。daemon 只在启动时读取 `dot.json`，修改后需重启；TUI 下次打开即生效。路径守卫的允许范围不变（workspace、主目录、临时目录和你在 `security.json` 里加的目录）。
+记忆、日记、任务、事件、会话和委派记录仍然放在工位目录里，只有"在哪里干活"变了；相对路径不是绝对路径时该工位不可用。daemon 只在启动时读取 `desk.json`，修改后需重启；TUI 下次打开即生效。路径守卫的允许范围不变（workspace、主目录、临时目录和你在 `security.json` 里加的目录）。
 
 常见文件：
 
@@ -1184,11 +1185,11 @@ web 工具的代理顺序是：
 
 记忆分层（spec 050）：
 
-- `memory/*.md` + 生成的 `MEMORY.md`：dot 的 durable facts、决策、偏好、约束，同一 dot 的所有频道共享。索引会话首轮整份注入，元数据内联在各自的 frontmatter 里，没有独立的 sidecar metadata 文件。
+- `memory/*.md` + 生成的 `MEMORY.md`：工位的 durable facts、决策、偏好、约束，同一工位的所有频道共享。索引会话首轮整份注入，元数据内联在各自的 frontmatter 里，没有独立的 sidecar metadata 文件。
 - `journal/YYYY-MM-DD.md`：按天的工作记录，只由后台反思写；只有未来仍有用的事实会从 journal 提炼进 memory，一次性进度不会。
-- 各会话区的 `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索（覆盖本 dot 的所有会话区），不进入首轮注入。
-- `${PIPICLAW_HOME}/state/memory/<dot>/<会话区>.json`：内置 scheduler 的 hidden state，只记录 dirty、上次运行时间和 backoff，不是记忆来源。
-- `${PIPICLAW_HOME}/state/subagent-runs/<dot>/<runId>.json`：委派权威状态、pid、argv 和结算/唤醒幂等标记，记录里的 `channelId` 是发起委派的频道；dot 内的 `subagent-runs.jsonl` 只是摘要。启动时按 `state/subagent-runs/` 下的每个 dot 目录恢复，与绑定无关。
+- 各会话区的 `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索（覆盖本工位的所有会话区），不进入首轮注入。
+- `${PIPICLAW_HOME}/state/memory/<name>/<会话区>.json`：内置 scheduler 的 hidden state，只记录 dirty、上次运行时间和 backoff，不是记忆来源。
+- `${PIPICLAW_HOME}/state/subagent-runs/<name>/<runId>.json`：委派权威状态、pid、argv 和结算/唤醒幂等标记，记录里的 `channelId` 是发起委派的频道；工位内的 `subagent-runs.jsonl` 只是摘要。启动时按 `state/subagent-runs/` 下的每个工位目录恢复，与绑定无关。
 - `${PIPICLAW_HOME}/state/dingtalk/conversations.json`：各频道的钉钉路由元数据（会话 id、私聊/群、发送者），用于重启后主动推送。
 
 ## 常见问题（Frequently Asked Questions）

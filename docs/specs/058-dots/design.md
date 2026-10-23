@@ -9,6 +9,8 @@
 | 关联实现 | 新模块 `src/dot/`；`src/runtime/` 新增 `dot-runtime.ts`；`channel/ agent/ memory/ tasks/ events/ jobs/ subagents/ tools/ dingtalk/ tui/ usage/ security/ commands/` 全部改用 dot 寻址；新脚本 `scripts/migrate-to-dots.mjs`；`AGENTS.md`、`CLAUDE.md`、`docs/` 顶层手册与 playbooks |
 | 明确不含 | 权限控制（`admins` 留待后续）；dot 改名、删除、合并；每个 dot 独立的 SOUL / skills / 模型；跨频道同步最近上下文；TUI 写入绑定 |
 
+> 默认接入由 [059 默认个人助手](../059-default-assistant/design.md) 调整；术语、目标布局和迁移方式由 [060 Desk](../060-desk/design.md) 接续。原通用迁移脚本已删除，改为[一次性迁移说明](../../desk-migration.md)。本篇保留最初设计与实施记录，历史命令不是当前操作指南。
+
 ## 摘要
 
 现在一个 `channelId` 同时扮演两个角色：

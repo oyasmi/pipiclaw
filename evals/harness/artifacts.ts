@@ -14,10 +14,9 @@ import type { ArtifactSpec, TrialContext } from "./schema.js";
 import { hashFile } from "./util.js";
 
 export interface ArtifactIndex {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	complete: boolean;
-	/** `channelDir` is the pre-058 name of `dotDir`, kept readable for archived trials. */
-	mounts: { homeDir: string; workspaceDir: string; dotDir: string; channelDir?: string };
+	mounts: { homeDir: string; workspaceDir: string; deskDir: string };
 	entries: Array<{
 		id: string;
 		path: string;
@@ -45,16 +44,16 @@ export function atomicJson(path: string, value: unknown): void {
 }
 
 export function captureArtifacts(
-	context: Pick<TrialContext, "homeDir" | "workspaceDir" | "dotDir">,
+	context: Pick<TrialContext, "homeDir" | "workspaceDir" | "deskDir">,
 	trialDir: string,
 	specs: ArtifactSpec[] = [{ root: "workspace", path: "." }],
 ): ArtifactIndex {
-	const index: ArtifactIndex = { schemaVersion: 1, complete: true, mounts: context, entries: [] };
+	const index: ArtifactIndex = { schemaVersion: 2, complete: true, mounts: context, entries: [] };
 	let bytes = 0;
 	const seen = new Set<string>();
 	for (const spec of specs) {
 		const root =
-			spec.root === "home" ? context.homeDir : spec.root === "workspace" ? context.workspaceDir : context.dotDir;
+			spec.root === "home" ? context.homeDir : spec.root === "workspace" ? context.workspaceDir : context.deskDir;
 		const visit = (path: string): void => {
 			const rel = relative(root, path);
 			if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
@@ -109,7 +108,7 @@ export function captureArtifacts(
 		};
 		if (isAbsolute(spec.path))
 			throw new Error(
-				"Absolute artifact declarations are unsupported; use a path relative to home, workspace, or channel.",
+				"Absolute artifact declarations are unsupported; use a path relative to home, workspace, or desk.",
 			);
 		visit(resolve(root, spec.path));
 	}
@@ -148,7 +147,11 @@ export function sealArtifactIndex(trialDir: string, index: ArtifactIndex, files:
 /** Verify stored bytes before allowing an oracle to consume archived evidence. */
 export function verifyArtifacts(trialDir: string, required: string[] = []): ArtifactIndex {
 	const index = JSON.parse(readFileSync(join(trialDir, "artifact-index.json"), "utf8")) as ArtifactIndex;
-	if (index.schemaVersion !== 1 || !index.complete)
+	if (index.schemaVersion !== 2 || typeof index.mounts?.deskDir !== "string")
+		throw new Error(
+			"Unsupported archived desk evidence format; collect a new run or convert a separate copy offline.",
+		);
+	if (!index.complete)
 		throw new Error("Archived evidence is incomplete; collect the missing artifacts before regrading.");
 	for (const file of required)
 		if (!index.entries.some((entry) => entry.path === file && entry.status === "complete"))

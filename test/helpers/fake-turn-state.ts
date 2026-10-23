@@ -40,17 +40,17 @@ export function createFakeTurnState() {
 }
 
 /**
- * Inert defaults for the session-binding half of `AgentRunner` (including its (dot, channel)
+ * Inert defaults for the session-binding half of `AgentRunner` (including its (desk, channel)
  * pairing); spread first so a case can override.
  */
 export function createFakeSessionBinding(
-	conversation: import("../../src/dot/types.js").DotConversation = {
-		dot: "news",
-		dotDir: "/tmp/dots/news",
-		cwd: "/tmp/dots/news",
+	conversation: import("../../src/desk/types.js").DeskConversation = {
+		desk: "news",
+		deskDir: "/tmp/desk-news",
+		cwd: "/tmp/desk-news",
 		channelId: "dm_1",
 		conversation: "dm-1",
-		conversationDir: "/tmp/dots/news/conversations/dm-1",
+		conversationDir: "/tmp/desk-news/conversations/dm-1",
 	},
 ) {
 	return {

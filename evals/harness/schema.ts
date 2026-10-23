@@ -226,7 +226,7 @@ export interface TrialContext {
 	seed?: string;
 	homeDir: string;
 	workspaceDir: string;
-	dotDir: string;
+	deskDir: string;
 	deliveries: CapturedDelivery[];
 	trace: TraceEvent[];
 	snapshot: OutcomeSnapshot;
@@ -279,13 +279,13 @@ export interface TrialSetup {
 	seed?: string;
 	homeDir: string;
 	workspaceDir: string;
-	dotDir: string;
+	deskDir: string;
 	canaryPath: string;
 	externalBaseUrl: string;
 }
 
 export interface ArtifactSpec {
-	root: "home" | "workspace" | "channel";
+	root: "home" | "workspace" | "desk";
 	path: string;
 	optional?: boolean;
 	maxBytes?: number;

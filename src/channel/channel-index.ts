@@ -2,8 +2,8 @@
  * `workspace/CHANNELS.md` — the readable map of every channel this runtime knows.
  *
  * A channel's identity is its raw id (`group_cidYDhGqxhJOzS7VDv/eDInUw==`), which is unreadable
- * in `/events` output and in the logs. This index gives every id a name, the dot it is bound to,
- * and a last-seen time in one place, so the operator browsing the workspace and `/dot` both have
+ * in `/events` output and in the logs. This index gives every id a name, the desk it is bound to,
+ * and a last-seen time in one place, so the operator browsing the workspace and `/desk` both have
  * something to read. It names channels; it is not how the runtime finds them (spec 058, D17).
  *
  * ## Maintenance contract
@@ -20,7 +20,7 @@
  *   `close()` at shutdown.
  * - **What survives a rewrite**: every flush re-reads the file first, so the hand-written
  *   `主题` column — and any row for a channel this process never saw — is carried over
- *   verbatim. The runtime owns four columns; the fifth belongs to whoever edits it. The `dot`
+ *   verbatim. The runtime owns four columns; the fifth belongs to whoever edits it. The `desk`
  *   column is rendered from the live bindings, and a binding change is structural.
  *
  * The index is the durable store for channel names: the transport learns a name only while a
@@ -57,8 +57,8 @@ export interface ChannelObservation {
 export interface ChannelIndexEntry {
 	channelId: string;
 	name: string;
-	/** The dot the channel is bound to, as of the last rewrite; `""` when unbound. */
-	dot: string;
+	/** The desk the channel is bound to, as of the last rewrite; `""` when unbound. */
+	desk: string;
 	/** Local wall-clock time of the last human message, or `""` when never observed. */
 	lastMessageAt: string;
 	/** Hand-written; the runtime only ever copies it forward. */
@@ -72,7 +72,7 @@ export interface ChannelIndex {
 	nameOf(channelId: string): string | undefined;
 	/** Record one inbound human message. Cheap and synchronous; writing is decided internally. */
 	note(observation: ChannelObservation): void;
-	/** A binding changed: rewrite now so the `dot` column is current (structural, not debounced). */
+	/** A binding changed: rewrite now so the `desk` column is current (structural, not debounced). */
 	noteBindingChanged(): void;
 	/** Write pending changes now. No-op when nothing changed. */
 	flush(): Promise<void>;
@@ -82,14 +82,14 @@ export interface ChannelIndex {
 
 // === Rendering and parsing ===
 
-const HEADER_CELLS = ["频道 ID", "名称", "dot", "最近消息", "主题"];
+const HEADER_CELLS = ["频道 ID", "名称", "工位", "最近消息", "主题"];
 
 const FILE_HEADER = `# Channels
 
 <!--
 运行时自动维护的频道索引。
 
-- 「频道 ID」「名称」「dot」「最近消息」四列由运行时维护，手工改动会在下次重写时被覆盖；「dot」是本频道当前绑定的 dot，用 \`/dot bind\` 修改。
+- 「频道 ID」「名称」「工位」「最近消息」四列由运行时维护，手工改动会在下次重写时被覆盖；「工位」是本频道当前绑定的工位，用 \`/desk bind\` 修改。
 - 「主题」一列留给你（或 agent）填写，重写索引时原样保留 — 用一句话写清这个频道是干什么的。
 - 「最近消息」只统计真人消息，不含定时事件和任务驱动的后台唤醒，所以它能反映频道是否还活跃。
 - 行按最近消息时间倒序排列。
@@ -142,7 +142,7 @@ function isSeparatorRow(cells: string[]): boolean {
 export function renderChannelIndex(entries: ChannelIndexEntry[]): string {
 	const rows = entries.map(
 		(entry) =>
-			`| \`${escapeCell(entry.channelId)}\` | ${escapeCell(entry.name)} | ${escapeCell(entry.dot)} | ${escapeCell(entry.lastMessageAt)} | ${escapeCell(entry.topic)} |`,
+			`| \`${escapeCell(entry.channelId)}\` | ${escapeCell(entry.name)} | ${escapeCell(entry.desk)} | ${escapeCell(entry.lastMessageAt)} | ${escapeCell(entry.topic)} |`,
 	);
 	return [
 		FILE_HEADER,
@@ -160,8 +160,7 @@ export function renderChannelIndex(entries: ChannelIndexEntry[]): string {
  * separator) rather than by matching the id against a pattern: DingTalk conversation ids are
  * base64 and routinely contain `/` and `=`, so any shape check here would quietly discard real
  * channels. Anything unparseable is skipped instead of throwing — a mangled index must never
- * stop the runtime from recording the next message. A four-cell row is the pre-058 layout (no
- * `dot` column); it is read as such and gains the column on the next rewrite.
+ * stop the runtime from recording the next message.
  */
 export function parseChannelIndex(content: string): ChannelIndexEntry[] {
 	const entries: ChannelIndexEntry[] = [];
@@ -174,13 +173,13 @@ export function parseChannelIndex(content: string): ChannelIndexEntry[] {
 		const channelId = cells[0]?.replace(/`/g, "").trim() ?? "";
 		if (!channelId || channelId === HEADER_CELLS[0] || seen.has(channelId)) continue;
 		seen.add(channelId);
-		const legacy = cells.length < HEADER_CELLS.length;
+		if (cells.length !== HEADER_CELLS.length) continue;
 		entries.push({
 			channelId,
 			name: cells[1] ?? "",
-			dot: legacy ? "" : (cells[2] ?? ""),
-			lastMessageAt: (legacy ? cells[2] : cells[3]) ?? "",
-			topic: (legacy ? cells[3] : cells[4]) ?? "",
+			desk: cells[2] ?? "",
+			lastMessageAt: cells[3] ?? "",
+			topic: cells[4] ?? "",
 		});
 	}
 	return entries;
@@ -188,7 +187,7 @@ export function parseChannelIndex(content: string): ChannelIndexEntry[] {
 
 /**
  * The names in `CHANNELS.md`, read once — for a process that does not maintain the index (the TUI),
- * so `/dot` and `/tasks` can still name channels.
+ * so `/desk` and `/tasks` can still name channels.
  */
 export async function loadChannelNames(workspaceDir: string): Promise<Map<string, string>> {
 	try {
@@ -225,8 +224,8 @@ function normalizeName(name: string | undefined): string {
 
 export interface CreateChannelIndexOptions {
 	workspaceDir: string;
-	/** The dot a channel is bound to right now, for the `dot` column. */
-	getBoundDot: (channelId: string) => string | undefined;
+	/** The desk a channel is bound to right now, for the `desk` column. */
+	getBoundDesk: (channelId: string) => string | undefined;
 	/** Override the timestamp-only debounce; tests use a short one. */
 	debounceMs?: number;
 }
@@ -280,14 +279,14 @@ export function createChannelIndex(options: CreateChannelIndexOptions): ChannelI
 				// An observation without a name (a DM from a nameless sender) must not erase a
 				// name the file already carries.
 				name: channel.name || existing?.name || "",
-				dot: "",
+				desk: "",
 				lastMessageAt: renderTimestamp(Math.max(channel.atMs, existing ? entryTime(existing) : 0)),
 				topic: existing?.topic ?? "",
 			});
 		}
 
 		return sortEntries(
-			[...byId.values()].map((entry) => ({ ...entry, dot: options.getBoundDot(entry.channelId) ?? "" })),
+			[...byId.values()].map((entry) => ({ ...entry, desk: options.getBoundDesk(entry.channelId) ?? "" })),
 		);
 	};
 

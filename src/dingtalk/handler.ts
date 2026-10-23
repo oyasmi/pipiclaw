@@ -62,6 +62,8 @@ export interface DingTalkBotPort {
 
 export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
+	/** After sender authorization, before attachments or commands: establish the default binding. */
+	prepareChannel?(channelId: string): Promise<void>;
 	/**
 	 * Note that a real person just wrote in this channel. Called once per accepted inbound
 	 * message, before any busy/command routing, and never for synthetic wakes — see the

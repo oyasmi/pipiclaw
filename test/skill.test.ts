@@ -38,8 +38,8 @@ function makeTool(workspaceDir: string) {
 describe("skill tool", () => {
 	it("returns diagnostics for malformed skills and ignores reference Markdown", async () => {
 		const workspaceDir = createWorkspace();
-		const dotDir = join(workspaceDir, "dm_1");
-		mkdirSync(dotDir);
+		const deskDir = join(workspaceDir, "dm_1");
+		mkdirSync(deskDir);
 		await writeSkill(workspaceDir, "release-notes");
 		writeFileSync(join(workspaceDir, "skills", "README.md"), "Reference notes without frontmatter\n");
 		const brokenDir = join(workspaceDir, "skills", "broken");

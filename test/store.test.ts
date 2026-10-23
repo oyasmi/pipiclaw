@@ -15,9 +15,9 @@ function storeFor(root: string): ChannelStore {
 
 /** The store resolves archive paths without creating them, so a test that seeds a file says so. */
 function seedChannelDir(workingDir: string, channelId: string): string {
-	const dotDir = join(workingDir, channelId);
-	mkdirSync(dotDir, { recursive: true });
-	return dotDir;
+	const deskDir = join(workingDir, channelId);
+	mkdirSync(deskDir, { recursive: true });
+	return deskDir;
 }
 
 function sampleSubAgentRun(): LoggedSubAgentRun {
@@ -110,9 +110,9 @@ describe("ChannelStore", () => {
 	it("rotates oversized logs, resets sync offsets, and writes subagent runs", async () => {
 		const workingDir = createTempDir();
 		const store = storeFor(workingDir);
-		const dotDir = seedChannelDir(workingDir, "dm_rotate");
-		const logPath = join(dotDir, "log.jsonl");
-		const syncOffsetPath = join(dotDir, ".sync-offset");
+		const deskDir = seedChannelDir(workingDir, "dm_rotate");
+		const logPath = join(deskDir, "log.jsonl");
+		const syncOffsetPath = join(deskDir, ".sync-offset");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 		writeFileSync(syncOffsetPath, "42", "utf-8");
@@ -130,16 +130,16 @@ describe("ChannelStore", () => {
 		expect(readFileSync(syncOffsetPath, "utf-8")).toBe("0");
 		expect(readFileSync(logPath, "utf-8")).toContain('"text":"rotated"');
 
-		await store.logSubAgentRun(dotDir, sampleSubAgentRun());
+		await store.logSubAgentRun(deskDir, sampleSubAgentRun());
 		await store.flush();
-		expect(readFileSync(join(dotDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
+		expect(readFileSync(join(deskDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
 	});
 
 	it("serializes concurrent writes to the same log file around rotation", async () => {
 		const workingDir = createTempDir();
 		const store = storeFor(workingDir);
-		const dotDir = seedChannelDir(workingDir, "dm_concurrent");
-		const logPath = join(dotDir, "log.jsonl");
+		const deskDir = seedChannelDir(workingDir, "dm_concurrent");
+		const logPath = join(deskDir, "log.jsonl");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 
@@ -168,7 +168,7 @@ describe("ChannelStore", () => {
 		expect(readFileSync(logPath, "utf-8")).toContain('"text":"second"');
 	});
 
-	it("archives nothing for a channel that is not bound to a dot", async () => {
+	it("archives nothing for a channel that is not bound to a desk", async () => {
 		// Spec 058, D4: an unbound channel leaves no trace on disk — no directory, no log.
 		const workingDir = createTempDir();
 		const store = storeFor(workingDir);

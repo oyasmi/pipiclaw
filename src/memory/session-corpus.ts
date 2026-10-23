@@ -31,8 +31,8 @@ export interface SessionSearchDocument {
 export const SESSION_SCAN_MAX_CHARS = 20_000;
 
 export interface BuildSessionCorpusOptions {
-	/** The dot whose conversations — every channel that has talked to it — form the corpus (spec 058, D12). */
-	dotDir: string;
+	/** The desk whose conversations — every channel that has talked to it — form the corpus (spec 058, D12). */
+	deskDir: string;
 	maxFiles: number;
 	maxCharsPerDocument?: number;
 	maxDocumentsTotal?: number;
@@ -276,9 +276,9 @@ async function parseJsonlFile(
 	return docs;
 }
 
-async function listConversations(dotDir: string): Promise<string[]> {
+async function listConversations(deskDir: string): Promise<string[]> {
 	try {
-		const entries = await readdir(join(dotDir, "conversations"), { withFileTypes: true });
+		const entries = await readdir(join(deskDir, "conversations"), { withFileTypes: true });
 		return entries
 			.filter((entry) => entry.isDirectory())
 			.map((entry) => entry.name)
@@ -329,9 +329,9 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 	const maxFiles = Math.max(1, Math.floor(options.maxFiles));
 	const maxChars = options.maxCharsPerDocument ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
 	const maxDocuments = options.maxDocumentsTotal ?? DEFAULT_MAX_DOCUMENTS_TOTAL;
-	const conversationDirs = (await listConversations(options.dotDir)).map((conversation) => ({
+	const conversationDirs = (await listConversations(options.deskDir)).map((conversation) => ({
 		conversation,
-		dir: join(options.dotDir, "conversations", conversation),
+		dir: join(options.deskDir, "conversations", conversation),
 	}));
 	const readPlan: Array<{ path: string; source: SessionSearchSource; conversation: string }> = [];
 	for (const { conversation, dir } of conversationDirs) {
@@ -348,7 +348,7 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 	// Every conversation is read, each keeping at most its newest `maxDocuments`; the total is then
 	// shared out by `shareBudget`. Stopping in directory order once the total ran over let one
 	// long-lived channel fill the budget before later channels were read at all (spec 058, D12:
-	// `session_search` covers the whole dot).
+	// `session_search` covers the whole desk).
 	const byConversation = new Map<string, SessionSearchDocument[]>();
 	for (const item of readPlan) {
 		let docs = byConversation.get(item.conversation) ?? [];

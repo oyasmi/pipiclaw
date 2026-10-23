@@ -10,7 +10,7 @@ import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/tools
 import {
 	configureSubAgentRuntime,
 	getSubAgentRunManager,
-	testDot,
+	testDesk,
 	testManagers,
 } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -37,8 +37,8 @@ function sleep(ms: number): Promise<void> {
 describe("subagent tool: async dispatch past the sync grace window (spec 040, D2)", () => {
 	it("returns a dispatched placeholder once the grace window elapses, then wakes the channel once the run actually finishes", async () => {
 		const workspaceDir = createTempWorkspace();
-		const dotDir = join(workspaceDir, "dm_123");
-		mkdirSync(dotDir, { recursive: true });
+		const deskDir = join(workspaceDir, "dm_123");
+		mkdirSync(deskDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];
 		configureSubAgentRuntime({
@@ -57,8 +57,8 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
-			dotDir,
-			runtimeContext: { workspaceDir, dot: "news", dotDir, channelId: "dm_123" },
+			deskDir,
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
 			// Tiny grace window; maxWallTimeSec (default 300s via inline systemPrompt path) stays
 			// far above it so the wall-clock budget timer cannot fire and confound the test.
 			syncGraceMs: 20,
@@ -129,7 +129,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		}
 
 		expect(dispatched).toHaveLength(1);
-		expect(dispatched[0]?.dispatchId).toBe(`subagent:${testDot("dm_123")}:${runId}:done`);
+		expect(dispatched[0]?.dispatchId).toBe(`subagent:${testDesk("dm_123")}:${runId}:done`);
 		expect(dispatched[0]?.text).toContain(`[SUBAGENT:${runId}]`);
 		expect(getSubAgentRunManager("dm_123").get(runId)?.status).toBe("completed");
 	});

@@ -8,12 +8,12 @@ import type {
 	SessionEntry,
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { drainBoundaryReflectWork, enqueueBoundaryReflectWork } from "./boundary-work.js";
-import { type DotMemoryQueue, getDotMemoryQueue } from "./dot-memory-queue.js";
+import { type DeskMemoryQueue, getDeskMemoryQueue } from "./desk-memory-queue.js";
 import {
 	type MemoryActivityEvent,
 	readMemoryMaintenanceState,
@@ -28,8 +28,8 @@ import { buildIncrementalMemorySourceWindow } from "./source-window.js";
 export type ConsolidationReason = "new-session" | "shutdown";
 
 export interface MemoryLifecycleOptions {
-	/** The conversation whose session this lifecycle reflects; its memory lands in the dot. */
-	conversation: DotConversation;
+	/** The conversation whose session this lifecycle reflects; its memory lands in the desk. */
+	conversation: DeskConversation;
 	workspaceDir: string;
 	appHomeDir?: string;
 	getMessages: () => AgentMessage[];
@@ -37,19 +37,19 @@ export interface MemoryLifecycleOptions {
 	getModel: () => Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	recordMemoryActivity?: (event: MemoryActivityEvent) => Promise<void> | void;
-	memoryQueue?: DotMemoryQueue;
+	memoryQueue?: DeskMemoryQueue;
 }
 
 export class MemoryLifecycle {
 	private durableDirty = false;
 	private durableRevision = 0;
 	private lastDurableConsolidationRevision = 0;
-	private readonly memoryQueue: DotMemoryQueue;
+	private readonly memoryQueue: DeskMemoryQueue;
 	// Tracks the detached new-session reflect run so shutdown/tests can await it.
 	private backgroundNewSessionReflect: Promise<void> = Promise.resolve();
 
 	constructor(private options: MemoryLifecycleOptions) {
-		this.memoryQueue = options.memoryQueue ?? getDotMemoryQueue();
+		this.memoryQueue = options.memoryQueue ?? getDeskMemoryQueue();
 	}
 
 	createExtensionFactory(): ExtensionFactory {
@@ -140,7 +140,7 @@ export class MemoryLifecycle {
 		correlationId?: string;
 	}): Promise<void> {
 		try {
-			await appendMemoryReviewLog(this.options.conversation.dotDir, {
+			await appendMemoryReviewLog(this.options.conversation.deskDir, {
 				timestamp: formatLocalTime(),
 				channelId: this.options.conversation.channelId,
 				...entry,
@@ -188,14 +188,14 @@ export class MemoryLifecycle {
 			log.logInfo(`[${this.options.conversation.channelId}] Memory reflect starting (${reason})`);
 			const result = await runReflect({
 				channelId: this.options.conversation.channelId,
-				dotDir: this.options.conversation.dotDir,
+				deskDir: this.options.conversation.deskDir,
 				workspaceDir: this.options.workspaceDir,
 				model: this.options.getModel(),
 				resolveApiKey: this.options.resolveApiKey,
 				messages: sourceWindow.messages,
 				usageContext: {
 					channelId: this.options.conversation.channelId,
-					dot: this.options.conversation.dot,
+					desk: this.options.conversation.desk,
 					correlationId: sourceWindow.windowId,
 				},
 			});

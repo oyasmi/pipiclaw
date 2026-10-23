@@ -11,7 +11,7 @@ import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/w
 import {
 	configureSubAgentRuntime,
 	getSubAgentRunManager,
-	testDot,
+	testDesk,
 	testManagers,
 } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -134,8 +134,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("spawns codex-cli, persists the pid, and settles completed once turn.completed arrives", async () => {
 		const workspaceDir = createTempWorkspace();
-		const dotDir = join(workspaceDir, "dm_ext");
-		const artifactDir = join(dotDir, "subagent-artifacts", "run-ext-1");
+		const deskDir = join(workspaceDir, "dm_ext");
+		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-1");
 		mkdirSync(artifactDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];
@@ -273,7 +273,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 
 		await probeStarted;
-		const recordPath = join(stateDir, testDot(channelId), "run-ext-handshake.json");
+		const recordPath = join(stateDir, testDesk(channelId), "run-ext-handshake.json");
 		await waitFor(() => existsSync(recordPath));
 		const persisted = JSON.parse(readFileSync(recordPath, "utf-8")) as {
 			status?: string;
@@ -291,12 +291,12 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const workspaceDir = createTempWorkspace();
 		const projectDir = join(workspaceDir, "project");
 		const channelId = "dm_ext_verify_write";
-		const dotDir = join(workspaceDir, channelId);
+		const deskDir = join(workspaceDir, channelId);
 		const runId = "run-ext-verify-write";
-		const artifactDir = join(dotDir, "subagent-artifacts", runId);
+		const artifactDir = join(deskDir, "subagent-artifacts", runId);
 		mkdirSync(projectDir, { recursive: true });
-		mkdirSync(join(dotDir, "tasks"), { recursive: true });
-		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n");
+		mkdirSync(join(deskDir, "tasks"), { recursive: true });
+		writeFileSync(join(deskDir, "tasks", "ship.md"), "---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n");
 		execFileSync("git", ["-C", projectDir, "init", "-q"], { stdio: "pipe" });
 		execFileSync("git", ["-C", projectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
 		execFileSync("git", ["-C", projectDir, "config", "user.name", "Test"], { stdio: "pipe" });
@@ -312,7 +312,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			...testManagers(channelId),
 			runId,
 			channelId,
-			dotDir,
+			deskDir,
 			label: "verify build outputs",
 			agent: "verifier",
 			source: "predefined",
@@ -348,7 +348,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		// Spec 052, D6: the verdict is the checker's declared line, recorded as information; no
 		// attestation or subject snapshot is written.
 		expect(manager.get(runId)?.verificationVerdict).toBe("pass");
-		expect(existsSync(join(dotDir, ".verifications"))).toBe(false);
+		expect(existsSync(join(deskDir, ".verifications"))).toBe(false);
 		const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: projectDir });
 		expect(nextLease.ok).toBe(true);
 		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");
@@ -356,8 +356,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("drops only pipiclaw's own LLM/DingTalk env vars, keeps others, and records what was dropped (fix plan §4.3)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const dotDir = join(workspaceDir, "dm_ext");
-		const artifactDir = join(dotDir, "subagent-artifacts", "run-ext-env");
+		const deskDir = join(workspaceDir, "dm_ext");
+		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-env");
 		mkdirSync(artifactDir, { recursive: true });
 
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 5151 });
@@ -414,8 +414,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("settles failed when the process exits 0 but no protocol terminal event was observed", async () => {
 		const workspaceDir = createTempWorkspace();
-		const dotDir = join(workspaceDir, "dm_ext2");
-		const artifactDir = join(dotDir, "subagent-artifacts", "run-ext-2");
+		const deskDir = join(workspaceDir, "dm_ext2");
+		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-2");
 		mkdirSync(artifactDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];
@@ -464,8 +464,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("settles failed immediately when spawn itself fails (e.g. missing binary)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const dotDir = join(workspaceDir, "dm_ext3");
-		const artifactDir = join(dotDir, "subagent-artifacts", "run-ext-3");
+		const deskDir = join(workspaceDir, "dm_ext3");
+		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-3");
 		mkdirSync(artifactDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];
@@ -763,8 +763,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("rejects an unknown harness before ever spawning", async () => {
 		const workspaceDir = createTempWorkspace();
-		const dotDir = join(workspaceDir, "dm_ext4");
-		const artifactDir = join(dotDir, "subagent-artifacts", "run-ext-4");
+		const deskDir = join(workspaceDir, "dm_ext4");
+		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-4");
 		mkdirSync(artifactDir, { recursive: true });
 		configureSubAgentRuntime({});
 		const { spawnFn, spawnFnForInput } = makeFakeSpawn();
@@ -795,8 +795,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("spawns claude-code, persists the pre-assigned session id at launch, and settles completed on a result event", async () => {
 		const workspaceDir = createTempWorkspace();
-		const dotDir = join(workspaceDir, "dm_ext5");
-		const artifactDir = join(dotDir, "subagent-artifacts", "run-ext-5");
+		const deskDir = join(workspaceDir, "dm_ext5");
+		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-5");
 		mkdirSync(artifactDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];

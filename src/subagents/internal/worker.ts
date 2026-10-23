@@ -65,10 +65,10 @@ export function getLastAssistantMessage(messages: AgentMessage[]): AssistantMess
  */
 function withSubagentMemoryWriteDeny(
 	securityConfig: SecurityConfig,
-	dotDir: string,
+	deskDir: string,
 	workspaceDir: string,
 ): SecurityConfig {
-	const protectedPaths = [getMemoryDir(dotDir), getJournalDir(dotDir), getMemoryIndexPath(dotDir)];
+	const protectedPaths = [getMemoryDir(deskDir), getJournalDir(deskDir), getMemoryIndexPath(deskDir)];
 	// The role directory gets the same structural denial (spec 040, D8.1): a sub-agent's write/edit
 	// tools are exactly as capable of writing a self-authorizing `runtime: external` role file as
 	// the main agent's are.
@@ -96,7 +96,7 @@ export function buildSubagentTools(
 ): AgentTool<any>[] {
 	const securityConfig = withSubagentMemoryWriteDeny(
 		options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
-		options.dotDir,
+		options.deskDir,
 		options.workspaceDir,
 	);
 	return options
@@ -109,7 +109,7 @@ export function buildSubagentTools(
 				cwd: runContext.workingDirectory,
 			},
 			channelId: options.runtimeContext.channelId,
-			dotDir: options.dotDir,
+			deskDir: options.deskDir,
 			workspaceDir: options.workspaceDir,
 			webConfig: options.webConfig,
 			rtkEnabled: options.rtkEnabled,

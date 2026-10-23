@@ -29,11 +29,11 @@ const MEDIA_UPLOAD_TIMEOUT_MS = 60_000;
 // File extensions the `sampleFile` message type accepts (per DingTalk docs).
 const SUPPORTED_FILE_TYPES = new Set(["xlsx", "pdf", "zip", "rar", "doc", "docx", "ppt", "pptx", "csv", "txt"]);
 
-/** Lowercased extension without the dot ("Report.PDF" → "pdf"); "" when none. */
+/** Lowercased extension without the desk ("Report.PDF" → "pdf"); "" when none. */
 function extractFileExtension(fileName: string): string {
-	const dot = fileName.lastIndexOf(".");
-	if (dot < 0 || dot === fileName.length - 1) return "";
-	return fileName.slice(dot + 1).toLowerCase();
+	const desk = fileName.lastIndexOf(".");
+	if (desk < 0 || desk === fileName.length - 1) return "";
+	return fileName.slice(desk + 1).toLowerCase();
 }
 
 export interface DingTalkMediaDeps {

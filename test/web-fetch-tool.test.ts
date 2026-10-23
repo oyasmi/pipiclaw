@@ -30,27 +30,27 @@ function textOutput(details: { finalUrl?: string; status?: number; truncated?: b
 	};
 }
 
-function makeTool(dotDir: string) {
+function makeTool(deskDir: string) {
 	return createWebFetchTool({
 		webConfig: DEFAULT_TOOLS_CONFIG.tools.web,
 		securityConfig: DEFAULT_SECURITY_CONFIG,
-		workspaceDir: dotDir,
+		workspaceDir: deskDir,
 		channelId: "dm_1",
-		dotDir,
+		deskDir,
 	});
 }
 
 describe("web_fetch tool caching and pagination (batch 2.7)", () => {
-	let dotDir: string;
+	let deskDir: string;
 	beforeEach(() => {
 		runWebFetchMock.mockReset();
-		dotDir = mkdtempSync(join(tmpdir(), "pipiclaw-webfetch-"));
+		deskDir = mkdtempSync(join(tmpdir(), "pipiclaw-webfetch-"));
 	});
 
 	it("pages a long page from one cached snapshot without refetching", async () => {
 		const body = `${"A".repeat(600)}MIDDLE_MARK${"B".repeat(600)}`;
 		runWebFetchMock.mockResolvedValueOnce(textOutput({}, body));
-		const tool = makeTool(dotDir);
+		const tool = makeTool(deskDir);
 
 		const first = await tool.execute("c", { url: "https://example.com/page", maxChars: 600 });
 		const firstText = first.content[0].type === "text" ? first.content[0].text : "";
@@ -64,7 +64,7 @@ describe("web_fetch tool caching and pagination (batch 2.7)", () => {
 
 	it("distinguishes 'more to page' from 'the source itself was truncated'", async () => {
 		runWebFetchMock.mockResolvedValueOnce(textOutput({ truncated: true }, "short body"));
-		const tool = makeTool(dotDir);
+		const tool = makeTool(deskDir);
 
 		const res = await tool.execute("c", { url: "https://example.com/big", maxChars: 9999 });
 		const text = res.content[0].type === "text" ? res.content[0].text : "";
@@ -74,7 +74,7 @@ describe("web_fetch tool caching and pagination (batch 2.7)", () => {
 
 	it("refresh:true bypasses the cache", async () => {
 		runWebFetchMock.mockResolvedValue(textOutput({}, "v1"));
-		const tool = makeTool(dotDir);
+		const tool = makeTool(deskDir);
 		await tool.execute("c", { url: "https://example.com/p", maxChars: 100 });
 
 		runWebFetchMock.mockResolvedValue(textOutput({}, "v2 content"));
@@ -85,7 +85,7 @@ describe("web_fetch tool caching and pagination (batch 2.7)", () => {
 	});
 
 	it("refuses offset>0 when the snapshot is gone instead of stitching a fresh one", async () => {
-		const tool = makeTool(dotDir);
+		const tool = makeTool(deskDir);
 		await expect(
 			tool.execute("c", { url: "https://example.com/expired", maxChars: 100, offset: 400 }),
 		).rejects.toThrow(/offset=0/);
@@ -94,7 +94,7 @@ describe("web_fetch tool caching and pagination (batch 2.7)", () => {
 
 	it("keeps the redirect final URL and status through the cache round-trip", async () => {
 		const key = webCacheKey("https://example.com/r", "markdown");
-		await writeWebCache(dotDir, key, {
+		await writeWebCache(deskDir, key, {
 			body: "cached body",
 			fetchedAt: Date.now(),
 			finalUrl: "https://example.com/final",
@@ -103,10 +103,10 @@ describe("web_fetch tool caching and pagination (batch 2.7)", () => {
 			contentType: "text/html",
 			sourceTruncated: false,
 		});
-		const roundTripped = await readWebCache(dotDir, key);
+		const roundTripped = await readWebCache(deskDir, key);
 		expect(roundTripped?.finalUrl).toBe("https://example.com/final");
 
-		const tool = makeTool(dotDir);
+		const tool = makeTool(deskDir);
 		const res = await tool.execute("c", { url: "https://example.com/r", extractMode: "markdown", maxChars: 100 });
 		const text = res.content[0].type === "text" ? res.content[0].text : "";
 		expect(text).toContain("Final URL after redirects: https://example.com/final");

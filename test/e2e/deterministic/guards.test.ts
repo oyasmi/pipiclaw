@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getBindingsPath } from "../../../src/dot/paths.js";
-import { createDot } from "../../../src/dot/registry.js";
+import { getBindingsPath } from "../../../src/desk/paths.js";
+import { createDesk } from "../../../src/desk/registry.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 describe("E2E deterministic: path guard", () => {
@@ -43,13 +43,13 @@ describe("E2E deterministic: path guard", () => {
 		expect(delivered).not.toMatch(/Path blocked|Resolved path/);
 	});
 
-	it("A19: `/dot bind` is refused while the channel has a turn in flight", async () => {
+	it("A19: `/desk bind` is refused while the channel has a turn in flight", async () => {
 		// Catches a rebind under a running turn: its runner would be disposed mid-turn and its tail
-		// written into a dot the channel no longer belongs to. Mutation check (2026-10-18): removing
-		// the busy check in `DotRuntime.bind` rebinds mid-turn — `bindings.json` changes and the
+		// written into a desk the channel no longer belongs to. Mutation check (2026-10-18): removing
+		// the busy check in `DeskRuntime.bind` rebinds mid-turn — `bindings.json` changes and the
 		// next turn lands in `lab`.
 		harness = await createDeterministicHarness();
-		await createDot(harness.workspaceDir, "lab", new Date());
+		await createDesk(harness.workspaceDir, "lab", new Date());
 		harness.model.script.route({
 			name: "turn",
 			when: (r) => r.isMainTurn,
@@ -61,8 +61,8 @@ describe("E2E deterministic: path guard", () => {
 		await harness.sendUserMessageNoWait("HELD_TURN");
 		await gate.arrived;
 		try {
-			// The busy transport answers `/dot` at once, on the runtime-command path.
-			await harness.sendUserMessageNoWait("/dot bind lab");
+			// The busy transport answers `/desk` at once, on the runtime-command path.
+			await harness.sendUserMessageNoWait("/desk bind lab");
 		} finally {
 			gate.release();
 		}
@@ -71,6 +71,6 @@ describe("E2E deterministic: path guard", () => {
 
 		await harness.sendUserMessage("AFTER_REFUSAL");
 		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).toContain("AFTER_REFUSAL");
-		expect(existsSync(join(harness.workspaceDir, "dots", "lab", "conversations", "dm-1"))).toBe(false);
+		expect(existsSync(join(harness.workspaceDir, "desk-lab", "conversations", "dm-1"))).toBe(false);
 	});
 });

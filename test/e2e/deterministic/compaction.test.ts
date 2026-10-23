@@ -3,14 +3,14 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { CompactionSummary } from "../../../src/agent/session/compaction-summary.js";
-import { getDotMemoryQueue } from "../../../src/memory/dot-memory-queue.js";
+import { getDeskMemoryQueue } from "../../../src/memory/desk-memory-queue.js";
 import { crash, startDaemon } from "../../support/daemon-process.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
 import { bindChannelOnDisk, createDeterministicHarness, reply } from "../../support/runtime-harness.js";
 import { cleanupE2ETestHome, createDeterministicHome } from "../../support/setup.js";
 
-function seed(conversationDir: string, dotDir: string, homeDir: string): void {
-	const manager = SessionManager.open(join(conversationDir, "context.jsonl"), conversationDir, dotDir);
+function seed(conversationDir: string, deskDir: string, homeDir: string): void {
+	const manager = SessionManager.open(join(conversationDir, "context.jsonl"), conversationDir, deskDir);
 	const usage = {
 		input: 160000,
 		output: 10,
@@ -106,11 +106,11 @@ describe("E2E deterministic: compaction", () => {
 				const manager = SessionManager.open(
 					join(paths.conversationDir, "context.jsonl"),
 					paths.conversationDir,
-					paths.dotDir,
+					paths.deskDir,
 				);
 				manager.appendMessage({ role: "user", content: `PREFIX_TO_REPLACE ${"中".repeat(40000)}`, timestamp: 0 });
-				seed(paths.conversationDir, paths.dotDir, paths.homeDir);
-				writeFileSync(join(paths.dotDir, "critical-config.ts"), "TAIL_FILE_RESULT");
+				seed(paths.conversationDir, paths.deskDir, paths.homeDir);
+				writeFileSync(join(paths.deskDir, "critical-config.ts"), "TAIL_FILE_RESULT");
 			},
 		});
 		harness.model.script.route({
@@ -212,7 +212,7 @@ describe("E2E deterministic: compaction", () => {
 	it("compacts once with its own budget while a blocked memory worker leaves the channel usable", async () => {
 		// Catches double /compact and synchronous reflect. Mutation (2026-10-22): remove the slash-command guard in turn-pipeline; custom instructions are lost and this case fails.
 		const harness = await createDeterministicHarness({
-			seed: (paths) => seed(paths.conversationDir, paths.dotDir, paths.homeDir),
+			seed: (paths) => seed(paths.conversationDir, paths.deskDir, paths.homeDir),
 		});
 		harness.model.script.route({
 			name: "compact",
@@ -241,7 +241,7 @@ describe("E2E deterministic: compaction", () => {
 				.map((line) => JSON.parse(line));
 			expect(entries.filter((entry) => entry.type === "compaction")).toHaveLength(1);
 			expect(
-				readdirSync(join(harness.dotDir, ".memory-work", "dm-1")).filter((file) => file.endsWith(".json")),
+				readdirSync(join(harness.deskDir, ".memory-work", "dm-1")).filter((file) => file.endsWith(".json")),
 			).toHaveLength(1);
 			// The reflect request remains held: no cancellation or ordinary completion can hide a blocking hook.
 			await harness.sendUserMessage("AFTER_COMPACTION");
@@ -257,7 +257,7 @@ describe("E2E deterministic: compaction", () => {
 			expect(harness.model.requests.filter(summaryRequest)).toHaveLength(2);
 		} finally {
 			memory.release();
-			await getDotMemoryQueue().run({ dot: harness.dot, dotDir: harness.dotDir }, async () => {});
+			await getDeskMemoryQueue().run({ desk: harness.desk, deskDir: harness.deskDir }, async () => {});
 			await harness.shutdown();
 		}
 	});
@@ -269,7 +269,7 @@ describe("E2E deterministic: compaction", () => {
 		const home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
 		const channelId = "dm_e2e_user";
 		const conversation = await bindChannelOnDisk(home.workspaceDir, channelId);
-		seed(conversation.conversationDir, conversation.dotDir, home.homeDir);
+		seed(conversation.conversationDir, conversation.deskDir, home.homeDir);
 		const settingsPath = join(home.homeDir, "settings.json");
 		const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
 		settings.memoryMaintenance = { enabled: false };
@@ -286,7 +286,7 @@ describe("E2E deterministic: compaction", () => {
 			daemon = await startDaemon(home.homeDir);
 			await daemon.call("turn", { channelId, text: "/compact" });
 			await memory.arrived;
-			const dir = join(conversation.dotDir, ".memory-work", conversation.conversation);
+			const dir = join(conversation.deskDir, ".memory-work", conversation.conversation);
 			expect(readdirSync(dir).filter((file) => file.endsWith(".json"))).toHaveLength(1);
 			await crash(daemon.child);
 			memory.release();

@@ -5,14 +5,14 @@ import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { DotConversation } from "../dot/types.js";
+import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { isNodeError } from "../shared/os.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import { type DotMemoryQueue, getDotMemoryQueue } from "./dot-memory-queue.js";
+import { type DeskMemoryQueue, getDeskMemoryQueue } from "./desk-memory-queue.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
 import { runReflect } from "./reflect.js";
 import { appendMemoryReviewLog } from "./review-log.js";
@@ -27,11 +27,11 @@ interface BoundaryWork {
 	messages: Array<{ entryId: string; message: AgentMessage }>;
 }
 
-function workDir(conversation: DotConversation): string {
-	return join(conversation.dotDir, ".memory-work", conversation.conversation);
+function workDir(conversation: DeskConversation): string {
+	return join(conversation.deskDir, ".memory-work", conversation.conversation);
 }
 
-async function pendingFiles(conversation: DotConversation): Promise<string[]> {
+async function pendingFiles(conversation: DeskConversation): Promise<string[]> {
 	try {
 		return (await readdir(workDir(conversation))).filter((name) => /^[a-f0-9]{32}\.json$/.test(name)).sort();
 	} catch (error) {
@@ -40,7 +40,7 @@ async function pendingFiles(conversation: DotConversation): Promise<string[]> {
 	}
 }
 
-async function completed(conversation: DotConversation, id: string): Promise<boolean> {
+async function completed(conversation: DeskConversation, id: string): Promise<boolean> {
 	try {
 		await access(join(workDir(conversation), `${id}.done`));
 		return true;
@@ -50,13 +50,13 @@ async function completed(conversation: DotConversation, id: string): Promise<boo
 	}
 }
 
-export async function hasBoundaryReflectWork(conversation: DotConversation): Promise<boolean> {
+export async function hasBoundaryReflectWork(conversation: DeskConversation): Promise<boolean> {
 	return (await pendingFiles(conversation)).length > 0;
 }
 
-/** Persist before context is replaced. No dot-memory queue/lock or model request on this path. */
+/** Persist before context is replaced. No desk-memory queue/lock or model request on this path. */
 export async function enqueueBoundaryReflectWork(
-	conversation: DotConversation,
+	conversation: DeskConversation,
 	entries: SessionEntry[],
 	firstKeptEntryId: string,
 	signal: AbortSignal,
@@ -88,12 +88,12 @@ export async function enqueueBoundaryReflectWork(
 }
 
 export interface BoundaryReflectOptions {
-	conversation: DotConversation;
+	conversation: DeskConversation;
 	workspaceDir: string;
 	appHomeDir: string;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
-	queue?: DotMemoryQueue;
+	queue?: DeskMemoryQueue;
 }
 
 /** Called by the live lifecycle and the startup/idle scheduler, including when idle maintenance is off. */
@@ -101,7 +101,7 @@ export async function drainBoundaryReflectWork(options: BoundaryReflectOptions):
 	const { conversation, appHomeDir } = options;
 	try {
 		if (!(await hasBoundaryReflectWork(conversation))) return;
-		const queue = options.queue ?? getDotMemoryQueue();
+		const queue = options.queue ?? getDeskMemoryQueue();
 		await queue.run(conversation, async () => {
 			const maintenance = await readMemoryMaintenanceState(appHomeDir, conversation);
 			const retryAt = maintenance.failureBackoffUntil ? parseLocalTime(maintenance.failureBackoffUntil) : undefined;
@@ -148,14 +148,14 @@ export async function drainBoundaryReflectWork(options: BoundaryReflectOptions):
 				if (cursor !== item.entryIds.length - 1) {
 					const result = await runReflect({
 						channelId: conversation.channelId,
-						dotDir: conversation.dotDir,
+						deskDir: conversation.deskDir,
 						workspaceDir: options.workspaceDir,
 						model: options.model,
 						resolveApiKey: options.resolveApiKey,
 						messages,
-						usageContext: { channelId: conversation.channelId, dot: conversation.dot, correlationId: item.id },
+						usageContext: { channelId: conversation.channelId, desk: conversation.desk, correlationId: item.id },
 					});
-					await appendMemoryReviewLog(conversation.dotDir, {
+					await appendMemoryReviewLog(conversation.deskDir, {
 						timestamp: formatLocalTime(),
 						channelId: conversation.channelId,
 						reason: "reflect-boundary",

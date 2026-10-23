@@ -29,11 +29,11 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 | 层 | 载体 | 持有什么 | 谁维护 |
 |----|------|----------|--------|
-| **events** | `dots/<dot>/events/*.json` | 何时唤醒：提醒、周期与定时工作的模板、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`） |
-| **tasks** | `dots/<dot>/tasks/<id>.md` + `<id>.jsonl` | 契约（目标、验收清单、工作项）、等待票、用量；循环日志记着每一步、每次派发与结算 | 主 agent 经 `task_create`/`task_update`/`task_close` 建档，任务循环经 `task_step_end` 推进 |
+| **events** | `desk-<name>/events/*.json` | 何时唤醒：提醒、周期与定时工作的模板、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`） |
+| **tasks** | `desk-<name>/tasks/<id>.md` + `<id>.jsonl` | 契约（目标、验收清单、工作项）、等待票、用量；循环日志记着每一步、每次派发与结算 | 主 agent 经 `task_create`/`task_update`/`task_close` 建档，任务循环经 `task_step_end` 推进 |
 | **task driver** | runtime 确定性扫描 | 兑现到期的票、兜底过期的票、停下超预算的任务、排下一步 | Pipiclaw runtime，扫描本身零 token |
 
-事件和任务都属于一个 dot，放在 `workspace/dots/<dot>/` 下（默认 `~/.pipiclaw/workspace/dots/<dot>/`；设置了 `PIPICLAW_HOME` 时以它为根）。每个事件和任务都记着自己的**投递频道**：事件的 `channelId`、任务 frontmatter 的 `channel`，结果只发到那里。投递频道没有绑定在这个 dot 上时（换绑到了别的 dot，或者解绑了），对应的事件和任务**挂起**：事件到点跳过，任务不推进；频道绑回来后自动恢复。dot 失去全部绑定时整体休眠，它的事件 watcher 停止。
+事件和任务都属于一个工位，放在 `workspace/desk-<name>/` 下（默认 `~/.pipiclaw/workspace/desk-<name>/`；设置了 `PIPICLAW_HOME` 时以它为根）。每个事件和任务都记着自己的**投递频道**：事件的 `channelId`、任务 frontmatter 的 `channel`，结果只发到那里。投递频道没有绑定在这个工位上时（换绑到了别的工位，或者解绑了），对应的事件和任务**挂起**：事件到点跳过，任务不推进；频道绑回来后自动恢复。工位失去全部绑定时整体休眠，它的事件 watcher 停止。
 
 **为什么需要两层。**只有事件时，每次唤醒都是无状态的：agent 醒来只知道事件文本那一句话，不知道有哪些在途工作、上次做到哪、验收标准是什么。任务补上这块记忆，让工作变成：
 
@@ -47,7 +47,7 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 ## 它是什么（What It Is）
 
-在 dot 的 `events/` 目录（`~/.pipiclaw/workspace/dots/<dot>/events/`）中放入一个 `.json` 文件，运行中的 Pipiclaw 就会读取它，并把它转成一条发给投递频道 `channelId` 的事件消息。`channelId` 必须是绑定在这个 dot 上的频道，否则到点时跳过，并在事件历史里记一条 `skipped`（`channel_not_bound`）。
+在工位的 `events/` 目录（`~/.pipiclaw/workspace/desk-<name>/events/`）中放入一个 `.json` 文件，运行中的 Pipiclaw 就会读取它，并把它转成一条发给投递频道 `channelId` 的事件消息。`channelId` 必须是绑定在这个工位上的频道，否则到点时跳过，并在事件历史里记一条 `skipped`（`channel_not_bound`）。
 
 适合的场景：
 
@@ -228,7 +228,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 示例：
 
 ```json
-{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pipiclaw/workspace/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","textPreview":"检查当前 workspace 和 channel 的 MEMORY.md...","queue":{"accepted":true}}
+{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pipiclaw/workspace/desk-default/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","desk":"default","textPreview":"检查共享背景与当前工位记忆...","queue":{"accepted":true}}
 ```
 
 说明：
@@ -245,13 +245,13 @@ Pipiclaw 会把事件调度层的审计记录写入：
 - 私聊：`dm_<staffId>`
 - 群聊：`group_<conversationId>`
 
-频道绑定到 dot 之后，`workspace/CHANNELS.md` 会列出它的 id、名称和所属 dot；`dots/bindings.json` 是绑定的原始记录。在频道里让 agent 用 `event_manage` 创建事件时，投递频道自动就是当前频道，不用自己写。
+频道绑定到工位之后，`workspace/CHANNELS.md` 会列出它的 id、名称和所属工位；`desk-bindings.json` 是绑定的原始记录。在频道里让 agent 用 `event_manage` 创建事件时，投递频道自动就是当前频道，不用自己写。
 
-终端（TUI）不进绑定表，也不运行任务驱动器和事件 watcher，所以在终端里 `task_create` 或 `event_manage create` 会被拒绝，并提示去绑定了该 dot 的钉钉频道里创建。
+终端（TUI）不进绑定表，也不运行任务驱动器和事件 watcher，所以在终端里 `task_create` 或 `event_manage create` 会被拒绝，并提示去绑定了该工位的钉钉频道里创建。
 
 ## 谁来管理事件：三个入口
 
-同一个 dot 的 `events/` 目录有三个互不冲突的管理入口：
+同一个工位的 `events/` 目录有三个互不冲突的管理入口：
 
 | 入口 | 谁用 | 能做什么 |
 |------|------|----------|
@@ -261,16 +261,16 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 ### `/events` 命令（人用，只读 + 删除）
 
-钉钉渠道中用 `/events` 查看和删除现有事件。它只管理已有文件，不支持通过命令创建或更新；需要新增或修改时，直接编辑 `dots/<dot>/events/*.json` 或让 agent 用 `event_manage`。`/events` 列出本 dot 的全部事件，投递到别的频道的会标出频道名，投递频道已不在本 dot 上的标为已暂停。
+钉钉渠道中用 `/events` 查看和删除现有事件。它只管理已有文件，不支持通过命令创建或更新；需要新增或修改时，直接编辑 `desk-<name>/events/*.json` 或让 agent 用 `event_manage`。`/events` 列出本工位的全部事件，投递到别的频道的会标出频道名，投递频道已不在本工位上的标为已暂停。
 
 | 命令 | 说明 |
 |------|------|
 | `/events list` | 列出事件文件名、类型、`channelId`、`schedule` / `at`（无 timezone 列）和文本预览；定义无效（包括 watcher 会拒绝的过密 cron）时用一句中文说明原因 |
-| `/events show <name>` | 展示 `dots/<dot>/events/<name>.json` 的完整 JSON |
+| `/events show <name>` | 展示 `desk-<name>/events/<name>.json` 的完整 JSON |
 | `/events delete <name>` | 删除对应事件文件 |
 | `/events history [name]` | 读取最近的事件调度历史，一条一行；传入 `name` 时只显示该事件 |
 
-事件名只允许普通文件名字符（字母、数字、`.`、`_`、`-`）。可以写 `weekly-review` 或 `weekly-review.json`，Pipiclaw 会统一归一化。命令不会访问本 dot 的 `events/` 之外的路径。
+事件名只允许普通文件名字符（字母、数字、`.`、`_`、`-`）。可以写 `weekly-review` 或 `weekly-review.json`，Pipiclaw 会统一归一化。命令不会访问本工位的 `events/` 之外的路径。
 
 ### `event_manage` 工具（agent 自调度）
 
@@ -296,7 +296,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
    - 禁止 `immediate` 类型（create 与 update 双侧）——当下能做的事就在当前回合做完；
    - `one-shot` 的 `at` 必须至少晚于现在 2 分钟；
    - `periodic` 的 cron 最密每 **30 分钟**一次；**带 `preAction` 门控时放宽到最密每 5 分钟**——传感器条件不成立时静默、零 token，适合调用用户已安装的稳定检测命令；硬下限仍是 5 分钟；
-   - 本 dot 的 `events/` 内事件文件数达到 50 时拒绝再 create。
+   - 本工位的 `events/` 内事件文件数达到 50 时拒绝再 create。
 
 > 手工编辑会绕过 `event_manage` 的 channel 所有权、提前量等即时错误提示，但 watcher 仍是最终信任边界：`immediate`、过密 cron、过多事件和被 command guard 拒绝的 `preAction` 仍会被拒绝。`one-shot` 的 2 分钟提前量也用于 watcher 校验进程运行期间新写入的文件；启动前遗留且已经错过的文件按可靠恢复语义补投递一次。
 > 注意：第 4 条的两道 guard 检查都以 `security.json` 里 `commandGuard.enabled` 为前提；全局关闭 command guard 时，写入时与触发时的检查都不生效（这是既有安全语义）。
@@ -389,7 +389,7 @@ v3（0.9.2）的 `status`、`wake`、`control`、`schedule`、`Manual`、`Verifi
 ### 目录布局
 
 ```text
-workspace/dots/<dot>/tasks/
+workspace/desk-<desk>/tasks/
 ├── export-api.md             契约
 ├── export-api.jsonl          循环日志
 ├── weekly-report-20261005-0900.md    事件模板生成的实例
@@ -434,7 +434,7 @@ budget: {"usd":30}
 |---|---|
 | `state` | `open`（现在有活可干）/ `parked`（在等一张票）/ `done`（已关闭，仅归档文件） |
 | `paused` | `{by,reason,at}`。**出现即暂停**，与 `state` 正交；`by` 为 `user` 或 `runtime` |
-| `channel` | 投递频道：创建时写入（聊天里创建取当前频道，事件模板生成的实例取事件的 `channelId`），之后不变。它没有绑定在本 dot 上时任务挂起 |
+| `channel` | 投递频道：创建时写入（聊天里创建取当前频道，事件模板生成的实例取事件的 `channelId`），之后不变。它没有绑定在本工位上时任务挂起 |
 | `ticket` | `state: parked` 时必需，`open`/`done` 时必须不存在 |
 | `usage` | 整个任务的用量：步数、成本、连续过期次数 |
 | `budget` | 可选的每任务预算覆盖，只有 `steps` 与 `usd`，见[预算](#预算与停止) |
@@ -525,9 +525,9 @@ driver 是自适应 timer + nudge 的零 token 扫描：
 1. **兑现**到期的 `time` 票。
 2. **兜底**过期的票（重开或通知）。
 3. **停下**已经超预算或在空转的任务。
-4. **排队**一个可跑的任务，每个 dot 每次至多一个，在 dot 内部轮转保证公平；派发前看的是投递频道是否忙。
+4. **排队**一个可跑的任务，每个工位每次至多一个，在工位内部轮转保证公平；派发前看的是投递频道是否忙。
 
-只扫描激活的 dot（至少绑定了一个频道）。投递频道没有绑定在本 dot 上的任务整个跳过：不兑现、不兜底、不计预算、不派发，进入挂起时记一条 info 日志 `taskdriver.task.suspended`，频道绑回来后照常推进。
+只扫描激活的工位（至少绑定了一个频道）。投递频道没有绑定在本工位上的任务整个跳过：不兑现、不兜底、不计预算、不派发，进入挂起时记一条 info 日志 `taskdriver.task.suspended`，频道绑回来后照常推进。
 
 `work`/`ask` 从不轮询——它们由各自的所有者推过来：`SubAgentRunManager` 与 `JobManager` 的结算、`/tasks reply`。所有推送边都要经过同一个幂等的票据兑现，所以 at-least-once 的重放是安全的 no-op。任务处于 `open`（已有步骤在驱动）时到达的结算唤醒不会再开一个模型回合，结果已经写进日志，下一步的看板会带上。
 
@@ -550,7 +550,7 @@ events 与 tasks 之间只有一条边：**事件按模板生成任务实例**�
 /tasks doctor                           只检查手工编辑或转换未完成造成的问题（含缺少投递频道的任务）
 ```
 
-`/tasks` 列出本 dot 的全部任务：投递频道不是当前频道时显示它的名称，投递频道已不在本 dot 上时标为"已暂停：投递频道未绑定到本 dot"。
+`/tasks` 列出本工位的全部任务：投递频道不是当前频道时显示它的名称，投递频道已不在本工位上时标为"已暂停：投递频道未绑定到本工位"。
 
 聊天里的回复使用界面用语（[对照表](interaction-and-commands.md#界面用语对照)）：契约显示为"任务说明"，团队看板为"工作项"，循环日志为"任务记录"，等待票为"等待条件"，兜底时限为"最晚检查时间"，状态为"进行中 / 等待中 / 已结束"。它们和模型看到的 step brief 读的是同一份数据，但由两个渲染器分别输出（`renderTaskBoardForUser` / `renderTaskLogLineForUser`）：给你的版本是平铺列表，一个工作项的多个委派合并在一行，不出现 `continue`、`VERDICT`、`exit` 这类参数值和工具名，时间只到分钟。回复受 1,500 字预算约束，超出时给出 `/tasks log <id>` 和任务文件的绝对路径。
 
@@ -567,15 +567,13 @@ task_list      task_create    task_update    task_close    task_log
 task_step_end  （只在任务会话里注册）
 ```
 
-`task_update` 只改工作项和预算，不再承载进度记录——进度属于 `task_step_end` 的 `note`。`task_close` 只有 `complete`（DoD 全部勾选且没有在途项）和 `cancel`；关闭任务**不会**取消仍在运行的委派或作业，回执会列出来。任务会话的工具集里**没有** `task_create`、`memory_save` 和 `event_manage`：任务不建任务、不写 dot 记忆、不管事件。
+`task_update` 只改工作项和预算，不再承载进度记录——进度属于 `task_step_end` 的 `note`。`task_close` 只有 `complete`（DoD 全部勾选且没有在途项）和 `cancel`；关闭任务**不会**取消仍在运行的委派或作业，回执会列出来。任务会话的工具集里**没有** `task_create`、`memory_save` 和 `event_manage`：任务不建任务、不写工位记忆、不管事件。
 
 每回合仍注入 `<task_agenda>`，每行含状态、等待票摘要与兜底时间、工作项进度和用量；它是背景参考，不是新指令。
 
 ## 从更早的任务格式升级
 
-v3→v5 的任务转换代码随 spec 058 删除。dot 迁移脚本（[部署与运维](deployment-and-operations.md#迁移到-dot-布局spec-058)）要求 `state/task-migration-v5.done` 已存在，所以从 v3 升级要先装一个 0.9.x 版本完整启动一次，让它把任务转成 v5，再升级并迁移到 dot。
-
-0.9.3 beta 期间写出的 v4 任务文件（有 `state:`，同时带 `cycle`、`verify` 或 `run`/`job`/`signal`/`schedule` 票）从来不在转换范围内：它们的用量、预算和等待语义不会被保留。迁移前把这类任务的契约、日志和会话文件移出 `tasks/`，迁移后在对应的 dot 里用 `task_create` 以新 id 重建（核对 Goal、DoD 和剩余工作项，重新确认预算；周期工作改成带 `task` 模板的事件），等待来源由新任务通过 `task_step_end` 重新建立，不要手写 `ticket`。
+当前运行时只读取现行任务格式，没有任务转换器或迁移标记检查。升级更早版本时，由 AI agent 按[一次性迁移说明](./desk-migration.md)盘点原始任务、日志、会话、预算和等待来源，再对照目标 reader 整理。保留原件与关联，不能先清空等待条件或丢弃用量来让新版本读入。
 
 ## 异常恢复
 

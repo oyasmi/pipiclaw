@@ -13,19 +13,19 @@ function doc(front: string, body: string): string {
 }
 
 describe("buildTaskDigest", () => {
-	let dotDir: string;
+	let deskDir: string;
 	let tasksDir: string;
 	beforeEach(async () => {
-		dotDir = await mkdtemp(join(tmpdir(), "task-digest-"));
-		tasksDir = join(dotDir, "tasks");
+		deskDir = await mkdtemp(join(tmpdir(), "task-digest-"));
+		tasksDir = join(deskDir, "tasks");
 		await mkdir(tasksDir, { recursive: true });
 	});
 	afterEach(async () => {
-		await rm(dotDir, { recursive: true, force: true });
+		await rm(deskDir, { recursive: true, force: true });
 	});
 
 	async function digest(maxTasks = 8, maxChars = 1000): Promise<string> {
-		return buildTaskDigest({ dotDir, maxTasks, maxChars, now: NOW });
+		return buildTaskDigest({ deskDir, maxTasks, maxChars, now: NOW });
 	}
 
 	it("returns empty with no tasks, includes non-done framing, and excludes done ones", async () => {
@@ -66,7 +66,7 @@ describe("buildTaskDigest", () => {
 		for (let i = 0; i < taskCount; i++) {
 			await writeFile(join(tasksDir, `t${i}.md`), doc("state: open", taskTitle(i)));
 		}
-		const out = await buildTaskDigest({ dotDir, now: NOW, ...config });
+		const out = await buildTaskDigest({ deskDir, now: NOW, ...config });
 		const shown = out.split("\n").filter((line) => line.startsWith("- t"));
 		if (exactShown !== undefined) {
 			expect(shown).toHaveLength(exactShown);

@@ -1,5 +1,5 @@
 /**
- * Terminal TUI runtime: transport-neutral app init (no DingTalk gate), opening a dot (spec 058,
+ * Terminal TUI runtime: transport-neutral app init (no DingTalk gate), opening a desk (spec 058,
  * D18), and wiring of the collaborators the `TurnController` drives.
  *
  * The heavy lifting is reused as-is: `ChannelRunner` drives each turn, the
@@ -25,11 +25,11 @@ import { CHANNELS_INDEX_FILENAME, loadChannelNames } from "../channel/channel-in
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
-import { buildDotList } from "../dot/commands.js";
-import { assertNoLegacyLayout, StartupRefusal } from "../dot/legacy-layout.js";
-import { isDotName, normalizeDotName } from "../dot/paths.js";
-import { allocateConversation, createDot, listDots, loadBindings, readDotRecord } from "../dot/registry.js";
-import type { DotConversation } from "../dot/types.js";
+import { loadBindings } from "../desk/bindings.js";
+import { buildDeskList } from "../desk/commands.js";
+import { DEFAULT_DESK, isDeskName, normalizeDeskName } from "../desk/paths.js";
+import { allocateConversation, createDesk, listDesks, readDeskRecord } from "../desk/registry.js";
+import type { DeskConversation } from "../desk/types.js";
 import { createExecutor } from "../executor.js";
 import { createJobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
@@ -63,9 +63,9 @@ async function waitForStorageFlush(task: Promise<unknown>): Promise<void> {
 }
 
 export interface TuiAppOptions {
-	/** The dot to open (D18): required; any dot, bound or not, served by a daemon or not. */
-	dot?: string;
-	/** Create the dot when it does not exist — an explicit creation, like `/dot new` (INV-2). */
+	/** The desk to open; defaults to the built-in personal assistant. */
+	desk?: string;
+	/** Create the desk when it does not exist — an explicit creation, like `/desk new` (INV-2). */
 	create?: boolean;
 	/** One-shot, non-interactive run: process a single prompt then exit. */
 	print?: boolean;
@@ -80,45 +80,41 @@ export interface TuiAppOptions {
 }
 
 /**
- * Resolve `--dot` to this TUI's conversation in it: validate the name, create the dot only with
- * `--create`, and allocate the `tui` conversation (under the dot.json lock, D3). Exits with a
+ * Resolve `--desk` to this TUI's conversation in it: validate the name, create the desk only with
+ * `--create`, and allocate the `tui` conversation (under the desk.json lock, D3). Exits with a
  * deployer-facing message on any failure.
  */
-async function openDot(options: TuiAppOptions, paths: BootstrapPaths, io: BootstrapIO): Promise<DotConversation> {
+async function openDesk(options: TuiAppOptions, paths: BootstrapPaths, io: BootstrapIO): Promise<DeskConversation> {
 	const fail = (message: string): never => {
 		io.error(message);
 		throw new BootstrapExitError(1);
 	};
-	let name = normalizeDotName(options.dot ?? "");
-	if (!name) {
-		// Without --dot, a home with exactly one usable dot opens it; anything else must be named.
-		const usable = (await listDots(paths.workspaceDir)).filter((dot) => dot.availability === "available");
-		if (usable.length !== 1) {
+	const name = normalizeDeskName(options.desk ?? DEFAULT_DESK);
+	if (!isDeskName(name)) {
+		fail(
+			`Invalid desk name "${name}": use 1-32 lowercase letters, digits or hyphens, not starting or ending with "-".`,
+		);
+	}
+	let summary = await readDeskRecord(paths.workspaceDir, name);
+	if (summary.availability === "missing" && options.create) {
+		const created = await createDesk(paths.workspaceDir, name, new Date());
+		if (created.kind !== "created") {
 			fail(
-				`Missing --dot <name>: the terminal opens one dot${usable.length > 1 ? ` (${usable.map((dot) => dot.name).join(", ")})` : ""}. Run \`pipiclaw tui --help\` for usage.`,
+				`Could not create desk "${name}" (${created.kind}). Inspect ${summary.deskDir} and desk-bindings.json; restore missing records from backup.`,
 			);
 		}
-		name = usable[0].name;
-	}
-	if (!isDotName(name)) {
-		fail(
-			`Invalid dot name "${name}": use 1-32 lowercase letters, digits or hyphens, not starting or ending with "-".`,
-		);
-	}
-	let summary = await readDotRecord(paths.workspaceDir, name);
-	if (summary.availability === "missing" && options.create) {
-		const created = await createDot(paths.workspaceDir, name, new Date());
-		if (created.kind !== "created") fail(`Could not create dot "${name}" (${created.kind}).`);
-		summary = await readDotRecord(paths.workspaceDir, name);
+		summary = await readDeskRecord(paths.workspaceDir, name);
 	}
 	if (summary.availability === "missing") {
-		const known = (await listDots(paths.workspaceDir)).map((dot) => dot.name);
+		const known = (await listDesks(paths.workspaceDir)).map((desk) => desk.name);
 		fail(
-			`Dot "${name}" does not exist. ${known.length > 0 ? `Existing dots: ${known.join(", ")}.` : "No dots exist yet."} ` +
-				"Add --create to create it.",
+			`Desk "${name}" has no readable record. ${known.length > 0 ? `Existing desks: ${known.join(", ")}.` : "No desks exist yet."} ` +
+				"Restore an existing desk from backup; use --create only for a new desk.",
 		);
 	}
-	if (summary.availability === "invalid") fail(`Dot "${name}" is unavailable: ${summary.reason}`);
+	if (summary.availability === "invalid") {
+		fail(`Desk "${name}" is unavailable: ${summary.reason}. Inspect or restore ${summary.deskDir}/desk.json.`);
+	}
 	return allocateConversation(paths.workspaceDir, name, TUI_CHANNEL_ID, "tui", new Date());
 }
 
@@ -148,20 +144,13 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	log.configureLogging(settingsManager.getLoggingSettings());
 	log.logStartup(paths.workspaceDir);
 
-	try {
-		assertNoLegacyLayout(paths);
-	} catch (error) {
-		if (!(error instanceof StartupRefusal)) throw error;
-		io.error(error.message);
-		throw new BootstrapExitError(1);
-	}
-	const conversation = await openDot(options, paths, io);
-	const { dot } = conversation;
-	// One writer per conversation (D6): a second TUI on this dot would append to the same session file.
+	const conversation = await openDesk(options, paths, io);
+	const { desk } = conversation;
+	// One writer per conversation (D6): a second TUI on this desk would append to the same session file.
 	const lock = await acquireFileLock(join(conversation.conversationDir, ".lock"));
 	if (lock.kind === "held") {
 		io.error(
-			`Dot "${dot}" is already open in another terminal (pid ${lock.heldBy?.pid ?? "unknown"}); close it first.`,
+			`Desk "${desk}" is already open in another terminal (pid ${lock.heldBy?.pid ?? "unknown"}); close it first.`,
 		);
 		throw new BootstrapExitError(1);
 	}
@@ -179,15 +168,15 @@ async function runWithConversation(
 	options: TuiAppOptions,
 	io: BootstrapIO,
 	paths: BootstrapPaths,
-	conversation: DotConversation,
+	conversation: DeskConversation,
 	settingsManager: ReturnType<typeof prepareAppServices>["settingsManager"],
 ): Promise<void> {
 	const channelId = TUI_CHANNEL_ID;
-	const { dot } = conversation;
+	const { desk } = conversation;
 	const names = await loadChannelNames(paths.workspaceDir);
 	// Read once, for labels only: the TUI never writes bindings (D18).
-	const bindings = (await loadBindings(paths.workspaceDir).catch(() => undefined))?.bindings ?? {};
-	const record = (await readDotRecord(paths.workspaceDir, dot)).record;
+	const bindings = (await loadBindings(paths.workspaceDir)).bindings;
+	const record = (await readDeskRecord(paths.workspaceDir, desk)).record;
 
 	const store = new ChannelStore({
 		resolveArchiveDir: (id) => (id === channelId ? conversation.conversationDir : undefined),
@@ -196,8 +185,8 @@ async function runWithConversation(
 	const runs = createSubAgentRuntime({ workspaceDir: paths.workspaceDir });
 	const makeRunner = () =>
 		createRunner(conversation, {
-			jobManager: jobs.get(dot),
-			runManager: runs.get(dot),
+			jobManager: jobs.get(desk),
+			runManager: runs.get(desk),
 			appHomeDir: paths.appHomeDir,
 			workspaceDir: paths.workspaceDir,
 			describeChannel: (id) => names.get(id),
@@ -245,26 +234,25 @@ async function runWithConversation(
 				{
 					kind: "bound",
 					conversation,
-					// The TUI lists and creates dots but never binds (D18): its port has no `bind`.
-					dotPort: {
+					// The TUI lists and creates desks but never binds (D18): its port has no `bind`.
+					deskPort: {
 						list: async () =>
-							buildDotList(await listDots(paths.workspaceDir), bindings, dot, (id) =>
+							buildDeskList(await listDesks(paths.workspaceDir), bindings, desk, (id) =>
 								formatChannelLabel(id, names.get(id)),
 							),
 						channelIndexPath: join(paths.workspaceDir, CHANNELS_INDEX_FILENAME),
-						create: (name) => createDot(paths.workspaceDir, name, new Date()),
+						create: (name) => createDesk(paths.workspaceDir, name, new Date()),
 					},
 					paths,
 					describeChannel: (id) => ({
 						label: formatChannelLabel(id, names.get(id)),
-						boundHere: bindings[id]?.dot === dot,
+						boundHere: bindings[id]?.desk === desk,
 					}),
-					dotChannelIds: () => Object.keys(record?.conversations ?? {}),
 					version: readCliVersion(),
 					startedAt,
 					peekRunner: () => runner,
 					getRunner: () => runner,
-					runManager: runs.get(dot),
+					runManager: runs.get(desk),
 				},
 				name,
 				args,

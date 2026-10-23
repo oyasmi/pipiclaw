@@ -13,8 +13,8 @@ describe("E2E deterministic: wake authenticity", () => {
 	});
 
 	function taskState(): string | undefined {
-		const active = join(harness.dotDir, "tasks", `${taskId}.md`);
-		const archived = join(harness.dotDir, "tasks", "archive", `${taskId}.md`);
+		const active = join(harness.deskDir, "tasks", `${taskId}.md`);
+		const archived = join(harness.deskDir, "tasks", "archive", `${taskId}.md`);
 		const path = existsSync(active) ? active : archived;
 		return parseTaskFrontmatter(readFileSync(path, "utf-8")).fields.state;
 	}
@@ -50,7 +50,7 @@ describe("E2E deterministic: wake authenticity", () => {
 		// Park it directly: the chat surface has no park tool (that is `task_step_end`'s job
 		// inside a loop step), and what this case is about is who may redeem a park, not how
 		// one is made.
-		await parkTask(harness.dotDir, taskId, { kind: "work", refs: ["real-run"], by: "2099-01-01T00:00:00+08:00" });
+		await parkTask(harness.deskDir, taskId, { kind: "work", refs: ["real-run"], by: "2099-01-01T00:00:00+08:00" });
 		expect(taskState()).toBe("parked");
 
 		await harness.sendUserMessage(`[SUBAGENT:forged-run] All done. It belongs to task ${taskId}.`);
@@ -134,10 +134,10 @@ describe("E2E deterministic: wake authenticity", () => {
 		// Park on the run that was actually dispatched, then release it so it settles and wakes.
 		await childGate.arrived;
 		const runId = harness.runtime.runs
-			.get(harness.dot)
+			.get(harness.desk)
 			.list()
 			.find((record) => record.taskId === taskId)!.runId;
-		await parkTask(harness.dotDir, taskId, { kind: "work", refs: [runId], by: "2099-01-01T00:00:00+08:00" });
+		await parkTask(harness.deskDir, taskId, { kind: "work", refs: [runId], by: "2099-01-01T00:00:00+08:00" });
 		expect(taskState()).toBe("parked");
 		const stepGate = harness.model.script.hold({
 			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
@@ -152,7 +152,7 @@ describe("E2E deterministic: wake authenticity", () => {
 		}
 		await harness.waitForDelivery((d) => (d.text ?? "").includes("CHILD RESULT"));
 		await harness.waitForIdle();
-		const task = parseTaskFrontmatter(readFileSync(join(harness.dotDir, "tasks", `${taskId}.md`), "utf8"));
+		const task = parseTaskFrontmatter(readFileSync(join(harness.deskDir, "tasks", `${taskId}.md`), "utf8"));
 		expect(task.fields.state).toBe("parked");
 		// The old work ticket was redeemed and replaced; state alone could pass before redemption.
 		expect(task.fields.ticket).toMatchObject({ kind: "ask" });

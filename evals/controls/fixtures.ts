@@ -36,7 +36,7 @@ export function controlEvent(
 }
 
 export function controlFile(ctx: TrialContext, path: string, content: string): void {
-	const target = join(ctx.dotDir, path);
+	const target = join(ctx.deskDir, path);
 	mkdirSync(join(target, ".."), { recursive: true });
 	writeFileSync(target, content);
 }
@@ -249,7 +249,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		);
 		for (const name of ["incident.md", "legacy.md", "runtime.md"]) {
 			const correlationId = `research-${name}`;
-			controlEvent(ctx, "tool-call", "read", { path: `${ctx.dotDir}/research/${name}` });
+			controlEvent(ctx, "tool-call", "read", { path: `${ctx.deskDir}/research/${name}` });
 			ctx.trace.at(-1)!.correlationId = correlationId;
 			controlEvent(ctx, "tool-result", "read", { detail: `${name} authoritative fixture contents` });
 			ctx.trace.at(-1)!.correlationId = correlationId;

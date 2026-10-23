@@ -1,6 +1,6 @@
 /**
- * Inbound images on the runtime side: persist a downloaded image under the bound dot's `inbox/`,
- * and map absolute image paths back to dot-relative ones for the message archive.
+ * Inbound images on the runtime side: persist a downloaded image under the bound desk's `inbox/`,
+ * and map absolute image paths back to desk-relative ones for the message archive.
  */
 import { mkdir, writeFile } from "fs/promises";
 import { join, relative } from "path";
@@ -11,27 +11,27 @@ import { localStampForFilename } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 /**
- * Absolute `InboundImage.path`s → paths relative to the dot directory, for `LoggedMessage.images`
+ * Absolute `InboundImage.path`s → paths relative to the desk directory, for `LoggedMessage.images`
  * (spec 049). An absolute path in `log.jsonl` would be dead on any machine other than the one that
  * wrote it, and `~/.pipiclaw` itself can move between backup and restore.
  */
-export function relativeImagePaths(dotDir: string | undefined, images: InboundImage[] | undefined): string[] {
-	if (!dotDir || !images || images.length === 0) return [];
-	return images.map((image) => relative(dotDir, image.path));
+export function relativeImagePaths(deskDir: string | undefined, images: InboundImage[] | undefined): string[] {
+	if (!deskDir || !images || images.length === 0) return [];
+	return images.map((image) => relative(deskDir, image.path));
 }
 
 /**
- * Persist one downloaded inbound image under the dot's `inbox/` (spec 049). The runtime owns this,
+ * Persist one downloaded inbound image under the desk's `inbox/` (spec 049). The runtime owns this,
  * not the transport, because it resolves the binding; an unbound channel never gets here (D4). See
  * the doc comment on `DingTalkHandler.persistInboundImage` for the full contract.
  */
 export async function persistInboundImage(
-	dotDir: string,
+	deskDir: string,
 	channelId: string,
 	image: { data: Buffer; mimeType: string | null },
 ): Promise<InboundImage | null> {
 	try {
-		const dir = join(dotDir, "inbox");
+		const dir = join(deskDir, "inbox");
 		await mkdir(dir, { recursive: true });
 		const extension = extensionForMimeType(image.mimeType);
 		const path = join(dir, `image-${localStampForFilename()}-${Math.random().toString(36).slice(2, 8)}.${extension}`);

@@ -1,6 +1,6 @@
 /**
- * `/events`: list, show, delete and history of one dot's scheduled events, confined to
- * `<dot>/events/` and that dot's slice of the event history (spec 058, D14).
+ * `/events`: list, show, delete and history of one desk's scheduled events, confined to
+ * `<desk>/events/` and that desk's slice of the event history (spec 058, D14).
  */
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
@@ -20,16 +20,11 @@ const TEXT_PREVIEW_MAX_CHARS = 100;
 
 export interface HandleEventsCommandOptions {
 	args: string;
-	/** The asking channel's dot: its `events/` and its history records are the whole scope. */
-	dot: string;
-	dotDir: string;
+	/** The asking channel's desk: its `events/` and its history records are the whole scope. */
+	desk: string;
+	deskDir: string;
 	historyPath: string;
-	/**
-	 * Channels with a conversation in this dot. History written before spec 058 carries no `dot`;
-	 * such a record belongs here when its channel is one of these.
-	 */
-	dotChannelIds: readonly string[];
-	/** Names a delivery channel and says whether it is still bound to this dot. */
+	/** Names a delivery channel and says whether it is still bound to this desk. */
 	describeChannel: (channelId: string) => ChannelDescription;
 }
 
@@ -72,8 +67,8 @@ export function parseEventsCommand(args: string): EventsCommand {
 	throw new Error(`未知子命令 \`${action}\`。`);
 }
 
-function eventsDir(dotDir: string): string {
-	return join(dotDir, "events");
+function eventsDir(deskDir: string): string {
+	return join(deskDir, "events");
 }
 
 const SAFE_ID_OPTIONS = { suffix: ".json", pattern: EVENT_NAME_PATTERN, label: "event name" };
@@ -84,8 +79,8 @@ export function normalizeEventName(name: string): string {
 	return normalizeSafeId(name, SAFE_ID_OPTIONS);
 }
 
-export function resolveEventPath(dotDir: string, name: string): { eventName: string; eventPath: string } {
-	const { id: eventName, path: eventPath } = resolveSafeIdPath(eventsDir(dotDir), name, SAFE_ID_OPTIONS);
+export function resolveEventPath(deskDir: string, name: string): { eventName: string; eventPath: string } {
+	const { id: eventName, path: eventPath } = resolveSafeIdPath(eventsDir(deskDir), name, SAFE_ID_OPTIONS);
 	return { eventName, eventPath };
 }
 
@@ -102,7 +97,7 @@ function formatEventSummary(
 	const lines = [
 		`**${name}**`,
 		`- 类型：${event.type}`,
-		`- 投递频道（channelId）：${channel.label}${channel.boundHere ? "" : "（已暂停：投递频道未绑定到本 dot）"}`,
+		`- 投递频道（channelId）：${channel.label}${channel.boundHere ? "" : "（已暂停：投递频道未绑定到本工位）"}`,
 	];
 	if (event.type === "one-shot") {
 		lines.push(`- 触发时间：${event.at}`);
@@ -142,7 +137,7 @@ function describeEventProblem(error: unknown, name: string): string {
 const EMPTY_EVENTS = "暂无定时事件。\n在对话里告诉我要定时做什么，我会创建事件。";
 
 async function listEvents(options: HandleEventsCommandOptions): Promise<string> {
-	const dir = eventsDir(options.dotDir);
+	const dir = eventsDir(options.deskDir);
 	if (!existsSync(dir)) return EMPTY_EVENTS;
 
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".json")).sort();
@@ -173,7 +168,7 @@ function eventNotFound(eventName: string): string {
 }
 
 async function showEvent(options: HandleEventsCommandOptions, name: string): Promise<string> {
-	const { eventName, eventPath } = resolveEventPath(options.dotDir, name);
+	const { eventName, eventPath } = resolveEventPath(options.deskDir, name);
 	if (!existsSync(eventPath)) return eventNotFound(eventName);
 
 	const raw = await readFile(eventPath, "utf-8");
@@ -187,7 +182,7 @@ async function showEvent(options: HandleEventsCommandOptions, name: string): Pro
 	let status = "";
 	try {
 		const channel = options.describeChannel(parseScheduledEventContent(raw, `${eventName}.json`).channelId);
-		status = `- 投递频道：${channel.label}${channel.boundHere ? "" : "（已暂停：投递频道未绑定到本 dot）"}\n\n`;
+		status = `- 投递频道：${channel.label}${channel.boundHere ? "" : "（已暂停：投递频道未绑定到本工位）"}\n\n`;
 	} catch {
 		// An unparseable file has no channel to describe; the raw body below says why.
 	}
@@ -197,7 +192,7 @@ async function showEvent(options: HandleEventsCommandOptions, name: string): Pro
 }
 
 async function deleteEvent(options: HandleEventsCommandOptions, name: string): Promise<string> {
-	const { eventName, eventPath } = resolveEventPath(options.dotDir, name);
+	const { eventName, eventPath } = resolveEventPath(options.deskDir, name);
 	if (!existsSync(eventPath)) return eventNotFound(eventName);
 
 	// Read before deleting so the reply carries what was removed (review 2026-08-24 §3.4):
@@ -260,9 +255,8 @@ function formatHistoryRecord(record: EventHistoryRecord): string {
 	return `- ${bits.join(" · ")}`;
 }
 
-function belongsToDot(record: EventHistoryRecord, options: HandleEventsCommandOptions): boolean {
-	if (record.dot) return record.dot === options.dot;
-	return record.channelId !== undefined && options.dotChannelIds.includes(record.channelId);
+function belongsToDesk(record: EventHistoryRecord, options: HandleEventsCommandOptions): boolean {
+	return record.desk === options.desk;
 }
 
 async function showHistory(options: HandleEventsCommandOptions, name?: string): Promise<string> {
@@ -280,7 +274,7 @@ async function showHistory(options: HandleEventsCommandOptions, name?: string): 
 		.filter(Boolean)
 		.map(parseHistoryLine)
 		.filter((record): record is EventHistoryRecord => !!record)
-		.filter((record) => belongsToDot(record, options))
+		.filter((record) => belongsToDesk(record, options))
 		.filter((record) => !eventName || record.eventName === eventName)
 		.slice(-DEFAULT_HISTORY_LIMIT)
 		.reverse();

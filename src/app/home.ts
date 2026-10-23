@@ -7,6 +7,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../agent/prompt/workspace-templates.js";
+import { initializeDefaultDesk } from "../desk/default.js";
 import * as log from "../log.js";
 import {
 	APP_HOME_DIR,
@@ -52,7 +53,7 @@ This file stores stable workspace-level memory.
 
 - It is intended to be managed by a human administrator.
 - It is not automatically rewritten by normal runtime consolidation.
-- Store durable shared background here when it should apply across all dots.
+- Store durable shared background here when it should apply across all desks.
 - Keep this file focused on stable facts, policies, and shared context, not transient conversation history.
 
 ## Shared Context
@@ -239,8 +240,11 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 		created.push("workspace/");
 	}
 
-	// Events live per dot (spec 058, D14), so `dots/` replaces the old workspace `events/`.
-	for (const dir of ["skills", "dots", "sub-agents"]) {
+	// Validate current state before supplementing any shared files or capabilities.
+	if (initializeDefaultDesk(paths)) created.push("workspace/desk-default/");
+
+	// Only shared capabilities live at the root; work state belongs to desk-<name>/.
+	for (const dir of ["skills", "sub-agents"]) {
 		const dirPath = join(paths.workspaceDir, dir);
 		if (!existsSync(dirPath)) {
 			mkdirSync(dirPath, { recursive: true });

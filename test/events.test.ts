@@ -125,7 +125,7 @@ function createWatcher(
 	isBound: EventsWatcherOptions["isBound"] = () => true,
 ): EventsWatcher {
 	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig, {
-		dot: "news",
+		desk: "news",
 		isBound,
 		historyPath,
 		spawnTask,
@@ -278,7 +278,7 @@ describe("EventsWatcher", () => {
 			expect(bot.events).toHaveLength(0);
 			expect(spawnTask).toHaveBeenCalledWith({
 				eventName: "weekly",
-				dot: "news",
+				desk: "news",
 				channelId: "dm_1",
 				template: expect.objectContaining({ title: "Weekly report" }),
 				occurrence,
@@ -323,7 +323,7 @@ describe("EventsWatcher", () => {
 			expect(readFileSync(`${filePath}.error.txt`, "utf-8")).toContain("disk full");
 		});
 
-		it("does not spawn when the preAction gate blocks the occurrence or the dot goes dormant during it", async () => {
+		it("does not spawn when the preAction gate blocks the occurrence or the desk goes dormant during it", async () => {
 			const dir = createTempDir();
 			const spawnTask = vi.fn(async () => ({ outcome: "spawned" as const, id: "x" }));
 			const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, undefined, spawnTask);
@@ -334,8 +334,8 @@ describe("EventsWatcher", () => {
 			);
 			expect(spawnTask).not.toHaveBeenCalled();
 
-			// The gate passes, but while it ran the dot went dormant or the channel was rebound away.
-			// Failure caught: a stopped watcher persisted a task instance for a dot nobody is driving.
+			// The gate passes, but while it ran the desk went dormant or the channel was rebound away.
+			// Failure caught: a stopped watcher persisted a task instance for a desk nobody is driving.
 			// Mutation check (run: goes red): drop the post-gate `admits` check in `execute`.
 			for (const lose of ["stop", "unbind"] as const) {
 				let bound = true;
@@ -417,7 +417,7 @@ describe("EventsWatcher", () => {
 	});
 
 	it("schedules nothing from a load that finishes after stop (spec 058 dormancy)", async () => {
-		// Failure caught: a dot going dormant while a periodic file is mid-load leaves an orphan cron
+		// Failure caught: a desk going dormant while a periodic file is mid-load leaves an orphan cron
 		// on the discarded watcher; on reactivation it fires alongside the new watcher's cron.
 		// Mutation check (run: goes red): drop the `stopped` check in `handleFile`.
 		const dir = createTempDir();
@@ -458,7 +458,7 @@ describe("EventsWatcher", () => {
 		expect(bot.events).toHaveLength(1);
 		expect(bot.events[0]).toMatchObject({
 			channelId: "dm_42",
-			dot: "news",
+			desk: "news",
 			user: "EVENT",
 			// Periodic wakes carry the [SILENT] contract in their trigger, not the system prompt (spec 026 §7.3).
 			text: "[EVENT:periodic.json:periodic:0 3 * * 0] run maintenance This is a periodic runtime wake. If it produces no user-visible change or result, reply with exactly [SILENT].",
@@ -470,10 +470,10 @@ describe("EventsWatcher", () => {
 		expect(history.some((entry) => entry.action === "deleted" && entry.result === "ok")).toBe(true);
 		expect(history[0]?.ts).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*[+-]\d{2}:\d{2}$/));
 		expect(String(history[0]?.ts)).not.toContain("Z");
-		expect(history[0]?.dot).toBe("news");
+		expect(history[0]?.desk).toBe("news");
 
-		// Spec 058, D8: once the delivery channel is no longer bound to this dot, the occurrence is
-		// skipped — nothing dispatched to a channel that now belongs to another dot (or to none).
+		// Spec 058, D8: once the delivery channel is no longer bound to this desk, the occurrence is
+		// skipped — nothing dispatched to a channel that now belongs to another desk (or to none).
 		const unboundBot = new FakeBot(true);
 		const unbound = createWatcher(
 			dir,
@@ -623,7 +623,7 @@ describe("EventsWatcher", () => {
 				new FakeBot() as unknown as DingTalkBot,
 				createMockExecutor(),
 				undefined,
-				{ dot: "news", isBound: () => true, dispatch: (event) => service.dispatch(event) },
+				{ desk: "news", isBound: () => true, dispatch: (event) => service.dispatch(event) },
 			);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 			const definition = {
@@ -668,7 +668,7 @@ describe("EventsWatcher", () => {
 		const beforeStart = new Date(Date.now() - 60_000);
 		utimesSync(filePath, beforeStart, beforeStart);
 		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot, createMockExecutor(), undefined, {
-			dot: "news",
+			desk: "news",
 			isBound: () => true,
 			dispatch: async () => {
 				throw new Error("ENOSPC: no space left on device");

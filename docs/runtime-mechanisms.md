@@ -24,7 +24,7 @@
 
 ## 记忆维护
 
-记忆属于 dot（spec 050、058），由 dot 目录下的文件分层：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录。会话在各频道自己的会话区 `conversations/<kind>-<n>/` 里：`log.jsonl` / `context.jsonl` 是冷存储；`active-session.json` 存在时指定当前聊天 session JSONL，缺失则使用 `context.jsonl`。绑定到同一 dot 的频道共享记忆、各自保留对话；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。这里的隔离是应用状态隔离，不是 OS 文件权限边界。
+记忆属于工位（spec 050、058），由工位目录下的文件分层：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录。会话在各频道自己的会话区 `conversations/<kind>-<n>/` 里：`log.jsonl` / `context.jsonl` 是冷存储；`active-session.json` 存在时指定当前聊天 session JSONL，缺失则使用 `context.jsonl`。绑定到同一工位的频道共享记忆、各自保留对话；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。这里的隔离是应用状态隔离，不是 OS 文件权限边界。
 
 后台 memory maintenance scheduler 不使用事件文件。它只在本地 gate 通过后才发起 LLM sidecar：
 
@@ -32,11 +32,11 @@
 |---|---:|---|
 | Reflect | 20 分钟 | 从新对话中同时提炼 journal 新增行和 durable memory 增/改/删 |
 
-另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个会话区（只看激活 dot 中已绑定频道的会话区）。`settings.json.memoryMaintenance.enabled: false` 只关闭空闲定时反思；压缩、`/new` 和正常退出等边界仍可能触发同一个反思 pass，显式记忆工具也不受影响。`sessionSearch.summarizeWithModel` 默认已关闭，曾主动开启时可关闭以节省额外总结调用。
+另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个会话区（只看激活工位中已绑定频道的会话区）。`settings.json.memoryMaintenance.enabled: false` 只关闭空闲定时反思；压缩、`/new` 和正常退出等边界仍可能触发同一个反思 pass，显式记忆工具也不受影响。`sessionSearch.summarizeWithModel` 默认已关闭，曾主动开启时可关闭以节省额外总结调用。
 
 ## 定时事件
 
-事件文件位于 `workspace/dots/<dot>/events/*.json`，`channelId` 是投递频道，须绑定在该 dot 上，否则到点跳过。当前只支持：
+事件文件位于 `workspace/desk-<name>/events/*.json`，`channelId` 是投递频道，须绑定在该工位上，否则到点跳过。当前只支持：
 
 - `one-shot`：未来某个时间触发一次。
 - `periodic`：按五段 cron 触发，按主机时区解释。
@@ -64,11 +64,11 @@
 
 当前采用 Task v5（spec 052）：任务是一个由 Pipiclaw 作为负责人推进的一次性项目，契约、循环日志和等待票分离。
 
-任务文件位于 `workspace/dots/<dot>/tasks/<id>.md`，frontmatter 的 `channel` 是投递频道；它不在该 dot 上时任务挂起。`tools.tasks.enabled` 同时门控三件事：全部 task_* 工具、内建 TaskDriver、每回合任务摘要注入。
+任务文件位于 `workspace/desk-<name>/tasks/<id>.md`，frontmatter 的 `channel` 是投递频道；它不在该工位上时任务挂起。`tools.tasks.enabled` 同时门控三件事：全部 task_* 工具、内建 TaskDriver、每回合任务摘要注入。
 
 当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进后继工作项的文字，等待用 runtime 校验的票表达；每个任务按自己的 Goal、DoD、Work Items 和预算收口。手工编辑造成的旧契约或损坏元数据用 `/tasks doctor` 检查；更早的任务格式见[事件与任务](./events-and-tasks.md#从更早的任务格式升级)。
 
-TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的票据到期时间、兜底时限和步骤结束 nudge 决定下一次扫描；只扫描激活的 dot，每个 dot 每 tick 至多派发一个任务步骤。`outcome: continue` 没有退避——下一步在同一次 nudge 里就排上。任务超出预算（步数/成本，成本含绑定委派），或连续两步没有任何工具调用时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。
+TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的票据到期时间、兜底时限和步骤结束 nudge 决定下一次扫描；只扫描激活的工位，每个工位每 tick 至多派发一个任务步骤。`outcome: continue` 没有退避——下一步在同一次 nudge 里就排上。任务超出预算（步数/成本，成本含绑定委派），或连续两步没有任何工具调用时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。
 
 周期与定时的工作不在任务里：事件带 `task` 模板，每次触发由 runtime 生成一个独立的任务实例，上一实例没结束就跳过并通知。任务本身没有 `schedule`，也没有单独的开周期动作。
 

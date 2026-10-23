@@ -26,8 +26,8 @@ export const compactionCases: EvalCase[] = [
 			{ root: "home", path: "compaction-evidence.json", optional: true },
 		],
 		setup: async (ctx) => {
-			const conversationDir = join(ctx.dotDir, "conversations/dm-1");
-			const manager = SessionManager.open(join(conversationDir, "context.jsonl"), conversationDir, ctx.dotDir);
+			const conversationDir = join(ctx.deskDir, "conversations/dm-1");
+			const manager = SessionManager.open(join(conversationDir, "context.jsonl"), conversationDir, ctx.deskDir);
 			const settings = JSON.parse(readFileSync(join(ctx.homeDir, "settings.json"), "utf8"));
 			const usage = {
 				input: 1000,
@@ -50,7 +50,7 @@ export const compactionCases: EvalCase[] = [
 			manager.appendMessage({
 				role: "user",
 				timestamp: 1,
-				content: `当前任务：在 dot 工作目录写 handoff.json，内容为 {"region":"eu-west-1","approval":"${fixtureToken(ctx.seed, "APPROVAL")}","deploy":false}。只生成交接文件，不实际部署，不等待额外批准，不要求我重复信息。保留字段类型，尤其 deploy 是布尔值 false。`,
+				content: `当前任务：在 desk 工作目录写 handoff.json，内容为 {"region":"eu-west-1","approval":"${fixtureToken(ctx.seed, "APPROVAL")}","deploy":false}。只生成交接文件，不实际部署，不等待额外批准，不要求我重复信息。保留字段类型，尤其 deploy 是布尔值 false。`,
 			});
 			manager.appendMessage(assistant("已确认任务目标、授权标识和禁止部署的约束。"));
 			manager.appendMessage({ role: "user", content: "先核对资料，稍后继续写文件。", timestamp: 3 });
@@ -77,7 +77,7 @@ export const compactionCases: EvalCase[] = [
 			tracePredicate(
 				"compaction-occurred",
 				(ctx) => {
-					const path = join(ctx.dotDir, "conversations/dm-1/context.jsonl");
+					const path = join(ctx.deskDir, "conversations/dm-1/context.jsonl");
 					return (
 						existsSync(path) &&
 						readFileSync(path, "utf8")
@@ -91,7 +91,7 @@ export const compactionCases: EvalCase[] = [
 			tracePredicate(
 				"checkpoint-task-retained",
 				(ctx) => {
-					const path = join(ctx.dotDir, "handoff.json");
+					const path = join(ctx.deskDir, "handoff.json");
 					if (!existsSync(path)) return false;
 					try {
 						const result = JSON.parse(readFileSync(path, "utf8"));
@@ -127,7 +127,7 @@ compactionCases.push({
 		const model = runtime.getModel(settings.defaultProvider, settings.defaultModel);
 		if (!model) throw new Error("Background compaction fixture requires the configured model window.");
 		const measuredInput = Math.floor((model.contextWindow - 16384 - 4096) * 0.75);
-		const path = join(ctx.dotDir, "conversations/dm-1/context.jsonl");
+		const path = join(ctx.deskDir, "conversations/dm-1/context.jsonl");
 		const entries = readFileSync(path, "utf8")
 			.trim()
 			.split("\n")
@@ -167,7 +167,7 @@ compactionCases.push({
 		tracePredicate(
 			"compaction-occurred",
 			(ctx) => {
-				const path = join(ctx.dotDir, "conversations/dm-1/context.jsonl");
+				const path = join(ctx.deskDir, "conversations/dm-1/context.jsonl");
 				return (
 					existsSync(path) &&
 					readFileSync(path, "utf8")

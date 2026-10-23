@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
-import { testDot } from "./helpers/background-runtime.js";
+import { testDesk } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spawns a process that exits immediately and resolves its pid once it has been reaped, so a
@@ -42,9 +42,9 @@ const leases: Array<{ leaseKey?: string; runId: string }> = [];
 function createManager(
 	channelId: string,
 	options: ConstructorParameters<typeof SubAgentRunManager>[1],
-	dotDir = "/tmp/pipiclaw-test-dot",
+	deskDir = "/tmp/pipiclaw-test-desk",
 ): SubAgentRunManager {
-	const manager = new SubAgentRunManager({ dot: testDot(channelId), dotDir }, options);
+	const manager = new SubAgentRunManager({ desk: testDesk(channelId), deskDir }, options);
 	managers.add(manager);
 	return manager;
 }
@@ -159,7 +159,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// first→second transition: release the second daemon's process-local lease first.
 		secondDaemon.stop();
 		releaseWorkspaceLease(secondDaemon.get("run-adopt")?.leaseKey, "run-adopt");
-		const recordPath = join(stateDir, testDot(channelId), "run-adopt.json");
+		const recordPath = join(stateDir, testDesk(channelId), "run-adopt.json");
 		const persisted = JSON.parse(readFileSync(recordPath, "utf-8"));
 		persisted.deadlineAt = Date.now() + 100;
 		writeFileSync(recordPath, `${JSON.stringify(persisted)}\n`, "utf-8");
@@ -171,7 +171,25 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 				return true;
 			},
 		});
-		await swept.restore();
+		// Reproduce an early timer delivery: without re-arming, the only recovery check is
+		// consumed before the deadline and this adopted process runs forever. Mutation: removing
+		// the early-delivery guard leaves the run running and prevents the persisted wake.
+		const nativeSetTimeout = globalThis.setTimeout;
+		const timerSpy = vi.spyOn(globalThis, "setTimeout").mockImplementationOnce((callback, delay, ...args) =>
+			nativeSetTimeout(() => {
+				const clock = vi.spyOn(Date, "now").mockReturnValue(persisted.deadlineAt - 1);
+				try {
+					callback(...args);
+				} finally {
+					clock.mockRestore();
+				}
+			}, delay),
+		);
+		try {
+			await swept.restore();
+		} finally {
+			timerSpy.mockRestore();
+		}
 		// The deadline kill is killProcessGroup's TERM, then an unconditional 5s grace before KILL
 		// (host-process.ts KILL_GRACE_MS) — only then does settlement start. Allow headroom for
 		// instrumented runs; the earlier coverage timeout's root cause was not conclusively reproduced.
@@ -425,12 +443,12 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 	it("keeps a purpose=verify run's declared verdict and logs its settlement when it completes across a restart", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_verify_restart";
-		const dotDir = join(workspaceDir, channelId);
+		const deskDir = join(workspaceDir, channelId);
 		const stateDir = join(workspaceDir, "state");
-		const artifactDir = join(dotDir, "subagent-artifacts", "run-verify");
+		const artifactDir = join(deskDir, "subagent-artifacts", "run-verify");
 		mkdirSync(artifactDir, { recursive: true });
-		mkdirSync(join(dotDir, "tasks"), { recursive: true });
-		writeFileSync(join(dotDir, "tasks", "ship.md"), "---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n");
+		mkdirSync(join(deskDir, "tasks"), { recursive: true });
+		writeFileSync(join(deskDir, "tasks", "ship.md"), "---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n");
 		const projectDir = join(workspaceDir, "project");
 		mkdirSync(projectDir, { recursive: true });
 
@@ -446,7 +464,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			].join("\n")}\n`,
 		);
 
-		const firstDaemon = createManager(channelId, { stateDir }, dotDir);
+		const firstDaemon = createManager(channelId, { stateDir }, deskDir);
 		const lease = claimWorkspaceLease({ runId: "run-verify", channelId, workingDirectory: projectDir });
 		expect(lease.ok).toBe(true);
 		await firstDaemon.register({
@@ -462,7 +480,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			taskId: "ship",
 			workingDirectory: projectDir,
 			artifactDir,
-			dotDir,
+			deskDir,
 			leaseKey: lease.ok ? lease.leaseKey : undefined,
 			mutates: "write",
 		});
@@ -472,18 +490,18 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			deadlineAt: Date.now() + 60_000,
 			maxWallTimeSec: 60,
 			processStartedAt: Date.now(),
-			dotDir,
+			deskDir,
 		});
 
 		firstDaemon.stop();
 		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-verify");
-		const secondDaemon = createManager(channelId, { stateDir }, dotDir);
+		const secondDaemon = createManager(channelId, { stateDir }, deskDir);
 		await secondDaemon.restore();
 
 		const record = secondDaemon.get("run-verify");
 		expect(record?.status).toBe("completed");
 		expect(record?.verificationVerdict).toBe("pass");
-		const settled = (await readTaskLog(dotDir, "ship", { kinds: ["settle"] }))[0];
+		const settled = (await readTaskLog(deskDir, "ship", { kinds: ["settle"] }))[0];
 		expect(settled).toMatchObject({ ref: "run-verify", status: "completed", verdict: "pass" });
 		await resetTaskLogAppenders();
 	});

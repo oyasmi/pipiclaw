@@ -9,8 +9,8 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempChannel = useTempDirs("pipiclaw-memory-manage-");
 
-function makeOptions(dotDir: string, overrides: Record<string, unknown> = {}) {
-	return { channelId: "dm_1", dot: "news", dotDir, workspaceDir: dotDir, ...overrides };
+function makeOptions(deskDir: string, overrides: Record<string, unknown> = {}) {
+	return { channelId: "dm_1", desk: "news", deskDir, workspaceDir: deskDir, ...overrides };
 }
 const makeSave = (dir: string, o: Record<string, unknown> = {}) => createMemorySaveTool(makeOptions(dir, o) as never);
 const makeSearch = (dir: string, o: Record<string, unknown> = {}) =>
@@ -33,24 +33,24 @@ async function run(
 
 describe("memory tools", () => {
 	it("bounds a long journal hit and points to the full source", async () => {
-		const dotDir = createTempChannel();
-		mkdirSync(join(dotDir, "journal"), { recursive: true });
-		writeFileSync(join(dotDir, "journal", "2020-01-02.md"), `- archiveprobe ${"details ".repeat(2000)}\n`);
-		const { text } = await run(makeSearch(dotDir), { query: "archiveprobe" });
+		const deskDir = createTempChannel();
+		mkdirSync(join(deskDir, "journal"), { recursive: true });
+		writeFileSync(join(deskDir, "journal", "2020-01-02.md"), `- archiveprobe ${"details ".repeat(2000)}\n`);
+		const { text } = await run(makeSearch(deskDir), { query: "archiveprobe" });
 		expect(text).toContain("journal/2020-01-02.md");
 		expect(text.length).toBeLessThan(1000);
 		expect(text).toMatch(/read.*file/i);
 	});
 
-	it("saves a durable entry as a dot memory file", async () => {
-		const dotDir = createTempChannel();
-		const { details } = await run(makeSave(dotDir), {
+	it("saves a durable entry as a desk memory file", async () => {
+		const deskDir = createTempChannel();
+		const { details } = await run(makeSave(deskDir), {
 			content: "User prefers responses in Chinese",
 			name: "user-prefers-chinese",
 			type: "user",
 		});
 		expect(details).toMatchObject({ saved: true, name: "user-prefers-chinese" });
-		const entries = await listMemoryEntries(dotDir);
+		const entries = await listMemoryEntries(deskDir);
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({
 			description: "User prefers responses in Chinese",
@@ -64,48 +64,48 @@ describe("memory tools", () => {
 		// was empty, and the tool rendered "Saved ... as `undefined`." with details.saved=false — a
 		// success message for a write that never happened. Mutation check: revert the content builder
 		// to `savedName = replaces ?? result.added[0]` and details.name is undefined here.
-		const dotDir = createTempChannel();
-		await run(makeSave(dotDir), { content: "The staging deploy key rotated on Tuesday", name: "deploy-key" });
-		await run(makeForget(dotDir), { name: "deploy-key" });
+		const deskDir = createTempChannel();
+		await run(makeSave(deskDir), { content: "The staging deploy key rotated on Tuesday", name: "deploy-key" });
+		await run(makeForget(deskDir), { name: "deploy-key" });
 
-		const again = await run(makeSave(dotDir), {
+		const again = await run(makeSave(deskDir), {
 			content: "The staging deploy key rotated on Tuesday",
 			name: "deploy-key",
 		});
 		expect(again.details.saved).toBe(true);
 		expect(typeof again.details.name).toBe("string");
 		expect(again.text).not.toContain("undefined");
-		const entries = await listMemoryEntries(dotDir);
+		const entries = await listMemoryEntries(deskDir);
 		expect(entries.map((e) => e.description)).toContain("The staging deploy key rotated on Tuesday");
 	});
 
 	it("rejects a save with only whitespace content, an invalid name, or a secret", async () => {
-		const dotDir = createTempChannel();
-		await expect(makeSave(dotDir).execute("call", { content: "   " } as never)).rejects.toThrow(/non-empty content/);
-		await expect(makeSave(dotDir).execute("call", { content: "fact", name: "Bad Name" } as never)).rejects.toThrow(
+		const deskDir = createTempChannel();
+		await expect(makeSave(deskDir).execute("call", { content: "   " } as never)).rejects.toThrow(/non-empty content/);
+		await expect(makeSave(deskDir).execute("call", { content: "fact", name: "Bad Name" } as never)).rejects.toThrow(
 			/not a valid memory name/,
 		);
-		const secret = await run(makeSave(dotDir), { content: "api_key = abcdef1234567890" });
+		const secret = await run(makeSave(deskDir), { content: "api_key = abcdef1234567890" });
 		expect(secret.details).toMatchObject({ saved: false, blockedReason: "secret" });
 	});
 
 	it("rejects search without a query and forget without a name", async () => {
-		const dotDir = createTempChannel();
-		await expect(makeSearch(dotDir).execute("call", { query: "" } as never)).rejects.toThrow(/non-empty query/);
-		await expect(makeForget(dotDir).execute("call", { name: " " } as never)).rejects.toThrow(/non-empty name/);
+		const deskDir = createTempChannel();
+		await expect(makeSearch(deskDir).execute("call", { query: "" } as never)).rejects.toThrow(/non-empty query/);
+		await expect(makeForget(deskDir).execute("call", { name: " " } as never)).rejects.toThrow(/non-empty name/);
 	});
 
 	it("searches memory files and hints when nothing matched", async () => {
-		const dotDir = createTempChannel();
-		await applyMemoryOps(dotDir, [
+		const deskDir = createTempChannel();
+		await applyMemoryOps(deskDir, [
 			{ op: "add", description: "User prefers dark mode in the dashboard", source: "agent" },
 		]);
-		const hit = await run(makeSearch(dotDir), { query: "dark mode preference" });
+		const hit = await run(makeSearch(deskDir), { query: "dark mode preference" });
 		expect(hit.text).toContain("dark mode");
 		expect(hit.details.resultCount).toBeGreaterThanOrEqual(1);
 		const source = hit.text.match(/\[(memory\/[^\]]+)\]/)?.[1];
 		expect(source).toBeDefined();
-		expect(readFileSync(join(dotDir, source!), "utf8")).toContain("dark mode");
+		expect(readFileSync(join(deskDir, source!), "utf8")).toContain("dark mode");
 
 		const miss = await run(makeSearch(createTempChannel()), { query: "nonexistent topic xyz" });
 		expect(miss.text).toContain("No stored memory matched");
@@ -131,26 +131,26 @@ describe("memory tools", () => {
 	});
 
 	it("forgets an entry by exact name through the serial queue and tombstones by hash only", async () => {
-		const dotDir = createTempChannel();
+		const deskDir = createTempChannel();
 		const seen: string[] = [];
-		await applyMemoryOps(dotDir, [
+		await applyMemoryOps(deskDir, [
 			{ op: "add", name: "home-address", description: "User's home address is 5 Main St", source: "agent" },
 		]);
-		const tool = makeForget(dotDir, {
+		const tool = makeForget(deskDir, {
 			memoryQueue: {
-				run: <T>(target: { dot: string }, job: () => Promise<T>) => {
-					seen.push(target.dot);
+				run: <T>(target: { desk: string }, job: () => Promise<T>) => {
+					seen.push(target.desk);
 					return job();
 				},
 			},
 		});
 		const { details } = await run(tool, { name: "home-address" });
 		expect(details).toMatchObject({ forgotten: true, name: "home-address" });
-		// INV-8: the queue key is the dot, so every channel of the dot serializes on one queue.
+		// INV-8: the queue key is the desk, so every channel of the desk serializes on one queue.
 		expect(seen).toEqual(["news"]);
-		expect(await listMemoryEntries(dotDir)).toHaveLength(0);
+		expect(await listMemoryEntries(deskDir)).toHaveLength(0);
 
-		const log = readFileSync(getMemoryReviewLogPath(dotDir), "utf-8").trim();
+		const log = readFileSync(getMemoryReviewLogPath(deskDir), "utf-8").trim();
 		const entry = JSON.parse(log.split("\n").at(-1) as string);
 		expect(entry).toMatchObject({ channelId: "dm_1", reason: "memory-forget" });
 		expect(JSON.stringify(entry.actions)).not.toContain("5 Main St");
@@ -158,8 +158,8 @@ describe("memory tools", () => {
 	});
 
 	it("flags a near-duplicate save and accepts it once replaces is supplied", async () => {
-		const dotDir = createTempChannel();
-		await applyMemoryOps(dotDir, [
+		const deskDir = createTempChannel();
+		await applyMemoryOps(deskDir, [
 			{
 				op: "add",
 				name: "pkg-manager",
@@ -168,36 +168,36 @@ describe("memory tools", () => {
 			},
 		]);
 		await expect(
-			makeSave(dotDir).execute("call", {
+			makeSave(deskDir).execute("call", {
 				content: "The team default package manager for installs is now pnpm",
 			} as never),
 		).rejects.toThrow(/pkg-manager/);
-		expect(await listMemoryEntries(dotDir)).toHaveLength(1);
+		expect(await listMemoryEntries(deskDir)).toHaveLength(1);
 
-		const replaced = await run(makeSave(dotDir), {
+		const replaced = await run(makeSave(deskDir), {
 			content: "The team default package manager for installs is now pnpm",
 			replaces: "pkg-manager",
 		});
 		expect(replaced.details).toMatchObject({ saved: true, name: "pkg-manager" });
-		const entries = await listMemoryEntries(dotDir);
+		const entries = await listMemoryEntries(deskDir);
 		expect(entries).toHaveLength(1);
 		expect(entries[0].description).toContain("pnpm");
 
-		const waived = await run(makeSave(dotDir), {
+		const waived = await run(makeSave(deskDir), {
 			content: "The team default package manager for installs is now pnpm",
 			replaces: "none",
 		});
 		expect(waived.details).toMatchObject({ saved: true });
-		expect(await listMemoryEntries(dotDir)).toHaveLength(2);
+		expect(await listMemoryEntries(deskDir)).toHaveLength(2);
 	});
 
 	it("reports when forget finds no match, and when replaces names a missing entry", async () => {
-		const dotDir = createTempChannel();
-		await applyMemoryOps(dotDir, [{ op: "add", description: "Something durable", source: "agent" }]);
-		const forget = await run(makeForget(dotDir), { name: "does-not-exist" });
+		const deskDir = createTempChannel();
+		await applyMemoryOps(deskDir, [{ op: "add", description: "Something durable", source: "agent" }]);
+		const forget = await run(makeForget(deskDir), { name: "does-not-exist" });
 		expect(forget.details).toMatchObject({ forgotten: false });
 		await expect(
-			makeSave(dotDir).execute("call", { content: "new fact", replaces: "ghost" } as never),
+			makeSave(deskDir).execute("call", { content: "new fact", replaces: "ghost" } as never),
 		).rejects.toThrow(/No memory named "ghost"/);
 	});
 });

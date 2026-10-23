@@ -12,7 +12,7 @@ import type { StoredTaskDocument } from "./store.js";
 import { archivedTaskPath, taskPath, tasksDir } from "./store.js";
 
 export interface CreateTaskDocumentOptions {
-	dotDir: string;
+	deskDir: string;
 	id: string;
 	input: TaskCreateInput;
 	/** The delivery channel (spec 058, D13): the creating turn's channel, or the spawning event's. */
@@ -28,16 +28,16 @@ export interface CreateTaskDocumentOptions {
  */
 export function createTaskDocument(options: CreateTaskDocumentOptions): Promise<StoredTaskDocument> {
 	// Locked like every other task write, so two processes cannot both pass the existence check.
-	return withTaskMutation(options.dotDir, options.id, () => writeNewTask(options));
+	return withTaskMutation(options.deskDir, options.id, () => writeNewTask(options));
 }
 
 async function writeNewTask(options: CreateTaskDocumentOptions): Promise<StoredTaskDocument> {
 	const id = normalizeTaskId(options.id);
-	const path = taskPath(options.dotDir, id);
+	const path = taskPath(options.deskDir, id);
 	if (existsSync(path)) {
 		throw new RecoverableToolError(`Task "${id}" already exists; use task_update or edit the body instead.`);
 	}
-	if (existsSync(archivedTaskPath(options.dotDir, id))) {
+	if (existsSync(archivedTaskPath(options.deskDir, id))) {
 		throw new RecoverableToolError(
 			`Archived task "${id}" already exists; choose a new id or restore it manually first.`,
 		);
@@ -51,7 +51,7 @@ async function writeNewTask(options: CreateTaskDocumentOptions): Promise<StoredT
 		budget: options.input.budget,
 	};
 	const body = renderStandardTaskBody(options.input);
-	await writeFileAtomically(join(tasksDir(options.dotDir), `${id}.md`), renderTaskDocument(fields, body));
+	await writeFileAtomically(join(tasksDir(options.deskDir), `${id}.md`), renderTaskDocument(fields, body));
 	return { id, path, fields, body };
 }
 
