@@ -34,7 +34,7 @@ A module is a path under `src/`. Dependencies run strictly downward through the 
 | 10 | `app` | `src/app/` | the process shell: app-home scaffolding, CLI args, shared services, LLM proxy, `pipiclaw auth` | layers 0–9 | `home.ts`, `services.ts`, `proxy.ts`, `auth-command.ts` |
 | 11 | `dingtalk` | `src/dingtalk/` | the DingTalk Stream transport: connection, AI cards, media, inbound normalization, turn delivery, `channel.json` | layers 0–10 | `transport.ts`, `bot.ts`, `cards.ts`, `connection.ts`, `delivery.ts`, `config.ts` |
 | 11 | `webapi` | `src/webapi/` | the Web API transport: an OpenAI Responses-shaped HTTP and WebSocket server on a local socket and optional TCP, its keys, conversations and response records under `state/webapi/`, and the `pipiclaw webapi key` command | layers 0–10 | `transport.ts`, `server.ts`, `service.ts`, `response-state.ts`, `store.ts`, `routes/` |
-| 11 | `tui` | `src/tui/` | the terminal front end: the second `ChannelContext` implementation | layers 0–10 | `app.ts`, `frontend.ts` |
+| 11 | `tui` | `src/tui/` | the terminal: a client of the Web API's local socket (the official SDK), its frontends and rendering. Never imports `runtime/`, `desk/` writes or `webapi/` | layers 0–1, shared, commands, tools-contract, config, app (CLI shell), desk (read bindings) | `cli.ts`, `client.ts`, `session.ts`, `render.ts`, `frontend.ts` |
 | 12 | `runtime` | `src/runtime/` | the daemon: composition root and the services that join several subsystems | everything except `tui` | `bootstrap.ts`, `ingress.ts`, `transports.ts`, `shutdown.ts`, `durable-dispatch.ts`, `task-driver.ts` |
 | — | `entry` | `src/main.ts`, `src/index.ts` | the executable entry and the public library surface (spec 035) | any | `main.ts`, `index.ts` |
 

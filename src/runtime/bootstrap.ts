@@ -39,13 +39,14 @@ import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/runtime.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
+import type { SecurityLogEvent } from "../security/types.js";
 import type { FileLockHandle } from "../shared/file-lock.js";
 import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
-import { acquireDaemonLock } from "./daemon-lock.js";
+import { acquireDaemonLock, tryAcquireDaemonLock } from "./daemon-lock.js";
 import { DeskRuntime } from "./desk-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createIngress, type IngressService } from "./ingress.js";
@@ -176,6 +177,15 @@ interface RuntimeContextOptions {
 	settingsManager?: PipiclawSettingsManager;
 }
 
+/** The security audit log as a transport's `audit` callback; the config is read when the first event arrives. */
+function securityAudit(paths: BootstrapPaths): (event: SecurityLogEvent) => void {
+	let config: ReturnType<typeof loadSecurityConfigWithDiagnostics>["config"] | undefined;
+	return (event) => {
+		config ??= loadSecurityConfigWithDiagnostics(paths.appHomeDir).config;
+		void logSecurityEvent(paths.workspaceDir, config, event);
+	};
+}
+
 export async function createRuntimeContext(options: RuntimeContextOptions): Promise<RuntimeContext> {
 	// One runtime per app home (INV-11): a second one would write the same desks, sessions and
 	// state files with no lock between them. Taken before anything is touched.
@@ -210,7 +220,6 @@ async function buildRuntimeContext(
 	const executor = options.executor ?? createExecutor();
 	const dispatch = (event: WakeEvent) => durableDispatch?.dispatch(event) ?? false;
 
-	let auditConfig: ReturnType<typeof loadSecurityConfigWithDiagnostics>["config"] | undefined;
 	// The transports this process hosts. A delivered answer is archived through `store`, which is
 	// built below: the closure only runs once a turn is under way.
 	const transports = createTransportRegistry(
@@ -218,10 +227,7 @@ async function buildRuntimeContext(
 			(await loadTransports({
 				paths: options.paths,
 				stateDir: join(appHomeDir, "state"),
-				audit: (event) => {
-					auditConfig ??= loadSecurityConfigWithDiagnostics(appHomeDir).config;
-					void logSecurityEvent(workspaceDir, auditConfig, event);
-				},
+				audit: securityAudit(options.paths),
 				archiveBotResponse: (channelId, text) => store.logBotResponse(channelId, text, Date.now().toString()),
 			})),
 	);
@@ -610,4 +616,48 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 			await runtime.shutdown("manual");
 		},
 	};
+}
+
+/** A runtime started inside the terminal process (spec 061, D26). */
+export interface EmbeddedRuntime {
+	/** Shut the runtime down in the daemon's order and release the app home. */
+	stop(): Promise<void>;
+}
+
+/**
+ * Start the runtime for `pipiclaw tui` when no daemon is running: only the Web API's local socket
+ * is switched on (the terminal is its client), whatever `channel.json` says. Returns `undefined`
+ * when another process already holds the app home — a daemon is running and the terminal should
+ * connect to it. The lock is taken exactly once and handed to the runtime.
+ */
+export async function bootstrapEmbedded(paths: BootstrapPaths, io: BootstrapIO): Promise<EmbeddedRuntime | undefined> {
+	printBootstrapSummary(bootstrapAppHome(paths), io, paths);
+	const lock = await tryAcquireDaemonLock(paths.appHomeDir);
+	if (lock.kind === "held") return undefined;
+	// The full-screen terminal owns stdout: the runtime logs to its file sink only.
+	log.setConsoleLoggingEnabled(false);
+	const { settingsManager } = prepareAppServices(paths);
+	log.logStartup(paths.workspaceDir);
+	const { WebApiTransport } = await import("../webapi/transport.js");
+	let runtime: RuntimeContext;
+	try {
+		runtime = await createRuntimeContext({
+			paths,
+			daemonLock: lock.handle,
+			transports: [
+				new WebApiTransport({
+					config: { socket: true, keys: [] },
+					stateDir: join(paths.appHomeDir, "state", "webapi"),
+					audit: securityAudit(paths),
+				}),
+			],
+			registerSignalHandlers: false,
+			startServices: true,
+			settingsManager,
+		});
+	} catch (error) {
+		await lock.handle.release();
+		throw error;
+	}
+	return { stop: () => runtime.shutdown("manual") };
 }

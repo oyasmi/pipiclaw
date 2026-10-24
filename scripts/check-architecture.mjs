@@ -64,7 +64,7 @@ const ALLOWED = {
 	app: [...BELOW_AGENT, "agent"],
 	dingtalk: BELOW_TRANSPORT,
 	webapi: BELOW_TRANSPORT,
-	tui: BELOW_TRANSPORT,
+	tui: [...L01, "tools-contract", "config", "desk", "app"],
 	runtime: [...BELOW_TRANSPORT, "dingtalk", "webapi"],
 	entry: [...BELOW_TRANSPORT, "dingtalk", "webapi", "tui", "runtime"],
 };

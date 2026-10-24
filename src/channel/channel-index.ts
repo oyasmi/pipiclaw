@@ -185,19 +185,6 @@ export function parseChannelIndex(content: string): ChannelIndexEntry[] {
 	return entries;
 }
 
-/**
- * The names in `CHANNELS.md`, read once — for a process that does not maintain the index (the TUI),
- * so `/desk` and `/tasks` can still name channels.
- */
-export async function loadChannelNames(workspaceDir: string): Promise<Map<string, string>> {
-	try {
-		const entries = parseChannelIndex(await readFile(join(workspaceDir, CHANNELS_INDEX_FILENAME), "utf-8"));
-		return new Map(entries.filter((entry) => entry.name).map((entry) => [entry.channelId, entry.name]));
-	} catch {
-		return new Map();
-	}
-}
-
 function entryTime(entry: Pick<ChannelIndexEntry, "lastMessageAt">): number {
 	return entry.lastMessageAt ? (parseLocalTime(entry.lastMessageAt) ?? 0) : 0;
 }

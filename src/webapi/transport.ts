@@ -72,7 +72,8 @@ export class WebApiTransport implements Transport {
 	}
 
 	async stop(): Promise<void> {
-		const { server, service } = this;
+		const server = this.server;
+		const service = this.service;
 		this.server = undefined;
 		this.service = undefined;
 		await server?.stop();

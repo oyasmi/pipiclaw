@@ -48,7 +48,7 @@ export async function bindChannelOnDisk(
 	desk: string = E2E_DESK,
 ): Promise<DeskConversation> {
 	createDeskRecord(workspaceDir, desk, new Date());
-	const kind = channelId === "tui" ? "tui" : channelId.startsWith("dingtalk:group:") ? "group" : "dm";
+	const kind = channelId.startsWith("dingtalk:group:") ? "group" : "dm";
 	const conversation = await allocateConversation(workspaceDir, desk, channelId, kind, new Date());
 	const bindings = await loadBindings(workspaceDir);
 	bindings.bindings[channelId] = { desk, boundAt: new Date().toISOString() };

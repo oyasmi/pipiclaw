@@ -1,8 +1,8 @@
 /**
  * Rendering + input contracts for the terminal TUI.
  *
- * `TranscriptRenderer` is the output-only surface the delivery controller
- * (`terminal-context.ts`) writes to — progress, final answers, notices. It is
+ * `TranscriptRenderer` is the output-only surface the event renderer
+ * (`render.ts`) writes to — progress, final answers, notices. It is
  * deliberately small so it is trivial to fake in tests.
  *
  * `Frontend` is the full interactive shell the app drives: a `TranscriptRenderer`

@@ -4,7 +4,7 @@ import { runAuth } from "./app/auth-command.js";
 import { formatCliCommandsHelp, isBootstrapExitError } from "./app/home.js";
 import { StartupRefusal } from "./desk/startup-error.js";
 import * as log from "./log.js";
-import { bootstrap } from "./runtime/bootstrap.js";
+import { bootstrap, bootstrapEmbedded } from "./runtime/bootstrap.js";
 import { errorMessage } from "./shared/text-utils.js";
 import { runTui } from "./tui/cli.js";
 
@@ -50,7 +50,7 @@ if (command === "tui") {
 	// --print finishes. Exit explicitly: raw-mode stdin and the runner session
 	// keep the event loop alive, so the process would otherwise hang after the UI
 	// tears down.
-	runTui(process.argv).then(() => process.exit(0), handleError);
+	runTui(process.argv, { startEmbeddedRuntime: bootstrapEmbedded }).then(() => process.exit(0), handleError);
 } else if (command === "webapi") {
 	// Only the key commands live here; the Web API itself is loaded by the daemon, if channel.json turns it on.
 	import("./webapi/key-command.js")

@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { bootstrapPathsIn } from "../../support/fake-runner.js";
 import {
 	canRunE2E,
 	cleanupE2ETestHome,
@@ -11,18 +12,15 @@ import {
 
 const describeE2E = canRunE2E() ? describe : describe.skip;
 
-// Unlike the other e2e specs (which drive the runtime through a fake DingTalk
-// bot), this one exercises the terminal channel end-to-end: the real
-// `pipiclaw tui --print` path, a real ChannelRunner on a live model, and the
-// terminal ChannelContext delivering the final answer to stdout. It is the only
-// e2e where an unstubbed transport carries a turn from entry to output.
+// Unlike the other e2e specs (which drive the runtime through a fake DingTalk bot), this one runs
+// the real `pipiclaw tui --print` path: the terminal starts the runtime itself, asks over the Web
+// API socket, and a live model's answer reaches stdout.
 describeE2E("E2E: terminal TUI (--print)", () => {
 	let home: E2ETestHome;
 
 	beforeAll(() => {
 		home = createE2ETestHome();
-		// ChannelRunner resolves auth/models from paths.ts constants derived from
-		// PIPICLAW_HOME at module load, so set it before importing the TUI app.
+		// paths.ts derives its constants from PIPICLAW_HOME at module load, so set it before importing the runtime.
 		process.env.PIPICLAW_HOME = home.homeDir;
 	});
 
@@ -30,8 +28,11 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		cleanupE2ETestHome(home.homeDir);
 	});
 
-	it("answers a one-shot prompt through the terminal channel and persists desk memory", async () => {
-		const { runTuiApp } = await import("../../../src/tui/app.js");
+	it("answers a one-shot prompt through the Web API socket and creates the desk", async () => {
+		const [{ runTui }, { bootstrapEmbedded }] = await Promise.all([
+			import("../../../src/tui/cli.js"),
+			import("../../../src/runtime/bootstrap.js"),
+		]);
 
 		const chunks: string[] = [];
 		const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
@@ -40,35 +41,28 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		});
 
 		try {
-			await runTuiApp({
-				desk: "tui-e2e",
-				create: true,
-				print: true,
-				plain: true,
-				quiet: true,
-				initialPrompt: "请只回复一个单词：PONG，不要包含任何其他内容。",
-				// Absorb bootstrap/init chatter so it does not land on captured stdout;
-				// the plain frontend writes the final answer straight to process.stdout.
-				io: { log: () => {}, error: () => {} },
-			});
+			await runTui(
+				[
+					"node",
+					"pipiclaw",
+					"tui",
+					"--desk",
+					"tui-e2e",
+					"--create",
+					"--print",
+					"--plain",
+					"--quiet",
+					"请只回复一个单词：PONG，不要包含任何其他内容。",
+				],
+				{ startEmbeddedRuntime: bootstrapEmbedded },
+				{ log: () => {}, error: () => {} },
+				bootstrapPathsIn(home.homeDir),
+			);
 		} finally {
 			stdoutSpy.mockRestore();
 		}
 
-		const output = chunks.join("");
-		expect(output.toUpperCase(), getE2ESkipReason() ?? undefined).toContain("PONG");
-
-		// The terminal channel shares the DingTalk memory layout: workspace/<id>/.
-		const deskDir = join(home.workspaceDir, "tui_e2e");
-		expect(existsSync(join(deskDir, "SESSION.md"))).toBe(true);
-		const logPath = join(deskDir, "log.jsonl");
-		expect(existsSync(logPath)).toBe(true);
-		// The incoming user message was archived, mirroring the DingTalk path.
-		expect(readFileSync(logPath, "utf-8")).toContain("PONG");
+		expect(chunks.join("").toUpperCase(), getE2ESkipReason() ?? undefined).toContain("PONG");
+		expect(existsSync(join(home.workspaceDir, "desk-tui-e2e", "desk.json"))).toBe(true);
 	});
-
-	// The zero-LLM built-in-command regression (spec 048 F1: runOnce() used to call
-	// beginTurn() directly, skipping dispatch()) is now covered deterministically in
-	// test/e2e/deterministic/tui-command.test.ts, where it needs no real model and
-	// isn't gated behind local credentials.
 });

@@ -90,7 +90,7 @@ export async function bindTestChannel(
 ): Promise<import("../../src/desk/types.js").DeskConversation> {
 	const registry = await import("../../src/desk/registry.js");
 	registry.createDeskRecord(workspaceDir, desk, new Date());
-	const kind = channelId === "tui" ? "tui" : channelId.startsWith("dingtalk:group:") ? "group" : "dm";
+	const kind = channelId.startsWith("dingtalk:group:") ? "group" : "dm";
 	const conversation = await registry.allocateConversation(workspaceDir, desk, channelId, kind, new Date());
 	const bindingStore = await import("../../src/desk/bindings.js");
 	const bindings = await bindingStore.loadBindings(workspaceDir);

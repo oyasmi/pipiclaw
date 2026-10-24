@@ -29,6 +29,8 @@ export const DEFAULT_APP_HOME_DIR = join(homedir(), `.${APP_NAME}`);
 export const APP_HOME_DIR = process.env.PIPICLAW_HOME ?? DEFAULT_APP_HOME_DIR;
 export const WORKSPACE_DIR = join(APP_HOME_DIR, "workspace");
 export const STATE_DIR = join(APP_HOME_DIR, "state");
+/** Where the daemon's Web API listens on this machine (spec 061, D4): the terminal connects here. */
+export const webapiSocketPath = (appHomeDir: string): string => join(appHomeDir, "state", "webapi", "api.sock");
 export const EVENT_STATE_DIR = join(STATE_DIR, "events");
 export const EVENT_HISTORY_PATH = join(EVENT_STATE_DIR, "history.jsonl");
 export const LOG_STATE_DIR = join(STATE_DIR, "logs");

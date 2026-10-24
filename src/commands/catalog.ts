@@ -383,13 +383,6 @@ export function isBuiltInCommandName(name: string): name is BuiltInCommandName {
 	return BUILT_IN_NAMES.has(name);
 }
 
-const SESSION_COMMAND_NAMES = new Set<string>(SESSION_COMMANDS.map((command) => command.name));
-
-/** True for a session-layer command name (`/model`, `/compact`, …) — needs the idle session layer. */
-export function isSessionCommandName(name: string): boolean {
-	return SESSION_COMMAND_NAMES.has(name);
-}
-
 const RUNNER_BUILT_IN_NAMES = new Set<string>(
 	BUILT_IN_COMMANDS.filter((command) => command.runnerHandled).map((command) => command.name),
 );

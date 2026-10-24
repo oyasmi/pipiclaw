@@ -144,8 +144,8 @@ export function createDeskRecord(workspaceDir: string, name: string, now: Date):
  * The conversation directory a channel uses in this desk, allocating it on first use (INV-7):
  * `<kind>-<n>` with `n` one past the largest index of that kind already in `desk.json`. Idempotent —
  * a channel already registered gets its existing directory back. The read-modify-write holds the
- * cross-process `desk-json.lock`, so a TUI allocating `tui-N` and the daemon allocating `group-N`
- * never lose each other's entry.
+ * cross-process `desk-json.lock`, so two processes allocating at once (the daemon and an
+ * embedded runtime, or a desk command run elsewhere) never lose each other's entry.
  */
 export async function allocateConversation(
 	workspaceDir: string,

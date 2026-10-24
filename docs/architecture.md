@@ -53,7 +53,7 @@ pipiclaw tui [--desk <名字>] [提示] # 默认打开默认工位，同一 agen
 | 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |
 | 10 | `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
 | 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `transport.ts`（`Transport` 实现）、`bot.ts`（门面）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（回合输出口） |
-| 11 | `src/tui/` | 终端前端（第二个 `ChannelContext` 实现） | `cli.ts`、`app.ts`、`frontend.ts`、`turn-controller.ts` |
+| 11 | `src/tui/` | 终端：Web API 本地 socket 的客户端（官方 SDK）、前端与渲染 | `cli.ts`、`client.ts`、`session.ts`、`render.ts`、`frontend.ts` |
 | 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`ingress.ts`、`transports.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-driver.ts` |
 | — | `src/main.ts`、`src/index.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理；公共库出口（spec 035） | — |
 
@@ -105,7 +105,7 @@ flowchart TB
 - **`DingTalkBot`**（`dingtalk/bot.ts` 只是门面，下面这些职责由 `connection.ts`、`inbound.ts`、`cards.ts`、`media.ts`、`access-token.ts` 各自承担）负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
 - **合成事件不直接进内存队列**：EventsWatcher 和 TaskDriver 产生的事件先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
 - **先解析绑定，再建 runner**（spec 058）：`DeskRuntime` 是 daemon 里唯一回答"这个频道绑在哪个工位上、哪些工位处于激活状态"的地方。安装时初始化 `default`，获准的真实入站消息先为缺少绑定的频道分配会话并持久化到 `default`，再下载附件和路由命令；已有绑定及其故障保持原样。只读解析和合成事件不会创建绑定；合成事件只有在它的频道仍绑定在事件所属的工位（`event.desk`）上时才被接受。没有任何绑定的工位处于休眠：它的事件 watcher 停止，task driver 和记忆调度器不再扫描它，正在跑的 run 和 job 照常结算但不投递唤醒。
-- **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，TUI（`tui/app.ts`）的单进程一个可替换引用（频道 `tui`，会话区 `conversations/tui-N/`）——一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
+- **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
 - **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到工位目录；完成后同样先经过 durable dispatch，再唤醒发起委派的那个频道（仍绑定在该工位上时）。
 
 ## 4. 一条消息的生命周期

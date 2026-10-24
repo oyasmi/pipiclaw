@@ -98,12 +98,6 @@ describe("task tool surface (spec 052, D7)", () => {
 			await expect(createTask(options, { id: "dup", title: "D", goal: "G", dod: "- [ ] D" })).rejects.toThrow(
 				/already exists/,
 			);
-			// Failure caught: a task created from the terminal (channel `tui`) is never driven by the
-			// daemon, so creating it would silently park work that cannot run.
-			await expect(
-				createTask({ ...options, channelId: "tui" }, { id: "tui-task", title: "T", goal: "G", dod: "- [ ] D" }),
-			).rejects.toThrow(/DingTalk channel/);
-			expect(await readStoredTask(deskDir, "tui-task")).toBeUndefined();
 		});
 	});
 
