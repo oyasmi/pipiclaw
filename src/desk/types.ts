@@ -6,7 +6,7 @@
  */
 
 /** Which family a channel belongs to; decides its conversation directory's `<kind>-<n>` name. */
-export type ConversationKind = "dm" | "group" | "tui";
+export type ConversationKind = "dm" | "group" | "tui" | "webapi";
 
 /** One `desk.json` `conversations` entry: where a channel's sessions live inside this desk. */
 export interface DeskConversationRecord {

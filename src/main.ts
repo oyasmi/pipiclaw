@@ -51,6 +51,11 @@ if (command === "tui") {
 	// keep the event loop alive, so the process would otherwise hang after the UI
 	// tears down.
 	runTui(process.argv).then(() => process.exit(0), handleError);
+} else if (command === "webapi") {
+	// Only the key commands live here; the Web API itself is loaded by the daemon, if channel.json turns it on.
+	import("./webapi/key-command.js")
+		.then(({ runWebApiCommand }) => runWebApiCommand(process.argv))
+		.then(() => process.exit(0), handleError);
 } else if (command === "auth") {
 	// readline keeps stdin open, so exit explicitly on success too.
 	runAuth(process.argv).then(() => process.exit(0), handleError);

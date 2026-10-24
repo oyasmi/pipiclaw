@@ -351,6 +351,7 @@ export function formatCliCommandsHelp(appName: string): string[] {
 		`  ${appName} [run] [options]         Run the daemon (default)`,
 		`  ${appName} tui [options] [prompt]   Chat with the agent in the terminal`,
 		`  ${appName} auth status|login|logout Manage provider credentials`,
+		`  ${appName} webapi key add|list|remove Manage Web API keys`,
 	];
 }
 

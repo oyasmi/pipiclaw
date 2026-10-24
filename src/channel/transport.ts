@@ -69,10 +69,21 @@ export interface Transport {
 	start(ingress: Ingress): Promise<void>;
 	/** Stop receiving, finish what is being delivered; `ingress` is not called afterwards. */
 	stop(): Promise<void>;
-	/** One turn's output port. A `quiet` turn shows no progress; only its answer is delivered. */
+	/**
+	 * One turn's output port. A `quiet` turn shows no progress; only its answer is delivered.
+	 * Every human message the ingress accepted (`started` or `queued`) gets exactly one `openTurn`
+	 * and one `finish`, whether it runs the agent or only answers a command — unless it is
+	 * `dropped` first, or the process ends.
+	 */
 	openTurn(turn: TurnInfo, opts: { quiet: boolean }): ChannelContext;
 	/** Outside any turn: command replies, receipts, task reports, wake-failure notices. Whether it was delivered. */
 	push(channelId: string, message: PushMessage): Promise<boolean>;
+	/**
+	 * Messages that were queued behind a running turn were dropped without ever running (`/stop`,
+	 * `/new`); `refs` are the `ref`s they carried. A transport that tracks each message to an end
+	 * (the Web API's responses) closes them here; one that does not simply omits this.
+	 */
+	dropped?(channelId: string, refs: string[]): void;
 	/** The `send_media` tool's exit. */
 	sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult>;
 	/** How a user sees this channel in `/desk`, `/tasks`, `/events` and CHANNELS.md. */

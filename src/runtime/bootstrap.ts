@@ -38,6 +38,7 @@ import * as log from "../log.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/runtime.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import { logSecurityEvent } from "../security/logger.js";
 import type { FileLockHandle } from "../shared/file-lock.js";
 import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -209,6 +210,7 @@ async function buildRuntimeContext(
 	const executor = options.executor ?? createExecutor();
 	const dispatch = (event: WakeEvent) => durableDispatch?.dispatch(event) ?? false;
 
+	let auditConfig: ReturnType<typeof loadSecurityConfigWithDiagnostics>["config"] | undefined;
 	// The transports this process hosts. A delivered answer is archived through `store`, which is
 	// built below: the closure only runs once a turn is under way.
 	const transports = createTransportRegistry(
@@ -216,6 +218,10 @@ async function buildRuntimeContext(
 			(await loadTransports({
 				paths: options.paths,
 				stateDir: join(appHomeDir, "state"),
+				audit: (event) => {
+					auditConfig ??= loadSecurityConfigWithDiagnostics(appHomeDir).config;
+					void logSecurityEvent(workspaceDir, auditConfig, event);
+				},
 				archiveBotResponse: (channelId, text) => store.logBotResponse(channelId, text, Date.now().toString()),
 			})),
 	);

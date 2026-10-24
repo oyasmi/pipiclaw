@@ -20,7 +20,7 @@ const MEMORY_WORK_DIRNAME = ".memory-work";
 export const SUBAGENT_RUNS_LOG_FILENAME = "subagent-runs.jsonl";
 
 const DESK_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
-const CONVERSATION_NAME_PATTERN = /^(dm|group|tui)-([1-9][0-9]*)$/;
+const CONVERSATION_NAME_PATTERN = /^(dm|group|tui|webapi)-([1-9][0-9]*)$/;
 
 export function isDeskName(value: string): boolean {
 	return DESK_NAME_PATTERN.test(value);

@@ -83,7 +83,12 @@ describe("loading the configured transports", () => {
 			paths.channelConfigPath,
 			typeof channelJson === "string" ? channelJson : JSON.stringify(channelJson),
 		);
-		return loadTransports({ paths, stateDir: join(paths.appHomeDir, "state"), archiveBotResponse: async () => {} });
+		return loadTransports({
+			paths,
+			stateDir: join(paths.appHomeDir, "state"),
+			archiveBotResponse: async () => {},
+			audit: () => {},
+		});
 	};
 
 	it("starts only what is switched on, and refuses when nothing is", async () => {

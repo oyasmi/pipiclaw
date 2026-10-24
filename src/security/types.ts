@@ -121,8 +121,35 @@ export interface ExternalAgentLogEvent extends SecurityLogEventBase {
 	model?: string;
 }
 
+/**
+ * One request to the Web API (spec 061, D24): who, what, and how it ended. Like an external-agent
+ * dispatch it records something that was *permitted*, so `audit.logBlocked` does not switch it off.
+ * It never carries a key, a request body or a response's content.
+ */
+export interface WebApiRequestLogEvent extends SecurityLogEventBase {
+	type: "webapi-request";
+	listener: "socket" | "tcp";
+	principal: string;
+	method: string;
+	path: string;
+	status: number;
+	conversationId?: string;
+}
+
+/** A Web API request that was refused before it was read: no or bad key, a browser origin, a foreign Host. */
+export interface WebApiAuthFailureLogEvent extends SecurityLogEventBase {
+	type: "webapi-auth";
+	listener: "socket" | "tcp";
+	reason: "missing_key" | "invalid_key" | "origin" | "host";
+	remote: string;
+	method: string;
+	path: string;
+}
+
 export type SecurityLogEvent =
 	| BlockedPathLogEvent
 	| BlockedCommandLogEvent
 	| BlockedNetworkLogEvent
-	| ExternalAgentLogEvent;
+	| ExternalAgentLogEvent
+	| WebApiRequestLogEvent
+	| WebApiAuthFailureLogEvent;

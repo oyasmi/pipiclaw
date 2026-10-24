@@ -417,6 +417,7 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		// skills, and prompt templates are recognized by isKnownSlashCommand.
 		if (event.text.trim().startsWith("/") && !runner.isKnownSlashCommand(event.text)) {
 			const name = slashCommandName(event.text) ?? "";
+			turn.output = trackOutput(transport.openTurn(turnInfoOf(event), { quiet: true }));
 			await replyTo(transport, event, formatUnknownCommandMessage(name));
 			return;
 		}
@@ -536,6 +537,25 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		await replyTo(transport, event, formatNoDeskReply(resolution), { markdown: true });
 	};
 
+	/**
+	 * A human message that only gets an answer — a command, a refusal — still has its own turn as
+	 * far as the transport is concerned: its output port is opened and finished around the reply,
+	 * so a transport that follows each message to an end (the Web API) always sees one.
+	 */
+	const answerOnly = async (transport: Transport, event: ChannelEvent, work: () => Promise<void>): Promise<void> => {
+		const output = trackOutput(transport.openTurn(turnInfoOf(event), { quiet: true }));
+		try {
+			await work();
+		} finally {
+			await output.ctx.finish({ kind: "completed", usage: createEmptyUsageTotals() }).catch((error: unknown) => {
+				log.logWarn("delivery.close.failed", "Delivery close failed", {
+					channelId: event.channelId,
+					reason: errorMessage(error),
+				});
+			});
+		}
+	};
+
 	const runDeskCommand = async (event: ChannelEvent, args: string, transport: Transport): Promise<void> => {
 		const logCtx = { channelId: event.channelId, userName: senderOf(event).userName };
 		log.logEvent("info", "runtime.command.started", "Executing command", {
@@ -593,17 +613,21 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			const command = parseBuiltInCommand(inboundEvent.text);
 			if (command?.name === "desk") {
 				releaseReservation(inboundEvent);
-				await runDeskCommand(inboundEvent, command.args, transport);
+				await answerOnly(transport, inboundEvent, () => runDeskCommand(inboundEvent, command.args, transport));
 				return;
 			}
 			if (resolution.kind !== "bound") {
-				await replyWithoutDesk(inboundEvent, resolution, transport);
+				await answerOnly(transport, inboundEvent, () => replyWithoutDesk(inboundEvent, resolution, transport));
 				return;
 			}
 		}
 
 		const runner = getRunner(inboundEvent.channelId);
-		if (!runner) return;
+		if (!runner) {
+			// The binding went away since the checks above: nothing can run, but the message still ends.
+			if (!isSyntheticEvent(inboundEvent)) await answerOnly(transport, inboundEvent, async () => undefined);
+			return;
+		}
 		const turn = await admitTurn(inboundEvent, runner);
 		if (!turn) return;
 		const task = (async () => {

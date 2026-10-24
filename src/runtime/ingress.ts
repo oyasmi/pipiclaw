@@ -67,15 +67,19 @@ export function createIngress(deps: IngressDeps): IngressService {
 		}
 		return queue;
 	};
-	const clearPending = (channelId: string): number => queues.get(channelId)?.clearPending() ?? 0;
+	/** Drop what has not started on `channelId`, telling its transport which named messages went. */
+	const clearPending = (channelId: string): number => {
+		const dropped = queues.get(channelId)?.clearPending();
+		if (dropped && dropped.refs.length > 0) transports.forChannel(channelId)?.dropped?.(channelId, dropped.refs);
+		return dropped?.count ?? 0;
+	};
 	/**
 	 * Detach all queued work from the previous session generation. The in-flight callback may
 	 * still unwind on its old queue object, while subsequent messages get a fresh queue.
 	 */
 	const resetChannelQueue = (channelId: string): number => {
-		const queue = queues.get(channelId);
-		const dropped = queue?.clearPending() ?? 0;
-		queue?.stop();
+		const dropped = clearPending(channelId);
+		queues.get(channelId)?.stop();
 		queues.delete(channelId);
 		return dropped;
 	};

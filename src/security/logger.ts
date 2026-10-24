@@ -31,7 +31,7 @@ export async function logSecurityEvent(
 ): Promise<void> {
 	// external-agent records a permitted action, not a blocked one (spec 040, D8.1): it must not
 	// disappear just because the operator only wants blocked-action logging.
-	if (!config.audit.logBlocked && event.type !== "external-agent") return;
+	if (!config.audit.logBlocked && event.type !== "external-agent" && event.type !== "webapi-request") return;
 	if (event.type === "external-agent") {
 		// External agents bypass command-guard. Their complete dispatch record is therefore a
 		// security gate, not best-effort observability: do not return until it is on disk, and let

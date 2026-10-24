@@ -3,6 +3,7 @@
  * finds its transport. The runtime never names a concrete transport anywhere else — it asks here.
  */
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { BootstrapPaths } from "../app/home.js";
 import { transportOf } from "../channel/channel-id.js";
 import { ChannelConfigError, type EnabledChannelSections, parseChannelConfig } from "../channel/config.js";
@@ -12,6 +13,7 @@ import { StartupRefusal } from "../desk/startup-error.js";
 import type { ConversationKind } from "../desk/types.js";
 import * as log from "../log.js";
 import { docsUrl } from "../paths.js";
+import type { SecurityLogEvent } from "../security/types.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 export interface TransportRegistry {
@@ -70,6 +72,8 @@ export async function loadTransports(deps: {
 	paths: BootstrapPaths;
 	stateDir: string;
 	archiveBotResponse: (channelId: string, text: string) => Promise<void>;
+	/** The security audit log, for the transports that take requests from the network. */
+	audit: (event: SecurityLogEvent) => void;
 }): Promise<Transport[]> {
 	const { channelConfigPath, appName } = deps.paths;
 	let sections: EnabledChannelSections;
@@ -94,7 +98,17 @@ export async function loadTransports(deps: {
 			transports.push(new DingTalkTransport({ config, archiveBotResponse: deps.archiveBotResponse }));
 		}
 		if (sections.webapi !== undefined) {
-			throw new ChannelConfigError(["webapi: the Web API channel is not available in this build."]);
+			const [{ WebApiTransport }, { parseWebApiConfig }] = await Promise.all([
+				import("../webapi/transport.js"),
+				import("../webapi/config.js"),
+			]);
+			transports.push(
+				new WebApiTransport({
+					config: parseWebApiConfig(sections.webapi),
+					stateDir: join(deps.stateDir, "webapi"),
+					audit: deps.audit,
+				}),
+			);
 		}
 	} catch (error) {
 		if (!(error instanceof ChannelConfigError)) throw error;

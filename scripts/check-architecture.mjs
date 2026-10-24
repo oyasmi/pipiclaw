@@ -63,9 +63,10 @@ const ALLOWED = {
 	"commands-router": [...BELOW_AGENT, "agent"],
 	app: [...BELOW_AGENT, "agent"],
 	dingtalk: BELOW_TRANSPORT,
+	webapi: BELOW_TRANSPORT,
 	tui: BELOW_TRANSPORT,
-	runtime: [...BELOW_TRANSPORT, "dingtalk"],
-	entry: [...BELOW_TRANSPORT, "dingtalk", "tui", "runtime"],
+	runtime: [...BELOW_TRANSPORT, "dingtalk", "webapi"],
+	entry: [...BELOW_TRANSPORT, "dingtalk", "webapi", "tui", "runtime"],
 };
 // Edges that may only be `import type`.
 const TYPE_ONLY_ALLOWED = { config: ["channel"] };

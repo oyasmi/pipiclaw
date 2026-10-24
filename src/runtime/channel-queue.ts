@@ -59,8 +59,11 @@ export class ChannelQueue {
 	// Drop not-yet-started work without disabling the queue. Used by /stop so a
 	// burst of queued messages does not keep running after the user asked to halt.
 	// The in-flight item (already shifted) is unaffected; the caller aborts it.
-	clearPending(): number {
-		const dropped = this.queue.length;
+	clearPending(): { count: number; refs: string[] } {
+		const dropped = {
+			count: this.queue.length,
+			refs: this.queue.flatMap((item) => (item.ref === undefined ? [] : [item.ref])),
+		};
 		this.queue = [];
 		return dropped;
 	}
