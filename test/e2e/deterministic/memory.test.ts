@@ -28,7 +28,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// making `findConversation` return `dm-1` for every channel leaks A_PRIVATE_TEXT into B.
 		// The journal half is the original M2 regression: omitting journal.days in memory-manage.ts
 		// fails the tool-message assertion.
-		const peer = "dm_e2e_peer";
+		const peer = "dingtalk:dm:e2e_peer";
 		harness = await createDeterministicHarness({ extraChannels: [{ channelId: peer }] });
 		mkdirSync(join(harness.deskDir, "journal"), { recursive: true });
 		writeFileSync(join(harness.deskDir, "journal", "2020-01-02.md"), "- release checkpoint: JOURNAL-EVIDENCE-73\n");
@@ -68,7 +68,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// memory/ and MEMORY.md, so B's write must wait for A's reflect to finish. Mutation check
 		// (2026-10-18): letting memory_save run its job without `queue.run` makes B's fact appear
 		// on disk while A's reflect is still held, and the "not yet" assertion goes red.
-		const peer = "dm_e2e_peer";
+		const peer = "dingtalk:dm:e2e_peer";
 		harness = await createDeterministicHarness({ extraChannels: [{ channelId: peer }] });
 		harness.model.script.route({
 			name: "ack",
@@ -256,7 +256,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		const entry = (await readActiveTasks(tasksDir)).find((e) => e.id === taskId);
 		expect(entry).toBeDefined();
 		const driver = createTaskDriverEvent(harness.desk, harness.channelId, entry!, Date.now());
-		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
+		await harness.sendWake(driver.text, { producer: "TASK_DRIVER" });
 		expect(lastUserContent()).toContain("<memory_bootstrap>");
 
 		// Back on chat, which already has one: it must not be sent again.

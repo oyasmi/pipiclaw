@@ -35,7 +35,7 @@ function makeTool(deskDir: string) {
 		webConfig: DEFAULT_TOOLS_CONFIG.tools.web,
 		securityConfig: DEFAULT_SECURITY_CONFIG,
 		workspaceDir: deskDir,
-		channelId: "dm_1",
+		channelId: "dingtalk:dm:1",
 		deskDir,
 	});
 }

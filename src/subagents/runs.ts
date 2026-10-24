@@ -1,6 +1,6 @@
 import { readdir, readFile, rename, rmdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -58,7 +58,7 @@ export interface RunManagerOptions {
 	stateDir?: string;
 	/** Is a run's channel still bound to this desk (spec 058, D7)? Omitted (TUI, tests): always. */
 	isBoundTo?: (channelId: string, desk: string) => boolean;
-	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
 	/** Best-effort out-of-band notice sink (see `RunNotice`). Never awaited by settlement or the
 	 *  progress tail — a slow or failing notifier must not delay either. */
 	notify?: RunNotifier;

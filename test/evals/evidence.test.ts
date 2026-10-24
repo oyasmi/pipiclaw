@@ -356,7 +356,7 @@ describe("eval supervision and evidence", () => {
 describe("eval resource accounting", () => {
 	const entry = (kind: UsageLedgerEntry["kind"], amount: number): UsageLedgerEntry => ({
 		ts: "2026-09-10",
-		channelId: "dm_eval",
+		channelId: "dingtalk:dm:eval",
 		kind,
 		model: "fixture",
 		usage: { input: amount, output: 0, cacheRead: 0, cacheWrite: 0, total: amount },

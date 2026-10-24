@@ -1,16 +1,4 @@
 /**
- * Inbound has no DingTalk-imposed size contract the way outbound does (`dingtalk.ts`'s
- * `MAX_IMAGE_BYTES` mirrors the *send* limit); this instead mirrors `tools/truncate.ts`'s
- * `MAX_INLINE_BINARY_BYTES` — the same ceiling `read` already applies to an on-disk image — so
- * "a picture the user sent" and "a picture `read` loads from disk" behave identically for the
- * model. Lives here, not in the DingTalk-specific `dingtalk/inbound-media.ts`, because both the
- * transport (rejecting an oversized download) and `agent/channel-runner.ts` (skipping an
- * oversized file before base64-encoding it) need the same number, and `agent/` never imports
- * from `runtime/` (spec 049).
- */
-export const MAX_INBOUND_IMAGE_BYTES = 5 * 1024 * 1024;
-
-/**
  * A user-sent image already downloaded to local disk (spec 049).
  *
  * Deliberately asymmetric with the outbound `OutboundMedia` (which carries a `Buffer`): outbound
@@ -38,42 +26,47 @@ export interface InboundImage {
 }
 
 /**
- * A message or wake, from any producer: a real inbound DingTalk message, a scheduled event, a
- * task-driver wake, or a job/subagent completion. `conversationId` is the one field genuinely
- * DingTalk-specific (needed to reply into the right conversation); every synthetic producer
- * (jobs/manager, task-driver, events, subagents/runs) leaves it unset rather than faking a value,
- * since it has no DingTalk conversation to route into. `conversationType` is not DingTalk-specific
- * in practice — every producer, real or synthetic, can derive "1"/"2" from the channelId prefix —
- * so it stays required.
+ * A message or a wake, from any producer (spec 061, D8). `source` is the discriminator: a `human`
+ * event is a real person's message that came through a transport; a `wake` is synthesized in
+ * process (scheduled events, the task driver, job and delegation completions) and is admitted only
+ * while its channel is still bound to the desk it was produced for.
  */
-export interface ChannelEvent {
-	type: "dm" | "group";
-	channelId: string; // dm_{staffId}, group_{conversationId}, or tui
+export type ChannelEvent = HumanEvent | WakeEvent;
+
+interface EventBase {
+	channelId: string;
 	ts: string;
-	user: string; // sender staff id, or a synthetic producer tag (JOB, TASK_DRIVER, SUBAGENT, EVENT, ...)
-	userName: string;
 	text: string;
 	/** Images the user sent alongside `text` (spec 049), already downloaded and persisted. */
 	images?: InboundImage[];
-	/** DingTalk conversation id; absent on synthetic events, which have no DingTalk conversation. */
-	conversationId?: string;
-	conversationType: string; // "1" = DM, "2" = group
-	/**
-	 * Human-readable channel name: the group title, or the peer's nickname for a DM. Absent on
-	 * synthetic events (scheduled events, task-driver wakes), which carry no conversation payload.
-	 */
-	channelName?: string;
 	/** Runtime-owned durable-dispatch record, absent for normal inbound messages. */
 	dispatchId?: string;
+}
+
+export interface HumanEvent extends EventBase {
+	source: "human";
+	user: string;
+	userName: string;
 	/**
-	 * The desk this synthetic event was produced for (spec 058, D7). Every in-process producer —
-	 * the task driver, the event watchers, run and job completion wakes — must set it; durable
-	 * dispatch refuses an event without it, and admission drops a wake whose channel is no longer
-	 * bound to this desk. DingTalk inbound parsing never writes it.
+	 * Human-readable channel name: the group title, or the peer's nickname for a DM. Absent when
+	 * the transport has none.
 	 */
-	desk?: string;
-	/** Structured wake provenance created only by in-process producers. DingTalk inbound parsing
-	 * never copies arbitrary payload fields into this event, so user text cannot manufacture it. */
+	channelName?: string;
+	/** The transport's own correlation reference for this message (`InboundMessage.ref`). */
+	ref?: string;
+}
+
+export interface WakeEvent extends EventBase {
+	source: "wake";
+	/** Producer tag: JOB, TASK_DRIVER, SUBAGENT, EVENT, … Shown to the model as the sender. */
+	producer: string;
+	/**
+	 * The desk this wake was produced for (spec 058, D7). Every in-process producer must set it;
+	 * durable dispatch refuses a wake without it, and admission drops a wake whose channel is no
+	 * longer bound to this desk.
+	 */
+	desk: string;
+	/** Structured wake provenance created only by in-process producers; user text cannot manufacture it. */
 	internalWake?: {
 		kind: "job" | "subagent";
 		resourceId: string;
@@ -81,20 +74,27 @@ export interface ChannelEvent {
 		dispatchId: string;
 	};
 	/**
-	 * Purely a display hint: `"awaited"` marks a synthetic wake a human is actually waiting on (a
-	 * delegation or background job finishing), as opposed to an autonomous check-in (task-driver
-	 * polling, a scheduled event) that normally has nothing to say. All synthetic wakes now
-	 * deliver only their result; this metadata does not enable progress cards or gate task
-	 * activation. Trust decisions stay on `internalWake` alone.
+	 * Purely a display hint: `"awaited"` marks a wake a human is actually waiting on (a delegation
+	 * or background job finishing), as opposed to an autonomous check-in (task-driver polling, a
+	 * scheduled event) that normally has nothing to say. All wakes deliver only their result; this
+	 * metadata does not enable progress cards or gate task activation. Trust decisions stay on
+	 * `internalWake` alone.
 	 */
 	presentation?: "awaited";
 }
 
+/** Who the model is told wrote this event: the person, or the producer tag of a wake. */
+export function senderOf(event: ChannelEvent): { user: string; userName: string } {
+	return event.source === "wake"
+		? { user: event.producer, userName: event.producer }
+		: { user: event.user, userName: event.userName };
+}
+
 /**
- * The one thing in-process producers (scheduled events, durable dispatch) need from a transport:
- * hand it a synthetic event for its per-channel queue. `false` means the queue rejected it (full
- * or stopped), so the caller keeps ownership and may retry. Implemented by `DingTalkBot`.
+ * The one thing in-process producers (scheduled events, durable dispatch) need from the runtime:
+ * hand it a wake for its per-channel queue. `false` means the queue rejected it (full or
+ * stopped), so the caller keeps ownership and may retry. Implemented by the runtime's `Ingress`.
  */
 export interface ChannelEventSink {
-	enqueueEvent(event: ChannelEvent): boolean;
+	enqueueEvent(event: WakeEvent): boolean;
 }

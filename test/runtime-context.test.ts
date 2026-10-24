@@ -71,14 +71,12 @@ class FakeTestBot {
 
 function createDmEvent(text: string, ts: string) {
 	return {
-		type: "dm" as const,
-		channelId: "dm_tester",
+		source: "human" as const,
+		channelId: "dingtalk:dm:tester",
 		ts,
 		user: "tester",
 		userName: "Tester",
 		text,
-		conversationId: "conv_1",
-		conversationType: "1",
 	};
 }
 
@@ -90,7 +88,7 @@ describe("createRuntimeContext", () => {
 	it("creates /new out of band and commits an empty active session", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
-		const conversation = await bindTestChannel(paths.workspaceDir, "dm_tester");
+		const conversation = await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
 		const bot = new FakeTestBot();
 		const runtime = await createRuntimeContext({
 			paths,
@@ -111,8 +109,8 @@ describe("createRuntimeContext", () => {
 		const refPath = getActiveSessionRefPath(conversation.conversationDir);
 		const ref = JSON.parse(readFileSync(refPath, "utf-8"));
 		expect(ref).toMatchObject({ version: 1, sessionId: expect.any(String), file: expect.stringMatching(/\.jsonl$/) });
-		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
-		expect(bot.sendPlain).toHaveBeenCalledWith("dm_tester", expect.stringContaining(ref.sessionId));
+		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dingtalk:dm:tester");
+		expect(bot.sendPlain).toHaveBeenCalledWith("dingtalk:dm:tester", expect.stringContaining(ref.sessionId));
 
 		await runtime.shutdown();
 	});
@@ -121,7 +119,7 @@ describe("createRuntimeContext", () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 		// Watchers are per active desk (spec 058, D6): one bound desk, one watcher.
-		await bindTestChannel(paths.workspaceDir, "dm_tester");
+		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
 		const bot = new FakeTestBot();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 		const memoryScheduler = { start: vi.fn(), stop: vi.fn() };
@@ -152,7 +150,7 @@ describe("createRuntimeContext", () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 		// Bound, so the message actually reaches the archive (an unbound channel never archives).
-		await bindTestChannel(paths.workspaceDir, "dm_tester");
+		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
 		const bot = new FakeTestBot();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 

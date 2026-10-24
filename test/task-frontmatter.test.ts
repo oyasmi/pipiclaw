@@ -25,7 +25,7 @@ describe("task frontmatter contract (spec 052, §3.3)", () => {
 			state: "parked",
 			paused: { by: "runtime", reason: "budget", at: "2026-09-05T10:00:00+08:00" },
 			// A real group id is base64: `/`, `+` and `=` must survive as plain text (spec 058, D13).
-			channel: "group_cidL1/dcU8u+SV7I9YuUXLeXg==",
+			channel: "dingtalk:group:cidL1/dcU8u+SV7I9YuUXLeXg==",
 			origin: "weekly-report",
 			ticket: { kind: "work", refs: ["run_a", "job_b"], by: "2099-01-01T00:00:00+08:00" },
 			usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 3, usd: 1.5, usdEstimated: true, expired: 1 },
@@ -46,8 +46,8 @@ describe("task frontmatter contract (spec 052, §3.3)", () => {
 	it("drops a park that survives into an archived document, keeping its delivery channel", () => {
 		const fields = normalizeTaskFrontmatter({ state: "parked", ticket: TICKET, outcome: "completed" });
 		expect(fields).toMatchObject({ state: "done", ticket: undefined, paused: undefined });
-		const archived = renderTaskFrontmatter({ state: "done", outcome: "cancelled", channel: "dm_1" });
-		expect(parseTaskFrontmatter(`${archived}\n# T\n`).fields.channel).toBe("dm_1");
+		const archived = renderTaskFrontmatter({ state: "done", outcome: "cancelled", channel: "dingtalk:dm:1" });
+		expect(parseTaskFrontmatter(`${archived}\n# T\n`).fields.channel).toBe("dingtalk:dm:1");
 	});
 
 	it("fails open to a live task when the block is missing or corrupt", () => {

@@ -66,10 +66,10 @@ describe("delivery", () => {
 		await vi.advanceTimersByTimeAsync(799);
 		expect(bot.calls).toEqual([]);
 		await vi.advanceTimersByTimeAsync(1);
-		expect(bot.calls).toEqual([{ method: "replaceCard", args: ["dm_123", "- A\n- B", false] }]);
+		expect(bot.calls).toEqual([{ method: "replaceCard", args: ["dingtalk:dm:123", "- A\n- B", false] }]);
 		await ctx.respond("C");
 		await vi.advanceTimersByTimeAsync(800);
-		expect(bot.calls.at(-1)).toEqual({ method: "appendToCard", args: ["dm_123", "\n- C"] });
+		expect(bot.calls.at(-1)).toEqual({ method: "appendToCard", args: ["dingtalk:dm:123", "\n- C"] });
 		expect(store.logged).toHaveLength(3);
 	});
 
@@ -109,7 +109,7 @@ describe("delivery", () => {
 		await vi.runAllTimersAsync();
 		await ctx.respondPlain("answer");
 		await ctx.flush();
-		expect(bot.calls).toEqual([{ method: "sendPlain", args: ["dm_123", "answer"] }]);
+		expect(bot.calls).toEqual([{ method: "sendPlain", args: ["dingtalk:dm:123", "answer"] }]);
 	});
 
 	it("successful final replacement blocks progress, silence, and duplicate final delivery", async () => {
@@ -119,7 +119,7 @@ describe("delivery", () => {
 		await ctx.replaceMessage("duplicate");
 		await ctx.deleteMessage();
 		await vi.runAllTimersAsync();
-		expect(bot.calls).toEqual([{ method: "finalizeCard", args: ["dm_123", "answer"] }]);
+		expect(bot.calls).toEqual([{ method: "finalizeCard", args: ["dingtalk:dm:123", "answer"] }]);
 	});
 
 	it("awaits actual final delivery and reports failure instead of marking an enqueue as success", async () => {

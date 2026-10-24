@@ -24,6 +24,7 @@ function runtimeFor(workspaceDir: string) {
 	const onBindingChanged = vi.fn();
 	const runtime = new DeskRuntime({
 		workspaceDir,
+		conversationKindOf: (channelId) => (channelId.startsWith("dingtalk:group:") ? "group" : "dm"),
 		recover,
 		createWatcher: ({ desk }) => {
 			const watcher: (typeof watchers)[number] = {
@@ -51,7 +52,7 @@ describe("DeskRuntime (spec 058, D6/D7)", () => {
 		// Failure caught: a dormant desk that keeps its watcher (background work nobody receives) or an
 		// activated desk whose channels take traffic before their interrupted turns are repaired.
 		const workspaceDir = tempDir();
-		const conversation = await bindTestChannel(workspaceDir, "dm_1", "news");
+		const conversation = await bindTestChannel(workspaceDir, "dingtalk:dm:1", "news");
 		const { runtime, watchers, recover } = runtimeFor(workspaceDir);
 		await runtime.load();
 		await runtime.activateBound();
@@ -73,15 +74,15 @@ describe("DeskRuntime (spec 058, D6/D7)", () => {
 		// Failure caught (INV-5): a run, job or task of one desk reporting into a channel now bound to
 		// another desk, or to none.
 		const workspaceDir = tempDir();
-		await bindTestChannel(workspaceDir, "dm_1", "news");
+		await bindTestChannel(workspaceDir, "dingtalk:dm:1", "news");
 		const { runtime, send } = runtimeFor(workspaceDir);
 		await runtime.load();
 
-		await expect(runtime.sendFromDesk("news", "dm_1", "done")).resolves.toBe(true);
-		await expect(runtime.sendFromDesk("other", "dm_1", "done")).resolves.toBe(false);
-		await expect(runtime.sendFromDesk("news", "dm_unbound", "done")).resolves.toBe(false);
+		await expect(runtime.sendFromDesk("news", "dingtalk:dm:1", "done")).resolves.toBe(true);
+		await expect(runtime.sendFromDesk("other", "dingtalk:dm:1", "done")).resolves.toBe(false);
+		await expect(runtime.sendFromDesk("news", "dingtalk:dm:unbound", "done")).resolves.toBe(false);
 		expect(send).toHaveBeenCalledTimes(1);
-		expect(send).toHaveBeenCalledWith("dm_1", "done");
+		expect(send).toHaveBeenCalledWith("dingtalk:dm:1", "done");
 	});
 });
 
@@ -92,20 +93,20 @@ describe("DeskRuntime.bind (spec 058, D5)", () => {
 		// its suspended work not reported; a target whose watcher starts (and skips this channel's
 		// overdue one-shots as unbound) before the binding is committed.
 		const workspaceDir = tempDir();
-		await bindTestChannel(workspaceDir, "dm_1", "news");
-		await bindTestChannel(workspaceDir, "dm_2", "news");
+		await bindTestChannel(workspaceDir, "dingtalk:dm:1", "news");
+		await bindTestChannel(workspaceDir, "dingtalk:dm:2", "news");
 		createDeskRecord(workspaceDir, "lab", new Date());
 		const newsDir = getDeskDir(workspaceDir, "news");
 		await createTaskDocument({
 			deskDir: newsDir,
 			id: "weekly",
 			input: { title: "Weekly", goal: "g", dod: "d" },
-			channel: "dm_1",
+			channel: "dingtalk:dm:1",
 		});
 		mkdirSync(join(newsDir, "events"), { recursive: true });
 		writeFileSync(
 			join(newsDir, "events", "digest.json"),
-			JSON.stringify({ type: "periodic", channelId: "dm_1", schedule: "0 9 * * *", text: "digest" }),
+			JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:1", schedule: "0 9 * * *", text: "digest" }),
 		);
 		const { runtime, watchers, busy, releaseRunner, onBindingChanged } = runtimeFor(workspaceDir);
 		await runtime.load();
@@ -113,42 +114,42 @@ describe("DeskRuntime.bind (spec 058, D5)", () => {
 		runtime.startServices();
 		const bindingsBefore = readFileSync(getBindingsPath(workspaceDir), "utf8");
 
-		busy.add("dm_1");
-		await expect(runtime.bind("dm_1", "lab")).resolves.toMatchObject({ kind: "busy" });
+		busy.add("dingtalk:dm:1");
+		await expect(runtime.bind("dingtalk:dm:1", "lab")).resolves.toMatchObject({ kind: "busy" });
 		busy.clear();
-		await expect(runtime.bind("dm_1", "news")).resolves.toMatchObject({ kind: "same" });
-		await expect(runtime.bind("dm_1", "nope")).resolves.toMatchObject({ kind: "unknown" });
-		await expect(runtime.bind("dm_1", "-bad-")).resolves.toMatchObject({ kind: "invalid" });
+		await expect(runtime.bind("dingtalk:dm:1", "news")).resolves.toMatchObject({ kind: "same" });
+		await expect(runtime.bind("dingtalk:dm:1", "nope")).resolves.toMatchObject({ kind: "unknown" });
+		await expect(runtime.bind("dingtalk:dm:1", "-bad-")).resolves.toMatchObject({ kind: "invalid" });
 		expect(readFileSync(getBindingsPath(workspaceDir), "utf8")).toBe(bindingsBefore);
 		expect(releaseRunner).not.toHaveBeenCalled();
 
 		releaseRunner.mockRejectedValueOnce(new Error("dispose failed"));
-		await expect(runtime.bind("dm_1", "lab")).resolves.toEqual({
+		await expect(runtime.bind("dingtalk:dm:1", "lab")).resolves.toEqual({
 			kind: "bound",
 			desk: "lab",
 			previousDesk: "news",
 			suspendedTasks: 1,
 			suspendedEvents: 1,
 		});
-		expect(runtime.isBoundTo("dm_1", "lab")).toBe(true);
-		expect(releaseRunner).toHaveBeenCalledWith("dm_1");
-		expect(onBindingChanged).toHaveBeenCalledWith("dm_1");
+		expect(runtime.isBoundTo("dingtalk:dm:1", "lab")).toBe(true);
+		expect(releaseRunner).toHaveBeenCalledWith("dingtalk:dm:1");
+		expect(onBindingChanged).toHaveBeenCalledWith("dingtalk:dm:1");
 		expect(runtime.activeDesks().map((target) => target.desk)).toEqual(["lab", "news"]);
-		expect(watchers.find((watcher) => watcher.desk === "lab")?.bindingsAtStart?.dm_1).toBe("lab");
+		expect(watchers.find((watcher) => watcher.desk === "lab")?.bindingsAtStart?.["dingtalk:dm:1"]).toBe("lab");
 
-		await expect(runtime.bind("dm_2", "lab")).resolves.toMatchObject({ previousDeskDormant: true });
+		await expect(runtime.bind("dingtalk:dm:2", "lab")).resolves.toMatchObject({ previousDeskDormant: true });
 		expect(runtime.activeDesks().map((target) => target.desk)).toEqual(["lab"]);
 		// What is on disk is what the next process starts from.
 		const restarted = runtimeFor(workspaceDir).runtime;
 		await restarted.load();
-		expect(restarted.isBoundTo("dm_1", "lab") && restarted.isBoundTo("dm_2", "lab")).toBe(true);
+		expect(restarted.isBoundTo("dingtalk:dm:1", "lab") && restarted.isBoundTo("dingtalk:dm:2", "lab")).toBe(true);
 	});
 
 	it("leaves the binding, the runner and the target's dormancy alone when the bindings write fails", async () => {
 		// Failure caught: a bind that half-happens — the runner disposed or the target desk left
 		// active while the channel still points at its old desk.
 		const workspaceDir = tempDir();
-		await bindTestChannel(workspaceDir, "dm_1", "news");
+		await bindTestChannel(workspaceDir, "dingtalk:dm:1", "news");
 		createDeskRecord(workspaceDir, "lab", new Date());
 		const { runtime, releaseRunner } = runtimeFor(workspaceDir);
 		await runtime.load();
@@ -158,8 +159,8 @@ describe("DeskRuntime.bind (spec 058, D5)", () => {
 		rmSync(bindingsPath);
 		mkdirSync(join(bindingsPath, "blocker"), { recursive: true });
 
-		await expect(runtime.bind("dm_1", "lab")).rejects.toThrow();
-		expect(runtime.isBoundTo("dm_1", "news")).toBe(true);
+		await expect(runtime.bind("dingtalk:dm:1", "lab")).rejects.toThrow();
+		expect(runtime.isBoundTo("dingtalk:dm:1", "news")).toBe(true);
 		expect(releaseRunner).not.toHaveBeenCalled();
 		expect(runtime.activeDesks().map((target) => target.desk)).toEqual(["news"]);
 	});

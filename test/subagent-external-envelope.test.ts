@@ -50,7 +50,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext_envelope");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext_envelope");
 		mkdirSync(deskDir, { recursive: true });
 
 		const researcherRole: SubAgentConfig = {
@@ -62,7 +62,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
-			...testManagers("dm_ext_envelope"),
+			...testManagers("dingtalk:dm:ext_envelope"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -75,7 +75,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 				agents: [researcherRole],
 				warnings: [],
 			}),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_ext_envelope" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:ext_envelope" },
 		});
 
 		const result = await tool.execute("call-1", {
@@ -129,7 +129,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext_no_memory");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext_no_memory");
 		mkdirSync(deskDir, { recursive: true });
 		await seedMemory(deskDir);
 
@@ -142,7 +142,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
-			...testManagers("dm_ext_no_memory"),
+			...testManagers("dingtalk:dm:ext_no_memory"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -151,7 +151,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_ext_no_memory" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:ext_no_memory" },
 		});
 
 		await tool.execute("call-no-memory", { agent: "scout", task: "Look around." });
@@ -165,7 +165,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext_with_memory");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext_with_memory");
 		mkdirSync(deskDir, { recursive: true });
 		await seedMemory(deskDir);
 
@@ -178,7 +178,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
-			...testManagers("dm_ext_with_memory"),
+			...testManagers("dingtalk:dm:ext_with_memory"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -187,7 +187,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_ext_with_memory" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:ext_with_memory" },
 		});
 
 		await tool.execute("call-with-memory", { agent: "scout", task: "Look around." });
@@ -205,7 +205,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext_invocation_context");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext_invocation_context");
 		mkdirSync(deskDir, { recursive: true });
 		await seedMemory(deskDir);
 
@@ -218,7 +218,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
-			...testManagers("dm_ext_invocation_context"),
+			...testManagers("dingtalk:dm:ext_invocation_context"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -227,7 +227,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_ext_invocation_context" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:ext_invocation_context" },
 		});
 
 		await tool.execute("call-invocation-context", { agent: "scout", task: "Look around." });
@@ -240,7 +240,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext_envelope_verify");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext_envelope_verify");
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(join(deskDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
 
@@ -253,7 +253,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
-			...testManagers("dm_ext_envelope_verify"),
+			...testManagers("dingtalk:dm:ext_envelope_verify"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -262,7 +262,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [checkerRole], warnings: [] }),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_ext_envelope_verify" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:ext_envelope_verify" },
 		});
 
 		await tool.execute("call-2", {

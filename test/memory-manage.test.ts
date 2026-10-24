@@ -10,7 +10,7 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempChannel = useTempDirs("pipiclaw-memory-manage-");
 
 function makeOptions(deskDir: string, overrides: Record<string, unknown> = {}) {
-	return { channelId: "dm_1", desk: "news", deskDir, workspaceDir: deskDir, ...overrides };
+	return { channelId: "dingtalk:dm:1", desk: "news", deskDir, workspaceDir: deskDir, ...overrides };
 }
 const makeSave = (dir: string, o: Record<string, unknown> = {}) => createMemorySaveTool(makeOptions(dir, o) as never);
 const makeSearch = (dir: string, o: Record<string, unknown> = {}) =>
@@ -152,7 +152,7 @@ describe("memory tools", () => {
 
 		const log = readFileSync(getMemoryReviewLogPath(deskDir), "utf-8").trim();
 		const entry = JSON.parse(log.split("\n").at(-1) as string);
-		expect(entry).toMatchObject({ channelId: "dm_1", reason: "memory-forget" });
+		expect(entry).toMatchObject({ channelId: "dingtalk:dm:1", reason: "memory-forget" });
 		expect(JSON.stringify(entry.actions)).not.toContain("5 Main St");
 		expect(JSON.stringify(entry.actions)).toContain("contentHash");
 	});

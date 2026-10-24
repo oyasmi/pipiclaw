@@ -249,7 +249,7 @@ export function logResponse(ctx: LogContext, text: string): void {
 
 // Compatibility helpers keep lower-risk call sites centralized while they use
 // the same output contract as structured events. The channel prefix accepts any non-blank id:
-// a group channel is `group_<conversationId>`, and DingTalk conversation ids are base64 (`+`, `/`,
+// a group channel is `dingtalk:group:<conversationId>`, and DingTalk conversation ids are base64 (`+`, `/`,
 // `=`), which a word-character class silently failed to match — group logs lost their `channel`.
 function legacyContext(message: string): { message: string; ctx?: LogContext } {
 	const match = /^\[([^\]\s]+)\]\s*/.exec(message);

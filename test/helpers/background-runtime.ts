@@ -44,7 +44,7 @@ export function restoreAllSubAgentRuns() {
  * managers are rooted at that directory — production always roots a desk's managers at the same
  * desk directory its tools write tasks into, so a test seeding tasks there needs the same.
  */
-export function testManagers(key: string = "dm_123", deskDir?: string) {
+export function testManagers(key: string = "dingtalk:dm:123", deskDir?: string) {
 	if (deskDir) {
 		const runManager = new SubAgentRunManager({ desk: testDesk(key), deskDir }, {});
 		return {

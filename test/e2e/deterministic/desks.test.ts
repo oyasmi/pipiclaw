@@ -28,14 +28,14 @@ describe("E2E deterministic: desks and bindings", () => {
 			respond: [reply.text("ok")],
 			repeat: true,
 		});
-		const channels = ["group_cidNEW/shared+AA==", "group_cidSECOND+AA==", "dm_new_user"];
+		const channels = ["dingtalk:group:cidNEW/shared+AA==", "dingtalk:group:cidSECOND+AA==", "dingtalk:dm:new_user"];
 		const defaultDir = getDeskDir(harness.workspaceDir, "default");
 		const desksBefore = readdirSync(harness.workspaceDir)
 			.filter((name) => name.startsWith("desk-"))
 			.sort();
 		// Historical background work cannot attach a channel: only a real message may do that.
-		await harness.sendWake("orphan wake", { channelId: "dm_orphan", desk: "default" });
-		expect(harness.runtime.desks.boundDesk("dm_orphan")).toBeUndefined();
+		await harness.sendWake("orphan wake", { channelId: "dingtalk:dm:orphan", desk: "default" });
+		expect(harness.runtime.desks.boundDesk("dingtalk:dm:orphan")).toBeUndefined();
 		expect(harness.modelRequestCount()).toBe(0);
 		const inbound = (harness.runtime as typeof harness.runtime & { bot: DingTalkBot }).bot as unknown as {
 			inbound: InboundMessages;
@@ -45,20 +45,20 @@ describe("E2E deterministic: desks and bindings", () => {
 		const config = inbound.inbound as unknown as { deps: { config: { allowFrom?: string[] } } };
 		config.deps.config.allowFrom = ["allowed"];
 		await inbound.inbound.onStreamMessage({ senderStaffId: "denied", text: { content: "hello" } });
-		expect(harness.runtime.desks.boundDesk("dm_denied")).toBeUndefined();
+		expect(harness.runtime.desks.boundDesk("dingtalk:dm:denied")).toBeUndefined();
 		expect(harness.modelRequestCount()).toBe(0);
 		await Promise.all(
 			channels.map((channelId) =>
 				inbound.inbound.onStreamMessage({
 					senderStaffId: "allowed",
-					conversationType: channelId.startsWith("group_") ? "2" : "1",
-					conversationId: channelId.slice("group_".length),
+					conversationType: channelId.startsWith("dingtalk:group:") ? "2" : "1",
+					conversationId: channelId.slice("dingtalk:group:".length),
 					text: { content: channelId },
 				}),
 			),
 		);
 		await harness.waitForIdle();
-		const actual = [channels[0], channels[1], "dm_allowed"];
+		const actual = [channels[0], channels[1], "dingtalk:dm:allowed"];
 		expect(harness.mainTurnRequests()).toHaveLength(3);
 		const bindings = JSON.parse(readFileSync(getBindingsPath(harness.workspaceDir), "utf8")).bindings;
 		for (const channelId of actual) expect(bindings[channelId].desk).toBe("default");
@@ -73,7 +73,7 @@ describe("E2E deterministic: desks and bindings", () => {
 		for (const channelId of actual) expect(existsSync(join(harness.workspaceDir, channelId))).toBe(false);
 
 		await harness.restart();
-		await harness.sendUserMessage("AFTER_RESTART", { channelId: channels[0], type: "group", conversationType: "2" });
+		await harness.sendUserMessage("AFTER_RESTART", { channelId: channels[0] });
 		expect(JSON.parse(readFileSync(join(defaultDir, "desk.json"), "utf8"))).toEqual(record);
 		expect(harness.mainTurnRequests()).toHaveLength(4);
 		await harness.runtime.shutdown("manual");
@@ -82,8 +82,6 @@ describe("E2E deterministic: desks and bindings", () => {
 		const before = harness.modelRequestCount();
 		await harness.sendUserMessage("do not recreate", {
 			channelId: channels[0],
-			type: "group",
-			conversationType: "2",
 		});
 		expect(harness.modelRequestCount()).toBe(before);
 		expect(existsSync(defaultDir)).toBe(false);
@@ -107,7 +105,7 @@ describe("E2E deterministic: desks and bindings", () => {
 		});
 		// A second channel keeps `e2e` active after the rebind, so the driver still scans it and the
 		// per-task binding filter (not the desk's dormancy) is what holds the task back.
-		harness = await createDeterministicHarness({ extraChannels: [{ channelId: "group_cidKEEP+e2e==" }] });
+		harness = await createDeterministicHarness({ extraChannels: [{ channelId: "dingtalk:group:cidKEEP+e2e==" }] });
 		const taskId = "weekly-digest";
 		await createTaskDocument({
 			deskDir: harness.deskDir,
@@ -137,14 +135,11 @@ describe("E2E deterministic: desks and bindings", () => {
 		const dispatchDir = join(harness.homeDir, "state", "dispatch");
 		mkdirSync(dispatchDir, { recursive: true });
 		const wake = {
-			type: "dm" as const,
+			source: "wake" as const,
 			channelId: harness.channelId,
 			ts: "1",
-			user: "SUBAGENT",
-			userName: "SUBAGENT",
+			producer: "SUBAGENT",
 			text: "[SUBAGENT:run_stale] finished: STALE_RESULT",
-			conversationId: "conv_e2e",
-			conversationType: "1",
 			dispatchId,
 			desk: harness.desk,
 		};

@@ -8,7 +8,7 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempDir = useTempDirs("pipiclaw-review-rotation-");
 
 function createChannelDir(): string {
-	return join(createTempDir(), "dm_123");
+	return join(createTempDir(), "dingtalk:dm:123");
 }
 
 describe("review log rotation", () => {
@@ -20,7 +20,7 @@ describe("review log rotation", () => {
 		// Write a file just under 1MB
 		const bigLine = JSON.stringify({
 			timestamp: "2026-01-01T00:00:00.000Z",
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			reason: "reflect",
 			candidates: [{ content: "x".repeat(500) }],
 		});
@@ -33,7 +33,7 @@ describe("review log rotation", () => {
 		// Append one more entry to trigger rotation
 		await appendMemoryReviewLog(deskDir, {
 			timestamp: "2026-04-19T00:00:00.000Z",
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			reason: "reflect",
 			actions: [{ target: "MEMORY.md" }],
 		});

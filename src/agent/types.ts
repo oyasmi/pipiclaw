@@ -266,7 +266,7 @@ export interface RunnerFactoryPaths {
 	 * Present enables the `send_media` tool; absent, the tool is not built.
 	 */
 	mediaSender?: MediaSender;
-	/** The channel's human name (群名 / 私聊对象), for the per-turn context; absent when unknown. */
+	/** How the channel is named to the user (群「名」/ 私聊「名」), for the per-turn context; absent when it has no name. */
 	describeChannel?: (channelId: string) => string | undefined;
 	/** A conversation directory's channel name, for labelling `session_search` hits. */
 	describeConversation?: (conversation: string) => string | undefined;

@@ -17,7 +17,7 @@ import { spawnLockHolder } from "./helpers/lock-holder.js";
 
 const createTempDir = useTempDirs("pipiclaw-maintenance-state-");
 
-const REF: MaintenanceStateRef = { desk: "news", conversation: "dm-1", channelId: "dm_1" };
+const REF: MaintenanceStateRef = { desk: "news", conversation: "dm-1", channelId: "dingtalk:dm:1" };
 
 function activity(kind: MemoryActivityEvent["kind"], ref: MaintenanceStateRef = REF): MemoryActivityEvent {
 	return { kind, ref, timestamp: "2026-04-19T00:00:00.000Z" };
@@ -83,14 +83,14 @@ describe("memory maintenance state", () => {
 		const path = getMemoryMaintenanceStatePath(appHomeDir, REF);
 
 		await expect(readMemoryMaintenanceState(appHomeDir, REF)).resolves.toMatchObject({
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			dirty: false,
 		});
 
 		await mkdir(join(appHomeDir, "state", "memory", "news"), { recursive: true });
 		await writeFile(path, "{bad json", "utf-8");
 		await expect(readMemoryMaintenanceState(appHomeDir, REF)).resolves.toMatchObject({
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			dirty: false,
 		});
 
@@ -129,7 +129,7 @@ describe("memory maintenance state", () => {
 		// Failure caught (INV-3): a base64 group id carries `/`; any path derived from it nests
 		// or escapes the state directory.
 		const appHomeDir = createTempDir();
-		const ref = { desk: "news", conversation: "group-1", channelId: "group_cidYDhGqxhJOzS7VDv/eDInUw==" };
+		const ref = { desk: "news", conversation: "group-1", channelId: "dingtalk:group:cidYDhGqxhJOzS7VDv/eDInUw==" };
 
 		await updateMemoryMaintenanceState(appHomeDir, ref, (state) => ({ ...state, dirty: true }));
 
@@ -141,7 +141,7 @@ describe("memory maintenance state", () => {
 
 	it("does not mark a user-turn-started event as dirty by itself", () => {
 		const next = applyMemoryActivityToState(
-			{ channelId: "dm_1", dirty: false, failureBackoffUntil: null },
+			{ channelId: "dingtalk:dm:1", dirty: false, failureBackoffUntil: null },
 			{
 				kind: "user-turn-started",
 				ref: REF,
@@ -215,8 +215,8 @@ describe("memory activity recorder", () => {
 	it("flush is idempotent and covers every buffered conversation", async () => {
 		const appHomeDir = createTempDir();
 		const recorder = createMemoryActivityRecorder({ appHomeDir, debounceMs: 60_000 });
-		const a = { desk: "news", conversation: "dm-1", channelId: "dm_a" };
-		const b = { desk: "news", conversation: "dm-2", channelId: "dm_b" };
+		const a = { desk: "news", conversation: "dm-1", channelId: "dingtalk:dm:a" };
+		const b = { desk: "news", conversation: "dm-2", channelId: "dingtalk:dm:b" };
 
 		recorder.record(activity("tool-call", a));
 		recorder.record(activity("tool-call", b));

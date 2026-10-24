@@ -23,7 +23,7 @@ describe("E2E deterministic: external process recovery", () => {
 		// old per-channel directory) — the restarted daemon refuses to start and the case goes red.
 		const model = await startMockProvider();
 		const home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
-		const channelId = "dm_e2e_user";
+		const channelId = "dingtalk:dm:e2e_user";
 		let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
 		let externalPid: number | undefined;
 		let socket: Socket | undefined;

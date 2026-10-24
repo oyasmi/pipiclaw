@@ -2,18 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach } from "vitest";
-import type { DingTalkEvent } from "../../src/dingtalk/handler.js";
+import type { HumanEvent } from "../../src/channel/channel-event.js";
 
-export function createFakeEvent(overrides: Partial<DingTalkEvent> = {}): DingTalkEvent {
+export function createFakeEvent(overrides: Partial<HumanEvent> = {}): HumanEvent {
 	return {
-		type: "dm",
-		channelId: "dm_123",
+		source: "human",
+		channelId: "dingtalk:dm:123",
 		ts: "1710000000000",
 		user: "user_1",
 		userName: "Alice",
 		text: "hello",
-		conversationId: "conv_123",
-		conversationType: "1",
 		...overrides,
 	};
 }
@@ -75,7 +73,7 @@ export function testConversation(
 		desk: overrides.desk ?? "news",
 		deskDir,
 		cwd: deskDir,
-		channelId: overrides.channelId ?? "dm_1",
+		channelId: overrides.channelId ?? "dingtalk:dm:1",
 		conversation,
 		conversationDir,
 	};
@@ -92,7 +90,7 @@ export async function bindTestChannel(
 ): Promise<import("../../src/desk/types.js").DeskConversation> {
 	const registry = await import("../../src/desk/registry.js");
 	registry.createDeskRecord(workspaceDir, desk, new Date());
-	const kind = channelId === "tui" ? "tui" : channelId.startsWith("group_") ? "group" : "dm";
+	const kind = channelId === "tui" ? "tui" : channelId.startsWith("dingtalk:group:") ? "group" : "dm";
 	const conversation = await registry.allocateConversation(workspaceDir, desk, channelId, kind, new Date());
 	const bindingStore = await import("../../src/desk/bindings.js");
 	const bindings = await bindingStore.loadBindings(workspaceDir);

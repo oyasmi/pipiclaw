@@ -5,7 +5,7 @@ import type { MemoryMaintenanceState } from "../src/memory/maintenance-state.js"
 const now = new Date("2026-04-19T01:00:00.000Z");
 
 const state: MemoryMaintenanceState = {
-	channelId: "dm_1",
+	channelId: "dingtalk:dm:1",
 	dirty: true,
 	eligibleAfter: "2026-04-19T00:00:00.000Z",
 	failureBackoffUntil: null,

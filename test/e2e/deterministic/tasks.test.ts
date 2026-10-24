@@ -71,8 +71,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		await expireTicket(harness.deskDir, taskId);
 		const entry = (await readActiveTasks(tasksDir())).find((task) => task.id === taskId)!;
 		await harness.sendWake(createTaskDriverEvent(harness.desk, harness.channelId, entry, Date.now()).text, {
-			user: "TASK_DRIVER",
-			userName: "TASK_DRIVER",
+			producer: "TASK_DRIVER",
 		});
 		const request = harness.lastMainTurnRequest();
 		expect(request?.tools).toContain("task_step_end");
@@ -138,7 +137,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId);
 		expect(entry).toBeDefined();
 		const driver = createTaskDriverEvent(harness.desk, harness.channelId, entry!, Date.now());
-		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
+		await harness.sendWake(driver.text, { producer: "TASK_DRIVER" });
 
 		// A one-shot `done` archives the contract and leaves its loop log beside it.
 		expect(existsSync(activePath())).toBe(false);
@@ -186,7 +185,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		await harness.sendUserMessage("帮我建个任务");
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId);
 		const driver = createTaskDriverEvent(harness.desk, harness.channelId, entry!, Date.now());
-		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
+		await harness.sendWake(driver.text, { producer: "TASK_DRIVER" });
 
 		const requestsBefore = harness.modelRequestCount();
 		await harness.sendUserMessage("/model e2e-mock/mock-fallback");
@@ -248,8 +247,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		await harness.sendUserMessage("帮我建个带工作项的任务");
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId);
 		await harness.sendWake(createTaskDriverEvent(harness.desk, harness.channelId, entry!, Date.now()).text, {
-			user: "TASK_DRIVER",
-			userName: "TASK_DRIVER",
+			producer: "TASK_DRIVER",
 		});
 
 		const log = await readTaskLog(harness.deskDir, taskId, { kinds: ["dispatch", "settle", "close"] });
@@ -374,8 +372,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		});
 		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId)!;
 		harness.enqueueWake(createTaskDriverEvent(harness.desk, harness.channelId, entry, Date.now()).text, {
-			user: "TASK_DRIVER",
-			userName: "TASK_DRIVER",
+			producer: "TASK_DRIVER",
 		});
 		await gate.arrived;
 		await harness.sendUserMessageNoWait("顺便问个别的 CHAT_MARKER");

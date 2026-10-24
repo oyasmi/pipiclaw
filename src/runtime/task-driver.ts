@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { ChannelEvent } from "../channel/channel-event.js";
-import { conversationTypeOf } from "../channel/channel-id.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 import { type PipiclawTaskDriverSettings, TASK_DRIVER_SETTINGS } from "../config/settings.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
@@ -21,9 +20,9 @@ export interface TaskDriverOptions {
 	 */
 	isBoundTo: (channelId: string, desk: string) => boolean;
 	isChannelActive: (channelId: string) => boolean;
-	dispatch: (event: ChannelEvent) => boolean | Promise<boolean>;
+	dispatch: (event: WakeEvent) => boolean | Promise<boolean>;
 	/** Optional observability hook. It runs after every production dispatch attempt. */
-	onDispatch?: (event: ChannelEvent, accepted: boolean) => void;
+	onDispatch?: (event: WakeEvent, accepted: boolean) => void;
 	/** Test-only override; production uses `TASK_DRIVER_SETTINGS`. */
 	settings?: PipiclawTaskDriverSettings;
 	/** Master autonomy switch (`tools.tasks.enabled`); re-read every tick. Defaults to on. */
@@ -31,7 +30,7 @@ export interface TaskDriverOptions {
 	/** Test-only override for the idle-sleep cap; production uses `settings.maxSleepMinutes`. */
 	intervalMs?: number;
 	/** Direct, non-LLM receipt for deterministic runtime stops. */
-	notify?: (event: ChannelEvent) => boolean | Promise<boolean>;
+	notify?: (event: WakeEvent) => boolean | Promise<boolean>;
 }
 
 /** Short debounce so a burst of nudges collapses into a single rescan. */
@@ -43,11 +42,6 @@ const REDISPATCH_GUARD_MS = 30_000;
 
 function attemptKey(desk: string, taskId: string): string {
 	return `${desk}\0${taskId}`;
-}
-
-function channelType(channelId: string): { type: ChannelEvent["type"]; conversationType: string } {
-	const conversationType = conversationTypeOf(channelId);
-	return { type: conversationType === "2" ? "group" : "dm", conversationType };
 }
 
 /**
@@ -69,7 +63,7 @@ export function createTaskDriverEvent(
 	channelId: string,
 	entry: TaskLedgerEntry,
 	nowMs: number,
-): ChannelEvent {
+): WakeEvent {
 	const repairOnly = !entry.readable;
 	const repair = repairOnly
 		? ` Task metadata is not readable; repair only the frontmatter in tasks/${entry.id}.md, then stop. ` +
@@ -85,10 +79,9 @@ export function createTaskDriverEvent(
 		.filter(Boolean)
 		.join(" ");
 	return {
-		...channelType(channelId),
+		source: "wake",
 		channelId,
-		user: "TASK_DRIVER",
-		userName: "TASK_DRIVER",
+		producer: "TASK_DRIVER",
 		text:
 			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}. ${capsule}${repair} ` +
 			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-lead.md")} before acting. ` +
@@ -115,15 +108,14 @@ export function taskStopReceipt(
 	reason: string,
 	nowMs: number,
 	breach?: BudgetBreach,
-): ChannelEvent {
+): WakeEvent {
 	const usage = entry.fields.usage ? ` · 已用 ${entry.fields.usage.steps} 步` : "";
 	const grant = breach === "steps" ? " +steps 10" : breach === "usd" ? " +usd 5" : "";
 	const resumeLabel = grant ? "继续并追加预算" : "继续";
 	return {
-		...channelType(channelId),
+		source: "wake",
 		channelId,
-		user: "TASK_DRIVER",
-		userName: "TASK_DRIVER",
+		producer: "TASK_DRIVER",
 		text:
 			`🛑 任务 \`${entry.id}\`（${entry.title}）已停止自动执行：${reason}。\n` +
 			`状态：${taskStateLabel(entry.fields.state)}${usage}\n` +
@@ -179,7 +171,7 @@ export class TaskDriver {
 
 	constructor(private readonly options: TaskDriverOptions) {}
 
-	private observeDispatch(event: ChannelEvent, accepted: boolean): void {
+	private observeDispatch(event: WakeEvent, accepted: boolean): void {
 		try {
 			this.options.onDispatch?.(event, accepted);
 		} catch (error) {

@@ -5,7 +5,6 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatChannelLabel } from "../../channel/channel-id.js";
 import { TASK_DIGEST_SETTINGS } from "../../config/settings.js";
 import type { DeskConversation } from "../../desk/types.js";
 import {
@@ -27,7 +26,8 @@ import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "./task-digest.js";
  */
 export function renderDeskTurnContext(
 	conversation: DeskConversation,
-	channelName: string | undefined,
+	/** How the channel is named to the user (`Transport.describe`), when it has a name. */
+	channelLabel: string | undefined,
 	workspaceDir: string,
 ): string {
 	return [
@@ -36,7 +36,7 @@ export function renderDeskTurnContext(
 		conversation.cwd === conversation.deskDir
 			? `Desk: ${conversation.desk} — directory ${conversation.deskDir} (your working directory).`
 			: `Desk: ${conversation.desk} — directory ${conversation.deskDir}. Your working directory is ${conversation.cwd}.`,
-		`This conversation: ${channelName ? `${formatChannelLabel(conversation.channelId, channelName)} ` : ""}(channel ${conversation.channelId}).`,
+		`This conversation: ${channelLabel ? `${channelLabel} ` : ""}(channel ${conversation.channelId}).`,
 		"The desk's `MEMORY.md` index, `memory/`, `journal/`, `tasks/` and `events/` live in the desk directory. Prefer the context supplied with this turn and the desk-bound tools; read those files directly only when you need detail they did not provide.",
 		"</runtime_turn_context>",
 	].join("\n");

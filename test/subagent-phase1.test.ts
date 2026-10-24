@@ -295,7 +295,7 @@ describe("sub-agent runtime context", () => {
 		// Both lines are consumed by a host process we do not control: the external agent reads
 		// the prompt and opens these paths itself. A raw id here sends it to a directory that
 		// has never existed.
-		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		const channelId = "dingtalk:group:cidYDhGqxhJOzS7VDv/eDInUw==";
 		const deskDir = "/workspace/root/desk-news";
 		const task = buildSubAgentTask(
 			"Check the work.",
@@ -323,7 +323,7 @@ describe("sub-agent runtime context", () => {
 			buildSubAgentTask(
 				"Check it.",
 				{ name: "checker" },
-				{ workspaceDir: "/ws", desk: "news", deskDir: "/ws/dm_1", channelId: "dm_1" },
+				{ workspaceDir: "/ws", desk: "news", deskDir: "/ws/dingtalk:dm:1", channelId: "dingtalk:dm:1" },
 				[],
 				{
 					runId: "run_v",
@@ -334,7 +334,7 @@ describe("sub-agent runtime context", () => {
 					artifactDir: "/checkout/.artifacts/run_v",
 				},
 			);
-		expect(envelope("W2")).toContain("Work Item W2 in /ws/dm_1/tasks/t-1.md");
+		expect(envelope("W2")).toContain("Work Item W2 in /ws/dingtalk:dm:1/tasks/t-1.md");
 		expect(envelope("W2")).not.toContain("every DoD item");
 		expect(envelope()).toContain("verify every DoD item");
 	});
@@ -343,7 +343,7 @@ describe("sub-agent runtime context", () => {
 describe("sub-agent tool", () => {
 	it("records a verifier's declared verdict on the run and on the task's log, with no attestation", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(
 			join(deskDir, "tasks", "ship.md"),
@@ -351,7 +351,7 @@ describe("sub-agent tool", () => {
 		);
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123", deskDir),
+			...testManagers("dingtalk:dm:123", deskDir),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -359,7 +359,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					delegatedTask = input;
@@ -399,14 +399,14 @@ describe("sub-agent tool", () => {
 
 	it("binds a delegation made inside a task session to that task, and rejects a foreign task or an unknown item", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(
 			join(deskDir, "tasks", "lead.md"),
 			"---\nstate: open\n---\n# Lead\n\n## DoD\n- [ ] ok\n\n## Work Items\n- [ ] W1 build\n",
 		);
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -414,7 +414,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			boundTaskId: "lead",
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
@@ -435,13 +435,13 @@ describe("sub-agent tool", () => {
 
 	it("preserves partial output and injects minimal runtime context", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		let delegatedTask = "";
 		const workerFailure = "simulated worker failure";
 
 		const tool = createSubAgentTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -454,7 +454,7 @@ describe("sub-agent tool", () => {
 				workspaceDir: "/workspace/root",
 				desk: "news",
 				deskDir: "/workspace/root/desk-news",
-				channelId: "dm_123",
+				channelId: "dingtalk:dm:123",
 			},
 			createWorker: () =>
 				new FakeWorker(async (input, worker) => {
@@ -481,7 +481,7 @@ describe("sub-agent tool", () => {
 		expect(result.details.failureReason).toBe(workerFailure);
 		expect(result.details.usage.total).toBe(19);
 		expect(delegatedTask).toContain("Workspace root: /workspace/root");
-		expect(delegatedTask).toContain("Channel id: dm_123");
+		expect(delegatedTask).toContain("Channel id: dingtalk:dm:123");
 		// Spec 036 D3: task-owned worktrees are gone, so a sub-agent always shares the
 		// parent's checkout and the runtime context no longer advertises an isolation mode.
 		expect(delegatedTask).not.toContain("Filesystem isolation");
@@ -490,7 +490,7 @@ describe("sub-agent tool", () => {
 
 	it("injects the workspace background, desk memory index, and journal for contextual sub-agents (spec 050, D12)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		writeFileSync(
 			join(workspaceDir, "MEMORY.md"),
@@ -512,7 +512,7 @@ describe("sub-agent tool", () => {
 
 		let delegatedTask = "";
 		const tool = createSubAgentTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -531,7 +531,7 @@ describe("sub-agent tool", () => {
 				workspaceDir: "/workspace/root",
 				desk: "news",
 				deskDir: "/workspace/root/desk-news",
-				channelId: "dm_123",
+				channelId: "dingtalk:dm:123",
 			},
 			createWorker: () =>
 				new FakeWorker(async (input, worker) => {
@@ -557,11 +557,11 @@ describe("sub-agent tool", () => {
 
 	it("uses settings.subagentModel when neither the invocation nor a predefined agent names a model (D5)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		let usedModel: Model<Api> | undefined;
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -569,7 +569,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			getSubAgentModelReference: () => "openai/gpt-4o",
 			createWorker: (config) => {
 				usedModel = config.subAgent.model;
@@ -597,7 +597,7 @@ describe("sub-agent artifact contract (D4)", () => {
 		respond: (input: string, worker: FakeWorker) => Promise<void> | void,
 	) {
 		return createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -605,14 +605,14 @@ describe("sub-agent artifact contract (D4)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: () => new FakeWorker(respond),
 		});
 	}
 
 	it("creates the artifact directory and tells the sub-agent where it is", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		let delegatedTask = "";
 		const tool = makeTool(workspaceDir, deskDir, (input, worker) => {
@@ -640,7 +640,7 @@ describe("sub-agent artifact contract (D4)", () => {
 
 	it("truncates an over-budget reply but keeps the full text on disk", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		const longText = Array.from({ length: 2000 }, (_, i) => `word${i}`).join(" ");
 		const tool = makeTool(workspaceDir, deskDir, (_input, worker) => {
@@ -675,12 +675,12 @@ describe("sub-agent convergence turn (D6)", () => {
 
 	it("gives a tool-budget abort one tool-free turn to report its conclusions", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		let callCount = 0;
 		const seenInputs: string[] = [];
 		const tool = createSubAgentTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -689,7 +689,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					callCount++;
@@ -726,11 +726,11 @@ describe("sub-agent convergence turn (D6)", () => {
 
 	it("reverts to the pre-convergence state when the convergence turn itself times out", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		let callCount = 0;
 		const tool = createSubAgentTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -739,7 +739,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			// Real, tiny wall clock: exercises the actual setTimeout/clearTimeout path without
 			// the flakiness of mixing fake timers with the real fs I/O prepareRunContext does.
 			convergenceWallClockMs: 20,
@@ -780,7 +780,7 @@ describe("sub-agent convergence turn (D6)", () => {
 	// the call at once and the run still finishes and wakes the channel with its result.
 	it("detaches on /stop mid-run, keeps running (including the convergence turn) and wakes with the result — spec 040 D2", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		let callCount = 0;
 		const controller = new AbortController();
@@ -792,7 +792,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			},
 		});
 		const tool = createSubAgentTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -801,7 +801,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					callCount++;
@@ -838,7 +838,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		await vi.waitFor(() => expect(wakes).toHaveLength(1));
 		// The budget abort still ran its D6 convergence turn — /stop does not reach the run itself.
 		expect(callCount).toBe(2);
-		const record = getSubAgentRunManager("dm_123").get(runId);
+		const record = getSubAgentRunManager("dingtalk:dm:123").get(runId);
 		expect(record?.status).toBe("failed");
 		expect(record?.failureReason).toContain("Tool call budget exceeded");
 		expect(wakes[0]).toContain("Confirmed: found the entrypoint despite /stop.");
@@ -846,13 +846,13 @@ describe("sub-agent convergence turn (D6)", () => {
 
 	it("rejects immediately without launching when the signal is already aborted before the call starts", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		const controller = new AbortController();
 		controller.abort();
 		let started = false;
 		const tool = createSubAgentTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -861,7 +861,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					started = true;
@@ -886,7 +886,7 @@ describe("sub-agent convergence turn (D6)", () => {
 describe("sub-agent working directory", () => {
 	function makeTool(workspaceDir: string, deskDir: string, executor: Executor) {
 		return createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -894,7 +894,7 @@ describe("sub-agent working directory", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					const message = createAssistantMessage("Done.");
@@ -906,7 +906,7 @@ describe("sub-agent working directory", () => {
 
 	it("runs commands in the requested checkout and tells the sub-agent about it", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		const checkout = join(workspaceDir, "other-checkout");
 		mkdirSync(deskDir, { recursive: true });
 		mkdirSync(checkout, { recursive: true });
@@ -919,7 +919,7 @@ describe("sub-agent working directory", () => {
 		};
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: recording,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -927,7 +927,7 @@ describe("sub-agent working directory", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: (config) => {
 				const worker = new FakeWorker(async (input, self) => {
 					delegatedTask = input;
@@ -955,7 +955,7 @@ describe("sub-agent working directory", () => {
 	it("uses the canonical checkout after admitting a symlinked working directory", async () => {
 		const root = createTempWorkspace();
 		const workspaceDir = join(root, "agent-workspace");
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		const baseDir = join(root, "checkout");
 		const nested = join(baseDir, "nested");
 		const outside = join(root, "outside");
@@ -974,7 +974,7 @@ describe("sub-agent working directory", () => {
 		};
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: recording,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -983,7 +983,7 @@ describe("sub-agent working directory", () => {
 			workspaceDir,
 			workingDirectory: baseDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			createWorker: (config) => {
 				// Simulate a symlink swap after admission. The worker must still receive the canonical
 				// directory captured before this callback, not the now-escaping alias.
@@ -1012,7 +1012,7 @@ describe("sub-agent working directory", () => {
 
 	it("rejects a working directory that does not exist", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		const tool = makeTool(workspaceDir, deskDir, fakeExecutor);
 

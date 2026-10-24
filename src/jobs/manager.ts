@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 import { getDeskDir, getDeskLogsDir, isDeskName } from "../desk/paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
@@ -70,7 +70,7 @@ export interface JobManagerOptions {
 	/** Is a job's channel still bound to this desk (spec 058, D7)? Omitted (TUI, tests): always. */
 	isBoundTo?: (channelId: string, desk: string) => boolean;
 	/** Delivers the completion wake. Omit to disable waking (sub-agent and test paths). */
-	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
 	sweepIntervalMs?: number;
 	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
 	fileStore?: FileStore;
@@ -991,7 +991,7 @@ interface JobRuntimeConfig {
 	 * across restarts, so a re-adopted job's spill is still found.
 	 */
 	workspaceDir?: string;
-	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
 	isBoundTo?: JobManagerOptions["isBoundTo"];
 	/** Sweep cadence override for the lazily-built desk managers (tests). */
 	sweepIntervalMs?: number;

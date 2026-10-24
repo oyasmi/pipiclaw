@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChannelRunner } from "../../../src/agent/channel-runner.js";
 import { TurnPipeline } from "../../../src/agent/turn/turn-pipeline.js";
-import type { ChannelEvent } from "../../../src/channel/channel-event.js";
+import type { WakeEvent } from "../../../src/channel/channel-event.js";
 import { type DurableDispatchRecord, DurableDispatchService } from "../../../src/runtime/durable-dispatch.js";
 import * as atomicFile from "../../../src/shared/atomic-file.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
@@ -26,20 +26,17 @@ describe("E2E deterministic: completion-wake failure boundaries", () => {
 		harness = undefined;
 	});
 
-	function seedWakes(current: DeterministicHarness): ChannelEvent[] {
+	function seedWakes(current: DeterministicHarness): WakeEvent[] {
 		const dir = join(current.homeDir, "state", "dispatch");
 		mkdirSync(dir, { recursive: true });
 		return ["run_a", "run_b", "run_c"].map((runId, index) => {
 			const dispatchId = `subagent:${current.desk}:${runId}:done`;
-			const event: ChannelEvent = {
-				type: "dm",
+			const event: WakeEvent = {
+				source: "wake",
 				channelId: current.channelId,
 				ts: String(index),
-				user: "SUBAGENT",
-				userName: "SUBAGENT",
+				producer: "SUBAGENT",
 				text: `[SUBAGENT:${runId}] finished`,
-				conversationId: "conv_e2e",
-				conversationType: "1",
 				dispatchId,
 				// Every producer stamps its desk; admission drops an unstamped wake (spec 058, D7).
 				desk: current.desk,

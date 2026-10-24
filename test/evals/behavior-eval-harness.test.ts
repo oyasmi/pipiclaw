@@ -172,8 +172,8 @@ describe("behavior eval multi-turn graders", () => {
 		const grader = lastDeliveryMatches("final", /^TARGET$/);
 		const context = trialContext({
 			deliveries: [
-				{ method: "sendPlain", channelId: "dm_eval", text: "TARGET", ts: 1 },
-				{ method: "sendPlain", channelId: "dm_eval", text: "wrong", ts: 2 },
+				{ method: "sendPlain", channelId: "dingtalk:dm:eval", text: "TARGET", ts: 1 },
+				{ method: "sendPlain", channelId: "dingtalk:dm:eval", text: "wrong", ts: 2 },
 			],
 		});
 		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "fail" });
@@ -192,7 +192,9 @@ describe("behavior eval multi-turn graders", () => {
 					fields: { kind: "runMemoryMaintenance" },
 				},
 			],
-			deliveries: [{ method: "sendPlain", channelId: "dm_eval", text: "unexpected", ts: 1_767_225_600_001 }],
+			deliveries: [
+				{ method: "sendPlain", channelId: "dingtalk:dm:eval", text: "unexpected", ts: 1_767_225_600_001 },
+			],
 		});
 		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "fail" });
 	});
@@ -204,7 +206,7 @@ describe("behavior eval multi-turn graders", () => {
 		replyText: string,
 	): { step: TrialContext["trace"][number]; delivery: TrialContext["deliveries"][number] } => ({
 		step: { schemaVersion: 1, seq, ts, segment: 1, kind: "step", fields: { kind: "user" } },
-		delivery: { method: "sendPlain", channelId: "dm_eval", text: replyText, ts: Date.parse(ts) + 500 },
+		delivery: { method: "sendPlain", channelId: "dingtalk:dm:eval", text: replyText, ts: Date.parse(ts) + 500 },
 	});
 
 	it("scores recall and precision separately, and does not punish an honest miss like a wrong answer", async () => {
@@ -487,7 +489,7 @@ describe("behavior eval process and gate semantics", () => {
 			deliveries: [
 				{
 					method: "sendPlain",
-					channelId: "dm_eval",
+					channelId: "dingtalk:dm:eval",
 					text: "HTTP 429 means rate limit; capacity may be exhausted.",
 					ts: 1,
 				},
@@ -520,7 +522,9 @@ describe("behavior eval process and gate semantics", () => {
 				(
 					await grader.grade(
 						trialContext({
-							deliveries: [{ method: "sendPlain", channelId: "dm_eval", text: "Done successfully", ts: 0 }],
+							deliveries: [
+								{ method: "sendPlain", channelId: "dingtalk:dm:eval", text: "Done successfully", ts: 0 },
+							],
 						}),
 					)
 				).status,

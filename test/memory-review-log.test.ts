@@ -7,7 +7,7 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempDir = useTempDirs("pipiclaw-review-log-");
 
 function createChannelDir(): string {
-	return join(createTempDir(), "dm_123");
+	return join(createTempDir(), "dingtalk:dm:123");
 }
 
 describe("memory review log", () => {
@@ -18,7 +18,7 @@ describe("memory review log", () => {
 			Array.from({ length: 8 }, (_, index) =>
 				appendMemoryReviewLog(deskDir, {
 					timestamp: `2026-04-19T00:00:0${index}.000Z`,
-					channelId: "dm_123",
+					channelId: "dingtalk:dm:123",
 					reason: "reflect",
 					actions: [{ index }],
 				}),
@@ -35,7 +35,7 @@ describe("memory review log", () => {
 	it("deduplicates consecutive identical gate skips", async () => {
 		const deskDir = createChannelDir();
 		const base = {
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			reason: "reflect" as const,
 			skipped: [{ target: "reflect", reason: "clean" }],
 		};

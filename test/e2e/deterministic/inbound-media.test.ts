@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_INBOUND_IMAGE_BYTES } from "../../../src/channel/attachments.js";
 import type { InboundImage } from "../../../src/channel/channel-event.js";
-import { MAX_INBOUND_IMAGE_BYTES } from "../../../src/channel/channel-event.js";
 import type { DingTalkBot } from "../../../src/dingtalk/bot.js";
 import type { InboundMessages } from "../../../src/dingtalk/inbound.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
@@ -65,7 +65,7 @@ describe("E2E deterministic: inbound image attachments", () => {
 			content: { downloadCode: "offline-image" },
 		});
 		await harness.waitForIdle();
-		expect(harness.runtime.desks.boundDesk("dm_new-image-user")).toBe("default");
+		expect(harness.runtime.desks.boundDesk("dingtalk:dm:new-image-user")).toBe("default");
 		expect(existsSync(join(harness.workspaceDir, "desk-default", "inbox"))).toBe(true);
 
 		const request = harness.lastMainTurnRequest();

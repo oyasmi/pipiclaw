@@ -35,7 +35,7 @@ vi.mock("../src/subagents/external/run.js", () => ({ launchExternalRun: launchEx
 describe("subagent_manage tool", () => {
 	it("lists this channel's runs", async () => {
 		configureSubAgentRuntime({});
-		const channelId = `dm_manage_list_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_list_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
 			runId: "run-1",
@@ -61,7 +61,7 @@ describe("subagent_manage tool", () => {
 	// `details.runs`. Running runs are always shown in full; only the terminal tail is capped.
 	it("caps a long history with a truncation note, without dropping running runs", async () => {
 		configureSubAgentRuntime({});
-		const channelId = `dm_manage_cap_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_cap_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		for (let i = 0; i < 55; i++) {
 			const runId = `run-terminal-${i}`;
@@ -124,7 +124,7 @@ describe("subagent_manage tool", () => {
 
 	it("tool-level cancel reports a handle-less run as lost and rejects unknown ids recoverably", async () => {
 		configureSubAgentRuntime({});
-		const channelId = `dm_manage_cancel_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_cancel_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
 			runId: "run-2",
@@ -150,7 +150,7 @@ describe("subagent_manage tool", () => {
 
 	it("follow_up is rejected for an internal run and for a still-running codex-cli run", async () => {
 		configureSubAgentRuntime({});
-		const channelId = `dm_manage_followup_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_followup_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		const base = {
 			channelId,
@@ -189,7 +189,7 @@ describe("subagent_manage tool", () => {
 
 	it("follow_up on a finished codex-cli run with no sessionId is rejected", async () => {
 		configureSubAgentRuntime({});
-		const channelId = `dm_manage_followup_nosession_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_followup_nosession_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
 			runId: "run-5",
@@ -236,7 +236,7 @@ describe("subagent_manage tool", () => {
 	it("follow_up on a completed codex-cli run with a session id launches a resumed run", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
-		const channelId = `dm_manage_followup_ok_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_followup_ok_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
 			runId: "run-6",
@@ -278,7 +278,7 @@ describe("subagent_manage tool", () => {
 			channelId,
 			workspaceDir: "/workspace",
 			desk: "news",
-			deskDir: "/workspace/dm_manage_followup_ok",
+			deskDir: "/workspace/dingtalk:dm:manage_followup_ok",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -335,7 +335,7 @@ describe("subagent_manage tool", () => {
 	it("follow_up is rejected when the role's harness changed since the original run (P1-2)", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
-		const channelId = `dm_manage_followup_harness_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_followup_harness_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
 			runId: "run-harness",
@@ -377,7 +377,7 @@ describe("subagent_manage tool", () => {
 			channelId,
 			workspaceDir: "/workspace",
 			desk: "news",
-			deskDir: "/workspace/dm_manage",
+			deskDir: "/workspace/dingtalk:dm:manage",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -418,7 +418,7 @@ describe("subagent_manage tool", () => {
 	it("releases a follow_up write lease when launch fails before lifecycle ownership transfers", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockRejectedValueOnce(new Error("prompt write failed"));
-		const channelId = `dm_manage_followup_failure_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_followup_failure_${Date.now()}`;
 		const workingDirectory = `/tmp/checkout-followup-${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
@@ -460,7 +460,7 @@ describe("subagent_manage tool", () => {
 			channelId,
 			workspaceDir: "/workspace",
 			desk: "news",
-			deskDir: "/workspace/dm_manage",
+			deskDir: "/workspace/dingtalk:dm:manage",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -504,7 +504,7 @@ describe("subagent_manage tool", () => {
 	it("allows follow_up on a purpose=verify run when the current role declares mutates: write", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
-		const channelId = `dm_manage_followup_verify_mutated_${Date.now()}`;
+		const channelId = `dingtalk:dm:manage_followup_verify_mutated_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
 			runId: "run-verify",
@@ -547,7 +547,7 @@ describe("subagent_manage tool", () => {
 			channelId,
 			workspaceDir: "/workspace",
 			desk: "news",
-			deskDir: "/workspace/dm_manage_followup_verify_mutated",
+			deskDir: "/workspace/dingtalk:dm:manage_followup_verify_mutated",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -650,7 +650,7 @@ describe("subagent_manage tool", () => {
 				channelId,
 				workspaceDir: "/workspace",
 				desk: "news",
-				deskDir: "/workspace/dm_manage_fp",
+				deskDir: "/workspace/dingtalk:dm:manage_fp",
 				getSubAgentDiscovery: () => ({
 					directory: "/workspace/sub-agents",
 					warnings: [],
@@ -680,7 +680,7 @@ describe("subagent_manage tool", () => {
 
 		it("rejects follow_up when the role's command has changed since launch", async () => {
 			launchExternalRunMock.mockClear();
-			const channelId = `dm_manage_fp_command_${Date.now()}`;
+			const channelId = `dingtalk:dm:manage_fp_command_${Date.now()}`;
 			await registerLaunchedRun(channelId, "codex exec");
 			const tool = makeTool(channelId, "codex exec --sandbox danger-full-access", "You build things.");
 
@@ -696,7 +696,7 @@ describe("subagent_manage tool", () => {
 
 		it("still allows follow_up when only the role's system prompt has changed", async () => {
 			launchExternalRunMock.mockClear();
-			const channelId = `dm_manage_fp_prompt_${Date.now()}`;
+			const channelId = `dingtalk:dm:manage_fp_prompt_${Date.now()}`;
 			await registerLaunchedRun(channelId, "codex exec");
 			const tool = makeTool(channelId, "codex exec", "You build things, carefully now (typo fixed).");
 

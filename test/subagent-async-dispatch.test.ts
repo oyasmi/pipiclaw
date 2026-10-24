@@ -37,7 +37,7 @@ function sleep(ms: number): Promise<void> {
 describe("subagent tool: async dispatch past the sync grace window (spec 040, D2)", () => {
 	it("returns a dispatched placeholder once the grace window elapses, then wakes the channel once the run actually finishes", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 
 		const dispatched: DingTalkEvent[] = [];
@@ -50,7 +50,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 
 		let releasePrompt: (() => void) | undefined;
 		const tool = createSubAgentInlineTool({
-			...testManagers("dm_123"),
+			...testManagers("dingtalk:dm:123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -58,7 +58,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			deskDir,
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 			// Tiny grace window; maxWallTimeSec (default 300s via inline systemPrompt path) stays
 			// far above it so the wall-clock budget timer cannot fire and confound the test.
 			syncGraceMs: 20,
@@ -116,7 +116,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		expect(result.details.dispatched).toBe(true);
 		expect(dispatched).toHaveLength(0); // not settled yet — nothing to announce
 
-		const run = getSubAgentRunManager("dm_123").get(runId);
+		const run = getSubAgentRunManager("dingtalk:dm:123").get(runId);
 		expect(run?.status).toBe("running");
 
 		// The run keeps executing in the background; let it finish now.
@@ -129,8 +129,8 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		}
 
 		expect(dispatched).toHaveLength(1);
-		expect(dispatched[0]?.dispatchId).toBe(`subagent:${testDesk("dm_123")}:${runId}:done`);
+		expect(dispatched[0]?.dispatchId).toBe(`subagent:${testDesk("dingtalk:dm:123")}:${runId}:done`);
 		expect(dispatched[0]?.text).toContain(`[SUBAGENT:${runId}]`);
-		expect(getSubAgentRunManager("dm_123").get(runId)?.status).toBe("completed");
+		expect(getSubAgentRunManager("dingtalk:dm:123").get(runId)?.status).toBe("completed");
 	});
 });

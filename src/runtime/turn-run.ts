@@ -6,7 +6,7 @@
 import type { AgentRunner } from "../agent/types.js";
 import type { BootstrapPaths } from "../app/home.js";
 import { type ChannelContext, muteChannelContext } from "../channel/channel-context.js";
-import type { ChannelEvent } from "../channel/channel-event.js";
+import { type ChannelEvent, senderOf, type WakeEvent } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
 	BUILT_IN_COMMANDS,
@@ -51,13 +51,9 @@ function isIdleRuntimeCommandName(name: string): name is Exclude<RuntimeCommandN
 	return IDLE_RUNTIME_COMMAND_NAMES.has(name);
 }
 
-/**
- * A wake from an in-process producer rather than a person. Every production producer goes through
- * durable dispatch (so carries a `dispatchId`) and stamps its `desk`; DingTalk inbound parsing sets
- * neither. `isEvent` is the transport's own flag for its synthetic queue path.
- */
-export function isSyntheticEvent(event: ChannelEvent, isEvent?: boolean): boolean {
-	return Boolean(isEvent) || event.dispatchId !== undefined || event.desk !== undefined;
+/** A wake from an in-process producer rather than a person (spec 061, D8: the event's `source`). */
+export function isSyntheticEvent(event: ChannelEvent): event is WakeEvent {
+	return event.source === "wake";
 }
 
 /** One message or wake, written to the message archive (see `ChannelStore.logMessage`). */
@@ -103,7 +99,7 @@ export interface EventTurnDeps {
  */
 export function createEventTurnRunner(
 	deps: EventTurnDeps,
-): (inboundEvent: ChannelEvent, bot: DingTalkBotPort, isEvent?: boolean) => Promise<void> {
+): (inboundEvent: ChannelEvent, bot: DingTalkBotPort) => Promise<void> {
 	const {
 		options,
 		store,
@@ -129,6 +125,7 @@ export function createEventTurnRunner(
 		event: ChannelEvent,
 		runner: AgentRunner,
 	): Promise<{ taskId: string; brief: string } | undefined> => {
+		if (event.source !== "wake") return undefined;
 		const taskId = parseDriverTaskId(event.text) ?? event.internalWake?.taskId;
 		if (!taskId) return undefined;
 		const { desk, deskDir } = runner.conversation;
@@ -212,9 +209,9 @@ export function createEventTurnRunner(
 			runner.endTurn();
 			return undefined;
 		}
-		const structuredWakeFinalized = event.internalWake === undefined;
+		const structuredWakeFinalized = event.source !== "wake" || event.internalWake === undefined;
 		let absorbedDispatchIds: string[] = [];
-		if (durable && event.dispatchId && isCoalescableWake(event)) {
+		if (durable && event.source === "wake" && event.dispatchId && isCoalescableWake(event)) {
 			const primary = event;
 			const absorbed = await durable
 				.absorbPending(
@@ -229,7 +226,7 @@ export function createEventTurnRunner(
 						channelId: event.channelId,
 						reason: errorMessage(error),
 					});
-					return [] as ChannelEvent[];
+					return [] as WakeEvent[];
 				});
 			if (absorbed.length > 0) {
 				event = mergeCompletionWakes(event, absorbed);
@@ -255,7 +252,7 @@ export function createEventTurnRunner(
 	): Promise<void> => {
 		const { event } = turn;
 		const commandStartedAt = Date.now();
-		const logCtx = { channelId: event.channelId, userName: event.userName };
+		const logCtx = { channelId: event.channelId, userName: senderOf(event).userName };
 		log.logEvent("info", "runtime.command.started", "Executing command", {
 			ctx: logCtx,
 			fields: { command: builtInCommand.name },
@@ -302,9 +299,9 @@ export function createEventTurnRunner(
 	const verifyInternalWake = async (
 		turn: TurnState,
 		runner: AgentRunner,
-		internalWake: NonNullable<ChannelEvent["internalWake"]>,
+		internalWake: NonNullable<WakeEvent["internalWake"]>,
 	) => {
-		const { event } = turn;
+		const event = turn.event as WakeEvent;
 		const { kind, resourceId, taskId: wakeTaskId } = internalWake;
 		const { desk, deskDir } = runner.conversation;
 		const claimed = await claimVerifiedWake(
@@ -337,6 +334,7 @@ export function createEventTurnRunner(
 		backgroundOnly: boolean,
 	): Promise<void> => {
 		const { event } = turn;
+		const sender = senderOf(event);
 		// Computed before archiving so a command's own text can be excluded from
 		// memory-extraction input (review 2026-08-24 §1.2): it is control-plane
 		// traffic, not conversation, and the history stays queryable via session_search.
@@ -346,8 +344,7 @@ export function createEventTurnRunner(
 			{
 				date: new Date().toISOString(),
 				ts: event.ts,
-				user: event.user,
-				userName: event.userName,
+				...sender,
 				text: event.text,
 				isBot: false,
 				skipContextSync: Boolean(builtInCommand),
@@ -382,10 +379,15 @@ export function createEventTurnRunner(
 		}
 
 		log.logEvent("info", "agent.turn.started", "Starting turn", {
-			ctx: { channelId: event.channelId, userName: event.userName },
+			ctx: { channelId: event.channelId, userName: sender.userName },
 			fields: { messageLength: event.text.length, source: backgroundOnly ? "event" : "message" },
 		});
-		if (event.internalWake && !(await verifyInternalWake(turn, runner, event.internalWake))) return;
+		if (
+			event.source === "wake" &&
+			event.internalWake &&
+			!(await verifyInternalWake(turn, runner, event.internalWake))
+		)
+			return;
 		// Verified job/run wakes that activate a task are task steps too. Verification must happen
 		// first: routing directly from user-controlled wake text would grant task-only tools.
 		const taskStep = await prepareTaskStep(turn.event, runner);
@@ -441,9 +443,9 @@ export function createEventTurnRunner(
 	 * the wake itself: the owner verifies and claims it and the task's `work` ticket is redeemed, so
 	 * the task resumes as soon as its channel is bound back instead of waiting out the backstop.
 	 */
-	const settleDroppedTaskWake = async (event: ChannelEvent): Promise<void> => {
+	const settleDroppedTaskWake = async (event: WakeEvent): Promise<void> => {
 		const wake = event.internalWake;
-		if (!wake || !event.desk) return;
+		if (!wake) return;
 		try {
 			const owner = wake.kind === "job" ? getJobs().get(event.desk) : getRuns().get(event.desk);
 			const claimed = await claimVerifiedWake(event, getDeskDir(options.paths.workspaceDir, event.desk), owner);
@@ -482,7 +484,7 @@ export function createEventTurnRunner(
 	};
 
 	const runDeskCommand = async (event: ChannelEvent, args: string, bot: DingTalkBotPort): Promise<void> => {
-		const logCtx = { channelId: event.channelId, userName: event.userName };
+		const logCtx = { channelId: event.channelId, userName: senderOf(event).userName };
 		log.logEvent("info", "runtime.command.started", "Executing command", {
 			ctx: logCtx,
 			fields: { command: "desk" },
@@ -497,7 +499,7 @@ export function createEventTurnRunner(
 		}
 	};
 
-	const runEventTurn = async (inboundEvent: ChannelEvent, bot: DingTalkBotPort, isEvent?: boolean): Promise<void> => {
+	const runEventTurn = async (inboundEvent: ChannelEvent, bot: DingTalkBotPort): Promise<void> => {
 		if (isShuttingDown()) {
 			log.logInfoEvent("runtime.shutdown.event_ignored", "Event ignored during shutdown", {
 				channelId: inboundEvent.channelId,
@@ -506,7 +508,7 @@ export function createEventTurnRunner(
 		}
 
 		const resolution = deps.resolveChannel(inboundEvent.channelId);
-		if (isSyntheticEvent(inboundEvent, isEvent)) {
+		if (isSyntheticEvent(inboundEvent)) {
 			// D7's authoritative check (the rule is `admitsSyntheticEvent`; `reserveEvent` applies it early).
 			if (!admitsSyntheticEvent(resolution, inboundEvent)) {
 				log.logInfoEvent("dispatch.wake.desk_mismatch", "Wake dropped: channel not bound to the wake's desk", {
@@ -544,10 +546,10 @@ export function createEventTurnRunner(
 		if (!turn) return;
 		const task = (async () => {
 			try {
-				await executeTurn(turn, runner, bot, Boolean(isEvent));
+				await executeTurn(turn, runner, bot, isSyntheticEvent(inboundEvent));
 			} catch (err) {
 				log.logEvent("error", "agent.turn.failed", "Turn failed", {
-					ctx: { channelId: turn.event.channelId, userName: turn.event.userName },
+					ctx: { channelId: turn.event.channelId, userName: senderOf(turn.event).userName },
 					fields: { error: errorMessage(err) },
 				});
 			} finally {

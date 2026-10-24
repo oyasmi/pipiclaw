@@ -65,9 +65,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		await expect(
 			launchExternalRun({
-				...testManagers("dm_shell_structured"),
+				...testManagers("dingtalk:dm:shell_structured"),
 				runId: "run-shell-structured",
-				channelId: "dm_shell_structured",
+				channelId: "dingtalk:dm:shell_structured",
 				label: "invalid shell run",
 				agent: "builder",
 				source: "predefined",
@@ -93,7 +93,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 	 *  than an empty section above a `---` fence. */
 	it("writes no system-prompt.txt and no prompt fence when the role declares an empty system prompt", async () => {
 		const workspaceDir = createTempWorkspace();
-		const artifactDir = join(workspaceDir, "dm_bodyless", "subagent-artifacts", "run-bodyless");
+		const artifactDir = join(workspaceDir, "dingtalk:dm:bodyless", "subagent-artifacts", "run-bodyless");
 		mkdirSync(artifactDir, { recursive: true });
 
 		const { spawnFnForInput, child } = makeFakeSpawn({ pid: 5151 });
@@ -103,9 +103,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 
 		await launchExternalRun({
-			...testManagers("dm_bodyless"),
+			...testManagers("dingtalk:dm:bodyless"),
 			runId: "run-bodyless",
-			channelId: "dm_bodyless",
+			channelId: "dingtalk:dm:bodyless",
 			label: "capability entry run",
 			agent: "codex-main",
 			source: "predefined",
@@ -129,12 +129,12 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(readFileSync(join(artifactDir, "prompt.txt"), "utf-8")).toBe("Implement the thing.\n");
 
 		child.emit("close", 0, null);
-		await waitFor(() => getSubAgentRunManager("dm_bodyless").get("run-bodyless")?.status !== "running");
+		await waitFor(() => getSubAgentRunManager("dingtalk:dm:bodyless").get("run-bodyless")?.status !== "running");
 	});
 
 	it("spawns codex-cli, persists the pid, and settles completed once turn.completed arrives", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-1");
 		mkdirSync(artifactDir, { recursive: true });
 
@@ -149,9 +149,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 5150 });
 
 		await launchExternalRun({
-			...testManagers("dm_ext"),
+			...testManagers("dingtalk:dm:ext"),
 			runId: "run-ext-1",
-			channelId: "dm_ext",
+			channelId: "dingtalk:dm:ext",
 			label: "build the feature",
 			agent: "builder",
 			source: "predefined",
@@ -173,7 +173,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(spawnFn.mock.calls[0]?.[0]).toBe("codex");
 		expect(spawnFn.mock.calls[0]?.[1]).toEqual(["exec", "--json", "-"]);
 
-		const manager = getSubAgentRunManager("dm_ext");
+		const manager = getSubAgentRunManager("dingtalk:dm:ext");
 		await waitFor(() => manager.get("run-ext-1")?.pid !== undefined);
 		expect(manager.get("run-ext-1")?.status).toBe("running");
 		expect(manager.get("run-ext-1")?.pid).toBe(5150);
@@ -232,7 +232,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 	// on them — it used to, adding up to a second to every external dispatch.
 	it("persists the pid and returns the dispatch before post-spawn probes finish", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_ext_launch_handshake";
+		const channelId = "dingtalk:dm:ext_launch_handshake";
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-ext-handshake");
 		mkdirSync(artifactDir, { recursive: true });
@@ -290,7 +290,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 	it("runs a write-capable purpose=verify under the lease and records the declared verdict", async () => {
 		const workspaceDir = createTempWorkspace();
 		const projectDir = join(workspaceDir, "project");
-		const channelId = "dm_ext_verify_write";
+		const channelId = "dingtalk:dm:ext_verify_write";
 		const deskDir = join(workspaceDir, channelId);
 		const runId = "run-ext-verify-write";
 		const artifactDir = join(deskDir, "subagent-artifacts", runId);
@@ -356,7 +356,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("drops only pipiclaw's own LLM/DingTalk env vars, keeps others, and records what was dropped (fix plan §4.3)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-env");
 		mkdirSync(artifactDir, { recursive: true });
 
@@ -369,9 +369,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		process.env.GITHUB_TOKEN = "gh-should-be-kept";
 		try {
 			await launchExternalRun({
-				...testManagers("dm_ext"),
+				...testManagers("dingtalk:dm:ext"),
 				runId: "run-ext-env",
-				channelId: "dm_ext",
+				channelId: "dingtalk:dm:ext",
 				label: "build",
 				agent: "builder",
 				source: "predefined",
@@ -402,7 +402,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(spawnOptions.env?.DINGTALK_APP_KEY).toBeUndefined();
 		expect(spawnOptions.env?.GITHUB_TOKEN).toBe("gh-should-be-kept");
 
-		const manager = getSubAgentRunManager("dm_ext");
+		const manager = getSubAgentRunManager("dingtalk:dm:ext");
 		await waitFor(() => manager.get("run-ext-env")?.pid !== undefined);
 		const warnings = manager.get("run-ext-env")?.invocationWarnings ?? [];
 		expect(warnings.some((w) => w.includes("ANTHROPIC_API_KEY"))).toBe(true);
@@ -414,7 +414,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("settles failed when the process exits 0 but no protocol terminal event was observed", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext2");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext2");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-2");
 		mkdirSync(artifactDir, { recursive: true });
 
@@ -428,9 +428,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		const { spawnFn: _spawnFn2, spawnFnForInput, child } = makeFakeSpawn({ pid: 6161 });
 		await launchExternalRun({
-			...testManagers("dm_ext2"),
+			...testManagers("dingtalk:dm:ext2"),
 			runId: "run-ext-2",
-			channelId: "dm_ext2",
+			channelId: "dingtalk:dm:ext2",
 			label: "quiet run",
 			agent: "builder",
 			source: "predefined",
@@ -447,7 +447,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			spawnFn: spawnFnForInput,
 		});
 
-		const manager = getSubAgentRunManager("dm_ext2");
+		const manager = getSubAgentRunManager("dingtalk:dm:ext2");
 		await waitFor(() => manager.get("run-ext-2")?.pid !== undefined);
 		child.emit("close", 0); // exit 0, but stdout never carried a terminal event.
 
@@ -464,7 +464,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("settles failed immediately when spawn itself fails (e.g. missing binary)", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext3");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext3");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-3");
 		mkdirSync(artifactDir, { recursive: true });
 
@@ -480,9 +480,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			failToSpawn: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
 		});
 		const result = await launchExternalRun({
-			...testManagers("dm_ext3"),
+			...testManagers("dingtalk:dm:ext3"),
 			runId: "run-ext-3",
-			channelId: "dm_ext3",
+			channelId: "dingtalk:dm:ext3",
 			label: "broken command",
 			agent: "builder",
 			source: "predefined",
@@ -499,7 +499,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			spawnFn: spawnFnForInput,
 		});
 
-		const manager = getSubAgentRunManager("dm_ext3");
+		const manager = getSubAgentRunManager("dingtalk:dm:ext3");
 		expect(manager.get("run-ext-3")?.status).toBe("failed");
 		expect(manager.get("run-ext-3")?.failureReason).toContain("Failed to launch");
 		// Spec 042 D2: a pre-spawn failure is reported in the same call instead of a wake — the
@@ -511,7 +511,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("captures a real short-lived child that closes before launchExternalRun returns", async () => {
 		const workspaceDir = createTempWorkspace();
-		const artifactDir = join(workspaceDir, "dm_short", "subagent-artifacts", "run-short");
+		const artifactDir = join(workspaceDir, "dingtalk:dm:short", "subagent-artifacts", "run-short");
 		const dispatched: DingTalkEvent[] = [];
 		configureSubAgentRuntime({
 			dispatch: (event) => {
@@ -521,9 +521,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 
 		await launchExternalRun({
-			...testManagers("dm_short"),
+			...testManagers("dingtalk:dm:short"),
 			runId: "run-short",
-			channelId: "dm_short",
+			channelId: "dingtalk:dm:short",
 			label: "short",
 			agent: "runner",
 			source: "inline",
@@ -539,7 +539,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			securityConfig: DEFAULT_SECURITY_CONFIG,
 		});
 
-		const manager = getSubAgentRunManager("dm_short");
+		const manager = getSubAgentRunManager("dingtalk:dm:short");
 		await waitFor(() => manager.get("run-short")?.status !== "running");
 		await waitFor(() => dispatched.length === 1);
 		expect(manager.get("run-short")?.status).toBe("completed");
@@ -549,12 +549,12 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("cancels a launch intent before spawn when cancel arrives after register", async () => {
 		const workspaceDir = createTempWorkspace();
-		const artifactDir = join(workspaceDir, "dm_launch_cancel", "subagent-artifacts", "run-launch-cancel");
+		const artifactDir = join(workspaceDir, "dingtalk:dm:launch_cancel", "subagent-artifacts", "run-launch-cancel");
 		configureSubAgentRuntime({});
-		const manager = getSubAgentRunManager("dm_launch_cancel");
+		const manager = getSubAgentRunManager("dingtalk:dm:launch_cancel");
 		await manager.register({
 			runId: "run-launch-cancel",
-			channelId: "dm_launch_cancel",
+			channelId: "dingtalk:dm:launch_cancel",
 			runtime: "external",
 			agent: "runner",
 			label: "cancel launch",
@@ -577,7 +577,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		"reaps the owned descendant group and releases the write lease on %s",
 		async (mode) => {
 			const workspaceDir = createTempWorkspace();
-			const channelId = `dm_group_${mode}`;
+			const channelId = `dingtalk:dm:dingtalk:group:${mode}`;
 			const runId = `run-group-${mode}`;
 			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
 			const marker = join(workspaceDir, `${mode}-late-write.txt`);
@@ -639,7 +639,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		"keeps parsed output, usage, and session id on %s instead of discarding them",
 		async (mode) => {
 			const workspaceDir = createTempWorkspace();
-			const channelId = `dm_partial_${mode}`;
+			const channelId = `dingtalk:dm:partial_${mode}`;
 			const runId = `run-partial-${mode}`;
 			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
 			mkdirSync(artifactDir, { recursive: true });
@@ -723,15 +723,15 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("settles failed (without spawning) when the mandatory audit record cannot be written", async () => {
 		const workspaceDir = createTempWorkspace();
-		const artifactDir = join(workspaceDir, "dm_audit_fail", "subagent-artifacts", "run-audit-fail");
+		const artifactDir = join(workspaceDir, "dingtalk:dm:audit_fail", "subagent-artifacts", "run-audit-fail");
 		const auditDirectory = join(workspaceDir, "audit-is-a-directory");
 		mkdirSync(auditDirectory, { recursive: true });
 		const { spawnFn, spawnFnForInput } = makeFakeSpawn();
 
 		const result = await launchExternalRun({
-			...testManagers("dm_audit_fail"),
+			...testManagers("dingtalk:dm:audit_fail"),
 			runId: "run-audit-fail",
-			channelId: "dm_audit_fail",
+			channelId: "dingtalk:dm:audit_fail",
 			label: "must be audited",
 			agent: "builder",
 			source: "predefined",
@@ -758,12 +758,12 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.kind).toBe("launch-failed");
 		expect(spawnFn).not.toHaveBeenCalled();
-		expect(getSubAgentRunManager("dm_audit_fail").get("run-audit-fail")?.status).toBe("failed");
+		expect(getSubAgentRunManager("dingtalk:dm:audit_fail").get("run-audit-fail")?.status).toBe("failed");
 	});
 
 	it("rejects an unknown harness before ever spawning", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext4");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext4");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-4");
 		mkdirSync(artifactDir, { recursive: true });
 		configureSubAgentRuntime({});
@@ -771,9 +771,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		await expect(
 			launchExternalRun({
-				...testManagers("dm_ext4"),
+				...testManagers("dingtalk:dm:ext4"),
 				runId: "run-ext-4",
-				channelId: "dm_ext4",
+				channelId: "dingtalk:dm:ext4",
 				label: "bad harness",
 				agent: "builder",
 				source: "predefined",
@@ -795,7 +795,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 	it("spawns claude-code, persists the pre-assigned session id at launch, and settles completed on a result event", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_ext5");
+		const deskDir = join(workspaceDir, "dingtalk:dm:ext5");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-5");
 		mkdirSync(artifactDir, { recursive: true });
 
@@ -809,9 +809,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 7171 });
 		await launchExternalRun({
-			...testManagers("dm_ext5"),
+			...testManagers("dingtalk:dm:ext5"),
 			runId: "run-ext-5",
-			channelId: "dm_ext5",
+			channelId: "dingtalk:dm:ext5",
 			label: "review the diff",
 			agent: "reviewer",
 			source: "predefined",
@@ -835,7 +835,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const presetSessionId = args[sessionIdIndex];
 		expect(presetSessionId).toBeTruthy();
 
-		const manager = getSubAgentRunManager("dm_ext5");
+		const manager = getSubAgentRunManager("dingtalk:dm:ext5");
 		// The pre-assigned session id is persisted at launch, before any output (D4's improvement):
 		// resume must not depend on a successful `result` event ever arriving.
 		await waitFor(() => manager.get("run-ext-5")?.sessionId !== undefined);

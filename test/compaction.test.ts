@@ -21,7 +21,7 @@ describe("compaction deadline and stale requests", () => {
 		// Missing product-switch guard used to turn an automatic operation into SDK manual compaction.
 		const prevent = vi.fn();
 		const pipeline = new TurnPipeline({
-			conversation: { channelId: "dm_test" } as never,
+			conversation: { channelId: "dingtalk:dm:test" } as never,
 			workspaceDir: "/tmp",
 			host: {
 				settingsManager: { getCompactionEnabled: () => false },
@@ -63,7 +63,7 @@ describe("compaction deadline and stale requests", () => {
 			} as unknown as ModelRuntime;
 			let handler!: (event: SessionBeforeCompactEvent) => Promise<unknown>;
 			const compaction = new SessionCompaction({
-				conversation: { channelId: "dm_test" } as never,
+				conversation: { channelId: "dingtalk:dm:test" } as never,
 				getSession: () => session,
 				getRuntime: () => runtime,
 				preserveMemory: async () => {
@@ -155,7 +155,7 @@ function backgroundHarness() {
 	});
 	const fault = vi.fn((_session: AgentSession, error: unknown) => new Error("quarantined", { cause: error }));
 	const compaction = new SessionCompaction({
-		conversation: { channelId: "dm_test" } as never,
+		conversation: { channelId: "dingtalk:dm:test" } as never,
 		getSession: () => session,
 		getRuntime: () => ({}) as ModelRuntime,
 		preserveMemory: async () => {},

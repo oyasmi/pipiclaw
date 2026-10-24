@@ -4,7 +4,7 @@
  * Declared here, below `bot.ts`, so the bot and the runtime both depend on it and not on each other.
  */
 import type { FinalDelivery, ProgressStyle } from "../channel/channel-context.js";
-import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
+import type { ChannelEvent, HumanEvent, InboundImage } from "../channel/channel-event.js";
 import type { ChannelObservation } from "../channel/channel-index.js";
 import type { RuntimeCommandName } from "../commands/catalog.js";
 import type { BusyMessageMode } from "./config.js";
@@ -75,10 +75,10 @@ export interface DingTalkHandler {
 	 * The transport calls this hook, when provided, immediately before `handleEvent`.
 	 */
 	reserveEvent?(event: DingTalkEvent): void;
-	handleEvent(event: DingTalkEvent, bot: DingTalkBotPort, isEvent?: boolean): Promise<void>;
+	handleEvent(event: DingTalkEvent, bot: DingTalkBotPort): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBotPort): Promise<StopOutcome>;
 	/** `/new` bypasses the old per-channel queue and live SDK session. */
-	handleNewSession(event: DingTalkEvent, bot: DingTalkBotPort): Promise<void>;
+	handleNewSession(event: HumanEvent, bot: DingTalkBotPort): Promise<void>;
 	/**
 	 * Render one of the stateless report commands (events/tasks/status/usage/context/subagents) to
 	 * text. Single dispatch point shared by the busy-turn switch below and bootstrap's idle-turn
@@ -86,7 +86,7 @@ export interface DingTalkHandler {
 	 */
 	runRuntimeCommand(event: DingTalkEvent, name: RuntimeCommandName, args: string): Promise<string>;
 	handleBusyMessage(
-		event: DingTalkEvent,
+		event: HumanEvent,
 		bot: DingTalkBotPort,
 		mode: BusyMessageMode,
 		queueText: string,

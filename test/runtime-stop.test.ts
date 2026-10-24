@@ -122,7 +122,7 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
-		await bindTestChannel(paths.workspaceDir, "dm_tester");
+		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
 		bootstrapAppHome(paths);
 		const bot = new FakeTestBot();
 		const runtime = await createRuntimeContext({
@@ -138,14 +138,12 @@ describe("runtime stop handling", () => {
 			createEventsWatcher: () => ({ start() {}, stop() {} }),
 		});
 		const event = {
-			type: "dm",
-			channelId: "dm_tester",
+			source: "human" as const,
+			channelId: "dingtalk:dm:tester",
 			ts: "1000",
 			user: "tester",
 			userName: "Tester",
 			text: "new work",
-			conversationId: "conv_1",
-			conversationType: "1",
 		} as const;
 		runtime.handler.reserveEvent?.(event);
 
@@ -157,8 +155,8 @@ describe("runtime stop handling", () => {
 
 		await runtime.handler.handleNewSession({ ...event, text: "/new" }, bot as unknown as DingTalkBot);
 		expect(retireForNewSession).toHaveBeenCalledOnce();
-		expect(runtime.handler.isRunning("dm_tester")).toBe(false);
-		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
+		expect(runtime.handler.isRunning("dingtalk:dm:tester")).toBe(false);
+		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dingtalk:dm:tester");
 
 		await runtime.shutdown();
 		// The in-test dynamic import of the bootstrap graph pays its one-time vite transform
@@ -205,7 +203,7 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
-		await bindTestChannel(paths.workspaceDir, "dm_tester");
+		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
 		bootstrapAppHome(paths);
 
 		const bot = new FakeTestBot();
@@ -225,25 +223,23 @@ describe("runtime stop handling", () => {
 		});
 
 		const event = {
-			type: "dm",
-			channelId: "dm_tester",
+			source: "human" as const,
+			channelId: "dingtalk:dm:tester",
 			ts: "1000",
 			user: "tester",
 			userName: "Tester",
 			text: "please keep working",
-			conversationId: "conv_1",
-			conversationType: "1",
 		} as const;
 		runtime.handler.reserveEvent?.(event);
 		const task = runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 
 		await runStarted;
-		await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
+		await runtime.handler.handleStop("dingtalk:dm:tester", bot as unknown as DingTalkBot);
 		await task;
 
 		expect(runner.abort).toHaveBeenCalledTimes(1);
-		expect(bot.discardCard).toHaveBeenCalledWith("dm_tester");
-		expect(bot.clearPendingMessages).toHaveBeenCalledWith("dm_tester");
+		expect(bot.discardCard).toHaveBeenCalledWith("dingtalk:dm:tester");
+		expect(bot.clearPendingMessages).toHaveBeenCalledWith("dingtalk:dm:tester");
 
 		await runtime.shutdown();
 	}, 60_000);
@@ -288,7 +284,7 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
-		const conversation = await bindTestChannel(paths.workspaceDir, "dm_tester");
+		const conversation = await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
 		const { deskDir } = conversation;
 		Object.assign(runner, { conversation });
 		bootstrapAppHome(paths);
@@ -313,20 +309,18 @@ describe("runtime stop handling", () => {
 		});
 
 		const event = {
-			type: "dm",
-			channelId: "dm_tester",
+			source: "wake" as const,
+			channelId: "dingtalk:dm:tester",
 			ts: "1000",
-			user: "TASK_DRIVER",
-			userName: "TASK_DRIVER",
+			producer: "TASK_DRIVER",
 			text: "[TASK_DRIVER:long-run] Resume task long-run.",
-			conversationId: "conv_1",
-			conversationType: "1",
+			desk: "news",
 		} as const;
 		runtime.handler.reserveEvent?.(event);
 		const task = runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 
 		await runStarted;
-		const outcome = await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
+		const outcome = await runtime.handler.handleStop("dingtalk:dm:tester", bot as unknown as DingTalkBot);
 		await task;
 
 		expect(runner.abort).toHaveBeenCalledTimes(1);
@@ -381,7 +375,7 @@ describe("runtime stop handling", () => {
 		createRunnerMock.mockReturnValue(runner);
 
 		const paths = createBootstrapPaths();
-		await bindTestChannel(paths.workspaceDir, "dm_tester");
+		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
 		bootstrapAppHome(paths);
 
 		const bot = new FakeTestBot();
@@ -402,29 +396,27 @@ describe("runtime stop handling", () => {
 		});
 
 		const event = {
-			type: "dm",
-			channelId: "dm_tester",
+			source: "human" as const,
+			channelId: "dingtalk:dm:tester",
 			ts: "1000",
 			user: "tester",
 			userName: "Tester",
 			text: "please keep working",
-			conversationId: "conv_1",
-			conversationType: "1",
 		} as const;
 		runtime.handler.reserveEvent?.(event);
 		const task = runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 
 		await runStarted;
-		await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
+		await runtime.handler.handleStop("dingtalk:dm:tester", bot as unknown as DingTalkBot);
 		// The wedged turn is still running, so /stop alone leaves the channel busy.
-		expect(runtime.handler.isRunning("dm_tester")).toBe(true);
+		expect(runtime.handler.isRunning("dingtalk:dm:tester")).toBe(true);
 
 		const deadline = Date.now() + 5_000;
-		while (runtime.handler.isRunning("dm_tester") && Date.now() < deadline) {
+		while (runtime.handler.isRunning("dingtalk:dm:tester") && Date.now() < deadline) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
-		expect(runtime.handler.isRunning("dm_tester")).toBe(false);
-		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
+		expect(runtime.handler.isRunning("dingtalk:dm:tester")).toBe(false);
+		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dingtalk:dm:tester");
 
 		// The next generation owns an independent state machine; late cleanup cannot release it.
 		const nextRunner: AgentRunner = { ...runner, ...createFakeTurnState() };
@@ -432,7 +424,7 @@ describe("runtime stop handling", () => {
 		runtime.handler.reserveEvent?.({ ...event, text: "next message" });
 		releaseRun();
 		await task;
-		expect(runtime.handler.isRunning("dm_tester")).toBe(true);
+		expect(runtime.handler.isRunning("dingtalk:dm:tester")).toBe(true);
 		nextRunner.endTurn();
 
 		await runtime.shutdown();

@@ -3,6 +3,7 @@
  * inbound download plus the per-message attachment resolution built on it (spec 049).
  */
 import axios from "axios";
+import { MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES_PER_MESSAGE, sniffImageMimeType } from "../channel/attachments.js";
 import type { MediaSendResult, OutboundMedia } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
 import * as log from "../log.js";
@@ -12,13 +13,7 @@ import { formatSize } from "../tools/truncate.js";
 import { type ConversationMeta, DINGTALK_API, DINGTALK_OAPI, http } from "./api.js";
 import type { DingTalkConfig } from "./config.js";
 import type { DingTalkHandler } from "./handler.js";
-import {
-	MAX_INBOUND_IMAGE_BYTES,
-	MAX_INBOUND_IMAGES_PER_MESSAGE,
-	MEDIA_DOWNLOAD_TIMEOUT_MS,
-	type ParsedInboundMessage,
-	sniffImageMimeType,
-} from "./inbound-media.js";
+import { MEDIA_DOWNLOAD_TIMEOUT_MS, type ParsedInboundMessage } from "./inbound-media.js";
 
 // DingTalk caps robot image messages at 1MB and file messages at 20MB. We reject
 // oversized files before spending an upload round-trip on a request the API rejects.

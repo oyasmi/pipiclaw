@@ -43,7 +43,7 @@ describe("desk registry", () => {
 		// Failure caught: a second /desk new silently overwriting desk.json would orphan every conversation.
 		expect(createDeskRecord(workspace, "news", NOW)).toEqual({ kind: "exists", name: "news" });
 		const bindings = await loadBindings(workspace);
-		bindings.bindings.dm_1 = { desk: "news", boundAt: NOW.toISOString() };
+		bindings.bindings["dingtalk:dm:1"] = { desk: "news", boundAt: NOW.toISOString() };
 		await writeBindings(workspace, bindings);
 		rmSync(getDeskDir(workspace, "news"), { recursive: true });
 		expect(createDeskRecord(workspace, "news", NOW)).toEqual({ kind: "unavailable", name: "news" });
@@ -52,7 +52,7 @@ describe("desk registry", () => {
 	it("does not erase a first binding when another process finishes initialization late", async () => {
 		// A second daemon/TUI can finish setup and accept a channel before this initializer
 		// publishes its empty table. Sequential idempotency checks cannot catch that data loss.
-		// Mutation check (spec 060): overwriting on an EEXIST publication race loses dm_1.
+		// Mutation check (spec 060): overwriting on an EEXIST publication race loses dingtalk:dm:1.
 		const workspaceDir = makeWorkspace();
 		const child = spawn(
 			process.execPath,
@@ -76,9 +76,9 @@ describe("desk registry", () => {
 				}),
 			]);
 			initializeDefaultDesk({ workspaceDir });
-			await allocateConversation(workspaceDir, "default", "dm_1", "dm", NOW);
+			await allocateConversation(workspaceDir, "default", "dingtalk:dm:1", "dm", NOW);
 			const bindings = await loadBindings(workspaceDir);
-			bindings.bindings.dm_1 = { desk: "default", boundAt: NOW.toISOString() };
+			bindings.bindings["dingtalk:dm:1"] = { desk: "default", boundAt: NOW.toISOString() };
 			await writeBindings(workspaceDir, bindings);
 			child.stdin.end("\n");
 			expect((await exited)[0], stderr).toBe(0);
@@ -95,10 +95,10 @@ describe("desk registry", () => {
 	it("allocates one conversation per channel, numbered per kind, idempotently", async () => {
 		const workspace = makeWorkspace();
 		createDeskRecord(workspace, "desk-news", NOW);
-		const dm = await allocateConversation(workspace, "desk-news", "dm_1", "dm", NOW);
-		const group = await allocateConversation(workspace, "desk-news", "group_cid/a+b==", "group", NOW);
-		const dm2 = await allocateConversation(workspace, "desk-news", "dm_2", "dm", NOW);
-		const again = await allocateConversation(workspace, "desk-news", "group_cid/a+b==", "group", NOW);
+		const dm = await allocateConversation(workspace, "desk-news", "dingtalk:dm:1", "dm", NOW);
+		const group = await allocateConversation(workspace, "desk-news", "dingtalk:group:cid/a+b==", "group", NOW);
+		const dm2 = await allocateConversation(workspace, "desk-news", "dingtalk:dm:2", "dm", NOW);
+		const again = await allocateConversation(workspace, "desk-news", "dingtalk:group:cid/a+b==", "group", NOW);
 		// Failure caught (INV-7): re-binding a channel must resume its conversation, not open a new one,
 		// and the directory name never derives from the channel id.
 		expect([dm.conversation, group.conversation, dm2.conversation]).toEqual(["dm-1", "group-1", "dm-2"]);
@@ -111,11 +111,13 @@ describe("desk registry", () => {
 		const recordPath = join(dm.deskDir, "desk.json");
 		const record = JSON.parse(readFileSync(recordPath, "utf8"));
 		writeFileSync(recordPath, JSON.stringify({ ...record, cwd: "/srv/work" }));
-		const moved = await allocateConversation(workspace, "desk-news", "dm_1", "dm", NOW);
+		const moved = await allocateConversation(workspace, "desk-news", "dingtalk:dm:1", "dm", NOW);
 		expect([moved.cwd, moved.deskDir]).toEqual(["/srv/work", dm.deskDir]);
 		// Failure caught: a relative cwd would resolve against the daemon's own directory.
 		writeFileSync(recordPath, JSON.stringify({ ...record, cwd: "work" }));
-		await expect(allocateConversation(workspace, "desk-news", "dm_1", "dm", NOW)).rejects.toThrow(/absolute/);
+		await expect(allocateConversation(workspace, "desk-news", "dingtalk:dm:1", "dm", NOW)).rejects.toThrow(
+			/absolute/,
+		);
 	});
 
 	it("waits for another process holding desk-json.lock before allocating", async () => {
@@ -123,7 +125,7 @@ describe("desk registry", () => {
 		createDeskRecord(workspace, "news", NOW);
 		const holder = await spawnLockHolder(getDeskLockPath(getDeskDir(workspace, "news"), "desk-json.lock"));
 		let settled = false;
-		const allocation = allocateConversation(workspace, "news", "dm_1", "dm", NOW).finally(() => {
+		const allocation = allocateConversation(workspace, "news", "dingtalk:dm:1", "dm", NOW).finally(() => {
 			settled = true;
 		});
 		await new Promise((resolve) => setTimeout(resolve, 150));
@@ -170,12 +172,17 @@ describe("desk registry", () => {
 		expect(byName).toEqual({ copy: "invalid", empty: "missing", news: "available" });
 
 		// D4: a channel bound to a desk whose directory was moved away still finds its row in `/desk`.
-		const rows = buildDeskList(desks, { dm_1: { desk: "gone", boundAt: NOW.toISOString() } }, "gone", (id) => id);
+		const rows = buildDeskList(
+			desks,
+			{ "dingtalk:dm:1": { desk: "gone", boundAt: NOW.toISOString() } },
+			"gone",
+			(id) => id,
+		);
 		expect(rows.find((row) => row.name === "gone")).toEqual({
 			name: "gone",
 			availability: "missing",
 			current: true,
-			channels: [{ channelId: "dm_1", label: "dm_1" }],
+			channels: [{ channelId: "dingtalk:dm:1", label: "dingtalk:dm:1" }],
 		});
 	});
 });

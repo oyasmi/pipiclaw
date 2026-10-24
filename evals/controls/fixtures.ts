@@ -5,7 +5,7 @@ import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
 import type { CapturedDelivery, TraceEvent, TrialContext } from "../harness/schema.js";
 
 export function controlDelivery(ctx: TrialContext, text: string): void {
-	const value: CapturedDelivery = { method: "sendPlain", channelId: "dm_eval", text, ts: Date.now() };
+	const value: CapturedDelivery = { method: "sendPlain", channelId: "dingtalk:dm:eval", text, ts: Date.now() };
 	ctx.deliveries.push(value);
 	ctx.snapshot.deliveries.push(value);
 }
@@ -25,7 +25,7 @@ export function controlEvent(
 		stepIndex: 0,
 		stepId: "control:step-1",
 		sessionId: "control-session",
-		channelId: "dm_eval",
+		channelId: "dingtalk:dm:eval",
 		actorId: "main-agent",
 		callId: `call-${ctx.trace.length + 1}`,
 		kind,
@@ -93,7 +93,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 				stepIndex: 0,
 				stepId: "control:step-1",
 				sessionId: "control-session",
-				channelId: "dm_eval",
+				channelId: "dingtalk:dm:eval",
 				actorId: "main-agent",
 				callId: "test-before",
 				correlationId: "test-before",

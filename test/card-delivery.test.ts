@@ -83,7 +83,7 @@ function setup(template = "template") {
 	};
 	privateApi.tokens.accessToken = "test-token";
 	privateApi.tokens.tokenExpiry = Date.now() / 1000 + 3600;
-	privateApi.conversations.set("dm_123", { conversationId: "test", conversationType: "1", senderId: "123" });
+	privateApi.conversations.set("dingtalk:dm:123", { conversationId: "test", conversationType: "1", senderId: "123" });
 	const store = new FakeChannelStore();
 	const context = () => createDingTalkContext(createFakeEvent(), bot, store as never);
 	return { bot, context, ctx: context() };
@@ -188,7 +188,7 @@ describe("card delivery with stateful remote HTTP", () => {
 		ctx.primeCard(1);
 		await vi.advanceTimersByTimeAsync(1);
 		const oldId = [...cards.keys()][0];
-		bot.discardCard("dm_123");
+		bot.discardCard("dingtalk:dm:123");
 		createGate = undefined;
 		const next = context();
 		await next.respond("next turn");
@@ -209,7 +209,7 @@ describe("card delivery with stateful remote HTTP", () => {
 		streamGate = deferred();
 		ctx.primeCard(1);
 		await vi.advanceTimersByTimeAsync(1);
-		bot.discardCard("dm_123");
+		bot.discardCard("dingtalk:dm:123");
 		await ctx.respond("stale progress");
 		streamGate.resolve();
 		await ctx.close();

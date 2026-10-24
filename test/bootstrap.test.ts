@@ -10,8 +10,8 @@ import {
 	parseArgs,
 } from "../src/app/home.js";
 import { prepareAppServices } from "../src/app/services.js";
+import type { WakeEvent } from "../src/channel/channel-event.js";
 import { loadConfig } from "../src/dingtalk/config.js";
-import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import { bootstrap } from "../src/runtime/bootstrap.js";
 import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -119,7 +119,7 @@ describe("bootstrap", () => {
 		rmSync(join(paths.workspaceDir, "desk-default"), { recursive: true });
 		writeFileSync(
 			join(paths.workspaceDir, "desk-bindings.json"),
-			JSON.stringify({ version: 1, bindings: { dm_1: { desk: "default", boundAt: "2026-10-23" } } }),
+			JSON.stringify({ version: 1, bindings: { "dingtalk:dm:1": { desk: "default", boundAt: "2026-10-23" } } }),
 		);
 		bootstrapAppHome(paths);
 		expect(existsSync(deskPath)).toBe(false);
@@ -230,15 +230,13 @@ describe("prepareAppServices", () => {
  * and the owner then re-verifies it against its own record.
  */
 describe("claimVerifiedWake", () => {
-	const base: DingTalkEvent = {
-		type: "dm",
-		channelId: "dm_1",
-		user: "someone",
-		userName: "someone",
+	const base: WakeEvent = {
+		source: "wake",
+		channelId: "dingtalk:dm:1",
+		producer: "someone",
+		desk: "news",
 		text: '[SUBAGENT:run-1] Delegation "build" finished. It belongs to task T-1.',
 		ts: "1",
-		conversationId: "",
-		conversationType: "1",
 	};
 	const owner = (accept: boolean) => {
 		const begin = vi.fn(async (_id: string, _taskId: string, _dispatchId: string) => accept);
@@ -252,7 +250,7 @@ describe("claimVerifiedWake", () => {
 	});
 
 	it("claims nothing when the owner's own record does not back the envelope", async () => {
-		const dispatchId = "subagent:dm_1:run-1:done";
+		const dispatchId = "subagent:dingtalk:dm:1:run-1:done";
 		const event = {
 			...base,
 			dispatchId,

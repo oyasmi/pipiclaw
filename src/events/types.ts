@@ -2,7 +2,7 @@
  * Scheduled-event shapes: the on-disk definition, history records and the injected callbacks.
  * Types only, shared by validation, parsing and the watcher without forming an import cycle.
  */
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 import type { TaskCreateInput } from "../tasks/contract-input.js";
 
 export interface EventAction {
@@ -117,5 +117,5 @@ export interface EventsWatcherOptions {
 	 */
 	spawnTask?: (request: SpawnTaskRequest) => Promise<SpawnTaskResult>;
 	/** Persist synthetic work before it enters the in-memory channel queue. */
-	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
 }

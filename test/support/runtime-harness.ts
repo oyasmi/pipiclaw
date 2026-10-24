@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
+import type { HumanEvent, WakeEvent } from "../../src/channel/channel-event.js";
 import { loadBindings, writeBindings } from "../../src/desk/bindings.js";
 import { allocateConversation, createDeskRecord } from "../../src/desk/registry.js";
 import type { DeskConversation } from "../../src/desk/types.js";
 import type { DingTalkBot } from "../../src/dingtalk/bot.js";
-import type { DingTalkEvent } from "../../src/dingtalk/handler.js";
 import { waitFor } from "../e2e/helpers/wait.js";
 import { type CapturedDelivery, E2EFakeDingTalkBot } from "./fake-bot.js";
 import { HarnessDingTalkBot } from "./harness-bot.js";
@@ -25,7 +25,7 @@ export interface E2ERuntimeHarness {
 	deskDir: string;
 	conversationDir: string;
 	deliveries: CapturedDelivery[];
-	sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	sendUserMessage(text: string, overrides?: Partial<HumanEvent>): Promise<void>;
 	/**
 	 * Reads back the model the runner actually resolved (via `/status`) and throws
 	 * if it does not match `expectedModelId`. Guards F4 (spec 048): a "tests the real
@@ -49,7 +49,7 @@ export async function bindChannelOnDisk(
 	desk: string = E2E_DESK,
 ): Promise<DeskConversation> {
 	createDeskRecord(workspaceDir, desk, new Date());
-	const kind = channelId === "tui" ? "tui" : channelId.startsWith("group_") ? "group" : "dm";
+	const kind = channelId === "tui" ? "tui" : channelId.startsWith("dingtalk:group:") ? "group" : "dm";
 	const conversation = await allocateConversation(workspaceDir, desk, channelId, kind, new Date());
 	const bindings = await loadBindings(workspaceDir);
 	bindings.bindings[channelId] = { desk, boundAt: new Date().toISOString() };
@@ -68,7 +68,7 @@ export async function createRuntimeHarness(options?: {
 	process.env.PIPICLAW_HOME = home.homeDir;
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
-	const channelId = options?.channelId ?? "dm_e2e_user";
+	const channelId = options?.channelId ?? "dingtalk:dm:e2e_user";
 	const { conversationDir, deskDir } = await bindChannelOnDisk(home.workspaceDir, channelId);
 	const fakeBot = new E2EFakeDingTalkBot();
 	const runtime = await createRuntimeContext({
@@ -106,17 +106,15 @@ export async function createRuntimeHarness(options?: {
 		deskDir,
 		conversationDir,
 		deliveries: fakeBot.deliveries,
-		async sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void> {
+		async sendUserMessage(text: string, overrides?: Partial<HumanEvent>): Promise<void> {
 			await runtime.handler.handleEvent(
 				{
-					type: "dm",
+					source: "human",
 					channelId,
 					ts: Date.now().toString(),
 					user: "e2e_user",
 					userName: "E2E Tester",
 					text,
-					conversationId: "conv_e2e",
-					conversationType: "1",
 					...overrides,
 				},
 				fakeBot as unknown as DingTalkBot,
@@ -125,14 +123,12 @@ export async function createRuntimeHarness(options?: {
 		async assertResolvedModel(expectedModelId: string): Promise<void> {
 			const status = await runtime.handler.runRuntimeCommand(
 				{
-					type: "dm",
+					source: "human",
 					channelId,
 					ts: Date.now().toString(),
 					user: "e2e_user",
 					userName: "E2E Tester",
 					text: "/status",
-					conversationId: "conv_e2e",
-					conversationType: "1",
 				},
 				"status",
 				"",
@@ -163,13 +159,13 @@ export interface DeterministicHarness {
 	/** The in-process mock provider. Register routes on `model.script` before sending. */
 	model: import("./mock-provider/server.js").MockProvider;
 	/** Send a message and wait for the channel queue + turn to fully settle. */
-	sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	sendUserMessage(text: string, overrides?: Partial<HumanEvent>): Promise<void>;
 	/** Enqueue a message but return immediately — for stacking messages during a `hold`. */
-	sendUserMessageNoWait(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	sendUserMessageNoWait(text: string, overrides?: Partial<HumanEvent>): Promise<void>;
 	/** Deliver an internal wake (task driver / job / delegation), not a user message. Stamped with `desk`. */
-	sendWake(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	sendWake(text: string, overrides?: Partial<WakeEvent>): Promise<void>;
 	/** Queue an internal wake on the real channel queue, as production dispatch does, and return. */
-	enqueueWake(text: string, overrides?: Partial<DingTalkEvent>): boolean;
+	enqueueWake(text: string, overrides?: Partial<WakeEvent>): boolean;
 	/** Run an idle runtime command directly (`/tasks`, `/events` …), the TUI/busy path. */
 	runCommand(name: string, args?: string): Promise<string>;
 	/** Wait until no channel queue has pending/in-flight work and the runner is idle. */
@@ -239,7 +235,7 @@ export async function createDeterministicHarness(options?: {
 		toolsJson,
 		visionModels: options?.visionModels,
 	});
-	const channelId = options?.channelId ?? "dm_e2e_user";
+	const channelId = options?.channelId ?? "dingtalk:dm:e2e_user";
 	const { conversationDir, deskDir } = await bindChannelOnDisk(home.workspaceDir, channelId);
 	for (const extra of options?.extraChannels ?? []) {
 		await bindChannelOnDisk(home.workspaceDir, extra.channelId, extra.desk);
@@ -308,16 +304,26 @@ export async function createDeterministicHarness(options?: {
 		throw error;
 	}
 
-	function buildEvent(text: string, overrides?: Partial<DingTalkEvent>): DingTalkEvent {
+	function buildEvent(text: string, overrides?: Partial<HumanEvent>): HumanEvent {
 		return {
-			type: "dm",
+			source: "human",
 			channelId,
 			ts: Date.now().toString(),
 			user: "e2e_user",
 			userName: "E2E Tester",
 			text,
-			conversationId: "conv_e2e",
-			conversationType: "1",
+			...overrides,
+		};
+	}
+
+	function buildWake(text: string, overrides?: Partial<WakeEvent>): WakeEvent {
+		return {
+			source: "wake",
+			channelId,
+			ts: Date.now().toString(),
+			producer: "E2E",
+			desk: E2E_DESK,
+			text,
 			...overrides,
 		};
 	}
@@ -362,11 +368,11 @@ export async function createDeterministicHarness(options?: {
 			// The durable-dispatch / task-driver path: an internal event, not a user
 			// message. `_isEvent = true` so background wakes get progressStyle "none".
 			// Every in-process producer stamps the desk it produced the wake for (D7).
-			await runtime.handler.handleEvent(buildEvent(text, { desk: E2E_DESK, ...overrides }), bot as never, true);
+			await runtime.handler.handleEvent(buildWake(text, overrides), bot as never);
 			await waitForIdle();
 		},
 		enqueueWake(text, overrides): boolean {
-			return bot.enqueueEvent(buildEvent(text, { desk: E2E_DESK, ...overrides }));
+			return bot.enqueueEvent(buildWake(text, overrides));
 		},
 		async runCommand(name, args = ""): Promise<string> {
 			// The direct idle-runtime-command path the TUI and the busy DingTalk switch use

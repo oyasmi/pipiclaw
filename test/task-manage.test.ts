@@ -15,7 +15,7 @@ import { endTaskStep } from "../src/tools/task-manage/step-end.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
 import { testManagers } from "./helpers/background-runtime.js";
 
-const CHANNEL_ID = "dm_1";
+const CHANNEL_ID = "dingtalk:dm:1";
 const SATISFIED_BODY = renderStandardTaskBody({
 	title: "Work",
 	goal: "Do the work.",

@@ -1,4 +1,4 @@
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 
 /**
  * Consumer-side merging of completion wakes. K parallel delegations (or background jobs) used to
@@ -18,7 +18,7 @@ export const MAX_COALESCED_WAKES = 6;
 
 const COMPLETION_WAKE_ID = /^(subagent|job):.+:done$/;
 
-export function isCoalescableWake(event: ChannelEvent): boolean {
+export function isCoalescableWake(event: WakeEvent): boolean {
 	return !event.internalWake && typeof event.dispatchId === "string" && COMPLETION_WAKE_ID.test(event.dispatchId);
 }
 
@@ -29,12 +29,12 @@ export function isCoalescableWake(event: ChannelEvent): boolean {
  * (or a malformed record with no owning desk) never reaches the new desk's model. It stays queued
  * and its own admission drops it.
  */
-export function canAbsorbWake(primary: ChannelEvent, candidate: ChannelEvent): boolean {
-	return isCoalescableWake(candidate) && candidate.desk !== undefined && candidate.desk === primary.desk;
+export function canAbsorbWake(primary: WakeEvent, candidate: WakeEvent): boolean {
+	return isCoalescableWake(candidate) && candidate.desk === primary.desk;
 }
 
 /** The primary wake keeps its own text (and `[KIND:id]` tag) first; the others follow it. */
-export function mergeCompletionWakes(primary: ChannelEvent, others: ChannelEvent[]): ChannelEvent {
+export function mergeCompletionWakes(primary: WakeEvent, others: WakeEvent[]): WakeEvent {
 	if (others.length === 0) return primary;
 	const header =
 		`[${others.length} more completion wake(s) arrived while this channel was busy and are delivered with the one above. ` +

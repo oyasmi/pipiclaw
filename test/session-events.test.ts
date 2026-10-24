@@ -38,7 +38,7 @@ function createContext(respond = vi.fn(async () => {})): ChannelContext {
 			rawText: "",
 			user: "tester",
 			userName: "Tester",
-			channel: "dm_tester",
+			channel: "dingtalk:dm:tester",
 			ts: "1000",
 		},
 		respond,
@@ -63,7 +63,7 @@ function handlerContext(
 ): SessionEventHandlerContext {
 	return {
 		ctx,
-		logCtx: { channelId: "dm_tester", userName: "Tester" },
+		logCtx: { channelId: "dingtalk:dm:tester", userName: "Tester" },
 		queue: createQueue(),
 		pendingTools: new Map(),
 		store: null,

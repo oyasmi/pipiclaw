@@ -130,12 +130,12 @@ describe("sidecar-worker", () => {
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: (text) => text,
-			usageContext: { channelId: "dm_1", correlationId: "window-123" },
+			usageContext: { channelId: "dingtalk:dm:1", correlationId: "window-123" },
 		});
 
 		expect(recordUsage).toHaveBeenCalledWith(
 			expect.objectContaining({
-				channelId: "dm_1",
+				channelId: "dingtalk:dm:1",
 				kind: "sidecar",
 				label: "memory-inline-consolidation",
 				correlationId: "window-123",
@@ -167,13 +167,13 @@ describe("sidecar-worker", () => {
 				systemPrompt: "System",
 				prompt: "Prompt",
 				parse: (text) => text,
-				usageContext: { channelId: "dm_1" },
+				usageContext: { channelId: "dingtalk:dm:1" },
 			}),
 		).rejects.toThrow("sidecar timed out");
 
 		expect(recordUsage).toHaveBeenCalledWith(
 			expect.objectContaining({
-				channelId: "dm_1",
+				channelId: "dingtalk:dm:1",
 				kind: "sidecar",
 				label: "memory-recall-rerank",
 				cost: expect.objectContaining({ total: 0.01 }),

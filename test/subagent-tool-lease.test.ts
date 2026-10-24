@@ -66,7 +66,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
-function makeTool(workspaceDir: string, deskDir: string, channelId = "dm_lease") {
+function makeTool(workspaceDir: string, deskDir: string, channelId = "dingtalk:dm:lease") {
 	return createSubAgentInlineTool({
 		...testManagers(channelId),
 		executor: fakeExecutor,
@@ -104,7 +104,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("releases the lease when resolveApiKey rejects before registration", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_resolve_reject";
+		const channelId = "dingtalk:dm:resolve_reject";
 		const deskDir = join(workspaceDir, channelId);
 		mkdirSync(deskDir, { recursive: true });
 		const manager = new SubAgentRunManager({ desk: testDesk(channelId), deskDir: "/tmp/pipiclaw-test-desk" }, {});
@@ -130,7 +130,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("releases the lease when per-desk admission rejects registration", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_channel_cap_reject";
+		const channelId = "dingtalk:dm:channel_cap_reject";
 		const deskDir = join(workspaceDir, channelId);
 		mkdirSync(deskDir, { recursive: true });
 		const manager = new SubAgentRunManager({ desk: testDesk(channelId), deskDir: "/tmp/pipiclaw-test-desk" }, {});
@@ -202,7 +202,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("releases the lease and removes the provisional record when required registration persistence fails", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_persist_reject";
+		const channelId = "dingtalk:dm:persist_reject";
 		const deskDir = join(workspaceDir, channelId);
 		mkdirSync(deskDir, { recursive: true });
 		const blockedStateDir = join(workspaceDir, "state-file");
@@ -232,12 +232,12 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("rejects a write-mutating internal delegation when another run already holds the directory", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_lease");
+		const deskDir = join(workspaceDir, "dingtalk:dm:lease");
 		mkdirSync(deskDir, { recursive: true });
 
 		const held = acquireWorkspaceLease({
 			runId: "other-run",
-			channelId: "dm_other",
+			channelId: "dingtalk:dm:other",
 			workingDirectory: workspaceDir,
 		});
 		expect(held.ok).toBe(true);
@@ -258,12 +258,12 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("does not block a read-only delegation from the same directory", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_lease");
+		const deskDir = join(workspaceDir, "dingtalk:dm:lease");
 		mkdirSync(deskDir, { recursive: true });
 
 		const held = acquireWorkspaceLease({
 			runId: "other-run",
-			channelId: "dm_other",
+			channelId: "dingtalk:dm:other",
 			workingDirectory: workspaceDir,
 		});
 		expect(held.ok).toBe(true);
@@ -283,7 +283,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 	it("releases its own lease once the run settles, so the directory becomes available again", async () => {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_lease");
+		const deskDir = join(workspaceDir, "dingtalk:dm:lease");
 		mkdirSync(deskDir, { recursive: true });
 
 		const tool = makeTool(workspaceDir, deskDir);
@@ -295,14 +295,18 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		expect(result.details.failed).toBe(false);
 
 		// The lease is gone: a fresh write acquire on the same directory now succeeds.
-		const after = acquireWorkspaceLease({ runId: "next-run", channelId: "dm_lease", workingDirectory: workspaceDir });
+		const after = acquireWorkspaceLease({
+			runId: "next-run",
+			channelId: "dingtalk:dm:lease",
+			workingDirectory: workspaceDir,
+		});
 		expect(after.ok).toBe(true);
 		releaseWorkspaceLease(after.ok ? after.leaseKey : undefined, "next-run");
 	});
 
 	it("allows a write-capable verifier, holds its lease during execution, and releases it on settlement", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_verify_write_lease";
+		const channelId = "dingtalk:dm:verify_write_lease";
 		const deskDir = join(workspaceDir, channelId);
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(join(deskDir, "tasks", "ship.md"), "---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n");
@@ -348,7 +352,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		expect(releasePrompt).toBeDefined();
 		const runningLease = acquireWorkspaceLease({
 			runId: "competing-verify",
-			channelId: "dm_other",
+			channelId: "dingtalk:dm:other",
 			workingDirectory: workspaceDir,
 		});
 		expect(runningLease.ok).toBe(false);
@@ -369,7 +373,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 describe("subagent tool: purpose=verify admission (D9)", () => {
 	async function makeExternalTool(role: string) {
 		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dm_lease");
+		const deskDir = join(workspaceDir, "dingtalk:dm:lease");
 		mkdirSync(deskDir, { recursive: true });
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		const { writeFileSync } = await import("node:fs");
@@ -380,7 +384,7 @@ describe("subagent tool: purpose=verify admission (D9)", () => {
 
 		const { discoverSubAgents } = await import("../src/subagents/discovery.js");
 		return createSubAgentTool({
-			...testManagers("dm_lease"),
+			...testManagers("dingtalk:dm:lease"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -389,7 +393,7 @@ describe("subagent tool: purpose=verify admission (D9)", () => {
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => discoverSubAgents(workspaceDir, [model]),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_lease" },
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:lease" },
 		});
 	}
 

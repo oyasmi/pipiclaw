@@ -16,7 +16,7 @@ import {
 } from "fs";
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
-import type { ChannelEvent, ChannelEventSink } from "../channel/channel-event.js";
+import type { ChannelEventSink, WakeEvent } from "../channel/channel-event.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
@@ -587,14 +587,12 @@ export class EventsWatcher {
 		const message = `[EVENT:${filename}:${event.type}:${scheduleInfo}] ${event.text ?? ""}${periodicContract}`;
 
 		// Create synthetic ChannelEvent
-		const syntheticEvent: ChannelEvent = {
-			type: "dm",
+		const syntheticEvent: WakeEvent = {
+			source: "wake",
 			channelId: event.channelId,
-			user: "EVENT",
-			userName: "EVENT",
+			producer: "EVENT",
 			text: message,
 			ts: Date.now().toString(),
-			conversationType: "1",
 			dispatchId: eventDispatchId(this.options.desk, filename, event, occurrence),
 			desk: this.options.desk,
 		};

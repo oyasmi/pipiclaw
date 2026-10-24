@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseInboundMessage, sniffImageMimeType } from "../src/dingtalk/inbound-media.js";
+import { sniffImageMimeType } from "../src/channel/attachments.js";
+import { parseInboundMessage } from "../src/dingtalk/inbound-media.js";
 
 /**
  * spec 049: the 2026-08-30 incident's root cause lived entirely in the message-shape branching

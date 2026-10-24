@@ -92,7 +92,7 @@ function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000):
 describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 	it("rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_adopt";
+		const channelId = "dingtalk:dm:adopt";
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-adopt");
 		mkdirSync(artifactDir, { recursive: true });
@@ -228,7 +228,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 
 	it("settles an adopted write run when its lease cannot be rebuilt, without releasing another holder", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_adopt_lease_conflict";
+		const channelId = "dingtalk:dm:adopt_lease_conflict";
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-conflict");
 		mkdirSync(artifactDir, { recursive: true });
@@ -278,7 +278,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 
 	it("does not signal a reused pid when a conflicting lease prevents adoption", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_adopt_pid_mismatch";
+		const channelId = "dingtalk:dm:adopt_pid_mismatch";
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-pid-mismatch");
 		mkdirSync(artifactDir, { recursive: true });
@@ -372,7 +372,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 	// post-exit path) closes that by parsing `events.jsonl` on the reconciliation path too.
 	it("reconciles a completed run's usage, output, and session id across a restart instead of a false 'known zero'", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_usage_restart";
+		const channelId = "dingtalk:dm:usage_restart";
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-usage");
 		mkdirSync(artifactDir, { recursive: true });
@@ -442,7 +442,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 	// information, so what must survive the restart is the verdict itself and the task's log.
 	it("keeps a purpose=verify run's declared verdict and logs its settlement when it completes across a restart", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_verify_restart";
+		const channelId = "dingtalk:dm:verify_restart";
 		const deskDir = join(workspaceDir, channelId);
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-verify");

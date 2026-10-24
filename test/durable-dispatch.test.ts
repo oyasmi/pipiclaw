@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent } from "../src/dingtalk/handler.js";
+import type { WakeEvent } from "../src/channel/channel-event.js";
 import * as log from "../src/log.js";
 import {
 	type DurableDispatchRecord,
@@ -24,16 +24,13 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function event(): DingTalkEvent {
+function event(): WakeEvent {
 	return {
-		type: "dm",
-		channelId: "dm_1",
+		source: "wake",
+		channelId: "dingtalk:dm:1",
 		ts: "123",
-		user: "EVENT",
-		userName: "EVENT",
+		producer: "EVENT",
 		text: "[EVENT:once] do work",
-		conversationId: "",
-		conversationType: "1",
 		desk: "news",
 	};
 }
@@ -44,7 +41,7 @@ describe("DurableDispatchService", () => {
 		// caller to reject to: unguarded, one ENOSPC window takes the whole daemon down.
 		const stateDir = join(tempDir(), "state", "dispatch-readonly");
 		let accept = false;
-		const received: DingTalkEvent[] = [];
+		const received: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			bot: {
@@ -85,7 +82,7 @@ describe("DurableDispatchService", () => {
 
 	it("persists a queue-rejected dispatch and later delivers it, but refuses an event with no desk", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const received: DingTalkEvent[] = [];
+		const received: WakeEvent[] = [];
 		let accept = false;
 		const service = new DurableDispatchService({
 			stateDir,
@@ -110,14 +107,16 @@ describe("DurableDispatchService", () => {
 		// Spec 058, D7: a producer that forgot its desk is refused before anything is persisted —
 		// admission could never check such a wake against the channel's binding.
 		const before = readdirSync(stateDir).length;
-		await expect(service.dispatch({ ...event(), desk: undefined, ts: "456" })).resolves.toBe(false);
+		await expect(service.dispatch({ ...event(), desk: undefined as unknown as string, ts: "456" })).resolves.toBe(
+			false,
+		);
 		expect(readdirSync(stateDir)).toHaveLength(before);
 		expect(received).toHaveLength(1);
 	});
 
 	it("replays an expired lease after a restart and removes it only after completion", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const first: DingTalkEvent[] = [];
+		const first: WakeEvent[] = [];
 		const firstService = new DurableDispatchService({
 			stateDir,
 			leaseMs: 100,
@@ -132,7 +131,7 @@ describe("DurableDispatchService", () => {
 		const id = first[0]?.dispatchId;
 		expect(id).toBeTruthy();
 
-		const replayed: DingTalkEvent[] = [];
+		const replayed: WakeEvent[] = [];
 		const restarted = new DurableDispatchService({
 			stateDir,
 			leaseMs: 100,
@@ -152,7 +151,7 @@ describe("DurableDispatchService", () => {
 
 	it("marks a redelivered wake without changing its identity or stored text (spec 031, D3)", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			leaseMs: 100,
@@ -181,7 +180,7 @@ describe("DurableDispatchService", () => {
 		const root = tempDir();
 		const stateDir = join(root, "state", "dispatch");
 		const workspaceDir = join(root, "workspace");
-		const channelId = "dm_redelivery_task";
+		const channelId = "dingtalk:dm:redelivery_task";
 		const deskDir = join(workspaceDir, channelId);
 		await mkdir(join(deskDir, "tasks", "archive"), { recursive: true });
 		await writeFile(
@@ -233,14 +232,14 @@ describe("DurableDispatchService", () => {
 			{ announce: false },
 		);
 		const dispatchId = `subagent:${testDesk(channelId)}:run-redelivery:done`;
-		const wake: DingTalkEvent = {
+		const wake: WakeEvent = {
 			...event(),
 			channelId,
 			text: "[SUBAGENT:run-redelivery] done. It belongs to task T-redelivery.",
 			dispatchId,
 			internalWake: { kind: "subagent", resourceId: "run-redelivery", taskId: "T-redelivery", dispatchId },
 		};
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			leaseMs: 10,
@@ -275,7 +274,7 @@ describe("DurableDispatchService", () => {
 		vi.setSystemTime(start);
 
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const leaseMs = 100_000;
 		const service = new DurableDispatchService({
 			stateDir,
@@ -317,7 +316,7 @@ describe("DurableDispatchService", () => {
 
 	it("redelivers a started record once this process no longer holds its liveness claim (spec 031, D2)", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			leaseMs: 100,
@@ -349,7 +348,7 @@ describe("DurableDispatchService", () => {
 		// renew branch no longer keeps the stopped turn's record alive forever.
 		await service.dispatch(event());
 		await service.markStarted(delivered.at(-1)?.dispatchId);
-		expect(await service.cancelChannel("dm_1")).toBe(1);
+		expect(await service.cancelChannel("dingtalk:dm:1")).toBe(1);
 
 		await service.drainOnce();
 		expect(delivered).toHaveLength(3);
@@ -357,7 +356,7 @@ describe("DurableDispatchService", () => {
 
 	it("cancelChannel clears an in-flight lease so the next drain retries immediately", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			leaseMs: 15 * 60_000,
@@ -373,7 +372,7 @@ describe("DurableDispatchService", () => {
 
 		// Simulate the record still being "in flight" (queued, long lease) when the
 		// user hits /stop for that channel.
-		const canceled = await service.cancelChannel("dm_1");
+		const canceled = await service.cancelChannel("dingtalk:dm:1");
 		expect(canceled).toBe(1);
 
 		// Without cancelChannel this record would sit until the 15m lease expires;
@@ -390,7 +389,7 @@ describe("DurableDispatchService", () => {
 		vi.setSystemTime(start);
 
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			bot: {
@@ -424,7 +423,7 @@ describe("DurableDispatchService", () => {
 		vi.setSystemTime(now);
 
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const exhausted: DurableDispatchRecord[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
@@ -473,8 +472,8 @@ describe("DurableDispatchService", () => {
 		// derived from one used to become the filename verbatim, silently turning into a nested
 		// path a flat readdir (what drainOnce/cancelChannel actually do) can never see again.
 		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
-		const dispatchId = "subagent:group_a/b=:run-1:done";
+		const delivered: WakeEvent[] = [];
+		const dispatchId = "subagent:dingtalk:group:a/b=:run-1:done";
 		const service = new DurableDispatchService({
 			stateDir,
 			bot: {
@@ -503,7 +502,7 @@ describe("DurableDispatchService", () => {
 		// tried, discarding the message it carried for good.
 		const stateDir = join(tempDir(), "state", "dispatch");
 		let accept = false;
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			bot: {
@@ -537,7 +536,7 @@ describe("DurableDispatchService", () => {
 	it("names the wake's task in the exhausted notice without forwarding the prompt or producer tag", () => {
 		const wake = createTaskDriverEvent(
 			"news",
-			"group_cid+a/b==",
+			"dingtalk:group:cid+a/b==",
 			{
 				id: "weekly-report",
 				title: "周报",
@@ -568,23 +567,20 @@ describe("DurableDispatchService", () => {
 });
 
 describe("DurableDispatchService.absorbPending (completion-wake coalescing)", () => {
-	function wake(channelId: string, runId: string, text = `[SUBAGENT:${runId}] finished`): DingTalkEvent {
+	function wake(channelId: string, runId: string, text = `[SUBAGENT:${runId}] finished`): WakeEvent {
 		return {
-			type: "dm",
+			source: "wake",
 			channelId,
 			ts: String(Date.now()),
-			user: "SUBAGENT",
-			userName: "SUBAGENT",
+			producer: "SUBAGENT",
 			text,
-			conversationId: "",
-			conversationType: "1",
 			dispatchId: `subagent:${channelId}:${runId}:done`,
 			desk: "news",
 		};
 	}
 
 	function capturingService(stateDir: string, accept: () => boolean = () => true) {
-		const delivered: DingTalkEvent[] = [];
+		const delivered: WakeEvent[] = [];
 		const service = new DurableDispatchService({
 			stateDir,
 			bot: {
@@ -598,7 +594,7 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 		return { service, delivered };
 	}
 
-	const isWake = (candidate: DingTalkEvent) => candidate.user === "SUBAGENT";
+	const isWake = (candidate: WakeEvent) => candidate.producer === "SUBAGENT";
 
 	it.each([true, false])(
 		"preserves earlier claims and leaves a failed claim deliverable (queued=%s)",
@@ -606,16 +602,16 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 			const stateDir = join(tempDir(), "state", "dispatch");
 			let accept = true;
 			const { service, delivered } = capturingService(stateDir, () => accept);
-			await service.dispatch(wake("dm_1", "run_a"));
+			await service.dispatch(wake("dingtalk:dm:1", "run_a"));
 			accept = queued;
 			for (const [index, runId] of ["run_b", "run_c"].entries()) {
-				await service.dispatch(wake("dm_1", runId));
-				const path = join(stateDir, `${encodeURIComponent(`subagent:dm_1:${runId}:done`)}.json`);
+				await service.dispatch(wake("dingtalk:dm:1", runId));
+				const path = join(stateDir, `${encodeURIComponent(`subagent:dingtalk:dm:1:${runId}:done`)}.json`);
 				const record = JSON.parse(readFileSync(path, "utf-8"));
 				record.createdAt = new Date(index).toISOString();
 				await writeFile(path, JSON.stringify(record));
 			}
-			const failedId = "subagent:dm_1:run_c:done";
+			const failedId = "subagent:dingtalk:dm:1:run_c:done";
 			const write = atomicFile.writeFileAtomically;
 			const fault = vi
 				.spyOn(atomicFile, "writeFileAtomically")
@@ -629,8 +625,8 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 					await write(path, content, options);
 				});
 			await service.markStarted(delivered[0]?.dispatchId);
-			const claimed = await service.absorbPending("dm_1", delivered[0]!.dispatchId!, isWake, 5);
-			expect(claimed.map((item) => item.dispatchId)).toEqual(["subagent:dm_1:run_b:done"]);
+			const claimed = await service.absorbPending("dingtalk:dm:1", delivered[0]!.dispatchId!, isWake, 5);
+			expect(claimed.map((item) => item.dispatchId)).toEqual(["subagent:dingtalk:dm:1:run_b:done"]);
 			const failed = JSON.parse(readFileSync(join(stateDir, `${encodeURIComponent(failedId)}.json`), "utf-8"));
 			expect(failed.status).toBe(queued ? "queued" : "pending");
 			expect(failed.deliveries).toBe(queued ? 1 : 0);
@@ -647,23 +643,25 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 	it("folds this channel's waiting wakes into the starting turn and turns their stale deliveries away", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const { service, delivered } = capturingService(stateDir);
-		await service.dispatch(wake("dm_1", "run_a"));
-		await service.dispatch(wake("dm_1", "run_b"));
-		await service.dispatch(wake("dm_2", "run_other"));
-		await service.dispatch({ ...event(), dispatchId: "event:dm_1:x" });
+		await service.dispatch(wake("dingtalk:dm:1", "run_a"));
+		await service.dispatch(wake("dingtalk:dm:1", "run_b"));
+		await service.dispatch(wake("dingtalk:dm:2", "run_other"));
+		await service.dispatch({ ...event(), dispatchId: "event:dingtalk:dm:1:x" });
 		const primary = delivered[0]?.dispatchId as string;
 
 		expect(await service.markStarted(primary)).toBe(true);
-		const absorbed = await service.absorbPending("dm_1", primary, isWake, 5);
+		const absorbed = await service.absorbPending("dingtalk:dm:1", primary, isWake, 5);
 
 		// Only the same channel's matching wakes; never the primary, another channel, or an event.
-		expect(absorbed.map((item) => item.dispatchId)).toEqual(["subagent:dm_1:run_b:done"]);
+		expect(absorbed.map((item) => item.dispatchId)).toEqual(["subagent:dingtalk:dm:1:run_b:done"]);
 		// run_b's own queued delivery comes through later and must not run it a second time.
-		expect(await service.markStarted("subagent:dm_1:run_b:done")).toBe(false);
+		expect(await service.markStarted("subagent:dingtalk:dm:1:run_b:done")).toBe(false);
 		await service.markCompleted(primary);
-		await service.markCompleted("subagent:dm_1:run_b:done");
+		await service.markCompleted("subagent:dingtalk:dm:1:run_b:done");
 		const remaining = readdirSync(stateDir).map((name) => decodeURIComponent(name));
-		expect(remaining).toEqual(expect.arrayContaining(["subagent:dm_2:run_other:done.json", "event:dm_1:x.json"]));
+		expect(remaining).toEqual(
+			expect.arrayContaining(["subagent:dingtalk:dm:2:run_other:done.json", "event:dingtalk:dm:1:x.json"]),
+		);
 		expect(remaining).toHaveLength(2);
 	});
 
@@ -671,14 +669,14 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 		const stateDir = join(tempDir(), "state", "dispatch");
 		let accept = true;
 		const { service, delivered } = capturingService(stateDir, () => accept);
-		await service.dispatch(wake("dm_1", "run_a"));
+		await service.dispatch(wake("dingtalk:dm:1", "run_a"));
 		accept = false; // channel queue full: run_b stays pending on disk
-		await service.dispatch(wake("dm_1", "run_b"));
+		await service.dispatch(wake("dingtalk:dm:1", "run_b"));
 		accept = true;
 		const primary = delivered[0]?.dispatchId as string;
 		await service.markStarted(primary);
 
-		const absorbed = await service.absorbPending("dm_1", primary, isWake, 5);
+		const absorbed = await service.absorbPending("dingtalk:dm:1", primary, isWake, 5);
 		expect(absorbed).toHaveLength(1);
 		await service.drainOnce();
 		expect(delivered).toHaveLength(1);
@@ -687,31 +685,34 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 	it("lets /stop redeliver absorbed wakes on their own", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const { service, delivered } = capturingService(stateDir);
-		await service.dispatch(wake("dm_1", "run_a"));
-		await service.dispatch(wake("dm_1", "run_b"));
+		await service.dispatch(wake("dingtalk:dm:1", "run_a"));
+		await service.dispatch(wake("dingtalk:dm:1", "run_b"));
 		const primary = delivered[0]?.dispatchId as string;
 		await service.markStarted(primary);
-		await service.absorbPending("dm_1", primary, isWake, 5);
+		await service.absorbPending("dingtalk:dm:1", primary, isWake, 5);
 
 		// /stop dropped the queued closures and reset the channel's in-flight records.
-		await service.cancelChannel("dm_1");
+		await service.cancelChannel("dingtalk:dm:1");
 		await service.drainOnce();
 		const redelivered = delivered.slice(2).map((item) => item.dispatchId);
-		expect(redelivered).toEqual(expect.arrayContaining([primary, "subagent:dm_1:run_b:done"]));
+		expect(redelivered).toEqual(expect.arrayContaining([primary, "subagent:dingtalk:dm:1:run_b:done"]));
 		// The redelivery of the formerly absorbed wake is a real delivery now, not a stale one.
-		expect(await service.markStarted("subagent:dm_1:run_b:done")).toBe(true);
+		expect(await service.markStarted("subagent:dingtalk:dm:1:run_b:done")).toBe(true);
 	});
 
 	it("respects the limit, oldest first", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const { service, delivered } = capturingService(stateDir);
 		for (const runId of ["run_a", "run_b", "run_c", "run_d"]) {
-			await service.dispatch(wake("dm_1", runId));
+			await service.dispatch(wake("dingtalk:dm:1", runId));
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		}
 		const primary = delivered[0]?.dispatchId as string;
 		await service.markStarted(primary);
-		const absorbed = await service.absorbPending("dm_1", primary, isWake, 2);
-		expect(absorbed.map((item) => item.dispatchId)).toEqual(["subagent:dm_1:run_b:done", "subagent:dm_1:run_c:done"]);
+		const absorbed = await service.absorbPending("dingtalk:dm:1", primary, isWake, 2);
+		expect(absorbed.map((item) => item.dispatchId)).toEqual([
+			"subagent:dingtalk:dm:1:run_b:done",
+			"subagent:dingtalk:dm:1:run_c:done",
+		]);
 	});
 });

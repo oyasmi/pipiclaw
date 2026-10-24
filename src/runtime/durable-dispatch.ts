@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChannelEvent, ChannelEventSink } from "../channel/channel-event.js";
+import type { ChannelEventSink, WakeEvent } from "../channel/channel-event.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -20,7 +20,7 @@ export interface DurableDispatchRecord {
 	id: string;
 	createdAt: string;
 	status: DispatchStatus;
-	event: ChannelEvent;
+	event: WakeEvent;
 	deliveries: number;
 	leaseExpiresAt?: string;
 	/** Set by `markRetryable` to back off a repeatedly-failing structured wake instead of
@@ -81,7 +81,7 @@ function recordPath(stateDir: string, id: string): string {
  * prior side effects before repeating them. The stored record keeps the original text, so the
  * dispatch id is unaffected.
  */
-function withRedeliveryNotice(event: ChannelEvent, deliveries: number): ChannelEvent {
+function withRedeliveryNotice(event: WakeEvent, deliveries: number): WakeEvent {
 	if (deliveries <= 1) return event;
 	return {
 		...event,
@@ -94,11 +94,11 @@ function withRedeliveryNotice(event: ChannelEvent, deliveries: number): ChannelE
 
 /**
  * What a wake was for, in the user's terms (spec 053, D2). The wake's own `text` is a prompt for
- * the model and its `user` an internal producer tag (`TASK_DRIVER`, `SUBAGENT`, …), so neither
+ * the model and its `producer` an internal tag (`TASK_DRIVER`, `SUBAGENT`, …), so neither
  * may reach the chat; every in-process producer prefixes its text with a `[KIND:id…]` tag, which
  * is what this reads instead.
  */
-function describeWakeSource(event: ChannelEvent): { label: string; nextStep?: string } {
+function describeWakeSource(event: WakeEvent): { label: string; nextStep?: string } {
 	const tag = /^\[(TASK_DRIVER|SUBAGENT|JOB|EVENT):([^:\]\s]+)/.exec(event.text);
 	const id = tag?.[2];
 	switch (tag?.[1]) {
@@ -130,9 +130,9 @@ export function renderDispatchExhaustedNotice(record: DurableDispatchRecord, sta
 	);
 }
 
-function dispatchId(event: ChannelEvent): string {
+function dispatchId(event: WakeEvent): string {
 	return createHash("sha256")
-		.update(JSON.stringify([event.channelId, event.user, event.ts, event.text, event.conversationId]))
+		.update(JSON.stringify([event.channelId, event.producer, event.ts, event.text]))
 		.digest("hex");
 }
 
@@ -149,7 +149,9 @@ function parseRecord(raw: string): DurableDispatchRecord | undefined {
 				value.status !== "running" &&
 				value.status !== "exhausted") ||
 			!isRecord(value.event) ||
+			value.event.source !== "wake" ||
 			typeof value.event.channelId !== "string" ||
+			typeof value.event.producer !== "string" ||
 			typeof value.event.text !== "string" ||
 			typeof value.deliveries !== "number" ||
 			(value.nextAttemptAt !== undefined && typeof value.nextAttemptAt !== "string")
@@ -218,13 +220,13 @@ export class DurableDispatchService {
 		this.timer = null;
 	}
 
-	async dispatch(event: ChannelEvent): Promise<boolean> {
+	async dispatch(event: WakeEvent): Promise<boolean> {
 		// Spec 058, D7: every in-process producer stamps its desk. An event without one cannot be
 		// checked against the channel's binding at admission, so it is refused here, at the door.
 		if (!event.desk) {
 			log.logWarn("dispatch.event.missing_desk", "Dispatch refused: synthetic event carries no desk", {
 				channelId: event.channelId,
-				fields: { dispatchId: event.dispatchId, producer: event.user },
+				fields: { dispatchId: event.dispatchId, producer: event.producer },
 			});
 			return false;
 		}
@@ -328,11 +330,11 @@ export class DurableDispatchService {
 	async absorbPending(
 		channelId: string,
 		primaryId: string,
-		accept: (event: ChannelEvent) => boolean,
+		accept: (event: WakeEvent) => boolean,
 		limit: number,
 		/** `stopEpoch` sampled when the caller's admission began; a later `/stop` suppresses the stale-delivery marks. */
 		epoch = this.stopEpoch(channelId),
-	): Promise<ChannelEvent[]> {
+	): Promise<WakeEvent[]> {
 		if (limit <= 0) return [];
 		let filenames: string[];
 		try {
@@ -350,7 +352,7 @@ export class DurableDispatchService {
 		}
 		candidates.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-		const events: ChannelEvent[] = [];
+		const events: WakeEvent[] = [];
 		for (const { id } of candidates.slice(0, limit)) {
 			try {
 				await this.queue.run(id, async () => {
@@ -388,7 +390,7 @@ export class DurableDispatchService {
 	private isAbsorbable(
 		record: DurableDispatchRecord,
 		channelId: string,
-		accept: (event: ChannelEvent) => boolean,
+		accept: (event: WakeEvent) => boolean,
 	): boolean {
 		return (
 			record.event.channelId === channelId &&

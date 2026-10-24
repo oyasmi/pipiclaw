@@ -6,10 +6,10 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-store-");
 
-/** Every channel but `dm_unbound` archives into its own conversation directory under `root`. */
+/** Every channel but `dingtalk:dm:unbound` archives into its own conversation directory under `root`. */
 function storeFor(root: string): ChannelStore {
 	return new ChannelStore({
-		resolveArchiveDir: (channelId) => (channelId === "dm_unbound" ? undefined : join(root, channelId)),
+		resolveArchiveDir: (channelId) => (channelId === "dingtalk:dm:unbound" ? undefined : join(root, channelId)),
 	});
 }
 
@@ -63,7 +63,7 @@ describe("ChannelStore", () => {
 
 		const workingDir = createTempDir();
 		const store = storeFor(workingDir);
-		const channelId = "dm_1";
+		const channelId = "dingtalk:dm:1";
 		const first = await store.logMessage(channelId, {
 			date: "",
 			ts: "100",
@@ -110,14 +110,14 @@ describe("ChannelStore", () => {
 	it("rotates oversized logs, resets sync offsets, and writes subagent runs", async () => {
 		const workingDir = createTempDir();
 		const store = storeFor(workingDir);
-		const deskDir = seedChannelDir(workingDir, "dm_rotate");
+		const deskDir = seedChannelDir(workingDir, "dingtalk:dm:rotate");
 		const logPath = join(deskDir, "log.jsonl");
 		const syncOffsetPath = join(deskDir, ".sync-offset");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 		writeFileSync(syncOffsetPath, "42", "utf-8");
 
-		await store.logMessage("dm_rotate", {
+		await store.logMessage("dingtalk:dm:rotate", {
 			date: "2026-04-01T10:00:00.000Z",
 			ts: "200",
 			user: "alice",
@@ -138,20 +138,20 @@ describe("ChannelStore", () => {
 	it("serializes concurrent writes to the same log file around rotation", async () => {
 		const workingDir = createTempDir();
 		const store = storeFor(workingDir);
-		const deskDir = seedChannelDir(workingDir, "dm_concurrent");
+		const deskDir = seedChannelDir(workingDir, "dingtalk:dm:concurrent");
 		const logPath = join(deskDir, "log.jsonl");
 
 		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
 
 		const [first, second] = await Promise.all([
-			store.logMessage("dm_concurrent", {
+			store.logMessage("dingtalk:dm:concurrent", {
 				date: "2026-04-01T10:00:00.000Z",
 				ts: "201",
 				user: "alice",
 				text: "first",
 				isBot: false,
 			}),
-			store.logMessage("dm_concurrent", {
+			store.logMessage("dingtalk:dm:concurrent", {
 				date: "2026-04-01T10:00:01.000Z",
 				ts: "202",
 				user: "alice",
@@ -173,7 +173,7 @@ describe("ChannelStore", () => {
 		const workingDir = createTempDir();
 		const store = storeFor(workingDir);
 
-		const logged = await store.logMessage("dm_unbound", {
+		const logged = await store.logMessage("dingtalk:dm:unbound", {
 			date: "2026-04-01T10:00:00.000Z",
 			ts: "400",
 			user: "alice",

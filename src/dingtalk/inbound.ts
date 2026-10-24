@@ -5,14 +5,15 @@
  * overtaken by a later message on the same channel.
  */
 import type { DWClientDownStream } from "dingtalk-stream";
-import type { InboundImage } from "../channel/channel-event.js";
+import type { HumanEvent, InboundImage } from "../channel/channel-event.js";
 import * as log from "../log.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
+import { dingtalkDmChannelId, dingtalkGroupChannelId } from "./channel-ids.js";
 import type { DingTalkConfig } from "./config.js";
 import type { ConversationMetaStore } from "./conversation-meta.js";
-import type { DingTalkEvent, DingTalkHandler } from "./handler.js";
+import type { DingTalkHandler } from "./handler.js";
 import { type ParsedInboundMessage, parseInboundMessage } from "./inbound-media.js";
 
 interface DingTalkIncomingMessage {
@@ -47,7 +48,7 @@ export interface InboundMessagesDeps {
 		parsed: ParsedInboundMessage,
 	) => Promise<{ text: string; images: InboundImage[] }>;
 	/** Command / busy / `/new` routing for a built event (the bot's `routeInboundEvent`). */
-	routeInboundEvent: (event: DingTalkEvent) => Promise<void>;
+	routeInboundEvent: (event: HumanEvent) => Promise<void>;
 }
 
 export class InboundMessages {
@@ -144,7 +145,8 @@ export class InboundMessages {
 		}
 
 		// Determine channel ID
-		const channelId = conversationType === "2" ? `group_${conversationId}` : `dm_${senderId}`;
+		const channelId =
+			conversationType === "2" ? dingtalkGroupChannelId(conversationId) : dingtalkDmChannelId(senderId);
 
 		// Parsing above is free; resolving image attachments below is a real network round-trip.
 		// Serialize the whole "resolve attachments → build event → route" unit per channel (spec
@@ -179,15 +181,13 @@ export class InboundMessages {
 				handler.noteChannelActivity?.({ channelId, name: channelName, at: Date.now() });
 
 				// Build event
-				const event: DingTalkEvent = {
-					type: conversationType === "2" ? "group" : "dm",
+				const event: HumanEvent = {
+					source: "human",
 					channelId,
 					ts: Date.now().toString(),
 					user: senderId,
 					userName: senderName,
 					text: content,
-					conversationId,
-					conversationType,
 					...(channelName ? { channelName } : {}),
 					...(images.length > 0 ? { images } : {}),
 				};

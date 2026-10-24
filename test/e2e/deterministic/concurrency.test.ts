@@ -65,7 +65,7 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 		// Mutation check: sharing the transport's channel queue across ids blocks the peer request.
 		// Both channels share one desk (spec 058, D1): parallel turns and separate contexts must hold
 		// even though their memory, tasks and files are shared.
-		const otherChannel = "dm_isolated_peer";
+		const otherChannel = "dingtalk:dm:isolated_peer";
 		harness = await createDeterministicHarness({ extraChannels: [{ channelId: otherChannel }] });
 		harness.model.script.route({
 			name: "turn",

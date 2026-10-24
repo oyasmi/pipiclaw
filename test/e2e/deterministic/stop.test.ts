@@ -105,8 +105,8 @@ describe("E2E deterministic: /stop", () => {
 		});
 		let oldTurn: Promise<void> = Promise.resolve();
 		const handle = harness.runtime.handler.handleEvent.bind(harness.runtime.handler);
-		vi.spyOn(harness.runtime.handler, "handleEvent").mockImplementation((event, bot, isEvent) => {
-			const pending = handle(event, bot, isEvent);
+		vi.spyOn(harness.runtime.handler, "handleEvent").mockImplementation((event, bot) => {
+			const pending = handle(event, bot);
 			if (event.text === "WEDGE_RETURN") oldTurn = pending;
 			return pending;
 		});

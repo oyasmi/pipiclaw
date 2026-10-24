@@ -81,10 +81,10 @@ function scriptedWorker(script: AssistantMessage[], seen: { continues: number; m
 
 function makeTool(overrides: Partial<SubAgentToolOptions> & Pick<SubAgentToolOptions, "createWorker">) {
 	const workspaceDir = createTempWorkspace();
-	const deskDir = join(workspaceDir, "dm_123");
+	const deskDir = join(workspaceDir, "dingtalk:dm:123");
 	mkdirSync(deskDir, { recursive: true });
 	return createSubAgentInlineTool({
-		...testManagers("dm_123"),
+		...testManagers("dingtalk:dm:123"),
 		executor: fakeExecutor,
 		fileStore: createFileStore(),
 		getCurrentModel: () => model,
@@ -92,7 +92,7 @@ function makeTool(overrides: Partial<SubAgentToolOptions> & Pick<SubAgentToolOpt
 		resolveApiKey: async () => "test-key",
 		workspaceDir,
 		deskDir,
-		runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dm_123" },
+		runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
 		retryBaseDelayMs: 1,
 		...overrides,
 	});
@@ -135,7 +135,7 @@ describe("internal sub-agent: provider error recovery", () => {
 				(error: unknown) => error,
 			);
 			await entered.promise;
-			const manager = getSubAgentRunManager("dm_123");
+			const manager = getSubAgentRunManager("dingtalk:dm:123");
 			const run = manager.list().find((record) => record.status === "running")!;
 			await manager.cancel(run.runId);
 			// A second cancel must keep the same live handle until normal settlement owns cleanup.
@@ -188,7 +188,7 @@ describe("internal sub-agent: provider error recovery", () => {
 		// The continuation ran on the backup model with the backup model's own key.
 		expect(seen.models).toEqual([model.id, backupModel.id]);
 		expect(keysFor).toContain(backupModel.id);
-		const record = getSubAgentRunManager("dm_123").get(result.details.runId);
+		const record = getSubAgentRunManager("dingtalk:dm:123").get(result.details.runId);
 		expect(record?.model).toBe(`${backupModel.provider}/${backupModel.id}`);
 	});
 

@@ -20,8 +20,7 @@ import {
 	readCliVersion,
 } from "../app/home.js";
 import { prepareAppServices } from "../app/services.js";
-import type { ChannelEvent } from "../channel/channel-event.js";
-import { formatChannelLabel } from "../channel/channel-id.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 import { CHANNELS_INDEX_FILENAME, type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ChannelStore } from "../channel/store.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
@@ -32,6 +31,7 @@ import { getDeskDir } from "../desk/paths.js";
 import { listDesks } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
 import { DingTalkBot } from "../dingtalk/bot.js";
+import { describeDingTalkChannel, parseDingTalkChannelId } from "../dingtalk/channel-ids.js";
 import { type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import type { DingTalkHandler } from "../dingtalk/handler.js";
 import { createEventsWatcher } from "../events/watcher.js";
@@ -154,7 +154,7 @@ interface RuntimeContextOptions {
 	/** Receives raw SDK session events after subscription, without changing runtime handling. */
 	observer?: (event: unknown, channelId: string) => void;
 	/** Receives TaskDriver dispatch outcomes; used only by isolated evaluation workers. */
-	onTaskDriverDispatch?: (event: ChannelEvent, accepted: boolean) => void;
+	onTaskDriverDispatch?: (event: WakeEvent, accepted: boolean) => void;
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 	/** Test-only fault seams for the atomic structured-wake task transition. */
@@ -189,12 +189,13 @@ export async function createRuntimeContext(
 	let durableDispatch: DurableDispatchService | undefined;
 	let shuttingDown = false;
 	const executor = options.executor ?? createExecutor();
-	const dispatch = (event: ChannelEvent) => durableDispatch?.dispatch(event) ?? false;
+	const dispatch = (event: WakeEvent) => durableDispatch?.dispatch(event) ?? false;
 
 	// The one authority on bindings and active desks (spec 058, D6). `bot`, `taskDriver` and the
 	// spawner are resolved lazily by its callbacks: none of them runs before this function returns.
 	const deskRuntime: DeskRuntime = new DeskRuntime({
 		workspaceDir,
+		conversationKindOf: (channelId) => parseDingTalkChannelId(channelId)?.kind,
 		recover: async (conversations) => {
 			// Spec 043, D10 point 1: repair turns interrupted by the last shutdown/crash before any of
 			// these channels takes traffic — a dangling session would 400 against the provider on
@@ -257,8 +258,11 @@ export async function createRuntimeContext(
 		getBoundDesk: (channelId) => deskRuntime.boundDesk(channelId),
 	});
 	await channelIndex.load();
+	// How a channel is named to a user. DingTalk is the only transport the daemon hosts until the
+	// channel registry (spec 061, A2) takes this over.
+	const labelOf = (channelId: string) => describeDingTalkChannel(channelId, channelIndex.nameOf(channelId));
 	const describeChannel = (desk: string, channelId: string) => ({
-		label: formatChannelLabel(channelId, channelIndex.nameOf(channelId)),
+		label: labelOf(channelId),
 		boundHere: deskRuntime.isBoundTo(channelId, desk),
 	});
 
@@ -304,10 +308,10 @@ export async function createRuntimeContext(
 			modelsConfigPath: options.paths.modelsConfigPath,
 			settingsManager: runtimeSettingsManager,
 			onSessionEvent: options.observer,
-			describeChannel: (id) => channelIndex.nameOf(id),
+			describeChannel: (id) => (channelIndex.nameOf(id) ? labelOf(id) : undefined),
 			describeConversation: (dir) => {
 				const owner = deskRuntime.channelOfConversation(conversation.desk, dir);
-				return owner ? formatChannelLabel(owner, channelIndex.nameOf(owner)) : undefined;
+				return owner ? labelOf(owner) : undefined;
 			},
 			// The DingTalk bot is the media sender for this transport; enables `send_media`.
 			// `bot` is defined below in this same scope and initialized before any message
@@ -344,7 +348,7 @@ export async function createRuntimeContext(
 					await listDesks(workspaceDir),
 					deskRuntime.bindingTable(),
 					deskRuntime.boundDesk(channelId),
-					(id) => formatChannelLabel(id, channelIndex.nameOf(id)),
+					labelOf,
 				),
 			channelIndexPath: join(workspaceDir, CHANNELS_INDEX_FILENAME),
 			create: (name) => deskRuntime.create(name),
@@ -375,15 +379,13 @@ export async function createRuntimeContext(
 			log.logEvent("warn", "dispatch.exhausted", "Dispatch exhausted", {
 				ctx: { channelId: record.event.channelId },
 				details: record.event.text.slice(0, 500),
-				fields: { dispatchId: record.id, deliveries: record.deliveries, producer: record.event.user },
+				fields: { dispatchId: record.id, deliveries: record.deliveries, producer: record.event.producer },
 			});
-			if (record.event.desk) {
-				await deskRuntime.sendFromDesk(
-					record.event.desk,
-					record.event.channelId,
-					renderDispatchExhaustedNotice(record, dispatchStateDir),
-				);
-			}
+			await deskRuntime.sendFromDesk(
+				record.event.desk,
+				record.event.channelId,
+				renderDispatchExhaustedNotice(record, dispatchStateDir),
+			);
 		},
 	});
 	// Background jobs and delegation runs are owned per desk (spec 058, D15); their completion wakes

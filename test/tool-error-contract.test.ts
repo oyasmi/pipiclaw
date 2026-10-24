@@ -83,7 +83,7 @@ describe("tool error contract: recoverable failures never throw past withToolDet
 
 	it("job: cancel without ids is recoverable", async () => {
 		const jobManager = {} as DeskJobManager;
-		const tool = withToolDetails(createJobTool({ jobManager, channelId: "dm_1" }), "job");
+		const tool = withToolDetails(createJobTool({ jobManager, channelId: "dingtalk:dm:1" }), "job");
 		const result = await tool.execute("call", { label: "x", op: "cancel" }, undefined, undefined);
 		expect((result.details as { recoverable?: true }).recoverable).toBe(true);
 		expect((result.content[0] as { text: string }).text).toMatch(/^Rejected: /);

@@ -39,8 +39,8 @@ beforeEach(() => {
 describe("session search", () => {
 	it("builds a desk corpus from every conversation's context, session jsonl, log, and rotated log", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
-		const siblingDir = join(workspaceDir, "dm_other");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
+		const siblingDir = join(workspaceDir, "dingtalk:dm:other");
 		mkdirSync(deskDir, { recursive: true });
 		mkdirSync(siblingDir, { recursive: true });
 
@@ -85,7 +85,7 @@ describe("session search", () => {
 
 	it("searches Chinese and English terms with role filtering", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-04-19T00:00:00.000Z", userName: "Alice", text: "需要优化记忆管理", isBot: false },
@@ -125,7 +125,7 @@ describe("session search", () => {
 
 	it("returns recent entries when query is empty", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-04-18T00:00:00.000Z", text: "older", isBot: false },
@@ -151,8 +151,8 @@ describe("session search", () => {
 
 	it("keeps short-lived corpus caches for more than one channel", async () => {
 		const workspaceDir = createWorkspace();
-		const firstDir = join(workspaceDir, "dm_first");
-		const secondDir = join(workspaceDir, "dm_second");
+		const firstDir = join(workspaceDir, "dingtalk:dm:first");
+		const secondDir = join(workspaceDir, "dingtalk:dm:second");
 		mkdirSync(firstDir, { recursive: true });
 		mkdirSync(secondDir, { recursive: true });
 		writeJsonl(join(conv(firstDir), "log.jsonl"), [
@@ -186,7 +186,7 @@ describe("session search", () => {
 
 	it("falls back to raw preview when model summarization fails", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		const longText = `session_search fallback ${"detail ".repeat(220)}`;
 		writeJsonl(join(conv(deskDir), "log.jsonl"), [
@@ -213,7 +213,7 @@ describe("session search", () => {
 
 	it("deduplicates mirrored transcript documents and limits the scored corpus", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		const duplicate = {
 			type: "message",
@@ -247,7 +247,7 @@ describe("session search", () => {
 
 	it("caps documents at maxDocumentsTotal, keeps the newest, and leaves no conversation out", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_123");
+		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 		const entries = Array.from({ length: 200 }, (_, i) => ({
 			date: new Date(Date.now() - (200 - i) * 60_000).toISOString(),
@@ -276,7 +276,7 @@ describe("session search", () => {
 	// message to the small display window at ingest, so widening the query could never recover it.
 	it("finds a keyword in the middle of a long message and centers the preview on it", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_mid");
+		const deskDir = join(workspaceDir, "dingtalk:dm:mid");
 		mkdirSync(deskDir, { recursive: true });
 		const longMessage = `${"lorem ipsum ".repeat(400)} THE_BURIED_TOKEN decided to use pgbouncer ${"dolor sit ".repeat(400)}`;
 		writeJsonl(join(conv(deskDir), "log.jsonl"), [
@@ -303,7 +303,7 @@ describe("session search", () => {
 
 	it("does not return an unrelated recent message just because it is recent (batch 2.5)", async () => {
 		const workspaceDir = createWorkspace();
-		const deskDir = join(workspaceDir, "dm_recent");
+		const deskDir = join(workspaceDir, "dingtalk:dm:recent");
 		mkdirSync(deskDir, { recursive: true });
 		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: new Date().toISOString(), userName: "Alice", text: "what's for lunch today", isBot: false },

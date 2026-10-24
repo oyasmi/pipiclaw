@@ -19,7 +19,7 @@ const CONVERSATION = {
 	desk: "news",
 	deskDir: "/tmp/desk-news",
 	cwd: "/tmp/desk-news",
-	channelId: "dm_123",
+	channelId: "dingtalk:dm:123",
 	conversation: "dm-1",
 	conversationDir: "/tmp/desk-news/conversations/dm-1",
 };

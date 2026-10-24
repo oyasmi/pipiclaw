@@ -1,4 +1,6 @@
-import { TUI_CHANNEL_ID } from "../channel/channel-id.js";
+/** The terminal's channel id (`tui/channel-label.ts`); `tools/` cannot import `tui/`. Removed with the terminal channel in C3. */
+const TUI_CHANNEL_ID = "tui";
+
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 
 /**

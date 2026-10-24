@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MediaSendResult, OutboundMedia } from "../../src/channel/channel-context.js";
+import type { ChannelEvent, WakeEvent } from "../../src/channel/channel-event.js";
 import type { DingTalkBot } from "../../src/dingtalk/bot.js";
-import type { DingTalkBotPort, DingTalkEvent, DingTalkHandler } from "../../src/dingtalk/handler.js";
+import type { DingTalkBotPort, DingTalkHandler } from "../../src/dingtalk/handler.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/tasks/contract.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
@@ -300,9 +301,11 @@ class EvalBot implements DingTalkBotPort {
 		});
 		return { ok: true };
 	}
-	enqueueEvent(event: DingTalkEvent): boolean {
+	enqueueEvent(event: WakeEvent): boolean {
 		if (!this.handler) return false;
-		const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text)?.[1] ?? event.internalWake?.taskId;
+		const taskId =
+			/^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text)?.[1] ??
+			(event.source === "wake" ? event.internalWake?.taskId : undefined);
 		const priorActor = currentActorId;
 		const priorSession = currentSessionId;
 		if (taskId) {
@@ -310,7 +313,7 @@ class EvalBot implements DingTalkBotPort {
 			currentSessionId = `${caseId}:${channelId}:task:${taskId}`;
 		}
 		const pending = this.handler
-			.handleEvent(event, this, true)
+			.handleEvent(event, this)
 			.finally(() => {
 				currentActorId = priorActor;
 				currentSessionId = priorSession;
@@ -406,7 +409,7 @@ async function main(): Promise<void> {
 		},
 	});
 
-	const sendEvent = async (event: DingTalkEvent): Promise<void> => {
+	const sendEvent = async (event: ChannelEvent): Promise<void> => {
 		await runtime.handler.handleEvent(event, bot);
 	};
 	const execute = async (step: Step): Promise<void> => {
@@ -415,14 +418,12 @@ async function main(): Promise<void> {
 		if (step.kind === "user") {
 			const before = localTrace.length;
 			await sendEvent({
-				type: "dm",
+				source: "human",
 				channelId,
 				ts: Date.now().toString(),
 				user: "eval",
 				userName: "Evaluator",
 				text: interpolate(step.text, canaryPath, workspaceDir, deskDir),
-				conversationId: "eval",
-				conversationType: "1",
 			});
 			await bot.drain();
 			if (
@@ -436,14 +437,12 @@ async function main(): Promise<void> {
 			}
 		} else if (step.kind === "newSession" || step.kind === "compact") {
 			await sendEvent({
-				type: "dm",
+				source: "human",
 				channelId,
 				ts: Date.now().toString(),
 				user: "eval",
 				userName: "Evaluator",
 				text: step.kind === "newSession" ? "/new" : "/compact",
-				conversationId: "eval",
-				conversationType: "1",
 			});
 			await bot.drain();
 			if (step.kind === "newSession") {

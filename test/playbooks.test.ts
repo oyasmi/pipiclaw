@@ -88,7 +88,7 @@ describe("runtime playbook catalog", () => {
 					delete pre.timeoutMs;
 				}
 			}
-			const raw = { channelId: "dm_example", ...parsed };
+			const raw = { channelId: "dingtalk:dm:example", ...parsed };
 			const event = parseScheduledEventContent(JSON.stringify(raw), "example.json");
 			validateScheduledEvent(event, {
 				now: event.type === "one-shot" ? new Date(event.at).getTime() - 600_000 : Date.now(),

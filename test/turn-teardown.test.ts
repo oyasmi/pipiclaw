@@ -100,7 +100,7 @@ describe("forceEndStuckTurnAfterStop", () => {
 
 		expect(
 			await forceEndStuckTurnAfterStop({
-				channelId: "dm_tester",
+				channelId: "dingtalk:dm:tester",
 				runner: timely as never,
 				graceMs: 500,
 				pollMs: 5,
@@ -117,7 +117,7 @@ describe("forceEndStuckTurnAfterStop", () => {
 
 		expect(
 			await forceEndStuckTurnAfterStop({
-				channelId: "dm_tester",
+				channelId: "dingtalk:dm:tester",
 				runner: stuck as never,
 				graceMs: 30,
 				pollMs: 5,
@@ -136,7 +136,7 @@ describe("forceEndStuckTurnAfterStop", () => {
 		turn.requestStop();
 
 		await forceEndStuckTurnAfterStop({
-			channelId: "dm_tester",
+			channelId: "dingtalk:dm:tester",
 			runner: turn as never,
 			graceMs: 10,
 			pollMs: 5,

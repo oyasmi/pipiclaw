@@ -425,7 +425,7 @@ export const regressionCases: EvalCase[] = [
 				} catch {}
 				const pass =
 					definition?.type === "one-shot" &&
-					definition.channelId === "dm_eval" &&
+					definition.channelId === "dingtalk:dm:eval" &&
 					Date.parse(String(definition.at)) - Date.parse(ctx.trace[0]?.ts ?? "") >= 8 * 60_000 &&
 					Date.parse(String(definition.at)) - Date.parse(ctx.trace[0]?.ts ?? "") <= 12 * 60_000 &&
 					definition.text === "Review release candidate RC-17";

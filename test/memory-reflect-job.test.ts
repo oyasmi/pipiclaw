@@ -10,7 +10,7 @@ import { runReflectJob } from "../src/memory/reflect-job.js";
 import { getMemoryReviewLogPath } from "../src/memory/review-log.js";
 import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
-const REF = { desk: "news", conversation: "dm-1", channelId: "dm_1" };
+const REF = { desk: "news", conversation: "dm-1", channelId: "dingtalk:dm:1" };
 
 const makeTempDir = useTempDirs("pipiclaw-reflect-job-");
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
@@ -36,7 +36,7 @@ function maintenanceSettings(overrides: Partial<Record<string, unknown>> = {}) {
 async function harness() {
 	const workspaceDir = makeTempDir();
 	const appHomeDir = join(workspaceDir, ".app");
-	const deskDir = join(workspaceDir, "dm_1");
+	const deskDir = join(workspaceDir, "dingtalk:dm:1");
 	return { appHomeDir, deskDir, workspaceDir };
 }
 
@@ -105,7 +105,11 @@ describe("runReflectJob", () => {
 		};
 		await runReflectJob(input);
 		expect(runReflect).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(runReflect).mock.calls[0][0]).toMatchObject({ channelId: "dm_1", deskDir, workspaceDir });
+		expect(vi.mocked(runReflect).mock.calls[0][0]).toMatchObject({
+			channelId: "dingtalk:dm:1",
+			deskDir,
+			workspaceDir,
+		});
 
 		const state = await readMemoryMaintenanceState(appHomeDir, REF);
 		expect(state.lastReflectedEntryId).toBe("entry-2");

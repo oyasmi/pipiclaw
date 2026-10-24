@@ -4,9 +4,9 @@
  */
 import { mkdir, writeFile } from "fs/promises";
 import { join, relative } from "path";
+import { extensionForMimeType } from "../channel/attachments.js";
 import type { InboundImage } from "../channel/channel-event.js";
 import { getDeskInboxDir } from "../desk/paths.js";
-import { extensionForMimeType } from "../dingtalk/inbound-media.js";
 import * as log from "../log.js";
 import { localStampForFilename } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";

@@ -2,7 +2,8 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent, DingTalkHandler } from "../src/dingtalk/handler.js";
+import type { WakeEvent } from "../src/channel/channel-event.js";
+import type { DingTalkHandler } from "../src/dingtalk/handler.js";
 
 const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
@@ -207,8 +208,8 @@ describe("dingtalk", () => {
 
 		expect(handler.handleEvent).toHaveBeenCalledWith(
 			expect.objectContaining({
-				channelId: "dm_staff_1",
-				type: "dm",
+				channelId: "dingtalk:dm:staff_1",
+				source: "human",
 				text: "check dm",
 			}),
 			bot,
@@ -225,8 +226,8 @@ describe("dingtalk", () => {
 
 		expect(handler.handleEvent).toHaveBeenCalledWith(
 			expect.objectContaining({
-				channelId: "group_conv_group",
-				type: "group",
+				channelId: "dingtalk:group:conv_group",
+				source: "human",
 				text: "check group",
 			}),
 			bot,
@@ -235,7 +236,7 @@ describe("dingtalk", () => {
 		// Spec 058, D17: one file for every channel, keyed by channel id.
 		const metadataPath = join(stateDir, "dingtalk", "conversations.json");
 		expect(existsSync(metadataPath)).toBe(true);
-		expect(JSON.parse(readFileSync(metadataPath, "utf-8")).group_conv_group).toMatchObject({
+		expect(JSON.parse(readFileSync(metadataPath, "utf-8"))["dingtalk:group:conv_group"]).toMatchObject({
 			conversationId: "conv_group",
 			conversationType: "2",
 			senderId: "staff_2",
@@ -258,10 +259,10 @@ describe("dingtalk", () => {
 		await flushMicrotasks();
 
 		expect(noteChannelActivity).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "group_conv_group", name: "投资理财" }),
+			expect.objectContaining({ channelId: "dingtalk:group:conv_group", name: "投资理财" }),
 		);
 		expect(handler.handleEvent).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "group_conv_group", channelName: "投资理财" }),
+			expect.objectContaining({ channelId: "dingtalk:group:conv_group", channelName: "投资理财" }),
 			bot,
 		);
 
@@ -276,7 +277,7 @@ describe("dingtalk", () => {
 		await flushMicrotasks();
 
 		expect(noteChannelActivity).toHaveBeenLastCalledWith(
-			expect.objectContaining({ channelId: "dm_staff_2", name: "Bob" }),
+			expect.objectContaining({ channelId: "dingtalk:dm:staff_2", name: "Bob" }),
 		);
 
 		// The hook sits before busy/command routing, so a steer still counts as human activity,
@@ -311,7 +312,7 @@ describe("dingtalk", () => {
 		});
 		await flushMicrotasks();
 		expect(guardedActivity).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "group_conv_group", name: "投资理财" }),
+			expect.objectContaining({ channelId: "dingtalk:group:conv_group", name: "投资理财" }),
 		);
 	});
 
@@ -329,8 +330,11 @@ describe("dingtalk", () => {
 			conversationId: "conv_1",
 			conversationType: "1",
 		});
-		expect(handler.handleStop).toHaveBeenCalledWith("dm_staff_1", bot);
-		expect(bot.sendPlain).toHaveBeenCalledWith("dm_staff_1", "已停止当前回合。", { title: "/stop", markdown: true });
+		expect(handler.handleStop).toHaveBeenCalledWith("dingtalk:dm:staff_1", bot);
+		expect(bot.sendPlain).toHaveBeenCalledWith("dingtalk:dm:staff_1", "已停止当前回合。", {
+			title: "/stop",
+			markdown: true,
+		});
 
 		await privateApi.inbound.onStreamMessage({
 			text: { content: "/steer focus src" },
@@ -340,7 +344,7 @@ describe("dingtalk", () => {
 			conversationType: "1",
 		});
 		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dm_staff_1" }),
+			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
 			bot,
 			"steer",
 			"focus src",
@@ -354,7 +358,7 @@ describe("dingtalk", () => {
 			conversationType: "1",
 		});
 		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dm_staff_1" }),
+			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
 			bot,
 			"followUp",
 			"next task",
@@ -368,7 +372,7 @@ describe("dingtalk", () => {
 			conversationType: "1",
 		});
 		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dm_staff_1" }),
+			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
 			"events",
 			"list",
 		);
@@ -381,7 +385,7 @@ describe("dingtalk", () => {
 			conversationType: "1",
 		});
 		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dm_staff_1" }),
+			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
 			"status",
 			"",
 		);
@@ -487,7 +491,7 @@ describe("dingtalk", () => {
 		);
 		expect(handler.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "second message" }), bot);
 		expect(bot.sendPlain).not.toHaveBeenCalledWith(
-			"dm_staff_1",
+			"dingtalk:dm:staff_1",
 			expect.stringContaining("Could not queue this message"),
 		);
 	});
@@ -545,7 +549,7 @@ describe("dingtalk", () => {
 		it("downloads a picture message, persists it, and attaches it to the event", async () => {
 			const persistInboundImage = vi.fn(
 				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
-					path: "/workspace/dm_staff_1/inbox/image-1.jpg",
+					path: "/workspace/dingtalk:dm:staff_1/inbox/image-1.jpg",
 					mimeType: image.mimeType ?? "application/octet-stream",
 					byteSize: image.data.byteLength,
 				}),
@@ -565,7 +569,7 @@ describe("dingtalk", () => {
 			});
 			await flushMicrotasks();
 
-			expect(persistInboundImage).toHaveBeenCalledWith("dm_staff_1", {
+			expect(persistInboundImage).toHaveBeenCalledWith("dingtalk:dm:staff_1", {
 				data: expect.any(Buffer),
 				mimeType: "image/jpeg",
 			});
@@ -609,7 +613,7 @@ describe("dingtalk", () => {
 		it("persists an unrecognized format but excludes it from the model-facing images list", async () => {
 			const persistInboundImage = vi.fn(
 				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
-					path: "/workspace/dm_staff_1/inbox/image-1.bin",
+					path: "/workspace/dingtalk:dm:staff_1/inbox/image-1.bin",
 					mimeType: "application/octet-stream",
 					byteSize: image.data.byteLength,
 					unsupportedFormat: true,
@@ -630,7 +634,10 @@ describe("dingtalk", () => {
 			});
 			await flushMicrotasks();
 
-			expect(persistInboundImage).toHaveBeenCalledWith("dm_staff_1", { data: expect.any(Buffer), mimeType: null });
+			expect(persistInboundImage).toHaveBeenCalledWith("dingtalk:dm:staff_1", {
+				data: expect.any(Buffer),
+				mimeType: null,
+			});
 			expect(handler.handleEvent).toHaveBeenCalledWith(
 				expect.objectContaining({
 					text: "[图片1：格式不支持，已保存]",
@@ -643,7 +650,7 @@ describe("dingtalk", () => {
 		it("never overtakes a download in the channel's delivery order (spec 049 D3)", async () => {
 			const persistInboundImage = vi.fn(
 				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
-					path: "/workspace/dm_staff_1/inbox/image-1.jpg",
+					path: "/workspace/dingtalk:dm:staff_1/inbox/image-1.jpg",
 					mimeType: image.mimeType ?? "application/octet-stream",
 					byteSize: image.data.byteLength,
 				}),
@@ -743,14 +750,14 @@ describe("dingtalk", () => {
 		const privateApi = getPrivateApi(bot);
 		const meta = { conversationId: "conv_1", conversationType: "1", senderId: "staff_1" };
 
-		privateApi.conversations.set("dm_staff_1", meta);
+		privateApi.conversations.set("dingtalk:dm:staff_1", meta);
 		// A fresh store — the next process — routes the channel from disk alone.
-		expect(new ConversationMetaStore({ stateDir }, () => {}).get("dm_staff_1")).toEqual(meta);
+		expect(new ConversationMetaStore({ stateDir }, () => {}).get("dingtalk:dm:staff_1")).toEqual(meta);
 
 		// D17: every inbound message calls set(); an unchanged entry must not rewrite the file.
 		const metadataPath = join(stateDir, "dingtalk", "conversations.json");
-		writeFileSync(metadataPath, JSON.stringify({ dm_staff_1: meta, marker: meta }));
-		privateApi.conversations.set("dm_staff_1", meta);
+		writeFileSync(metadataPath, JSON.stringify({ "dingtalk:dm:staff_1": meta, marker: meta }));
+		privateApi.conversations.set("dingtalk:dm:staff_1", meta);
 		expect(JSON.parse(readFileSync(metadataPath, "utf-8")).marker).toEqual(meta);
 
 		// …but after a failed write, the same value is written again once the disk recovers, or the
@@ -758,14 +765,14 @@ describe("dingtalk", () => {
 		const dm2 = { ...meta, senderId: "staff_2" };
 		rmSync(metadataPath);
 		mkdirSync(join(metadataPath, "blocker"), { recursive: true });
-		privateApi.conversations.set("dm_staff_2", dm2);
+		privateApi.conversations.set("dingtalk:dm:staff_2", dm2);
 		rmSync(metadataPath, { recursive: true });
-		privateApi.conversations.set("dm_staff_2", dm2);
-		expect(new ConversationMetaStore({ stateDir }, () => {}).get("dm_staff_2")).toEqual(dm2);
+		privateApi.conversations.set("dingtalk:dm:staff_2", dm2);
+		expect(new ConversationMetaStore({ stateDir }, () => {}).get("dingtalk:dm:staff_2")).toEqual(dm2);
 
-		privateApi.getQueue("dm_staff_1");
+		privateApi.getQueue("dingtalk:dm:staff_1");
 		privateApi.cleanupIdleChannelCaches(Date.now() + 2 * 60 * 60 * 1000);
-		expect(privateApi.queues.has("dm_staff_1")).toBe(false);
+		expect(privateApi.queues.has("dingtalk:dm:staff_1")).toBe(false);
 	});
 
 	it("sends plain DM and group messages using cached metadata", async () => {
@@ -775,12 +782,12 @@ describe("dingtalk", () => {
 		getPrivateApi(bot).tokens.tokenExpiry = Date.now() / 1000 + 3600;
 		axiosMock.post.mockResolvedValue({ data: {} });
 
-		privateApi.conversations.set("dm_staff_1", {
+		privateApi.conversations.set("dingtalk:dm:staff_1", {
 			conversationId: "conv_1",
 			conversationType: "1",
 			senderId: "staff_1",
 		});
-		await expect(bot.sendPlain("dm_staff_1", "hello")).resolves.toBe(true);
+		await expect(bot.sendPlain("dingtalk:dm:staff_1", "hello")).resolves.toBe(true);
 		expect(axiosMock.post).toHaveBeenLastCalledWith(
 			expect.stringContaining("/oToMessages/batchSend"),
 			expect.objectContaining({
@@ -790,12 +797,12 @@ describe("dingtalk", () => {
 			expect.any(Object),
 		);
 
-		privateApi.conversations.set("group_conv_2", {
+		privateApi.conversations.set("dingtalk:group:conv_2", {
 			conversationId: "conv_2",
 			conversationType: "2",
 			senderId: "staff_2",
 		});
-		await expect(bot.sendPlain("group_conv_2", "# title")).resolves.toBe(true);
+		await expect(bot.sendPlain("dingtalk:group:conv_2", "# title")).resolves.toBe(true);
 		expect(axiosMock.post).toHaveBeenLastCalledWith(
 			expect.stringContaining("/groupMessages/send"),
 			expect.objectContaining({
@@ -814,13 +821,13 @@ describe("dingtalk", () => {
 		axiosMock.post.mockResolvedValue({ data: {} });
 		axiosMock.put.mockResolvedValue({ data: {} });
 
-		privateApi.conversations.set("dm_staff_1", {
+		privateApi.conversations.set("dingtalk:dm:staff_1", {
 			conversationId: "conv_1",
 			conversationType: "1",
 			senderId: "staff_1",
 		});
 
-		await expect(bot.appendToCard("dm_staff_1", "hello")).resolves.toBe(true);
+		await expect(bot.appendToCard("dingtalk:dm:staff_1", "hello")).resolves.toBe(true);
 		expect(axiosMock.post).toHaveBeenCalledWith(
 			expect.stringContaining("/card/instances/createAndDeliver"),
 			expect.objectContaining({
@@ -851,7 +858,7 @@ describe("dingtalk", () => {
 			expect.any(Object),
 		);
 
-		await expect(bot.replaceCard("dm_staff_1", "hello world", true)).resolves.toBe(true);
+		await expect(bot.replaceCard("dingtalk:dm:staff_1", "hello world", true)).resolves.toBe(true);
 		expect(axiosMock.put).toHaveBeenLastCalledWith(
 			expect.stringContaining("/card/streaming"),
 			expect.objectContaining({
@@ -878,15 +885,13 @@ describe("dingtalk", () => {
 			),
 		});
 
-		const event = (suffix: number): DingTalkEvent => ({
-			type: "dm",
-			channelId: "dm_queue",
+		const event = (suffix: number): WakeEvent => ({
+			source: "wake",
+			channelId: "dingtalk:dm:queue",
 			ts: `${suffix}`,
-			user: "staff_1",
-			userName: "Alice",
+			producer: "EVENT",
+			desk: "news",
 			text: `job ${suffix}`,
-			conversationId: "conv_1",
-			conversationType: "1",
 		});
 
 		const results = [1, 2, 3, 4, 5, 6, 7].map((index) => bot.enqueueEvent(event(index)));
@@ -914,14 +919,12 @@ describe("dingtalk", () => {
 			}),
 		});
 		bot.enqueueEvent({
-			type: "dm",
-			channelId: "dm_reserve",
+			source: "wake",
+			channelId: "dingtalk:dm:reserve",
 			ts: "1",
-			user: "staff_1",
-			userName: "Alice",
+			producer: "EVENT",
+			desk: "news",
 			text: "work",
-			conversationId: "conv_1",
-			conversationType: "1",
 		});
 		await flushMicrotasks();
 		expect(order).toEqual(["reserve", "handle"]);

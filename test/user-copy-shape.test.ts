@@ -30,10 +30,10 @@ import type { UsageLedger } from "../src/usage/ledger.js";
 import { renderUsageReport } from "../src/usage/render.js";
 import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
-/** `/tasks` asked from `dm_1`; a task delivering to any other channel is shown as suspended. */
+/** `/tasks` asked from `dingtalk:dm:1`; a task delivering to any other channel is shown as suspended. */
 const TASK_CHANNELS = {
-	currentChannelId: "dm_1",
-	describeChannel: (channelId: string) => ({ label: `\`${channelId}\``, boundHere: channelId === "dm_1" }),
+	currentChannelId: "dingtalk:dm:1",
+	describeChannel: (channelId: string) => ({ label: `\`${channelId}\``, boundHere: channelId === "dingtalk:dm:1" }),
 };
 
 /**
@@ -159,7 +159,7 @@ async function seedTasks(deskDir: string): Promise<void> {
 function runRecord(index: number): RunRecord {
 	return {
 		runId: `run_${String(index).padStart(6, "0")}`,
-		channelId: "dm_1",
+		channelId: "dingtalk:dm:1",
 		runtime: "external",
 		harness: "claude-code",
 		agent: `builder-${index % 3}`,
@@ -237,7 +237,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		]) {
 			expectUserCopyShape(
 				`/subagents ${args}`,
-				await handleSubagentsCommand({ args, runManager, channelId: "dm_1" }),
+				await handleSubagentsCommand({ args, runManager, channelId: "dingtalk:dm:1" }),
 			);
 		}
 	});
@@ -270,8 +270,13 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		for (let index = 0; index < 50; index++) {
 			const event =
 				index % 7 === 0
-					? { type: "periodic", channelId: "dm_1", schedule: "* * * * *", text: "too often" }
-					: { type: "periodic", channelId: "dm_1", schedule: "0 9 * * 1", text: `周报 ${"内容".repeat(30)}` };
+					? { type: "periodic", channelId: "dingtalk:dm:1", schedule: "* * * * *", text: "too often" }
+					: {
+							type: "periodic",
+							channelId: "dingtalk:dm:1",
+							schedule: "0 9 * * 1",
+							text: `周报 ${"内容".repeat(30)}`,
+						};
 			writeFileSync(join(eventsDeskDir, "events", `event-${index}.json`), JSON.stringify(event));
 		}
 		writeFileSync(join(eventsDeskDir, "events", "broken.json"), "{ not json");
@@ -299,7 +304,10 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 					deskDir: eventsDeskDir,
 					historyPath,
 					// Every other event delivers to an unbound channel: the suspended mark must fit too.
-					describeChannel: (channelId) => ({ label: `\`${channelId}\``, boundHere: channelId !== "dm_1" }),
+					describeChannel: (channelId) => ({
+						label: `\`${channelId}\``,
+						boundHere: channelId !== "dingtalk:dm:1",
+					}),
 				}),
 			);
 		}
@@ -325,7 +333,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			availability: index % 7 === 3 ? ("invalid" as const) : ("available" as const),
 			current: index === 0,
 			channels: Array.from({ length: index % 4 }, (_, channel) => ({
-				channelId: `group_cid${index}${channel}`,
+				channelId: `dingtalk:group:cid${index}${channel}`,
 				label: `群「${"投资成长".repeat(3)}${channel}」`,
 			})),
 		}));
@@ -384,7 +392,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			totalTokens: 12_000,
 			byKind: { turn: 1, subagent: 0.5 },
 			byModel: { "a/b": 1.5 },
-			byChannel: { dm_1: 1.5 },
+			byChannel: { "dingtalk:dm:1": 1.5 },
 			unknownCostCount: 1,
 			unknownUsageCount: 0,
 		};
@@ -392,7 +400,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		for (const mode of ["default", "7d", "month"] as const) {
 			expectUserCopyShape(
 				`/usage ${mode}`,
-				await renderUsageReport(ledger, { desk: "news", channelId: "dm_1" }, mode, new Date()),
+				await renderUsageReport(ledger, { desk: "news", channelId: "dingtalk:dm:1" }, mode, new Date()),
 			);
 		}
 
@@ -432,7 +440,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		for (const breach of ["steps", "usd", undefined] as const) {
 			expectUserCopyShape(
 				`stop receipt ${breach}`,
-				taskStopReceipt("news", "dm_1", entry, "已用满 60 步", 0, breach).text,
+				taskStopReceipt("news", "dingtalk:dm:1", entry, "已用满 60 步", 0, breach).text,
 			);
 		}
 		for (const status of ["completed", "failed", "cancelled", "lost"] as const) {
@@ -451,7 +459,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 				silentMs: 660_000,
 			}) ?? "",
 		);
-		const wake = createTaskDriverEvent("news", "dm_1", entry, 0);
+		const wake = createTaskDriverEvent("news", "dingtalk:dm:1", entry, 0);
 		const record: DurableDispatchRecord = {
 			version: 1,
 			id: wake.dispatchId as string,

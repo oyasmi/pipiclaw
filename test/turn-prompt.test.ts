@@ -6,7 +6,7 @@ function parts(overrides: Partial<TurnPromptParts> = {}): TurnPromptParts {
 		clippedInput: "ship it",
 		userMessage: "[2026-08-28 10:00] [Tester]: ship it",
 		preserveRawInput: false,
-		channelCapsule: "<runtime_turn_context>\nChannel directory: /w/dm_1\n</runtime_turn_context>",
+		channelCapsule: "<runtime_turn_context>\nChannel directory: /w/dingtalk:dm:1\n</runtime_turn_context>",
 		durableMemoryBootstrap: "",
 		taskDigest: "",
 		...overrides,

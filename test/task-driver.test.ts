@@ -33,7 +33,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	beforeEach(async () => {
 		workspaceDir = await mkdtemp(join(tmpdir(), "task-driver-v4-"));
 		deskDir = join(workspaceDir, "news");
-		bound = new Set(["dm_a"]);
+		bound = new Set(["dingtalk:dm:a"]);
 	});
 	afterEach(async () => {
 		vi.restoreAllMocks();
@@ -65,15 +65,19 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	}
 
 	it("dispatches open work and never polls a pushed or future ticket", async () => {
-		await writeTask("dm_a", "open", taskDoc({ state: "open" }));
+		await writeTask("dingtalk:dm:a", "open", taskDoc({ state: "open" }));
 		// A `work` ticket is redeemed by settlement, not by the scan: polling it would be the
 		// unverified resumption path spec 051 removed.
 		await writeTask(
-			"dm_a",
+			"dingtalk:dm:a",
 			"awaiting-work",
 			taskDoc({ state: "parked", ticket: { kind: "work", refs: ["run_x"], by: FUTURE } }),
 		);
-		await writeTask("dm_a", "later", taskDoc({ state: "parked", ticket: { kind: "time", at: FUTURE, by: FUTURE } }));
+		await writeTask(
+			"dingtalk:dm:a",
+			"later",
+			taskDoc({ state: "parked", ticket: { kind: "time", at: FUTURE, by: FUTURE } }),
+		);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledTimes(1);
@@ -85,23 +89,26 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		// a group id with `/` and `=` must arrive intact, stamped with the task's desk. A desk's
 		// channels run independently: one channel's ready task must not wait behind another
 		// channel's step, while two tasks of one channel still take turns.
-		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		const channelId = "dingtalk:group:cidYDhGqxhJOzS7VDv/eDInUw==";
 		bound.add(channelId);
 		await writeTask(channelId, "open", taskDoc({ state: "open" }));
-		await writeTask("dm_a", "dm-first", taskDoc({ state: "open" }));
-		await writeTask("dm_a", "dm-second", taskDoc({ state: "open" }));
+		await writeTask("dingtalk:dm:a", "dm-first", taskDoc({ state: "open" }));
+		await writeTask("dingtalk:dm:a", "dm-second", taskDoc({ state: "open" }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
-		expect(dispatch.mock.calls.map(([event]) => event.channelId).sort()).toEqual(["dm_a", channelId].sort());
+		expect(dispatch.mock.calls.map(([event]) => event.channelId).sort()).toEqual(["dingtalk:dm:a", channelId].sort());
 		expect(dispatch.mock.calls.find(([event]) => event.channelId === channelId)?.[0]).toMatchObject({
 			desk: "news",
-			type: "group",
-			conversationType: "2",
+			source: "wake",
 		});
 	});
 
 	it("never dispatches a paused task", async () => {
-		await writeTask("dm_a", "held", taskDoc({ state: "open", paused: { by: "user", reason: "hold", at: PAST } }));
+		await writeTask(
+			"dingtalk:dm:a",
+			"held",
+			taskDoc({ state: "open", paused: { by: "user", reason: "hold", at: PAST } }),
+		);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
@@ -109,7 +116,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 
 	it("redeems a due time ticket and dispatches the reopened task — but only while its channel is bound", async () => {
 		const path = await writeTask(
-			"dm_a",
+			"dingtalk:dm:a",
 			"timed",
 			taskDoc({ state: "parked", ticket: { kind: "time", at: PAST, by: PAST } }),
 		);
@@ -118,13 +125,13 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 
 		// Spec 058, D8: the delivery channel was rebound elsewhere. The task freezes whole — its
 		// due ticket is neither redeemed nor expired, and no step or receipt goes anywhere.
-		bound.delete("dm_a");
+		bound.delete("dingtalk:dm:a");
 		await instance.runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
 		expect((await readStoredTask(deskDir, "timed"))?.fields.state).toBe("parked");
 
 		// Bound again: it resumes from exactly where it froze.
-		bound.add("dm_a");
+		bound.add("dingtalk:dm:a");
 		await instance.runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledOnce();
 		expect((await readStoredTask(deskDir, "timed"))?.fields.state).toBe("open");
@@ -138,7 +145,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			ticket: { kind: "work", refs: ["run_never"], by: PAST },
 			usage: createUsage(NOW),
 		});
-		await writeTask("dm_a", "stuck", parked);
+		await writeTask("dingtalk:dm:a", "stuck", parked);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const notify = vi.fn((_event: DingTalkEvent) => true);
 		const instance = driver(dispatch, { notify });
@@ -158,7 +165,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 
 	it("stops a task that is already over budget before spending a model call on it", async () => {
 		await writeTask(
-			"dm_a",
+			"dingtalk:dm:a",
 			"spent",
 			taskDoc({ state: "open", budget: { steps: 2 }, usage: { ...createUsage(NOW), steps: 2 } }),
 		);
@@ -171,7 +178,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	});
 
 	it("stops a loop whose last two steps called no tool at all", async () => {
-		await writeTask("dm_a", "idle", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
+		await writeTask("dingtalk:dm:a", "idle", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
 			await appendTaskLog(deskDir, "idle", {
 				kind: "step",
@@ -189,7 +196,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	});
 
 	it("keeps driving a loop whose steps actually used tools", async () => {
-		await writeTask("dm_a", "busy", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
+		await writeTask("dingtalk:dm:a", "busy", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
 			await appendTaskLog(deskDir, "busy", {
 				kind: "step",
@@ -205,7 +212,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	});
 
 	it("does not queue a second step for a task it just dispatched", async () => {
-		await writeTask("dm_a", "open", taskDoc({ state: "open" }));
+		await writeTask("dingtalk:dm:a", "open", taskDoc({ state: "open" }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const instance = driver(dispatch);
 		await instance.runOnce(NOW);
@@ -223,16 +230,16 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			runnable: true,
 			expired: false,
 		};
-		const step = createTaskDriverEvent("news", "dm_a", entry, NOW.getTime());
+		const step = createTaskDriverEvent("news", "dingtalk:dm:a", entry, NOW.getTime());
 		expect(step.text).toContain("[TASK_DRIVER:T]");
 		expect(step.text).toContain("task_step_end");
 
 		// An unreadable file must never be driven as ordinary work: a repair dispatch is
 		// explicitly forbidden from executing the goal.
-		const repair = createTaskDriverEvent("news", "dm_a", { ...entry, readable: false }, NOW.getTime());
+		const repair = createTaskDriverEvent("news", "dingtalk:dm:a", { ...entry, readable: false }, NOW.getTime());
 		expect(repair.text).toContain("Do not execute the task goal");
 
-		const receipt = taskStopReceipt("news", "dm_a", entry, "预算耗尽", NOW.getTime());
+		const receipt = taskStopReceipt("news", "dingtalk:dm:a", entry, "预算耗尽", NOW.getTime());
 		expect(receipt.text).toContain("预算耗尽");
 		expect(receipt.text).toContain("/tasks show T");
 		expect(Number(receipt.ts)).toBe(NOW.getTime());

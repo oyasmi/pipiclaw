@@ -38,7 +38,7 @@ describe("loadDetachedMaintenanceContext", () => {
 
 	function makeOptions(appHomeDir: string, deskDir: string) {
 		return {
-			conversation: testConversation(deskDir, { channelId: "dm_cold" }),
+			conversation: testConversation(deskDir, { channelId: "dingtalk:dm:cold" }),
 			workspaceDir: appHomeDir,
 			authConfigPath: join(appHomeDir, "auth.json"),
 			modelsConfigPath: join(appHomeDir, "models.json"),
@@ -63,7 +63,7 @@ describe("loadDetachedMaintenanceContext", () => {
 		const openSpy = vi.spyOn(SessionManager, "open");
 		const first = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, deskDir));
 		// The first load builds a full context from disk alone, without a runner.
-		expect(first?.conversation.channelId).toBe("dm_cold");
+		expect(first?.conversation.channelId).toBe("dingtalk:dm:cold");
 		expect(first?.messages().length).toBeGreaterThanOrEqual(2);
 		expect(first?.sessionEntries().length).toBeGreaterThanOrEqual(2);
 		expect(first?.model.id).toBeTruthy();

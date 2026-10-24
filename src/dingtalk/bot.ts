@@ -15,7 +15,7 @@ import {
 	progressStyleOf,
 	type ResponseMode,
 } from "../channel/channel-context.js";
-import type { ChannelEventSink } from "../channel/channel-event.js";
+import { type ChannelEventSink, type HumanEvent, senderOf, type WakeEvent } from "../channel/channel-event.js";
 import { formatBusyHint, parseBuiltInCommand, renderBuiltInHelp, slashCommandName } from "../commands/catalog.js";
 import * as log from "../log.js";
 import { AccessTokenProvider } from "./access-token.js";
@@ -27,7 +27,7 @@ import { ChannelQueue } from "./channel-queue.js";
 import { type BusyMessageMode, type DingTalkConfig, normalizeBusyMessageDefault } from "./config.js";
 import { StreamConnection } from "./connection.js";
 import { ConversationMetaStore } from "./conversation-meta.js";
-import type { DingTalkBotPort, DingTalkEvent, DingTalkHandler } from "./handler.js";
+import type { DingTalkBotPort, DingTalkHandler } from "./handler.js";
 import { InboundMessages } from "./inbound.js";
 import { DingTalkMedia } from "./media.js";
 
@@ -168,27 +168,27 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 	 * Enqueue an event for processing.
 	 * Returns true if enqueued, false if queue is full (max 5).
 	 */
-	enqueueEvent(event: DingTalkEvent): boolean {
+	enqueueEvent(event: WakeEvent): boolean {
 		if (this.isStopped) {
 			return false;
 		}
 		const queue = this.getQueue(event.channelId);
 		if (queue.size() >= EVENT_QUEUE_LIMIT) {
 			log.logEvent("warn", "runtime.channel_queue.full", "Discarding incoming event", {
-				ctx: { channelId: event.channelId, userName: event.userName },
+				ctx: { channelId: event.channelId, userName: senderOf(event).userName },
 				fields: { messageLength: event.text.length },
 			});
 			return false;
 		}
 		log.logEvent("debug", "runtime.channel_queue.enqueued", "Incoming event queued", {
-			ctx: { channelId: event.channelId, userName: event.userName },
+			ctx: { channelId: event.channelId, userName: senderOf(event).userName },
 			fields: { messageLength: event.text.length },
 		});
 		queue.enqueue(async () => {
 			this.connection.beginMessageProcessing();
 			try {
 				this.handler.reserveEvent?.(event);
-				await this.handler.handleEvent(event, this, true);
+				await this.handler.handleEvent(event, this);
 			} finally {
 				this.connection.endMessageProcessing();
 			}
@@ -196,7 +196,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 		return true;
 	}
 
-	private enqueueStreamMessage(event: DingTalkEvent, textOverride?: string): void {
+	private enqueueStreamMessage(event: HumanEvent, textOverride?: string): void {
 		const queuedEvent = textOverride === undefined ? event : { ...event, text: textOverride };
 		const queue = this.getQueue(event.channelId);
 		if (queue.size() >= USER_MESSAGE_QUEUE_LIMIT) {
@@ -326,7 +326,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 	 * for a normal message. Split out of `onStreamMessage` so the deterministic e2e harness
 	 * (spec 048) can exercise the real transport queue and busy semantics without a socket.
 	 */
-	async routeInboundEvent(event: DingTalkEvent): Promise<void> {
+	async routeInboundEvent(event: HumanEvent): Promise<void> {
 		const { channelId } = event;
 		if (this.handler.prepareChannel) await this.handler.prepareChannel(channelId);
 		const content = event.text;

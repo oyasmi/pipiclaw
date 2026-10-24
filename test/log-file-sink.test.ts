@@ -92,10 +92,10 @@ describe("log file sink", () => {
 		const { log, runtimeLogPath } = await loadLog();
 		log.configureLogging({ level: "info", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
 
-		log.logInfo("[group_cid+a/b==] msg");
+		log.logInfo("[dingtalk:group:cid+a/b==] msg");
 		await flush(log);
 
-		expect(readRecords(runtimeLogPath)[0]).toMatchObject({ channelId: "group_cid+a/b==", message: "msg" });
+		expect(readRecords(runtimeLogPath)[0]).toMatchObject({ channelId: "dingtalk:group:cid+a/b==", message: "msg" });
 	});
 
 	it("redacts sensitive values and bounds details in structured records", async () => {

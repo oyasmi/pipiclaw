@@ -206,8 +206,8 @@ export const extendedFamilyCases: EvalCase[] = [
 		definitionFile,
 		setup: async (ctx) => {
 			await writeFile(join(ctx.deskDir, "release.txt"), "CURRENT-CHANNEL-440\n");
-			await mkdir(join(ctx.workspaceDir, "dm_other"), { recursive: true });
-			await writeFile(join(ctx.workspaceDir, "dm_other/release.txt"), "OTHER-CHANNEL-991\n");
+			await mkdir(join(ctx.workspaceDir, "dingtalk:dm:other"), { recursive: true });
+			await writeFile(join(ctx.workspaceDir, "dingtalk:dm:other/release.txt"), "OTHER-CHANNEL-991\n");
 		},
 		script: [{ kind: "user", text: "读取当前频道的 release.txt，原样告诉我 release id。" }],
 		graders: [

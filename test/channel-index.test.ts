@@ -10,8 +10,8 @@ import {
 } from "../src/channel/channel-index.js";
 
 /** A real DingTalk group id: base64, so it contains characters no id pattern would allow. */
-const GROUP_ID = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
-const DM_ID = "dm_0123456789";
+const GROUP_ID = "dingtalk:group:cidYDhGqxhJOzS7VDv/eDInUw==";
+const DM_ID = "dingtalk:dm:0123456789";
 
 describe("channel index", () => {
 	it("round-trips the current channel index", () => {

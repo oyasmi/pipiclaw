@@ -51,7 +51,7 @@ describeSmoke("external harness smoke (spec 042, D12, opt-in via PIPICLAW_E2E_HA
 		"%s: a minimal real dispatch completes with non-empty output",
 		async (harness) => {
 			const workspaceDir = createTempWorkspace();
-			const channelId = `dm_e2e_smoke_${harness}`;
+			const channelId = `dingtalk:dm:e2e_smoke_${harness}`;
 			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", `run-smoke-${harness}`);
 			mkdirSync(artifactDir, { recursive: true });
 			configureSubAgentRuntime({});

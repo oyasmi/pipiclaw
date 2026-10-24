@@ -177,15 +177,24 @@ describe("EventsWatcher", () => {
 		// Immediate events are rejected at the parse boundary itself (spec 031, D4), so no
 		// hand-written file can re-introduce a self-triggering wake.
 		expect(() =>
-			privateApi.parseEvent(JSON.stringify({ type: "immediate", channelId: "dm_1", text: "hello" }), "a.json"),
+			privateApi.parseEvent(
+				JSON.stringify({ type: "immediate", channelId: "dingtalk:dm:1", text: "hello" }),
+				"a.json",
+			),
 		).toThrow("Immediate events are no longer supported");
 
 		expect(() =>
-			privateApi.parseEvent(JSON.stringify({ type: "periodic", channelId: "dm_1", text: "hello" }), "b.json"),
+			privateApi.parseEvent(
+				JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:1", text: "hello" }),
+				"b.json",
+			),
 		).toThrow("Missing 'schedule' field");
 
 		expect(() =>
-			privateApi.parseEvent(JSON.stringify({ type: "unknown", channelId: "dm_1", text: "hello" }), "c.json"),
+			privateApi.parseEvent(
+				JSON.stringify({ type: "unknown", channelId: "dingtalk:dm:1", text: "hello" }),
+				"c.json",
+			),
 		).toThrow("Unknown event type");
 	});
 
@@ -205,7 +214,10 @@ describe("EventsWatcher", () => {
 		const dir = createTempDir();
 		const historyPath = join(createTempDir(), "history.jsonl");
 		const filename = "loop.json";
-		writeFileSync(join(dir, filename), JSON.stringify({ type: "immediate", channelId: "dm_1", text: "again" }));
+		writeFileSync(
+			join(dir, filename),
+			JSON.stringify({ type: "immediate", channelId: "dingtalk:dm:1", text: "again" }),
+		);
 		const bot = new FakeBot(true);
 		const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
@@ -233,7 +245,7 @@ describe("EventsWatcher", () => {
 		writeFileSync(invalidPath, "{}");
 		await privateApi.handleOneShot("invalid.json", {
 			type: "one-shot",
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			text: "hello",
 			at: "nope",
 		});
@@ -244,7 +256,7 @@ describe("EventsWatcher", () => {
 		writeFileSync(pastPath, "{}");
 		await privateApi.handleOneShot("past.json", {
 			type: "one-shot",
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			text: "hello",
 			at: "2020-01-01T00:00:00.000Z",
 		});
@@ -261,7 +273,7 @@ describe("EventsWatcher", () => {
 		};
 		const templateEvent = {
 			type: "periodic" as const,
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			schedule: "0 9 * * 1",
 			task: template,
 		};
@@ -279,7 +291,7 @@ describe("EventsWatcher", () => {
 			expect(spawnTask).toHaveBeenCalledWith({
 				eventName: "weekly",
 				desk: "news",
-				channelId: "dm_1",
+				channelId: "dingtalk:dm:1",
 				template: expect.objectContaining({ title: "Weekly report" }),
 				occurrence,
 			});
@@ -294,7 +306,7 @@ describe("EventsWatcher", () => {
 
 			await getEventsWatcherPrivateApi(watcher).execute(
 				"once.json",
-				{ type: "one-shot", channelId: "dm_1", at: "2026-02-01T10:00:00+08:00", task: template },
+				{ type: "one-shot", channelId: "dingtalk:dm:1", at: "2026-02-01T10:00:00+08:00", task: template },
 				true,
 				new Date("2030-01-01T00:00:00Z"),
 			);
@@ -316,7 +328,7 @@ describe("EventsWatcher", () => {
 
 			await getEventsWatcherPrivateApi(watcher).execute(
 				"once.json",
-				{ type: "one-shot", channelId: "dm_1", at: "2026-02-01T10:00:00+08:00", task: template },
+				{ type: "one-shot", channelId: "dingtalk:dm:1", at: "2026-02-01T10:00:00+08:00", task: template },
 				true,
 			);
 
@@ -369,7 +381,7 @@ describe("EventsWatcher", () => {
 
 		futureApi.handleOneShot("future.json", {
 			type: "one-shot",
-			channelId: "dm_future",
+			channelId: "dingtalk:dm:future",
 			text: "hello later",
 			at: futureAt,
 		});
@@ -383,7 +395,7 @@ describe("EventsWatcher", () => {
 		writeFileSync(overflowPath, "{}");
 		privateApi.handleOneShot("overflow.json", {
 			type: "one-shot",
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			text: "too far",
 			at: new Date(Date.now() + 2_147_483_648).toISOString(),
 		});
@@ -400,7 +412,7 @@ describe("EventsWatcher", () => {
 		writeFileSync(invalidCronPath, "{}");
 		privateApi.handlePeriodic("invalid-cron.json", {
 			type: "periodic",
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			text: "hello",
 			schedule: "not a cron",
 		});
@@ -423,7 +435,7 @@ describe("EventsWatcher", () => {
 		const dir = createTempDir();
 		writeFileSync(
 			join(dir, "digest.json"),
-			JSON.stringify({ type: "periodic", channelId: "dm_1", text: "digest", schedule: "0 9 * * *" }),
+			JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:1", text: "digest", schedule: "0 9 * * *" }),
 		);
 		const watcher = createWatcher(dir);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
@@ -447,7 +459,7 @@ describe("EventsWatcher", () => {
 			filename,
 			{
 				type: "periodic",
-				channelId: "dm_42",
+				channelId: "dingtalk:dm:42",
 				text: "run maintenance",
 				schedule: "0 3 * * 0",
 			},
@@ -457,9 +469,10 @@ describe("EventsWatcher", () => {
 
 		expect(bot.events).toHaveLength(1);
 		expect(bot.events[0]).toMatchObject({
-			channelId: "dm_42",
+			channelId: "dingtalk:dm:42",
 			desk: "news",
-			user: "EVENT",
+			source: "wake",
+			producer: "EVENT",
 			// Periodic wakes carry the [SILENT] contract in their trigger, not the system prompt (spec 026 §7.3).
 			text: "[EVENT:periodic.json:periodic:0 3 * * 0] run maintenance This is a periodic runtime wake. If it produces no user-visible change or result, reply with exactly [SILENT].",
 		});
@@ -487,7 +500,7 @@ describe("EventsWatcher", () => {
 		writeFileSync(filePath, "{}");
 		await getEventsWatcherPrivateApi(unbound).execute(
 			filename,
-			{ type: "periodic", channelId: "dm_42", text: "run maintenance", schedule: "0 3 * * 0" },
+			{ type: "periodic", channelId: "dingtalk:dm:42", text: "run maintenance", schedule: "0 3 * * 0" },
 			false,
 		);
 		await unbound.flush();
@@ -507,7 +520,7 @@ describe("EventsWatcher", () => {
 				filePath,
 				JSON.stringify({
 					type: "one-shot",
-					channelId: "dm_1",
+					channelId: "dingtalk:dm:1",
 					text: "wake me right now",
 					at: new Date(Date.now() + 5_000).toISOString(),
 				}),
@@ -534,7 +547,7 @@ describe("EventsWatcher", () => {
 				filePath,
 				JSON.stringify({
 					type: "one-shot",
-					channelId: "dm_1",
+					channelId: "dingtalk:dm:1",
 					text: "missed while down",
 					at: new Date(Date.now() - 60_000).toISOString(),
 				}),
@@ -560,7 +573,12 @@ describe("EventsWatcher", () => {
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 			writeFileSync(
 				filePath,
-				JSON.stringify({ type: "periodic", channelId: "dm_1", text: "burn tokens", schedule: "* * * * *" }),
+				JSON.stringify({
+					type: "periodic",
+					channelId: "dingtalk:dm:1",
+					text: "burn tokens",
+					schedule: "* * * * *",
+				}),
 			);
 			vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
 
@@ -578,7 +596,7 @@ describe("EventsWatcher", () => {
 			const reminderApi = getEventsWatcherPrivateApi(createWatcher(dir, reminderBot, createMockExecutor()));
 			const definition = {
 				type: "one-shot" as const,
-				channelId: "dm_9",
+				channelId: "dingtalk:dm:9",
 				text: "ping",
 				at: "2026-07-20T09:00:00+08:00",
 			};
@@ -593,7 +611,12 @@ describe("EventsWatcher", () => {
 			// Periodics instead key on the occurrence, so occurrences stay distinct.
 			const sweepBot = new FakeBot(true);
 			const sweepApi = getEventsWatcherPrivateApi(createWatcher(dir, sweepBot, createMockExecutor()));
-			const periodic = { type: "periodic" as const, channelId: "dm_9", text: "sweep", schedule: "0 * * * *" };
+			const periodic = {
+				type: "periodic" as const,
+				channelId: "dingtalk:dm:9",
+				text: "sweep",
+				schedule: "0 * * * *",
+			};
 			writeFileSync(join(dir, "sweep.json"), "{}");
 			await sweepApi.execute("sweep.json", periodic, false, new Date("2026-07-20T09:00:00Z"));
 			await sweepApi.execute("sweep.json", periodic, false, new Date("2026-07-20T10:00:00Z"));
@@ -628,7 +651,7 @@ describe("EventsWatcher", () => {
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 			const definition = {
 				type: "one-shot" as const,
-				channelId: "dm_1",
+				channelId: "dingtalk:dm:1",
 				text: "check",
 				at: "2026-07-20T10:00:00+08:00",
 			};
@@ -660,7 +683,7 @@ describe("EventsWatcher", () => {
 			filePath,
 			JSON.stringify({
 				type: "one-shot",
-				channelId: "dm_1",
+				channelId: "dingtalk:dm:1",
 				text: "missed while down",
 				at: new Date(Date.now() - 60_000).toISOString(),
 			}),
@@ -705,7 +728,7 @@ describe("EventsWatcher", () => {
 				filename: "dropped.json",
 				definition: {
 					type: "one-shot" as const,
-					channelId: "dm_1",
+					channelId: "dingtalk:dm:1",
 					text: "must not vanish",
 					at: "2030-01-01T00:00:00.000Z",
 				},
@@ -715,7 +738,7 @@ describe("EventsWatcher", () => {
 			{
 				label: "periodic",
 				filename: "recurring.json",
-				definition: { type: "periodic" as const, channelId: "dm_1", text: "tick", schedule: "0 3 * * 0" },
+				definition: { type: "periodic" as const, channelId: "dingtalk:dm:1", text: "tick", schedule: "0 3 * * 0" },
 				deleteAfter: false,
 				errorMarkerExpected: false,
 			},
@@ -748,7 +771,7 @@ describe("EventsWatcher", () => {
 
 				await privateApi.execute(
 					filename,
-					{ type: "one-shot", at: "2030-01-01T00:00:00.000Z", channelId: "dm_1", text, preAction },
+					{ type: "one-shot", at: "2030-01-01T00:00:00.000Z", channelId: "dingtalk:dm:1", text, preAction },
 					false,
 				);
 
@@ -771,7 +794,7 @@ describe("EventsWatcher", () => {
 				{
 					type: "one-shot",
 					at: "2030-01-01T00:00:00.000Z",
-					channelId: "dm_1",
+					channelId: "dingtalk:dm:1",
 					text: "should not pass",
 					preAction: { type: "bash", command: "false" },
 				},
@@ -807,7 +830,7 @@ describe("EventsWatcher", () => {
 					{
 						type: "one-shot",
 						at: "2030-01-01T00:00:00.000Z",
-						channelId: "dm_1",
+						channelId: "dingtalk:dm:1",
 						text: "should not pass",
 						preAction,
 					},
@@ -837,7 +860,7 @@ describe("EventsWatcher", () => {
 				{
 					type: "one-shot",
 					at: "2030-01-01T00:00:00.000Z",
-					channelId: "dm_1",
+					channelId: "dingtalk:dm:1",
 					text: "dangerous",
 					preAction: { type: "bash", command: "rm -rf /" },
 				},

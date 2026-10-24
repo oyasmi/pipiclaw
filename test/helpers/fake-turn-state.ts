@@ -48,7 +48,7 @@ export function createFakeSessionBinding(
 		desk: "news",
 		deskDir: "/tmp/desk-news",
 		cwd: "/tmp/desk-news",
-		channelId: "dm_1",
+		channelId: "dingtalk:dm:1",
 		conversation: "dm-1",
 		conversationDir: "/tmp/desk-news/conversations/dm-1",
 	},

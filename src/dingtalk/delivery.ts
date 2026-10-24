@@ -3,7 +3,7 @@
  * streaming or plain messages, and final-answer delivery for one turn.
  */
 import type { ChannelContext, ProgressStyle } from "../channel/channel-context.js";
-import type { ChannelEvent } from "../channel/channel-event.js";
+import { type ChannelEvent, senderOf } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
@@ -76,15 +76,14 @@ class ChannelDeliveryController {
 			message: {
 				text: this.event.text,
 				rawText: this.event.text,
-				user: this.event.user,
-				userName: this.event.userName,
+				...senderOf(this.event),
 				channel: this.event.channelId,
 				ts: this.event.ts,
 				images: this.event.images,
 			},
 			// The group title when the transport supplied one; the raw id is the fallback so a
 			// synthetic event (which carries no conversation payload) still names its channel.
-			channelName: this.event.channelName ?? this.event.channelId,
+			channelName: (this.event.source === "human" ? this.event.channelName : undefined) ?? this.event.channelId,
 			respond: async (text: string, shouldLog = true) => this.appendProgress(text, shouldLog),
 			respondPlain: async (text: string, shouldLog = true, title?: string) => this.sendFinal(text, shouldLog, title),
 			replaceMessage: async (text: string) => this.replaceWithFinal(text),

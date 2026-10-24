@@ -10,13 +10,18 @@
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { channelKind } from "../channel/channel-id.js";
 import { loadBindings, writeBindings } from "../desk/bindings.js";
 import type { BindOutcome } from "../desk/commands.js";
 import { DEFAULT_DESK, getDeskDir, isDeskName, normalizeDeskName } from "../desk/paths.js";
 import { allocateConversation, createDeskRecord, findConversation, readDeskRecord } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
-import type { BindingsFile, CreateDeskOutcome, DeskConversation, DeskSummary } from "../desk/types.js";
+import type {
+	BindingsFile,
+	ConversationKind,
+	CreateDeskOutcome,
+	DeskConversation,
+	DeskSummary,
+} from "../desk/types.js";
 import { parseScheduledEventContent } from "../events/parse.js";
 import * as log from "../log.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -59,6 +64,11 @@ interface DeskWatcher {
 
 export interface DeskRuntimeOptions {
 	workspaceDir: string;
+	/**
+	 * The conversation kind a channel's transport gives it (names its `conversations/<kind>-<n>/`
+	 * directory); `undefined` for an address no active transport owns.
+	 */
+	conversationKindOf: (channelId: string) => ConversationKind | undefined;
 	/** Repair interrupted turns in a desk's bound conversations; runs inside activation (D6 step 1). */
 	recover: (conversations: DeskConversation[]) => Promise<void>;
 	/** Build a desk's events watcher. It is started with the services and stopped at dormancy. */
@@ -106,7 +116,7 @@ export class DeskRuntime {
 		}
 		for (const [channelId, binding] of Object.entries(this.bindings.bindings)) {
 			const record = this.records.get(binding.desk)?.record;
-			const kind = channelKind(channelId);
+			const kind = this.options.conversationKindOf(channelId);
 			if (!record || !kind || record.conversations[channelId]) continue;
 			await allocateConversation(this.options.workspaceDir, binding.desk, channelId, kind, new Date());
 			await this.refreshRecord(binding.desk);
@@ -264,7 +274,7 @@ export class DeskRuntime {
 	}
 
 	private async bindNow(channelId: string, desk: string): Promise<BindOutcome> {
-		const kind = channelKind(channelId);
+		const kind = this.options.conversationKindOf(channelId);
 		if (!kind) throw new Error(`Not a channel id: ${channelId}`);
 		// 1. Validate. A desk that went missing or broken since startup is caught here, not later.
 		if (!isDeskName(desk)) return { kind: "invalid", desk };

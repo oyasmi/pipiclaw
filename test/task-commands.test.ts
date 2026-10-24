@@ -21,7 +21,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 
 	beforeEach(async () => {
 		workspaceDir = await mkdtemp(join(tmpdir(), "task-commands-v4-"));
-		deskDir = join(workspaceDir, "dm_1");
+		deskDir = join(workspaceDir, "dingtalk:dm:1");
 		tasksDir = join(deskDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
 	});
@@ -33,7 +33,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 	async function writeTask(id: string, fields: Partial<TaskFrontmatter> = {}): Promise<void> {
 		await writeFile(
 			join(tasksDir, `${id}.md`),
-			renderTaskDocument({ state: "open", channel: "dm_1", usage: createUsage(), ...fields }, BODY),
+			renderTaskDocument({ state: "open", channel: "dingtalk:dm:1", usage: createUsage(), ...fields }, BODY),
 		);
 	}
 
@@ -41,7 +41,7 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		handleTasksCommand({
 			args,
 			deskDir,
-			currentChannelId: "dm_1",
+			currentChannelId: "dingtalk:dm:1",
 			describeChannel: (channelId) => ({ label: `\`${channelId}\``, boundHere: true }),
 			dispatchTask,
 		});

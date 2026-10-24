@@ -19,9 +19,9 @@ function registryContext(): ToolBuildContext {
 		fileStore: createFileStore(),
 		securityConfig: DEFAULT_SECURITY_CONFIG,
 		securityContext: { agentWorkspaceDir: "/tmp/ws", cwd: "/tmp/ws" },
-		channelId: "dm_1",
+		channelId: "dingtalk:dm:1",
 		desk: "news",
-		deskDir: "/tmp/ws/dm_1",
+		deskDir: "/tmp/ws/dingtalk:dm:1",
 		workspaceDir: "/tmp/ws",
 		webConfig: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: true },
 		toolsConfig: DEFAULT_TOOLS_CONFIG,
@@ -105,7 +105,7 @@ function createQueue(): RunQueue {
 
 function createContext(respond: ReturnType<typeof vi.fn>): ChannelContext {
 	return {
-		message: { text: "", rawText: "", user: "u", userName: "U", channel: "dm_1", ts: "1" },
+		message: { text: "", rawText: "", user: "u", userName: "U", channel: "dingtalk:dm:1", ts: "1" },
 		respond,
 		respondPlain: vi.fn(async () => true),
 		replaceMessage: vi.fn(async () => {}),
@@ -124,7 +124,7 @@ function createContext(respond: ReturnType<typeof vi.fn>): ChannelContext {
 function handlerContext(ctx: ChannelContext, runState: RunState): SessionEventHandlerContext {
 	return {
 		ctx,
-		logCtx: { channelId: "dm_1", userName: "U" },
+		logCtx: { channelId: "dingtalk:dm:1", userName: "U" },
 		queue: createQueue(),
 		pendingTools: new Map(),
 		store: null,
@@ -250,15 +250,20 @@ describe("registry wiring", () => {
 		// buildToolSet to avoid an import cycle — wire it identically here.
 		const tool = withToolDetails(
 			createSubAgentTool({
-				...testManagers("dm_1"),
+				...testManagers("dingtalk:dm:1"),
 				executor: { exec: async () => ({ stdout: "", stderr: "", code: 0 }) },
 				fileStore: createFileStore(),
 				getCurrentModel: () => ({}) as never,
 				getAvailableModels: () => [],
 				resolveApiKey: async () => "key",
 				workspaceDir: "/tmp/ws",
-				deskDir: "/tmp/ws/dm_1",
-				runtimeContext: { workspaceDir: "/tmp/ws", desk: "news", deskDir: "/tmp/ws/dm_1", channelId: "dm_1" },
+				deskDir: "/tmp/ws/dingtalk:dm:1",
+				runtimeContext: {
+					workspaceDir: "/tmp/ws",
+					desk: "news",
+					deskDir: "/tmp/ws/dingtalk:dm:1",
+					channelId: "dingtalk:dm:1",
+				},
 			}),
 			"subagent",
 		);

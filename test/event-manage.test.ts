@@ -21,7 +21,7 @@ let eventsDir: string;
 function opts(overrides: Partial<EventManageToolOptions> = {}): EventManageToolOptions {
 	return {
 		deskDir: workspaceDir,
-		channelId: "dm_1",
+		channelId: "dingtalk:dm:1",
 		commandGuardConfig: guard(),
 		...overrides,
 	};
@@ -62,7 +62,7 @@ describe("manageEvent task templates (spec 052, D2)", () => {
 		);
 		expect(parsed.task?.title).toBe("周报");
 		expect(parsed.text).toBeUndefined();
-		expect(parsed.channelId).toBe("dm_1");
+		expect(parsed.channelId).toBe("dingtalk:dm:1");
 	});
 
 	it("refuses a definition that carries both `text` and `task`, or neither, without writing a file", async () => {
@@ -99,24 +99,24 @@ describe("manageEvent create", () => {
 	it("writes valid periodic and one-shot events that the watcher parser can load back, binding the channel itself", async () => {
 		const result = await manageEvent(opts(), {
 			action: "create",
-			name: "task.dm_1.weekly-report.schedule",
+			name: "task.dm1.weekly-report.schedule",
 			definition: validPeriodic,
 		});
 		expect(result.eventType).toBe("periodic");
-		expect(await listEventFiles()).toEqual(["task.dm_1.weekly-report.schedule.json"]);
-		const onDisk = await readFile(join(eventsDir, "task.dm_1.weekly-report.schedule.json"), "utf-8");
+		expect(await listEventFiles()).toEqual(["task.dm1.weekly-report.schedule.json"]);
+		const onDisk = await readFile(join(eventsDir, "task.dm1.weekly-report.schedule.json"), "utf-8");
 		expect(onDisk).not.toContain("timezone");
 		const parsed = parseScheduledEventContent(onDisk, "x.json");
 		expect(parsed.type).toBe("periodic");
-		expect(parsed.channelId).toBe("dm_1"); // bound by the tool, not supplied by the model
+		expect(parsed.channelId).toBe("dingtalk:dm:1"); // bound by the tool, not supplied by the model
 
 		const oneShot = await manageEvent(opts(), {
 			action: "create",
-			name: "task.dm_1.weekly-report.checkin",
+			name: "task.dm1.weekly-report.checkin",
 			definition: { type: "one-shot", text: "回访", at: futureIso(30) },
 		});
 		expect(oneShot.eventType).toBe("one-shot");
-		expect(oneShot.channelId).toBe("dm_1");
+		expect(oneShot.channelId).toBe("dingtalk:dm:1");
 	});
 
 	it("normalizes .json suffix (foo === foo.json)", async () => {
@@ -170,7 +170,7 @@ describe("manageEvent create", () => {
 	it("allows a sub-30-minute periodic cron when it carries a preAction gate", async () => {
 		const result = await manageEvent(opts(), {
 			action: "create",
-			name: "task.dm_1.demo.sensor",
+			name: "task.dm1.demo.sensor",
 			definition: {
 				type: "periodic",
 				text: "x",
@@ -179,13 +179,13 @@ describe("manageEvent create", () => {
 			},
 		});
 		expect(result.eventType).toBe("periodic");
-		expect(await listEventFiles()).toEqual(["task.dm_1.demo.sensor.json"]);
+		expect(await listEventFiles()).toEqual(["task.dm1.demo.sensor.json"]);
 	});
 
 	it("maps the schema's timeoutMs onto the on-disk preAction.timeout (ms)", async () => {
 		await manageEvent(opts(), {
 			action: "create",
-			name: "task.dm_1.demo.gated",
+			name: "task.dm1.demo.gated",
 			definition: {
 				type: "one-shot",
 				text: "x",
@@ -193,7 +193,7 @@ describe("manageEvent create", () => {
 				preAction: { type: "bash", command: "echo hi", timeoutMs: 4000 },
 			},
 		});
-		const onDisk = JSON.parse(await readFile(join(eventsDir, "task.dm_1.demo.gated.json"), "utf-8"));
+		const onDisk = JSON.parse(await readFile(join(eventsDir, "task.dm1.demo.gated.json"), "utf-8"));
 		expect(onDisk.preAction).toMatchObject({ type: "bash", command: "echo hi", timeout: 4000 });
 	});
 
@@ -256,7 +256,7 @@ describe("manageEvent show / update", () => {
 		const shown = await manageEvent(opts(), { action: "show", name: "upd" });
 		expect(shown.action).toBe("show");
 		const parsed = JSON.parse(shown.notice);
-		expect(parsed).toMatchObject({ type: "periodic", channelId: "dm_1", schedule: "0 10 * * 1" });
+		expect(parsed).toMatchObject({ type: "periodic", channelId: "dingtalk:dm:1", schedule: "0 10 * * 1" });
 	});
 
 	it("show throws recoverably for a missing event", async () => {
@@ -284,7 +284,10 @@ describe("manageEvent show / update", () => {
 	it("rejects rewriting an existing immediate event (re-arming guard)", async () => {
 		const { mkdir } = await import("node:fs/promises");
 		await mkdir(eventsDir, { recursive: true });
-		await writeFile(join(eventsDir, "imm.json"), JSON.stringify({ type: "immediate", channelId: "dm_1", text: "x" }));
+		await writeFile(
+			join(eventsDir, "imm.json"),
+			JSON.stringify({ type: "immediate", channelId: "dingtalk:dm:1", text: "x" }),
+		);
 		await expect(
 			manageEvent(opts(), {
 				action: "update",
@@ -299,13 +302,13 @@ describe("manageEvent show / update", () => {
 		await mkdir(eventsDir, { recursive: true });
 		await writeFile(
 			join(eventsDir, "other.json"),
-			JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
+			JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:other", text: "x", schedule: "0 10 * * 1" }),
 		);
 		const result = await manageEvent(opts(), { action: "update", name: "other", definition: validPeriodic });
-		expect(result.channelId).toBe("dm_other");
+		expect(result.channelId).toBe("dingtalk:dm:other");
 		const onDisk = parseScheduledEventContent(await readFile(join(eventsDir, "other.json"), "utf-8"), "x.json");
 		expect(onDisk.text).toBe(validPeriodic.text);
-		expect(onDisk.channelId).toBe("dm_other");
+		expect(onDisk.channelId).toBe("dingtalk:dm:other");
 	});
 });
 
@@ -323,7 +326,7 @@ describe("manageEvent delete", () => {
 		await mkdir(eventsDir, { recursive: true });
 		await writeFile(
 			join(eventsDir, "foreign.json"),
-			JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
+			JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:other", text: "x", schedule: "0 10 * * 1" }),
 		);
 		expect((await manageEvent(opts(), { action: "delete", name: "foreign" })).deleted).toBe(true);
 		expect(await listEventFiles()).toEqual([]);
@@ -341,7 +344,7 @@ describe("manageEvent delete", () => {
 			await mkdir(eventsDir, { recursive: true });
 			await writeFile(
 				join(eventsDir, "foreign.json"),
-				JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
+				JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:other", text: "x", schedule: "0 10 * * 1" }),
 			);
 
 			// Spec 058, D14: events belong to the desk, so another channel's event is listed too, with
@@ -351,7 +354,7 @@ describe("manageEvent delete", () => {
 			expect(result.names?.sort()).toEqual(["foreign", "mine-oneshot", "mine-periodic"]);
 			expect(result.notice).toContain("mine-periodic [periodic]");
 			expect(result.notice).toContain("mine-oneshot [one-shot]");
-			expect(result.notice).toMatch(/foreign .*delivers to dm_other/);
+			expect(result.notice).toMatch(/foreign .*delivers to dingtalk:dm:other/);
 		});
 
 		it("lists an unparseable file and flags it instead of failing the whole call", async () => {

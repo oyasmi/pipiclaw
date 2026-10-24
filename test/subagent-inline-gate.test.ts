@@ -28,7 +28,7 @@ function makeOptions(subagentInlineEnabled: boolean) {
 		cwd: process.cwd(),
 		desk: "news",
 		deskDir: "/repo/desk-news",
-		channelId: "dm_1",
+		channelId: "dingtalk:dm:1",
 		getSubAgentDiscovery: () => ({ directory: "/repo/sub-agents", warnings: [], agents: [] }),
 		getSessionSearchSettings: () => ({
 			enabled: true,

@@ -39,7 +39,7 @@ describe("memory maintenance scheduler", () => {
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir: join(root, "app"),
-			getConversations: () => [conv("dm_1")],
+			getConversations: () => [conv("dingtalk:dm:1")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({ memoryMaintenance: maintenanceSettings(false) }),
@@ -52,12 +52,12 @@ describe("memory maintenance scheduler", () => {
 	it("reflects one channel per tick", async () => {
 		const root = createTempDir();
 		const appHomeDir = join(root, "app");
-		await updateMemoryMaintenanceState(appHomeDir, conv("dm_1"), (state) => ({ ...state, dirty: true }));
-		await updateMemoryMaintenanceState(appHomeDir, conv("dm_2"), (state) => ({ ...state, dirty: true }));
+		await updateMemoryMaintenanceState(appHomeDir, conv("dingtalk:dm:1"), (state) => ({ ...state, dirty: true }));
+		await updateMemoryMaintenanceState(appHomeDir, conv("dingtalk:dm:2"), (state) => ({ ...state, dirty: true }));
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir,
-			getConversations: () => [conv("dm_1"), conv("dm_2")],
+			getConversations: () => [conv("dingtalk:dm:1"), conv("dingtalk:dm:2")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({
@@ -74,15 +74,15 @@ describe("memory maintenance scheduler", () => {
 	it("skips active channels in the ring", async () => {
 		const root = createTempDir();
 		const appHomeDir = join(root, "app");
-		for (const id of ["dm_1", "dm_2", "dm_3"]) {
+		for (const id of ["dingtalk:dm:1", "dingtalk:dm:2", "dingtalk:dm:3"]) {
 			await updateMemoryMaintenanceState(appHomeDir, conv(id), (state) => ({ ...state, dirty: true }));
 		}
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir,
-			getConversations: () => [conv("dm_1"), conv("dm_2"), conv("dm_3")],
+			getConversations: () => [conv("dingtalk:dm:1"), conv("dingtalk:dm:2"), conv("dingtalk:dm:3")],
 			getRuntimeContext,
-			isChannelActive: (channelId) => channelId === "dm_1",
+			isChannelActive: (channelId) => channelId === "dingtalk:dm:1",
 			getSettings: () => ({
 				memoryMaintenance: {
 					...maintenanceSettings(true),
@@ -92,7 +92,7 @@ describe("memory maintenance scheduler", () => {
 
 		await scheduler.runOnce();
 		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
-		expect(getRuntimeContext).toHaveBeenCalledWith(conv("dm_2"));
+		expect(getRuntimeContext).toHaveBeenCalledWith(conv("dingtalk:dm:2"));
 	});
 
 	it("skips channels with nothing due without requesting runtime context", async () => {
@@ -100,20 +100,20 @@ describe("memory maintenance scheduler", () => {
 		const appHomeDir = join(root, "app");
 		const now = new Date("2026-04-19T12:00:00.000Z");
 
-		// dm_1 has already reflected within its interval and is clean: reflect could not possibly
+		// dingtalk:dm:1 has already reflected within its interval and is clean: reflect could not possibly
 		// be due, so the cheap pre-check should skip it without touching the runtime.
-		await updateMemoryMaintenanceState(appHomeDir, conv("dm_1"), (state) => ({
+		await updateMemoryMaintenanceState(appHomeDir, conv("dingtalk:dm:1"), (state) => ({
 			...state,
 			dirty: false,
 			lastReflectAt: formatLocalTime(now),
 		}));
-		// dm_2 is dirty with no prior reflect, so it is a candidate.
-		await updateMemoryMaintenanceState(appHomeDir, conv("dm_2"), (state) => ({ ...state, dirty: true }));
+		// dingtalk:dm:2 is dirty with no prior reflect, so it is a candidate.
+		await updateMemoryMaintenanceState(appHomeDir, conv("dingtalk:dm:2"), (state) => ({ ...state, dirty: true }));
 
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir,
-			getConversations: () => [conv("dm_1"), conv("dm_2")],
+			getConversations: () => [conv("dingtalk:dm:1"), conv("dingtalk:dm:2")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({
@@ -123,7 +123,7 @@ describe("memory maintenance scheduler", () => {
 
 		await scheduler.runOnce(now);
 		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
-		expect(getRuntimeContext).toHaveBeenCalledWith(conv("dm_2"));
+		expect(getRuntimeContext).toHaveBeenCalledWith(conv("dingtalk:dm:2"));
 	});
 
 	it("starts and stops an idempotent interval regardless of the enabled setting", async () => {
@@ -133,7 +133,7 @@ describe("memory maintenance scheduler", () => {
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
 			appHomeDir: join(root, "app"),
-			getConversations: () => [conv("dm_1")],
+			getConversations: () => [conv("dingtalk:dm:1")],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({

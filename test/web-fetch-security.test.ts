@@ -23,7 +23,7 @@ const context = {
 	webConfig: DEFAULT_TOOLS_CONFIG.tools.web,
 	securityConfig: DEFAULT_SECURITY_CONFIG,
 	workspaceDir: "/workspace",
-	channelId: "dm_test",
+	channelId: "dingtalk:dm:test",
 };
 
 describe("web fetch security", () => {

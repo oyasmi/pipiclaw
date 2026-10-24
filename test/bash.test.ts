@@ -107,7 +107,7 @@ describe("bash tool", () => {
 			return { code: 0, stdout: "", stderr: "" };
 		});
 		const jobManager = new DeskJobManager({ desk: "news" }, executor);
-		const tool = createBashTool(executor, { jobManager, channelId: "dm_1" });
+		const tool = createBashTool(executor, { jobManager, channelId: "dingtalk:dm:1" });
 
 		const result = await tool.execute("call", { command: "npm install", async: true });
 
@@ -123,7 +123,7 @@ describe("bash tool", () => {
 		const manager = new DeskJobManager({ desk: "news" }, executor);
 		const start = vi.spyOn(manager, "start").mockResolvedValue({
 			id: "job_probe",
-			channelId: "dm_1",
+			channelId: "dingtalk:dm:1",
 			label: "check",
 			command: "npm test",
 			timeoutSeconds: 300,
@@ -131,7 +131,7 @@ describe("bash tool", () => {
 			startedAt: 0,
 			durationMs: 0,
 		});
-		const tool = createBashTool(executor, { jobManager: manager, channelId: "dm_1" });
+		const tool = createBashTool(executor, { jobManager: manager, channelId: "dingtalk:dm:1" });
 		await tool.execute("default", { command: "npm test", async: true });
 		expect(start.mock.calls[0]?.[2]).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
 		await tool.execute("long", { command: "npm test", async: true, timeout: 1800, taskId: "T" });

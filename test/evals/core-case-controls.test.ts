@@ -44,7 +44,7 @@ function context(): TrialContext {
 }
 
 function delivery(ctx: TrialContext, text: string): void {
-	const value: CapturedDelivery = { method: "sendPlain", channelId: "dm_eval", text, ts: Date.now() };
+	const value: CapturedDelivery = { method: "sendPlain", channelId: "dingtalk:dm:eval", text, ts: Date.now() };
 	ctx.deliveries.push(value);
 	ctx.snapshot.deliveries.push(value);
 }
@@ -182,7 +182,7 @@ describe("renovated core family controls", () => {
 				stepIndex: 2,
 				stepId: "control:step-3",
 				sessionId: "control-session",
-				channelId: "dm_eval",
+				channelId: "dingtalk:dm:eval",
 				actorId: "main-agent",
 				callId: "artifact-call",
 				correlationId: "artifact-call",
@@ -198,7 +198,7 @@ describe("renovated core family controls", () => {
 				stepIndex: 2,
 				stepId: "control:step-3",
 				sessionId: "control-session",
-				channelId: "dm_eval",
+				channelId: "dingtalk:dm:eval",
 				actorId: "main-agent",
 				callId: "artifact-call",
 				correlationId: "artifact-call",
@@ -354,7 +354,7 @@ describe("stage-three identity and failure attribution", () => {
 		expect(
 			traceIdentity({
 				caseId: "C-fix-01",
-				channelId: "dm_eval",
+				channelId: "dingtalk:dm:eval",
 				segment: 2,
 				stepIndex: 3,
 				sessionId: "actual-session-9",
@@ -365,7 +365,7 @@ describe("stage-three identity and failure attribution", () => {
 		).toEqual({
 			stepId: "C-fix-01:step-4",
 			sessionId: "actual-session-9",
-			channelId: "dm_eval",
+			channelId: "dingtalk:dm:eval",
 			actorId: "main-agent",
 			callId: "model-4",
 			parentCallId: "turn-4",

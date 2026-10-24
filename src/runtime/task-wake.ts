@@ -9,7 +9,7 @@
  * settled, names this task, and that the dispatch id is exactly the one its own completion wake
  * carries.
  */
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 import { readStoredTask, redeemTicket } from "../tasks/store.js";
 
 /** The slice of `DeskJobManager` / `SubAgentRunManager` a wake claim needs. */
@@ -54,7 +54,7 @@ async function isTaskActivelyDriven(deskDir: string, taskId: string): Promise<bo
  * exists to remove.
  */
 export async function claimVerifiedWake(
-	event: ChannelEvent,
+	event: WakeEvent,
 	/** The admitted wake's desk directory — where the task it names lives. */
 	deskDir: string,
 	owner: WakeOwner,

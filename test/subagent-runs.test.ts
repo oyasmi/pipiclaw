@@ -2,8 +2,8 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { WakeEvent } from "../src/channel/channel-event.js";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
-import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import type { SettleInput } from "../src/subagents/run-record.js";
 import { MAX_RUNNING_SUBAGENT_RUNS_PER_HOST } from "../src/subagents/run-record.js";
 import { createSubAgentRuntime } from "../src/subagents/run-registry.js";
@@ -87,10 +87,10 @@ function makeStore() {
 }
 
 function makeDispatch() {
-	const events: DingTalkEvent[] = [];
+	const events: WakeEvent[] = [];
 	return {
 		events,
-		dispatch: (event: DingTalkEvent) => {
+		dispatch: (event: WakeEvent) => {
 			events.push(event);
 			return true;
 		},
@@ -100,7 +100,7 @@ function makeDispatch() {
 function register(manager: SubAgentRunManager, overrides: Partial<Parameters<SubAgentRunManager["register"]>[0]> = {}) {
 	return manager.register({
 		runId: "run-1",
-		channelId: "dm_123",
+		channelId: "dingtalk:dm:123",
 		runtime: "internal",
 		agent: "explorer",
 		label: "explore the repo",
@@ -183,7 +183,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 		expect(events).toHaveLength(0);
 		expect(records).toHaveLength(1);
-		expect(records[0]).toMatchObject({ kind: "subagent", runId: "run-1", channelId: "dm_123" });
+		expect(records[0]).toMatchObject({ kind: "subagent", runId: "run-1", channelId: "dingtalk:dm:123" });
 		expect(archived).toHaveLength(1);
 		expect(archived[0]?.run).toMatchObject({ runId: "run-1", status: "completed", taskId: undefined });
 		expect(manager.get("run-1")?.wakeEnqueued).toBe(true);
@@ -258,7 +258,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toMatchObject({
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			notice: { kind: "settled", runId: "run-announced", agent: "explorer", status: "completed" },
 		});
 
@@ -277,7 +277,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		await register(manager, { runId: "run-task", taskId: "T-1" });
 		// Another channel of the same desk: its wake goes there, so it is no sibling of this one's
 		// (counting it would leave this channel waiting, [SILENT], for a wake it never gets).
-		await register(manager, { runId: "run-elsewhere", channelId: "group_cidOTHER" });
+		await register(manager, { runId: "run-elsewhere", channelId: "dingtalk:group:cidOTHER" });
 
 		await manager.settle("run-a", baseSettleInput(), { announce: true });
 		await manager.settle("run-b", baseSettleInput(), { announce: true });
@@ -418,7 +418,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const writer = new SubAgentRunManager(DESK, { stateDir });
 		await writer.register({
 			runId: "run-orphan",
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			runtime: "internal",
 			agent: "explorer",
 			label: "explore",
@@ -452,7 +452,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const writer = new SubAgentRunManager(DESK, { stateDir });
 		await writer.register({
 			runId: "run-done",
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			runtime: "internal",
 			agent: "explorer",
 			label: "explore",
@@ -483,7 +483,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 			const writer = new SubAgentRunManager(DESK, { stateDir });
 			await writer.register({
 				runId: "run-locked",
-				channelId: "dm_123",
+				channelId: "dingtalk:dm:123",
 				runtime: "internal",
 				agent: "explorer",
 				label: "explore",
@@ -536,13 +536,13 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const writer = new SubAgentRunManager(DESK, { stateDir });
 		const lease = acquireWorkspaceLease({
 			runId: "run-pending",
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			workingDirectory: workspaceDir,
 		});
 		expect(lease.ok).toBe(true);
 		await writer.register({
 			runId: "run-pending",
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			runtime: "internal",
 			agent: "explorer",
 			label: "pending settlement",
@@ -623,7 +623,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		});
 		await writer.register({
 			runId: "run-unwoken",
-			channelId: "dm_123",
+			channelId: "dingtalk:dm:123",
 			runtime: "internal",
 			agent: "explorer",
 			label: "explore",
@@ -655,7 +655,7 @@ describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
 			const id = manager.mintRunId();
 			expect(minted.has(id)).toBe(false);
 			minted.add(id);
-			await register(manager, { runId: id, channelId: "dm_mint_unique" });
+			await register(manager, { runId: id, channelId: "dingtalk:dm:mint_unique" });
 			// A settled run still occupies its id (only forgotten after GC), which is what
 			// mintRunId must avoid reissuing; settle it so registration doesn't hit the
 			// per-channel running-run cap on later iterations.
@@ -663,25 +663,27 @@ describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
 		}
 
 		const dup = new SubAgentRunManager(DESK, {});
-		await register(dup, { runId: "run-dup", channelId: "dm_dup" });
-		await expect(register(dup, { runId: "run-dup", channelId: "dm_dup" })).rejects.toThrow("already registered");
+		await register(dup, { runId: "run-dup", channelId: "dingtalk:dm:dup" });
+		await expect(register(dup, { runId: "run-dup", channelId: "dingtalk:dm:dup" })).rejects.toThrow(
+			"already registered",
+		);
 	});
 
 	it("resolveRef prefers an exact id, then unique prefixes (case-insensitive, run_ optional), and reports ambiguous/not_found", async () => {
 		const exact = new SubAgentRunManager(DESK, {});
-		await register(exact, { runId: "run_abc123", channelId: "dm_resolve" });
-		await register(exact, { runId: "run_abc123xyz", channelId: "dm_resolve" });
+		await register(exact, { runId: "run_abc123", channelId: "dingtalk:dm:resolve" });
+		await register(exact, { runId: "run_abc123xyz", channelId: "dingtalk:dm:resolve" });
 		expect(exact.resolveRef("run_abc123")).toMatchObject({ kind: "found", record: { runId: "run_abc123" } });
 
 		const prefix = new SubAgentRunManager(DESK, {});
-		await register(prefix, { runId: "run_qwe789", channelId: "dm_resolve_prefix" });
+		await register(prefix, { runId: "run_qwe789", channelId: "dingtalk:dm:resolve_prefix" });
 		expect(prefix.resolveRef("qwe7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
 		expect(prefix.resolveRef("run_qwe7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
 		expect(prefix.resolveRef("QWE7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
 
 		const ambiguous = new SubAgentRunManager(DESK, {});
-		await register(ambiguous, { runId: "run_zzz111", channelId: "dm_resolve_ambiguous" });
-		await register(ambiguous, { runId: "run_zzz222", channelId: "dm_resolve_ambiguous" });
+		await register(ambiguous, { runId: "run_zzz111", channelId: "dingtalk:dm:resolve_ambiguous" });
+		await register(ambiguous, { runId: "run_zzz222", channelId: "dingtalk:dm:resolve_ambiguous" });
 		const resolution = ambiguous.resolveRef("zzz");
 		expect(resolution.kind).toBe("ambiguous");
 		if (resolution.kind === "ambiguous") {
@@ -700,7 +702,7 @@ describe("SubAgentRunManager daily GC", () => {
 	it("keeps every managed artifact for seven days, then drops the artifacts and durable record together", async () => {
 		const workspaceDir = createTempWorkspace();
 		const stateDir = join(workspaceDir, "state");
-		const channelId = "dm_gc";
+		const channelId = "dingtalk:dm:gc";
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-gc");
 		mkdirSync(artifactDir, { recursive: true });
 		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
@@ -756,7 +758,7 @@ describe("SubAgentRunManager daily GC", () => {
 	it("retains the run for a later retry when artifact deletion fails", async () => {
 		const workspaceDir = createTempWorkspace();
 		const stateDir = join(workspaceDir, "state");
-		const channelId = "dm_gc_retry";
+		const channelId = "dingtalk:dm:gc_retry";
 		const artifactDir = join(workspaceDir, "not-a-directory");
 		writeFileSync(artifactDir, "blocks child unlinks", "utf-8");
 
@@ -789,7 +791,7 @@ describe("sub-agent run persistence per desk (spec 058, D15)", () => {
 		// Failure caught: a channel id is never a path segment (INV-3), so a base64 group id with `/`
 		// must neither nest the record directory nor lose the channel the wake goes back to.
 		const stateDir = createTempDir();
-		const channelId = `group_cid${Date.now()}/eDInUw==`;
+		const channelId = `dingtalk:group:cid${Date.now()}/eDInUw==`;
 
 		const writer = new SubAgentRunManager(DESK, { stateDir });
 		await writer.register({

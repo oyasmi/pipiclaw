@@ -20,7 +20,6 @@ import {
 } from "../app/home.js";
 import { prepareAppServices } from "../app/services.js";
 import { finalDeliveryOf, progressStyleOf } from "../channel/channel-context.js";
-import { formatChannelLabel, TUI_CHANNEL_ID } from "../channel/channel-id.js";
 import { CHANNELS_INDEX_FILENAME, loadChannelNames } from "../channel/channel-index.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
@@ -37,6 +36,7 @@ import { flushSecurityLogs } from "../security/logger.js";
 import { acquireFileLock } from "../shared/file-lock.js";
 import { createSubAgentRuntime } from "../subagents/run-registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
+import { formatTuiChannelLabel, TUI_CHANNEL_ID } from "./channel-label.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
 import { createFrontend } from "./renderer.js";
 import type { DeliveryTraits } from "./terminal-context.js";
@@ -192,7 +192,7 @@ async function runWithConversation(
 			describeChannel: (id) => names.get(id),
 			describeConversation: (dir) => {
 				const owner = Object.entries(record?.conversations ?? {}).find(([, entry]) => entry.dir === dir)?.[0];
-				return owner ? formatChannelLabel(owner, names.get(owner)) : undefined;
+				return owner ? formatTuiChannelLabel(owner, names.get(owner)) : undefined;
 			},
 			authConfigPath: paths.authConfigPath,
 			modelsConfigPath: paths.modelsConfigPath,
@@ -238,14 +238,14 @@ async function runWithConversation(
 					deskPort: {
 						list: async () =>
 							buildDeskList(await listDesks(paths.workspaceDir), bindings, desk, (id) =>
-								formatChannelLabel(id, names.get(id)),
+								formatTuiChannelLabel(id, names.get(id)),
 							),
 						channelIndexPath: join(paths.workspaceDir, CHANNELS_INDEX_FILENAME),
 						create: (name) => Promise.resolve(createDeskRecord(paths.workspaceDir, name, new Date())),
 					},
 					paths,
 					describeChannel: (id) => ({
-						label: formatChannelLabel(id, names.get(id)),
+						label: formatTuiChannelLabel(id, names.get(id)),
 						boundHere: bindings[id]?.desk === desk,
 					}),
 					version: readCliVersion(),

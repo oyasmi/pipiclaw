@@ -8,7 +8,7 @@ import { forceEndStuckTurnAfterStop } from "../agent/stop-watchdog.js";
 import type { AgentRunner } from "../agent/types.js";
 import type { BootstrapPaths } from "../app/home.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { ChannelEvent, HumanEvent } from "../channel/channel-event.js";
 import type { ChannelDescription } from "../channel/channel-id.js";
 import type { ChannelIndex } from "../channel/channel-index.js";
 import type { ChannelStore } from "../channel/store.js";
@@ -219,7 +219,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 			return { pausedTaskId };
 		},
 
-		async handleNewSession(event: ChannelEvent, _bot: DingTalkBotPort): Promise<void> {
+		async handleNewSession(event: HumanEvent, _bot: DingTalkBotPort): Promise<void> {
 			if (isShuttingDown()) return;
 			const previous = sessionResetChains.get(event.channelId) ?? Promise.resolve();
 			const reset = previous
@@ -354,7 +354,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 		},
 
 		async handleBusyMessage(
-			event: ChannelEvent,
+			event: HumanEvent,
 			bot: DingTalkBotPort,
 			mode: BusyMessageMode,
 			queueText: string,

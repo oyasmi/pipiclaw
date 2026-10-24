@@ -267,7 +267,7 @@ describe("E2E deterministic: compaction", () => {
 		// Mutation (2026-10-22): restore scheduler enabled-only gating; pending work remains and this case fails.
 		const model = await startMockProvider();
 		const home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
-		const channelId = "dm_e2e_user";
+		const channelId = "dingtalk:dm:e2e_user";
 		const conversation = await bindChannelOnDisk(home.workspaceDir, channelId);
 		seed(conversation.conversationDir, conversation.deskDir, home.homeDir);
 		const settingsPath = join(home.homeDir, "settings.json");

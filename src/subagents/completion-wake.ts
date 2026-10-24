@@ -2,8 +2,7 @@
  * Rendering of the completion wake a settled delegation run sends to its channel (spec 040 D7).
  */
 import { join } from "node:path";
-import type { ChannelEvent } from "../channel/channel-event.js";
-import { conversationTypeOf } from "../channel/channel-id.js";
+import type { WakeEvent } from "../channel/channel-event.js";
 import { formatDuration } from "../shared/format.js";
 import type { RunRecord } from "./run-record.js";
 
@@ -40,9 +39,8 @@ export function buildRunCompletionWake(input: {
 	outputSaved: boolean;
 	/** Other runs of the same task (or, for a chat-level run, the same channel) still running. */
 	siblingCount: number;
-}): ChannelEvent {
+}): WakeEvent {
 	const { desk, dispatchId, record, outputText, outputSaved, siblingCount } = input;
-	const conversationType = conversationTypeOf(record.channelId);
 	const tail = outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim();
 	// P2-1: say so when the tail cut real content, instead of leaving the reader to guess and
 	// spend a `read` round trip finding out output.md has more.
@@ -68,10 +66,9 @@ export function buildRunCompletionWake(input: {
 			? `\nVerdict: ${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}`
 			: "";
 	return {
-		type: conversationType === "2" ? "group" : "dm",
+		source: "wake",
 		channelId: record.channelId,
-		user: "SUBAGENT",
-		userName: "SUBAGENT",
+		producer: "SUBAGENT",
 		text:
 			`[SUBAGENT:${record.runId}] Delegation "${record.label}" -> ${record.agent} (${harnessLabel}) finished: ` +
 			`${record.status} (${record.durationEstimated ? "≈" : ""}${formatDuration(record.durationMs ?? 0)}).${belongsTo}${verdictLine}\n` +
@@ -90,7 +87,6 @@ export function buildRunCompletionWake(input: {
 			workspaceLine +
 			"Continue whatever was waiting on this delegation. If it needs no follow-up, respond with exactly [SILENT].",
 		ts: String(Date.now()),
-		conversationType,
 		dispatchId,
 		desk,
 		// The result is awaited; the wake itself still runs without a progress card.
