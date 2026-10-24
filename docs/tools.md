@@ -94,7 +94,7 @@
 
 ## 调度与长程类
 
-`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个工位，只能修改投递到当前频道的事件；`action: "show"` 读回完整定义以便安全更新。`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——成功收尾直接结束本轮，不再多一次模型请求；`task_log` 会在活动日志缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
+`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个工位，同工位的任何频道都能修改和删除其中的事件，修改保留原投递频道；`action: "show"` 读回完整定义以便安全更新。`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——成功收尾直接结束本轮，不再多一次模型请求；`task_log` 会在活动日志缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
 
 `tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、内建 task driver 和每回合的任务摘要注入。
 

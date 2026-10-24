@@ -82,7 +82,7 @@ const eventManageSchema = Type.Object({
 		],
 		{
 			description:
-				'"list" this desk\'s events (those delivering to other channels are read-only), "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name.',
+				'"list" this desk\'s events, "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name. Any channel of the desk may manage any of its events.',
 		},
 	),
 	name: Type.Optional(
@@ -131,7 +131,7 @@ export interface EventManageRequest {
 export interface EventManageToolOptions {
 	/** Events belong to the desk: they live in `<deskDir>/events/` (spec 058, D14). */
 	deskDir: string;
-	/** The current channel: a created event delivers here; only its own events can be changed. */
+	/** The current channel: a created event delivers here; an update keeps the event's own delivery channel. */
 	channelId: string;
 	commandGuardConfig: SecurityConfig["commandGuard"];
 }
@@ -163,8 +163,7 @@ async function listDeskEvents(options: EventManageToolOptions): Promise<EventMan
 		}
 		const when = event.type === "one-shot" ? `at ${event.at}` : event.schedule;
 		const pre = event.preAction ? " (preAction)" : "";
-		const elsewhere =
-			event.channelId === options.channelId ? "" : ` (delivers to ${event.channelId}; read-only here)`;
+		const elsewhere = event.channelId === options.channelId ? "" : ` (delivers to ${event.channelId})`;
 		const text = clipText(describeEventPayload(event), 80, { collapseWhitespace: true });
 		entries.push({ name, parsed: true, line: `- ${name} [${event.type}] ${when}${pre}${elsewhere} — ${text}` });
 	}
@@ -177,16 +176,20 @@ async function listDeskEvents(options: EventManageToolOptions): Promise<EventMan
  * preActions, and cross-channel channelIds. The returned event is what gets persisted, so
  * the file on disk is exactly what was validated.
  *
+ * `deliveryChannelId` is never taken from the model: a create delivers to the calling channel, an
+ * update keeps the channel the event already delivers to, whoever edits it.
+ *
  * The scheduling rules themselves live in `events/validation.ts` and are re-applied by
- * the watcher (spec 031, D4); this layer only adds tool-specific framing (channel ownership,
+ * the watcher (spec 031, D4); this layer only adds tool-specific framing (the delivery channel,
  * and turning validation failures into recoverable tool errors the model can retry).
  */
 function validateDefinition(
 	definition: EventDefinitionInput,
 	name: string,
 	options: EventManageToolOptions,
+	deliveryChannelId: string,
 ): ScheduledEvent {
-	assertBackgroundDeliverable(options.channelId, "event");
+	assertBackgroundDeliverable(deliveryChannelId, "event");
 	if (definition.type === "immediate") {
 		throw new RecoverableToolError(
 			"event_manage cannot create or update immediate events (self-triggering loop guard); " +
@@ -205,7 +208,7 @@ function validateDefinition(
 	// is unambiguous (fix plan §3.6).
 	const onDisk: Record<string, unknown> = {
 		type: definition.type,
-		channelId: options.channelId,
+		channelId: deliveryChannelId,
 		// Both are passed through when both are given: the parser rejects "text and task" with a
 		// message that says why, which a silent preference for one of them would hide.
 		...(definition.text !== undefined ? { text: definition.text } : {}),
@@ -248,21 +251,9 @@ async function readEvent(eventPath: string, name: string): Promise<ScheduledEven
 		existing = parseScheduledEventContent(await readFile(eventPath, "utf-8"), `${name}.json`);
 	} catch (error) {
 		const message = errorMessage(error);
-		throw new Error(`Existing event "${name}" could not be parsed (${message}); use /events to manage it directly.`);
-	}
-	return existing;
-}
-
-/** Changing an event rebinds its delivery channel to the caller's, so only the owning channel may. */
-async function readOwnedEvent(
-	eventPath: string,
-	name: string,
-	options: EventManageToolOptions,
-): Promise<ScheduledEvent> {
-	const existing = await readEvent(eventPath, name);
-	if (existing.channelId !== options.channelId) {
 		throw new RecoverableToolError(
-			`Event "${name}" delivers to another channel of this desk and cannot be modified from here.`,
+			`Existing event "${name}" could not be parsed (${message}), so its delivery channel is unknown; ` +
+				'delete it (action "delete") and create it again.',
 		);
 	}
 	return existing;
@@ -321,7 +312,6 @@ export async function manageEvent(
 				notice: `事件 \`${eventName}\` 不存在，无需删除。`,
 			};
 		}
-		await readOwnedEvent(eventPath, eventName, options);
 		await unlink(eventPath);
 		return {
 			action: "delete",
@@ -351,16 +341,15 @@ export async function manageEvent(
 				`Too many event files (>= ${MAX_EVENT_FILES}) in this desk's events/; clean up stale events before creating more.`,
 			);
 		}
-	} else {
-		if (!existsSync(eventPath)) {
-			throw new RecoverableToolError(`Event "${eventName}" does not exist; use action "create" to add it.`);
-		}
-		// Ownership check only: an existing file that no longer parses (e.g. a legacy immediate
-		// event) is reported by readOwnedEvent and pointed at /events.
-		await readOwnedEvent(eventPath, eventName, options);
+	} else if (!existsSync(eventPath)) {
+		throw new RecoverableToolError(`Event "${eventName}" does not exist; use action "create" to add it.`);
 	}
 
-	const event = validateDefinition(request.definition, eventName, options);
+	// An update keeps the delivery channel of the event it replaces. A file that no longer parses
+	// (e.g. a legacy immediate event) has none to keep: `readEvent` points the model at delete + create.
+	const deliveryChannelId =
+		request.action === "create" ? options.channelId : (await readEvent(eventPath, eventName)).channelId;
+	const event = validateDefinition(request.definition, eventName, options, deliveryChannelId);
 	const content = `${JSON.stringify(event, null, 2)}\n`;
 	await writeFileAtomically(eventPath, content);
 
@@ -383,9 +372,10 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 		name: "event_manage",
 		label: "event_manage",
 		description:
-			"List, show, create, update, or delete scheduled events that wake this channel later (one-shot check-ins and " +
-			"periodic cadences). Use list to recover event names, and show to read an event's full definition before an " +
-			"update. immediate events are rejected.",
+			"List, show, create, update, or delete this desk's scheduled events (one-shot check-ins and periodic " +
+			"cadences). A created event wakes this channel; an update keeps the event's original delivery channel. Use list " +
+			"to recover event names, and show to read an event's full definition before an update. immediate events are " +
+			"rejected.",
 		parameters: eventManageSchema,
 		execute: async (
 			_toolCallId: string,

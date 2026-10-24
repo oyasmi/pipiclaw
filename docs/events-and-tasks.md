@@ -274,7 +274,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 ### `event_manage` 工具（agent 自调度）
 
-`event_manage` 是给**主 agent** 的一等工具，让它能列出、创建、修改、删除周期节奏、独立提醒和外部传感器。`action=list` 只返回当前 channel 的事件（每条一行，含无法解析的文件），用于在闭环或改期前核对真实事件名。它与 `/events`、手工编辑操作**同一个**目录。
+`event_manage` 是给**主 agent** 的一等工具，让它能列出、创建、修改、删除周期节奏、独立提醒和外部传感器。`action=list` 返回本工位的全部事件（每条一行，投递到别的频道的会标出频道，含无法解析的文件），用于在闭环或改期前核对真实事件名；工位内任何频道都可以查看、修改和删除这些事件。它与 `/events`、手工编辑操作**同一个**目录。
 
 **参数：**
 
@@ -290,7 +290,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 1. **结构校验**：`definition` 必须能通过与 watcher 相同的 `parseScheduledEventContent`——工具写出的文件必然可被装载；`task` 模板还要通过与 `task_create` 相同的契约校验。
 2. **路径安全**：`name` 经 traversal 拦截（拒绝 `../` 等越界），字符集限定 `[A-Za-z0-9._-]`。
-3. **channel 所有权**：新定义的 `channelId` 由 runtime 绑定；show/update/delete 前会读取目标文件校验归属，一个 channel 不能操纵或打扰其他 channel 的事件。
+3. **投递频道**：`channelId` 始终由 runtime 绑定，不接受模型传入：新建的事件投递到当前频道，修改保留事件原来的投递频道（原文件无法解析时先 delete 再 create）。工位内不按频道隔离，同工位的任何频道都能修改和删除；需要隔离就用另一个工位。
 4. **`preAction` 安全**：命令写入时即过 `command-guard`，被拦截则整个操作失败（触发时的检查仍保留）。
 5. **防自激励闸门**（防止 agent 把自己拖入烧 token 的自唤醒循环）：
    - 禁止 `immediate` 类型（create 与 update 双侧）——当下能做的事就在当前回合做完；
@@ -298,7 +298,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
    - `periodic` 的 cron 最密每 **30 分钟**一次；**带 `preAction` 门控时放宽到最密每 5 分钟**——传感器条件不成立时静默、零 token，适合调用用户已安装的稳定检测命令；硬下限仍是 5 分钟；
    - 本工位的 `events/` 内事件文件数达到 50 时拒绝再 create。
 
-> 手工编辑会绕过 `event_manage` 的 channel 所有权、提前量等即时错误提示，但 watcher 仍是最终信任边界：`immediate`、过密 cron、过多事件和被 command guard 拒绝的 `preAction` 仍会被拒绝。`one-shot` 的 2 分钟提前量也用于 watcher 校验进程运行期间新写入的文件；启动前遗留且已经错过的文件按可靠恢复语义补投递一次。
+> 手工编辑会绕过 `event_manage` 的投递频道绑定、提前量等即时错误提示，但 watcher 仍是最终信任边界：`immediate`、过密 cron、过多事件和被 command guard 拒绝的 `preAction` 仍会被拒绝。`one-shot` 的 2 分钟提前量也用于 watcher 校验进程运行期间新写入的文件；启动前遗留且已经错过的文件按可靠恢复语义补投递一次。
 > 注意：第 4 条的两道 guard 检查都以 `security.json` 里 `commandGuard.enabled` 为前提；全局关闭 command guard 时，写入时与触发时的检查都不生效（这是既有安全语义）。
 
 **典型用法。** 安排一个与 task 无关的独立提醒：

@@ -294,16 +294,18 @@ describe("manageEvent show / update", () => {
 		).rejects.toThrow(/could not be parsed/);
 	});
 
-	it("rejects updating an event owned by another channel", async () => {
+	it("lets another channel of the desk update an event and keeps its delivery channel", async () => {
 		const { mkdir } = await import("node:fs/promises");
 		await mkdir(eventsDir, { recursive: true });
 		await writeFile(
 			join(eventsDir, "other.json"),
 			JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
 		);
-		await expect(manageEvent(opts(), { action: "update", name: "other", definition: validPeriodic })).rejects.toThrow(
-			/another channel/,
-		);
+		const result = await manageEvent(opts(), { action: "update", name: "other", definition: validPeriodic });
+		expect(result.channelId).toBe("dm_other");
+		const onDisk = parseScheduledEventContent(await readFile(join(eventsDir, "other.json"), "utf-8"), "x.json");
+		expect(onDisk.text).toBe(validPeriodic.text);
+		expect(onDisk.channelId).toBe("dm_other");
 	});
 });
 
@@ -316,19 +318,19 @@ describe("manageEvent delete", () => {
 		expect((await manageEvent(opts(), { action: "delete", name: "never" })).deleted).toBe(false);
 	});
 
-	it("refuses to delete an event owned by another channel", async () => {
+	it("deletes an event that delivers to another channel of the desk", async () => {
 		const { mkdir } = await import("node:fs/promises");
 		await mkdir(eventsDir, { recursive: true });
 		await writeFile(
 			join(eventsDir, "foreign.json"),
 			JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
 		);
-		await expect(manageEvent(opts(), { action: "delete", name: "foreign" })).rejects.toThrow(/another channel/);
-		expect(await listEventFiles()).toEqual(["foreign.json"]);
+		expect((await manageEvent(opts(), { action: "delete", name: "foreign" })).deleted).toBe(true);
+		expect(await listEventFiles()).toEqual([]);
 	});
 
 	describe("action: list", () => {
-		it("lists every event of this desk, one line each, marking those that deliver elsewhere", async () => {
+		it("lists every event of this desk, one line each, naming the channel of those that deliver elsewhere", async () => {
 			await manageEvent(opts(), { action: "create", name: "mine-periodic", definition: validPeriodic });
 			await manageEvent(opts(), {
 				action: "create",
@@ -342,14 +344,14 @@ describe("manageEvent delete", () => {
 				JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
 			);
 
-			// Spec 058, D14: events belong to the desk, so another channel's event is listed too — as
-			// read-only, since changing it here would retarget its delivery channel.
+			// Spec 058, D14: events belong to the desk, so another channel's event is listed too, with
+			// its delivery channel named.
 			const result = await manageEvent(opts(), { action: "list" });
 			expect(result.count).toBe(3);
 			expect(result.names?.sort()).toEqual(["foreign", "mine-oneshot", "mine-periodic"]);
 			expect(result.notice).toContain("mine-periodic [periodic]");
 			expect(result.notice).toContain("mine-oneshot [one-shot]");
-			expect(result.notice).toMatch(/foreign .*delivers to dm_other; read-only here/);
+			expect(result.notice).toMatch(/foreign .*delivers to dm_other/);
 		});
 
 		it("lists an unparseable file and flags it instead of failing the whole call", async () => {
