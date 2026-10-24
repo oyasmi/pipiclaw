@@ -706,4 +706,45 @@ A、B、C 三个阶段在同一个开发分支上完成，作为一个版本发�
 
 ## 18. 实施记录
 
-（实施 agent 按阶段填写：偏差与理由、核实结果、用例数变化 before → after。）
+按阶段填写：偏差与理由、核实结果、用例数变化 before → after。
+
+### 阶段 A（渠道层重构）
+
+**A0 基线**：单测 918 个（134 个文件），deterministic e2e 63 个（25 个文件）；`npm run check`、`test:e2e`、`eval:typecheck`、`build` 全绿。
+
+**A1**（单测 918 → 921，e2e 63 → 63）：新增 `test/channel-id.test.ts`（3 个用例，防的是 `:` / `/` / `+` / `=` 出现在钉钉会话 id 里时切错渠道）。其余是 fixture 里频道 id 的机械替换。`TransportName` 放在 `channel/transport.ts`（计划写在 `channel-id.ts`），因为 `channel-id.ts` 不需要知道有哪些渠道。
+
+**A2 + A3 合并成一个门禁点**。原因：计划自己指出的那点——`/stop` 时立即关闭卡片，在旧形状的 `ChannelContext`（`respond*` 加 `deleteMessage`）上无法由渠道自己表达，必须等回合输出口改成 `emit` / `finish` 才能做；两步改的是同一条投递链路。
+
+偏差与就地决定（每条都以"钉钉用户感觉不到变化"为准）：
+
+1. **`TurnEvent` 比 D7 多三处**，都是内部契约，不影响 Responses 协议映射，webapi 一律忽略：
+   - `commentary.level` 取 `"error" | "warning" | "notice"`。D7 只有 `"error"`，但旧代码里 `respondInThread` 的提示（跳过压缩、截断输入、更新 skill、图片提示）是**不进卡片的独立消息**，而且在 `final_card_only` 下也要发；模型切换提示则是"有进度就写成 ✕ 行，没有进度就发 ⚠️ 独立消息"。三种行为只用一个 `"error"` 表达不了，合并就会让钉钉可见行为变化。
+   - `tool.end` 多一个可选的 `failure`：给用户看的失败行（守卫拒绝按结构化形态渲染，其余取首行）。它由 agent 在知道"这是用户要看见的错误，还是模型自己能修的拒绝"的地方算出，渠道不再猜。
+   - `quiet` 只表示"不显示进度"，不改变答案的投递方式：`final_card_only` 下的后台唤醒答案照旧以卡片发出（旧行为），而不是 D7 字面说的"只投递 answer 的普通消息"。
+2. **运行器内置命令（`/help`、`/context`、空闲时的 `/stop` `/steer` `/followup` 提示）不走 `answer` 事件**：`AgentRunner.handleBuiltinCommand` 改成返回回复文本，由回合流水线用 `push`（带标题、`markdown: true`、`ref`）发出，与报告类命令完全同一条路径。理由：它们本来就是带标题、不归档的"命令回复"，用 `answer` 还得再给事件加 `title` 字段。代价是旧代码在普通消息发送失败时会再试一次卡片，这条兜底随之去掉（报告类命令早就没有）。`PushMessage` 因此多了可选的 `markdown` 字段。
+3. **`/stop` 立即关卡片**：`ChannelRunner.requestStop()` 现在同时调用 `TurnOutput.cancel()`，立刻对渠道发 `finish({ kind: "cancelled" })` 并丢弃之后的事件；钉钉在 `finish(cancelled)` 里同步 `discardCard`（不排在正在进行的投递之后）。这与旧的 `handleStop` 里直接 `discardCard` 的时序一致。`TurnOutput`（agent 内）保证渠道只收到一次 `finish`。副作用：关机时的 abort 现在也以 `cancelled` 收尾，卡片文字从"已处理，无需答复。"变成"处理已结束。"，仅此一处文案差异。
+4. **钉钉的队列上限是 20，不是"没有上限"**：D6 的描述与代码不符。保留 20 条上限与"消息积压过多"提示（由 Ingress 用 `push` 发出）；`whenBusy: "queue"` 的渠道用 `MAX_QUEUED_TURNS_PER_CHANNEL`（8），超限静默 `rejected: queue_full`，由渠道自己回错误。
+5. **附件的"保存失败"仍是文本标记**（`[图片N：保存失败]`、`[图片N：格式不支持，已保存]`），不是 `push` 出去的提示——这才是钉钉现有的行为。`InboundAttachment` 因此带 `index`（标记里的 N）。落盘与标记改写由 `runtime/inbound-images.ts` 的 `resolveInboundAttachments` 完成，并新增文件落盘（`inbox/file-<时间>-<清洗后的文件名>`）。
+6. **保留的既有行为（不是本次引入的，记在这里避免被当成回归）**：
+   - 钉钉里一个回合出现两次最终回答（steering 之后）时，只有第一次会送达——旧的 `sendFinal` / `replaceWithFinal` 都在 `ending` / 已送达之后直接返回。
+   - 滚动模式的头部"工具 N"现在只数 `tool.start`；旧代码因为靠 `"➜ "` 前缀数，会把委派的进度更新也算进去。
+7. **日志**：`log.logThinking` 不再只在显示进度时才记（agent 不再知道渠道显不显示进度）。
+8. **`RunQueue` 保留**，只用来给"刷新 skill 后再提示"这类非投递工作排序；回合事件直接 `emit`，顺序由渠道内部的串行链保证。
+9. **`dingtalk/handler.ts` 的 `BusyMessageResult`** 变成 `runtime/ingress-busy.ts` 的 `BusyOutcome`（多了 `steered`，供 `Ingress.steer` 使用）。`Ingress` 被拆成 `ingress.ts`（入口与顺序）、`ingress-busy.ts`（忙碌与 `/stop`）、`ingress-commands.ts`（`/new` 与报告类命令）、`ingress-deps.ts`（依赖清单）。`IngressService` 在接口之外多暴露测试用的 `handleEvent` / `reserveEvent` / `routeEvent` / `isIdle` / `isRunning` / `runRuntimeCommand`。
+10. **测试策略的一处偏差**：deterministic e2e 的夹具没有改成 `RecordingTransport`，而是继续用**真实的 `DingTalkTransport` + 捕获出站调用的 `HarnessDingTalkBot`**。理由：这样原来 63 个用例对钉钉投递序列的断言一条没动、全部通过，是"钉钉行为不变"最直接的证据；换成 `RecordingTransport` 反而会丢掉这层断言。`RecordingTransport` 用于 Ingress / 运行时的单测（`test/ingress.test.ts` 等）。
+11. **`TUI`** 在 A 阶段保持自己的运行时，只做了编译所需的最小改动：`terminal-context.ts` 消费 `TurnEvent`，`tui/progress.ts` 临时复制了一份进度格式，`tui/channel-label.ts` 放 `tui` 频道常量和标签；`tools/background-delivery.ts` 里写死了 `"tui"`。这些都在 C 阶段删除。
+12. `AppContext` 去掉了 `bot`（`DingTalkBot` 不再是运行时必有的东西），`RuntimeContext.handler` 改为 `ingress`；`BootstrapOptions` 新增 `transports`。
+
+**用例数（A2 + A3）**：单测 921 → 944，e2e 63 → 63。删除：`delivery`（13）、`card-delivery`（10）、`runtime-stop`（4）、`dingtalk.test.ts` 中的路由 / 队列 / 忙碌 8 例；新增：`dingtalk-delivery`（25，含 2 个新故障模式：`commentary` 各级别的展现、`cancelled` 不排在进行中的投递之后）、`ingress`（27，路由矩阵 + 准入 + 取消 / steer / `/new`）、`session-events`（6 → 9，新增 3 个 `TurnEvent` 序列）、`turn-output`（2）。净增主要来自两个新契约（`TurnEvent`、`Ingress`）的矩阵；C 阶段删掉旧 TUI controller 的用例后会回落，届时在 C 的记录里复核。
+
+**A4**（单测 944 → 948，e2e 63 → 63）：`channel/config.ts`、`dingtalk/config.ts`（`parseDingTalkConfig`）、`runtime/transports.ts`（按开关动态 import）、`runtime/daemon-lock.ts`、INV-8 的三处执行点（任务驱动、事件 watcher、durable dispatch）。
+
+- 新增 `test/channel-config.test.ts`（5）：取代原来 `bootstrap.test.ts` 里关于 `channel.json` 的 2 个用例；加上 `runtime-context` 的"一个 app home 只能有一个运行时"（1）；`events` / `task-driver` / `durable-dispatch` 各在既有用例里加了"渠道不可达"的断言（0 个新用例）。
+- **INV-7 验证**：用 `module.register` 的 `load` 钩子打印所有名字含 `dingtalk` 的模块加载：`import('dist/runtime/bootstrap.js')` 和 `node dist/main.js --version` 两条路径都**没有**加载任何 dingtalk 模块；`dingtalk-stream` 只在钉钉段为开时随 `dingtalk/transport.js` 动态加载。
+- **配置 / 锁的手动验证**（临时 `PIPICLAW_HOME`）：首次运行写模板并 exit 0；占位符 → exit 1 并逐项列出；两个段都关 → exit 1 并说明要开哪个；带旧格式的根级 `clientId` → exit 1 并指向文档；另一个进程持有 `state/daemon.lock` → exit 1，消息带 pid 和主机名。
+- `webapi.enabled: true` 目前（B1 之前）会拒绝启动并说明该渠道还不存在。
+- 假凭据启动的 daemon 会在首次连接失败后退出（exit 0）：这是旧版本就有的行为（重连定时器是 unref 的），不是回归，已用 `70cd4b8` 的构建对照确认。
+- `events/watcher.ts` 超过 800 行预算，把 `EventPreActionError` 抽到 `events/pre-action-error.ts`。
+- `HumanEvent.allowedDesks`（`/desk bind` 受 key 的 `desks` 限制）没有在 A 阶段加，留到 B3，那时才有调用方。
+
