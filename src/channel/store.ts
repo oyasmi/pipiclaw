@@ -5,6 +5,7 @@
  */
 import { writeFile } from "fs/promises";
 import { basename, dirname, join } from "path";
+import { getSubAgentRunsLogPath } from "../desk/paths.js";
 import * as log from "../log.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime } from "../shared/local-time.js";
@@ -154,7 +155,7 @@ export class ChannelStore {
 	 */
 	async logSubAgentRun(deskDir: string, run: LoggedSubAgentRun): Promise<void> {
 		if (this.closed) return;
-		const logPath = join(deskDir, "subagent-runs.jsonl");
+		const logPath = getSubAgentRunsLogPath(deskDir);
 		if (!this.archiveAppender.tryAppend({ filePath: logPath, value: run })) {
 			throw new Error("Sub-agent archive queue is full. Retry after pending log writes drain.");
 		}

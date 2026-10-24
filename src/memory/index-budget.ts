@@ -5,12 +5,12 @@ import { type MemoryEntry, renderMemoryIndex } from "./store.js";
 
 /**
  * Spec 050, D1/D4/D11: what actually goes into `<memory_bootstrap>` on the first turn, and the
- * budget tiering when the channel index does not fit.
+ * budget tiering when the desk memory index does not fit.
  *
  * Budgets are code constants, reallocated inside spec 026 §5.3's automatic-context share.
  */
 export const WORKSPACE_MEMORY_MAX_UNITS = 500;
-export const CHANNEL_INDEX_MAX_UNITS = 1_400;
+export const MEMORY_INDEX_MAX_UNITS = 1_400;
 export const JOURNAL_TAIL_MAX_UNITS = 400;
 const WORKSPACE_MEMORY_MAX_CHARS = 4_000;
 const JOURNAL_TAIL_MAX_CHARS = 3_000;
@@ -30,9 +30,9 @@ export interface TieredIndexResult {
  * `project` / `reference` by `updated` descending until the budget is spent, with a
  * trailing pointer to `memory_search`.
  */
-export function buildChannelIndexForBootstrap(
+export function buildMemoryIndexForBootstrap(
 	entries: MemoryEntry[],
-	maxUnits: number = CHANNEL_INDEX_MAX_UNITS,
+	maxUnits: number = MEMORY_INDEX_MAX_UNITS,
 ): TieredIndexResult {
 	const full = renderMemoryIndex(entries);
 	if (entries.length === 0 || countPromptUnits(full) <= maxUnits) {

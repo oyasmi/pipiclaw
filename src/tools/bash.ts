@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
+import { getDeskLogsDir } from "../desk/paths.js";
 import { CommandTerminatedError, EXECUTOR_SHELL_IS_BASH, type Executor } from "../executor.js";
 import type { DeskJobManager } from "../jobs/manager.js";
 import { formatBlockMessage, GuardBlockedError } from "../security/block-message.js";
@@ -24,8 +25,6 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
  */
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
 
-/** Subdirectory of the desk dir where full bash/job output spills live. */
-const BASH_LOG_DIR_NAME = "logs";
 /** Spill files kept per desk before the oldest are pruned on the next tool build. */
 const BASH_LOG_RETENTION = 40;
 /** Bytes read back from the spill file when the in-memory capture was truncated (D2.3). */
@@ -38,13 +37,13 @@ const TAIL_FROM_SPILL_BYTES = DEFAULT_MAX_BYTES * 4;
  */
 function getSpillFilePath(deskDir: string | undefined): string {
 	const id = randomBytes(8).toString("hex");
-	const dir = deskDir ? join(deskDir, BASH_LOG_DIR_NAME) : tmpdir();
+	const dir = deskDir ? getDeskLogsDir(deskDir) : tmpdir();
 	return join(dir, `pipiclaw-bash-${id}.log`);
 }
 
-/** Best-effort: keep the channel's `logs/` dir from growing without bound. */
+/** Best-effort: keep the desk's `logs/` dir from growing without bound. */
 async function pruneBashLogs(deskDir: string): Promise<void> {
-	const dir = join(deskDir, BASH_LOG_DIR_NAME);
+	const dir = getDeskLogsDir(deskDir);
 	let names: string[];
 	try {
 		names = (await readdir(dir)).filter((n) => n.startsWith("pipiclaw-bash-") && n.endsWith(".log"));
@@ -417,7 +416,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 
 			const spillPath = getSpillFilePath(options.deskDir);
 			if (options.deskDir) {
-				await mkdir(join(options.deskDir, BASH_LOG_DIR_NAME), { recursive: true }).catch(() => undefined);
+				await mkdir(getDeskLogsDir(options.deskDir), { recursive: true }).catch(() => undefined);
 			}
 			try {
 				const result = await executor.exec(effectiveCommand, {

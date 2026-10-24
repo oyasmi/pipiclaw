@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { getConversationsDir, SUBAGENT_RUNS_LOG_FILENAME } from "../desk/paths.js";
 import { isNodeError, readOptionalTextFile } from "../shared/os.js";
 import { isRecord } from "../shared/type-guards.js";
 
@@ -44,7 +45,7 @@ const IGNORED_JSONL_FILES = new Set([
 	"context.jsonl",
 	"log.jsonl",
 	"log.jsonl.1",
-	"subagent-runs.jsonl",
+	SUBAGENT_RUNS_LOG_FILENAME,
 	"memory-review.jsonl",
 ]);
 
@@ -278,7 +279,7 @@ async function parseJsonlFile(
 
 async function listConversations(deskDir: string): Promise<string[]> {
 	try {
-		const entries = await readdir(join(deskDir, "conversations"), { withFileTypes: true });
+		const entries = await readdir(getConversationsDir(deskDir), { withFileTypes: true });
 		return entries
 			.filter((entry) => entry.isDirectory())
 			.map((entry) => entry.name)
@@ -331,7 +332,7 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 	const maxDocuments = options.maxDocumentsTotal ?? DEFAULT_MAX_DOCUMENTS_TOTAL;
 	const conversationDirs = (await listConversations(options.deskDir)).map((conversation) => ({
 		conversation,
-		dir: join(options.deskDir, "conversations", conversation),
+		dir: join(getConversationsDir(options.deskDir), conversation),
 	}));
 	const readPlan: Array<{ path: string; source: SessionSearchSource; conversation: string }> = [];
 	for (const { conversation, dir } of conversationDirs) {

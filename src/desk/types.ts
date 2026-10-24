@@ -1,5 +1,5 @@
 /**
- * A desk is a named work context of the one Pipiclaw assistant (spec 058): it owns memory, journal, tasks,
+ * A desk is a named work context of the one Pipiclaw assistant (spec 060): it owns memory, journal, tasks,
  * events and working files. Channels are only addresses, bound to a desk through
  * `desk-bindings.json`; each channel that has talked to a desk gets its own conversation
  * directory inside it.

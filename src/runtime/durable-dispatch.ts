@@ -49,12 +49,11 @@ const MIN_RETRY_BACKOFF_MS = 30_000;
 const MAX_RETRY_BACKOFF_MS = 10 * 60_000;
 
 /**
- * A dispatch id is an opaque business id that may contain `/` (one written before spec 058 could
- * embed a base64 DingTalk group id). Used verbatim as a filename that turns into a nested path a
- * flat `readdir(stateDir)` scan can never find again (R1): a queue rejection or a restart then
- * makes that record un-drainable and un-cancellable forever, even once capacity returns. Percent-
- * encoding keeps the mapping reversible and collision-free without touching the id itself — only
- * the on-disk filename changes.
+ * A dispatch id is an opaque business id and may contain `/`. Used verbatim as a filename it would
+ * turn into a nested path a flat `readdir(stateDir)` scan can never find again (R1): a queue
+ * rejection or a restart then makes that record un-drainable and un-cancellable forever, even once
+ * capacity returns. Percent-encoding makes it always a flat filename and reversible without
+ * collisions, without touching the id itself — only the on-disk filename changes.
  */
 function encodeDispatchId(id: string): string {
 	return encodeURIComponent(id);

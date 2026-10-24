@@ -14,7 +14,7 @@ import { channelKind } from "../channel/channel-id.js";
 import { loadBindings, writeBindings } from "../desk/bindings.js";
 import type { BindOutcome } from "../desk/commands.js";
 import { DEFAULT_DESK, getDeskDir, isDeskName, normalizeDeskName } from "../desk/paths.js";
-import { allocateConversation, createDesk, findConversation, readDeskRecord } from "../desk/registry.js";
+import { allocateConversation, createDeskRecord, findConversation, readDeskRecord } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
 import type { BindingsFile, CreateDeskOutcome, DeskConversation, DeskSummary } from "../desk/types.js";
 import { parseScheduledEventContent } from "../events/parse.js";
@@ -223,7 +223,7 @@ export class DeskRuntime {
 
 	/** `/desk new`: an empty desk, bound to nothing and therefore dormant (D5). */
 	create(name: string): Promise<CreateDeskOutcome> {
-		return createDesk(this.options.workspaceDir, normalizeDeskName(name), new Date());
+		return Promise.resolve(createDeskRecord(this.options.workspaceDir, normalizeDeskName(name), new Date()));
 	}
 
 	/** `/desk bind` from `channelId`, in D5's order. Throws only when the bindings write itself fails. */

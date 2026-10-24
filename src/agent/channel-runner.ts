@@ -118,8 +118,8 @@ export class ChannelRunner implements AgentRunner {
 
 		// Create session manager, opening whichever session this conversation's active-session ref
 		// (or the context.jsonl default, for a conversation that has never run a topology op) names
-		// (spec 043, D1). The cwd override is the desk's working directory: a session header written
-		// before spec 058 still names the old project root.
+		// (spec 043, D1). The cwd override is the desk's working directory: `desk.json` can change
+		// its `cwd` after a session was created, so the header's cwd may be stale.
 		const activeSessionFile = resolveActiveSessionFile(conversationDir);
 		const sessionManager = SessionManager.open(
 			join(conversationDir, activeSessionFile),

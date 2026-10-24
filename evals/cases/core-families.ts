@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { buildChannelIndexForBootstrap } from "../../src/memory/index-budget.js";
+import { buildMemoryIndexForBootstrap } from "../../src/memory/index-budget.js";
 import { listMemoryEntries } from "../../src/memory/store.js";
 import { checkpointHasFile, observesFile, taskParkObservations, toolObservations } from "../graders/observations.js";
 import { verificationField } from "../graders/verification.js";
@@ -64,7 +64,7 @@ export const coreFamilyCases: EvalCase[] = [
 					source: "agent",
 				},
 			);
-			const result = buildChannelIndexForBootstrap(await listMemoryEntries(ctx.deskDir));
+			const result = buildMemoryIndexForBootstrap(await listMemoryEntries(ctx.deskDir));
 			if (!result.overBudget || result.includedNames.includes("zzz-canary-observation"))
 				throw new Error("Overflow fixture did not omit the target; increase distractors or repair ordering.");
 			await mkdir(join(ctx.deskDir, ".eval"), { recursive: true });

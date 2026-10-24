@@ -249,7 +249,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 			ledger,
 			store,
 			dispatch,
-			notify: (_dot, channelId, notice) => {
+			notify: (_desk, channelId, notice) => {
 				notices.push({ channelId, notice });
 			},
 		});
@@ -292,7 +292,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		try {
 			const notices: Array<{ kind: string; step?: string }> = [];
 			const manager = new SubAgentRunManager(DESK, {
-				notify: (_dot, _channelId, notice) => {
+				notify: (_desk, _channelId, notice) => {
 					notices.push(notice);
 				},
 			});

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { loadBindings, writeBindings } from "../../src/desk/bindings.js";
-import { allocateConversation, createDesk } from "../../src/desk/registry.js";
+import { allocateConversation, createDeskRecord } from "../../src/desk/registry.js";
 import type { DeskConversation } from "../../src/desk/types.js";
 import type { DingTalkBot } from "../../src/dingtalk/bot.js";
 import type { DingTalkEvent } from "../../src/dingtalk/handler.js";
@@ -48,7 +48,7 @@ export async function bindChannelOnDisk(
 	channelId: string,
 	desk: string = E2E_DESK,
 ): Promise<DeskConversation> {
-	await createDesk(workspaceDir, desk, new Date());
+	createDeskRecord(workspaceDir, desk, new Date());
 	const kind = channelId === "tui" ? "tui" : channelId.startsWith("group_") ? "group" : "dm";
 	const conversation = await allocateConversation(workspaceDir, desk, channelId, kind, new Date());
 	const bindings = await loadBindings(workspaceDir);

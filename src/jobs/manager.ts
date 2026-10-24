@@ -3,7 +3,7 @@ import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { getDeskDir, isDeskName } from "../desk/paths.js";
+import { getDeskDir, getDeskLogsDir, isDeskName } from "../desk/paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -1009,7 +1009,7 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 			const deskDir = config.workspaceDir ? getDeskDir(config.workspaceDir, desk) : undefined;
 			manager = new DeskJobManager({ desk, deskDir }, executor, {
 				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, desk) } : {}),
-				...(deskDir ? { spillDir: join(deskDir, "logs") } : {}),
+				...(deskDir ? { spillDir: getDeskLogsDir(deskDir) } : {}),
 				...(config.dispatch ? { dispatch: config.dispatch } : {}),
 				...(config.isBoundTo ? { isBoundTo: config.isBoundTo } : {}),
 				...(config.sweepIntervalMs ? { sweepIntervalMs: config.sweepIntervalMs } : {}),

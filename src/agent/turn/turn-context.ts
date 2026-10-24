@@ -9,7 +9,7 @@ import { formatChannelLabel } from "../../channel/channel-id.js";
 import { TASK_DIGEST_SETTINGS } from "../../config/settings.js";
 import type { DeskConversation } from "../../desk/types.js";
 import {
-	buildChannelIndexForBootstrap,
+	buildMemoryIndexForBootstrap,
 	clipJournalTailForBootstrap,
 	clipWorkspaceMemoryForBootstrap,
 } from "../../memory/index-budget.js";
@@ -55,7 +55,7 @@ export function buildTaskDigestForTurn(deskDir: string, channelId: string): Prom
 
 /**
  * Spec 050, D1: assemble `<memory_bootstrap>` for the first turn of a session — workspace
- * MEMORY.md (whole H2 sections, budgeted) + the channel index (full, or budget-tiered) +
+ * MEMORY.md (whole H2 sections, budgeted) + the desk memory index (full, or budget-tiered) +
  * today's journal tail.
  */
 export async function buildFirstTurnMemoryBootstrap(deskDir: string, workspaceDir: string): Promise<string> {
@@ -74,11 +74,11 @@ export async function buildFirstTurnMemoryBootstrap(deskDir: string, workspaceDi
 		readJournalDay(deskDir, today).catch(() => ""),
 	]);
 
-	const index = buildChannelIndexForBootstrap(entries);
+	const index = buildMemoryIndexForBootstrap(entries);
 	const journalTail = clipJournalTailForBootstrap(journalToday);
 	return renderMemoryBootstrap({
 		workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory),
-		channelIndex: entries.length > 0 ? index.text : "",
+		memoryIndex: entries.length > 0 ? index.text : "",
 		journal: journalTail ? { date: today, text: journalTail } : undefined,
 	});
 }

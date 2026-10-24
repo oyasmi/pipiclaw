@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { getMemoryWorkDir } from "../desk/paths.js";
 import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -28,7 +29,7 @@ interface BoundaryWork {
 }
 
 function workDir(conversation: DeskConversation): string {
-	return join(conversation.deskDir, ".memory-work", conversation.conversation);
+	return join(getMemoryWorkDir(conversation.deskDir), conversation.conversation);
 }
 
 async function pendingFiles(conversation: DeskConversation): Promise<string[]> {

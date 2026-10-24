@@ -5,7 +5,7 @@ import { parseJsonObject } from "../shared/llm-json.js";
 import { localDayKey } from "../shared/local-time.js";
 import { readOptionalTextFile } from "../shared/os.js";
 import { clipText } from "../shared/text-utils.js";
-import { buildChannelIndexForBootstrap, CHANNEL_INDEX_MAX_UNITS } from "./index-budget.js";
+import { buildMemoryIndexForBootstrap, MEMORY_INDEX_MAX_UNITS } from "./index-budget.js";
 import { appendJournalEntries } from "./journal.js";
 import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runRetriedSidecarTask } from "./sidecar-worker.js";
@@ -192,7 +192,7 @@ async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{
 		readOptionalTextFile(`${options.workspaceDir}/MEMORY.md`),
 		readOptionalTextFile(`${options.deskDir}/journal/${today}.md`),
 	]);
-	const tiered = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS);
+	const tiered = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS);
 	const transcript = clipText(
 		serializeConversation(sanitizeMessagesForMemory(options.messages)),
 		TRANSCRIPT_MAX_CHARS,

@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
 import { type InboundImage, MAX_INBOUND_IMAGE_BYTES } from "../../channel/channel-event.js";
+import { getDeskInboxDir } from "../../desk/paths.js";
 import * as log from "../../log.js";
 import { formatModelReference } from "../../models/reference.js";
 import { formatLocalTime, localStampForFilename } from "../../shared/local-time.js";
@@ -32,7 +33,7 @@ export async function persistOversizedInput(
 	text: string,
 ): Promise<string | undefined> {
 	try {
-		const dir = join(deskDir, "inbox");
+		const dir = getDeskInboxDir(deskDir);
 		await mkdir(dir, { recursive: true });
 		const path = join(dir, `message-${localStampForFilename()}.txt`);
 		await writeFile(path, text.replace(/\r/g, ""), { mode: 0o600 });

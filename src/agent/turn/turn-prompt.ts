@@ -17,7 +17,7 @@ export interface TurnPromptParts {
 	preserveRawInput: boolean;
 	/** `<runtime_turn_context>`: the channel facts kept out of the cached system prompt. */
 	channelCapsule: string;
-	/** `<memory_bootstrap>`: workspace memory + channel index + journal, first turn only (spec 050, D1). */
+	/** `<memory_bootstrap>`: workspace memory + desk memory index + journal, first turn only (spec 050, D1). */
 	durableMemoryBootstrap: string;
 	taskDigest: string;
 }

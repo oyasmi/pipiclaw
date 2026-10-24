@@ -30,7 +30,7 @@ describe("stripInjectedMemoryContext", () => {
 	it("strips the memory bootstrap the renderer really produces, and still unwraps the user message", () => {
 		const bootstrap = renderMemoryBootstrap({
 			workspaceMemory: "- 用户偏好：保持简单。",
-			channelIndex: "- [deploy-steps](deploy-steps.md) — 发布流程",
+			memoryIndex: "- [deploy-steps](deploy-steps.md) — 发布流程",
 			journal: { date: "2026-09-06", text: "定了先修验收关闭。" },
 		});
 		const raw = [bootstrap, "", "<user_message>", "重启一下服务", "</user_message>"].join("\n");

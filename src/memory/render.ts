@@ -15,7 +15,7 @@ export function hasMemoryBootstrapBlock(text: string): boolean {
 
 export interface MemoryBootstrapParts {
 	workspaceMemory?: string;
-	channelIndex?: string;
+	memoryIndex?: string;
 	journal?: { date: string; text: string };
 }
 
@@ -26,7 +26,7 @@ const HEADER =
 
 export function renderMemoryBootstrap(parts: MemoryBootstrapParts): string {
 	const workspace = parts.workspaceMemory?.trim();
-	const index = parts.channelIndex?.trim();
+	const index = parts.memoryIndex?.trim();
 	const journalText = parts.journal?.text.trim();
 	if (!workspace && !index && !journalText) {
 		return "";

@@ -1,9 +1,10 @@
 /**
- * Disk I/O for desks (spec 058, D3/D4): `desk-<desk>/desk.json` and `desk-bindings.json`.
+ * Disk I/O for `desk-<desk>/desk.json` and desk creation (spec 060). The binding table lives in
+ * `bindings.ts`.
  *
  * `desk.json` may be written by the daemon (`/desk bind`) and a TUI (first open) at once, so every
- * read-modify-write of it runs under the cross-process lock `.locks/desk-json.lock`. The bindings
- * file is written by the daemon alone. Writes are atomic and serialized per path in-process.
+ * read-modify-write of it runs under the cross-process lock `.locks/desk-json.lock`. Writes are
+ * atomic and serialized per path in-process.
  *
  * Channel ids are only JSON keys here; this module never parses them — callers pass the
  * conversation kind (the format rules live in `channel/channel-id.ts`).
@@ -23,6 +24,7 @@ import {
 	getDeskDir,
 	getDeskLockPath,
 	isConversationName,
+	isDeskEntry,
 	isDeskName,
 	parseConversationName,
 } from "./paths.js";
@@ -97,7 +99,7 @@ export async function listDesks(workspaceDir: string): Promise<DeskSummary[]> {
 	let entries: string[];
 	try {
 		entries = (await readdir(workspaceDir, { withFileTypes: true }))
-			.filter((entry) => entry.isDirectory() && entry.name.startsWith(DESK_DIR_PREFIX))
+			.filter(isDeskEntry)
 			.map((entry) => entry.name.slice(DESK_DIR_PREFIX.length));
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return [];
@@ -107,7 +109,7 @@ export async function listDesks(workspaceDir: string): Promise<DeskSummary[]> {
 	return summaries;
 }
 
-/** Publish a complete new desk atomically. Shared by synchronous scaffolding and /desk new. */
+/** Create an empty desk without binding it, publishing it atomically. Holds no conversation lock. */
 export function createDeskRecord(workspaceDir: string, name: string, now: Date): CreateDeskOutcome {
 	if (!isDeskName(name)) return { kind: "invalid", name };
 	const bindings = initializeBindings(workspaceDir);
@@ -123,7 +125,7 @@ export function createDeskRecord(workspaceDir: string, name: string, now: Date):
 	const staging = mkdtempSync(join(workspaceDir, `.desk-init-${name}-`));
 	const record: DeskRecord = { version: 1, name, createdAt: now.toISOString(), conversations: {} };
 	try {
-		writeFileSync(recordPath(staging), `${JSON.stringify(record, null, 2)}\n`, { flush: true });
+		writeFileSync(recordPath(staging), `${JSON.stringify(record, null, "\t")}\n`, { flush: true });
 		syncDirectoryBestEffort(staging);
 		try {
 			renameSync(staging, deskDir);
@@ -136,11 +138,6 @@ export function createDeskRecord(workspaceDir: string, name: string, now: Date):
 	} finally {
 		rmSync(staging, { recursive: true, force: true });
 	}
-}
-
-/** Create an empty desk without binding it. Initial publication holds no conversation lock. */
-export async function createDesk(workspaceDir: string, name: string, now: Date): Promise<CreateDeskOutcome> {
-	return createDeskRecord(workspaceDir, name, now);
 }
 
 /**

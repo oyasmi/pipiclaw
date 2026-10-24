@@ -3,7 +3,7 @@ import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
 import type { DeskConversation } from "../desk/types.js";
 import { localDayKey } from "../shared/local-time.js";
 import { getDeskMemoryQueue } from "./desk-memory-queue.js";
-import { buildChannelIndexForBootstrap, CHANNEL_INDEX_MAX_UNITS } from "./index-budget.js";
+import { buildMemoryIndexForBootstrap, MEMORY_INDEX_MAX_UNITS } from "./index-budget.js";
 import { listJournalDates, readJournalDay } from "./journal.js";
 import { readMemoryMaintenanceState } from "./maintenance-state.js";
 import { appendMemoryReviewLog } from "./review-log.js";
@@ -49,7 +49,7 @@ async function handleStatus(options: MemoryCommandOptions): Promise<string> {
 		.filter((entry): entry is MemoryEntry & { expires: string } => Boolean(entry.expires))
 		.sort((a, b) => a.expires.localeCompare(b.expires));
 	const malformed = entries.filter((entry) => entry.malformed);
-	const tiered = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS);
+	const tiered = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS);
 
 	const state = options.appHomeDir
 		? await readMemoryMaintenanceState(options.appHomeDir, options.conversation)

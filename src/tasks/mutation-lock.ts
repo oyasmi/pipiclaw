@@ -18,7 +18,8 @@ function taskMutationKey(deskDir: string, id: string): string {
 	return join(deskDir, "tasks", `${normalizeTaskId(id)}.md`);
 }
 
-/** `<deskDir>/.locks/task-<id>.lock` — the layout `desk/paths.ts` defines; tasks stays a leaf and does not import it. */
+/** `<deskDir>/.locks/task-<id>.lock` — the layout `desk/paths.ts` defines (`LOCKS_DIRNAME`, which must stay
+ * in step with the literal below): tasks stays a leaf and does not import it. */
 function taskLockPath(deskDir: string, id: string): string {
 	return join(deskDir, ".locks", `task-${normalizeTaskId(id)}.lock`);
 }

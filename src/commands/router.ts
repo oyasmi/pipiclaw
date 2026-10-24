@@ -36,7 +36,6 @@ export interface ReportCommandContext {
 	paths: ReportCommandPaths;
 	/** Names a delivery channel and says whether it is still bound to this desk. */
 	describeChannel: (channelId: string) => ChannelDescription;
-	/** Channels with a conversation in this desk, for `/events history` records older than spec 058. */
 	version: string;
 	startedAt: number;
 	/** The channel's live runner, if one exists; never builds one. */

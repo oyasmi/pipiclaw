@@ -60,8 +60,8 @@ export interface EventHistoryRecord {
 	eventName: string;
 	eventPath: string;
 	eventType: ScheduledEvent["type"] | "unknown";
-	/** The desk that owns the event; absent on records written before spec 058. */
-	desk?: string;
+	/** The desk that owns the event. */
+	desk: string;
 	channelId?: string;
 	action: EventHistoryAction;
 	result: EventHistoryResult;

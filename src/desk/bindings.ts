@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createAtomicTempPath, syncDirectoryBestEffort, writeFileAtomically } from "../shared/atomic-file.js";
 import { isPlainObject } from "../shared/type-guards.js";
-import { DESK_DIR_PREFIX, getBindingsPath, isDeskName } from "./paths.js";
+import { getBindingsPath, isDeskEntry, isDeskName } from "./paths.js";
 import { StartupRefusal } from "./startup-error.js";
 import type { BindingsFile } from "./types.js";
 
@@ -61,9 +61,7 @@ export function initializeBindings(workspaceDir: string): BindingsFile {
 		if (!missing(error)) throw error;
 	}
 	mkdirSync(workspaceDir, { recursive: true });
-	const hasDesks = readdirSync(workspaceDir, { withFileTypes: true }).some(
-		(entry) => entry.name.startsWith(DESK_DIR_PREFIX) && (entry.isDirectory() || entry.isSymbolicLink()),
-	);
+	const hasDesks = readdirSync(workspaceDir, { withFileTypes: true }).some(isDeskEntry);
 	if (hasDesks) {
 		// Another process may have published both the table and a desk since the first read.
 		try {
@@ -77,7 +75,7 @@ export function initializeBindings(workspaceDir: string): BindingsFile {
 	}
 	const path = getBindingsPath(workspaceDir);
 	const temporary = createAtomicTempPath(join(workspaceDir, ".desk-bindings-init"));
-	writeFileSync(temporary, `${JSON.stringify({ version: 1, bindings: {} }, null, 2)}\n`, { flush: true });
+	writeFileSync(temporary, `${JSON.stringify({ version: 1, bindings: {} }, null, "\t")}\n`, { flush: true });
 	try {
 		try {
 			linkSync(temporary, path);

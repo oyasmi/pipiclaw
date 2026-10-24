@@ -28,7 +28,7 @@ import { runReportCommand } from "../commands/router.js";
 import { loadBindings } from "../desk/bindings.js";
 import { buildDeskList } from "../desk/commands.js";
 import { DEFAULT_DESK, isDeskName, normalizeDeskName } from "../desk/paths.js";
-import { allocateConversation, createDesk, listDesks, readDeskRecord } from "../desk/registry.js";
+import { allocateConversation, createDeskRecord, listDesks, readDeskRecord } from "../desk/registry.js";
 import type { DeskConversation } from "../desk/types.js";
 import { createExecutor } from "../executor.js";
 import { createJobRuntime } from "../jobs/manager.js";
@@ -97,7 +97,7 @@ async function openDesk(options: TuiAppOptions, paths: BootstrapPaths, io: Boots
 	}
 	let summary = await readDeskRecord(paths.workspaceDir, name);
 	if (summary.availability === "missing" && options.create) {
-		const created = await createDesk(paths.workspaceDir, name, new Date());
+		const created = createDeskRecord(paths.workspaceDir, name, new Date());
 		if (created.kind !== "created") {
 			fail(
 				`Could not create desk "${name}" (${created.kind}). Inspect ${summary.deskDir} and desk-bindings.json; restore missing records from backup.`,
@@ -241,7 +241,7 @@ async function runWithConversation(
 								formatChannelLabel(id, names.get(id)),
 							),
 						channelIndexPath: join(paths.workspaceDir, CHANNELS_INDEX_FILENAME),
-						create: (name) => createDesk(paths.workspaceDir, name, new Date()),
+						create: (name) => Promise.resolve(createDeskRecord(paths.workspaceDir, name, new Date())),
 					},
 					paths,
 					describeChannel: (id) => ({

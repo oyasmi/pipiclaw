@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BootstrapPaths } from "../../../src/app/home.js";
-import { createDesk } from "../../../src/desk/registry.js";
+import { createDeskRecord } from "../../../src/desk/registry.js";
 import type { Frontend, FrontendCallbacks } from "../../../src/tui/frontend.js";
 import { reply } from "../../support/mock-provider/script.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
@@ -57,8 +57,8 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 		const { runTuiApp } = await import("../../../src/tui/app.js");
 		// Mutation (2026-10-23): requiring --desk prevents deletion of the default event.
 		// Events belong to the desk the terminal opens (spec 058, D14, D18).
-		await createDesk(home.workspaceDir, "default", new Date());
-		await createDesk(home.workspaceDir, "another", new Date());
+		createDeskRecord(home.workspaceDir, "default", new Date());
+		createDeskRecord(home.workspaceDir, "another", new Date());
 		mkdirSync(join(home.workspaceDir, "desk-default", "events"), { recursive: true });
 		const eventPath = join(home.workspaceDir, "desk-default", "events", "tui-probe.json");
 		writeFileSync(
@@ -101,7 +101,7 @@ describe("E2E deterministic: terminal TUI (--print) command plane", () => {
 		// Mutation (2026-10-22): remove the early /new route; no active-session ref is committed and this case fails.
 		const renderer = await import("../../../src/tui/renderer.js");
 		const { runTuiApp } = await import("../../../src/tui/app.js");
-		await createDesk(home.workspaceDir, "tui-e2e", new Date());
+		createDeskRecord(home.workspaceDir, "tui-e2e", new Date());
 		let callbacks!: FrontendCallbacks;
 		let ready!: () => void;
 		const started = new Promise<void>((resolve) => {

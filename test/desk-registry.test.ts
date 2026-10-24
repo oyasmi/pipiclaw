@@ -8,7 +8,7 @@ import { initializeBindings, loadBindings, writeBindings } from "../src/desk/bin
 import { buildDeskList } from "../src/desk/commands.js";
 import { initializeDefaultDesk } from "../src/desk/default.js";
 import { getBindingsPath, getDeskDir, getDeskLockPath, isDeskName } from "../src/desk/paths.js";
-import { allocateConversation, createDesk, listDesks } from "../src/desk/registry.js";
+import { allocateConversation, createDeskRecord, listDesks } from "../src/desk/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 import { spawnLockHolder } from "./helpers/lock-holder.js";
 
@@ -39,14 +39,14 @@ describe("desk registry", () => {
 
 	it("refuses to create a desk that already exists", async () => {
 		const workspace = makeWorkspace();
-		expect((await createDesk(workspace, "news", NOW)).kind).toBe("created");
+		expect(createDeskRecord(workspace, "news", NOW).kind).toBe("created");
 		// Failure caught: a second /desk new silently overwriting desk.json would orphan every conversation.
-		expect(await createDesk(workspace, "news", NOW)).toEqual({ kind: "exists", name: "news" });
+		expect(createDeskRecord(workspace, "news", NOW)).toEqual({ kind: "exists", name: "news" });
 		const bindings = await loadBindings(workspace);
 		bindings.bindings.dm_1 = { desk: "news", boundAt: NOW.toISOString() };
 		await writeBindings(workspace, bindings);
 		rmSync(getDeskDir(workspace, "news"), { recursive: true });
-		expect(await createDesk(workspace, "news", NOW)).toEqual({ kind: "unavailable", name: "news" });
+		expect(createDeskRecord(workspace, "news", NOW)).toEqual({ kind: "unavailable", name: "news" });
 	});
 
 	it("does not erase a first binding when another process finishes initialization late", async () => {
@@ -94,7 +94,7 @@ describe("desk registry", () => {
 
 	it("allocates one conversation per channel, numbered per kind, idempotently", async () => {
 		const workspace = makeWorkspace();
-		await createDesk(workspace, "desk-news", NOW);
+		createDeskRecord(workspace, "desk-news", NOW);
 		const dm = await allocateConversation(workspace, "desk-news", "dm_1", "dm", NOW);
 		const group = await allocateConversation(workspace, "desk-news", "group_cid/a+b==", "group", NOW);
 		const dm2 = await allocateConversation(workspace, "desk-news", "dm_2", "dm", NOW);
@@ -120,7 +120,7 @@ describe("desk registry", () => {
 
 	it("waits for another process holding desk-json.lock before allocating", async () => {
 		const workspace = makeWorkspace();
-		await createDesk(workspace, "news", NOW);
+		createDeskRecord(workspace, "news", NOW);
 		const holder = await spawnLockHolder(getDeskLockPath(getDeskDir(workspace, "news"), "desk-json.lock"));
 		let settled = false;
 		const allocation = allocateConversation(workspace, "news", "dm_1", "dm", NOW).finally(() => {
@@ -145,7 +145,7 @@ describe("desk registry", () => {
 		await expect(loadBindings(workspace)).rejects.toThrow(/version/);
 		rmSync(getBindingsPath(workspace));
 		initializeBindings(workspace);
-		await createDesk(workspace, "default", NOW);
+		createDeskRecord(workspace, "default", NOW);
 		rmSync(getBindingsPath(workspace));
 		expect(() => initializeBindings(workspace)).toThrow(/restore/);
 		expect(() => initializeBindings(workspace)).toThrow(/missing/);
@@ -153,7 +153,7 @@ describe("desk registry", () => {
 
 	it("marks a desk whose desk.json names another directory as invalid, and lists a bound desk that is gone", async () => {
 		const workspace = makeWorkspace();
-		await createDesk(workspace, "news", NOW);
+		createDeskRecord(workspace, "news", NOW);
 		mkdirSync(join(workspace, "skills"));
 		mkdirSync(join(workspace, ".desk-init-unpublished"));
 		const deskDir = join(workspace, "desk-copy");

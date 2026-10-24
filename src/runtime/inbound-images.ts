@@ -5,6 +5,7 @@
 import { mkdir, writeFile } from "fs/promises";
 import { join, relative } from "path";
 import type { InboundImage } from "../channel/channel-event.js";
+import { getDeskInboxDir } from "../desk/paths.js";
 import { extensionForMimeType } from "../dingtalk/inbound-media.js";
 import * as log from "../log.js";
 import { localStampForFilename } from "../shared/local-time.js";
@@ -31,7 +32,7 @@ export async function persistInboundImage(
 	image: { data: Buffer; mimeType: string | null },
 ): Promise<InboundImage | null> {
 	try {
-		const dir = join(deskDir, "inbox");
+		const dir = getDeskInboxDir(deskDir);
 		await mkdir(dir, { recursive: true });
 		const extension = extensionForMimeType(image.mimeType);
 		const path = join(dir, `image-${localStampForFilename()}-${Math.random().toString(36).slice(2, 8)}.${extension}`);

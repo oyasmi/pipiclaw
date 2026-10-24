@@ -54,6 +54,9 @@ function truncateTextPreview(text: string): string {
 	return clipText(text, TEXT_PREVIEW_MAX_CHARS, { headRatio: 1, omitHint: "…", collapseWhitespace: true });
 }
 
+/** The parts of a history record the caller supplies; the watcher stamps the rest. */
+type HistoryFields = Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath" | "desk">;
+
 function eventDispatchId(desk: string, filename: string, event: ScheduledEvent, occurrence: Date): string {
 	const name = eventNameFromFilename(filename);
 	const when = event.type === "one-shot" ? event.at : occurrence.toISOString();
@@ -167,9 +170,7 @@ export class EventsWatcher {
 		}
 	}
 
-	private appendHistory(
-		record: Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath"> & { filename: string },
-	): void {
+	private appendHistory(record: HistoryFields & { filename: string }): void {
 		if (!this.options.historyPath) {
 			return;
 		}
@@ -191,9 +192,7 @@ export class EventsWatcher {
 		event: ScheduledEvent,
 		action: EventHistoryAction,
 		result: EventHistoryResult,
-		extra: Partial<
-			Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath" | "eventType" | "channelId" | "action" | "result">
-		> = {},
+		extra: Partial<Omit<HistoryFields, "eventType" | "channelId" | "action" | "result">> = {},
 	): void {
 		this.appendHistory({
 			filename,

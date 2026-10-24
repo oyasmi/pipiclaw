@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getBindingsPath, getDeskDir } from "../src/desk/paths.js";
-import { createDesk } from "../src/desk/registry.js";
+import { createDeskRecord } from "../src/desk/registry.js";
 import { DeskRuntime } from "../src/runtime/desk-runtime.js";
 import { createTaskDocument } from "../src/tasks/create.js";
 import { bindTestChannel, useTempDirs } from "./helpers/fixtures.js";
@@ -94,7 +94,7 @@ describe("DeskRuntime.bind (spec 058, D5)", () => {
 		const workspaceDir = tempDir();
 		await bindTestChannel(workspaceDir, "dm_1", "news");
 		await bindTestChannel(workspaceDir, "dm_2", "news");
-		await createDesk(workspaceDir, "lab", new Date());
+		createDeskRecord(workspaceDir, "lab", new Date());
 		const newsDir = getDeskDir(workspaceDir, "news");
 		await createTaskDocument({
 			deskDir: newsDir,
@@ -149,7 +149,7 @@ describe("DeskRuntime.bind (spec 058, D5)", () => {
 		// active while the channel still points at its old desk.
 		const workspaceDir = tempDir();
 		await bindTestChannel(workspaceDir, "dm_1", "news");
-		await createDesk(workspaceDir, "lab", new Date());
+		createDeskRecord(workspaceDir, "lab", new Date());
 		const { runtime, releaseRunner } = runtimeFor(workspaceDir);
 		await runtime.load();
 		await runtime.activateBound();

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getBindingsPath } from "../../../src/desk/paths.js";
-import { createDesk } from "../../../src/desk/registry.js";
+import { createDeskRecord } from "../../../src/desk/registry.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 describe("E2E deterministic: path guard", () => {
@@ -49,7 +49,7 @@ describe("E2E deterministic: path guard", () => {
 		// the busy check in `DeskRuntime.bind` rebinds mid-turn — `bindings.json` changes and the
 		// next turn lands in `lab`.
 		harness = await createDeterministicHarness();
-		await createDesk(harness.workspaceDir, "lab", new Date());
+		createDeskRecord(harness.workspaceDir, "lab", new Date());
 		harness.model.script.route({
 			name: "turn",
 			when: (r) => r.isMainTurn,

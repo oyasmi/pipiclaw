@@ -7,11 +7,11 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import {
-	buildChannelIndexForBootstrap,
-	CHANNEL_INDEX_MAX_UNITS,
+	buildMemoryIndexForBootstrap,
 	clipJournalTailForBootstrap,
 	clipWorkspaceMemoryForBootstrap,
 	JOURNAL_TAIL_MAX_UNITS,
+	MEMORY_INDEX_MAX_UNITS,
 	WORKSPACE_MEMORY_MAX_UNITS,
 } from "../memory/index-budget.js";
 import { readJournalDay } from "../memory/journal.js";
@@ -160,7 +160,7 @@ export function buildFollowUpTask(
 
 /**
  * Spec 050, D12: `memory: index` injects the same three sections the main agent's first-turn
- * bootstrap does — workspace MEMORY.md, the channel index, today's journal tail — at half the
+ * bootstrap does — workspace MEMORY.md, the desk memory index, today's journal tail — at half the
  * main agent's budget. No per-call LLM recall: a sub-agent task is short-lived, so there is no
  * "first turn" to bootstrap once and reuse; it gets the same snapshot every dispatch.
  */
@@ -194,10 +194,10 @@ async function buildContextualBlocks(
 		readOptionalFile(join(options.workspaceDir, "MEMORY.md")),
 		readJournalDay(options.deskDir, today).catch(() => ""),
 	]);
-	const index = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS / 2);
+	const index = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS / 2);
 	const bootstrap = renderMemoryBootstrap({
 		workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory, WORKSPACE_MEMORY_MAX_UNITS / 2),
-		channelIndex: entries.length > 0 ? index.text : "",
+		memoryIndex: entries.length > 0 ? index.text : "",
 		journal: (() => {
 			const text = clipJournalTailForBootstrap(journalToday, JOURNAL_TAIL_MAX_UNITS / 2);
 			return text ? { date: today, text } : undefined;

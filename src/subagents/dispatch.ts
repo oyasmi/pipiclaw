@@ -7,6 +7,7 @@ import { realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { getSubAgentArtifactsDir } from "../desk/paths.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { findTaskItem, parseTaskItems } from "../tasks/contract.js";
 import { readStoredTask } from "../tasks/store.js";
@@ -31,7 +32,7 @@ function safeRunSegment(value: string): string {
 }
 
 function getSubAgentArtifactsRoot(deskDir: string): string {
-	return join(deskDir, "subagent-artifacts");
+	return getSubAgentArtifactsDir(deskDir);
 }
 
 /** Every run gets its own artifact directory (spec 032 D4), independent of `returns` mode. */

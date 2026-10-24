@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | 已实施；默认初始化、desk 运行时与七份 playbook 已统一，验证见[验收记录](./acceptance.md) |
+| 状态 | 已实施；默认初始化、desk 运行时与七份 playbook 已统一，验证见[验收记录](./acceptance.md)；术语、模型指导与运行时收窄的追加修复见[追加修复](./followup.md)（待实施） |
 | 日期 | 2026-10-23 |
 | 承接 | [058 Dot](../058-dots/design.md)、[059 默认个人助手](../059-default-assistant/design.md) |
 | 用户决定 | 一个 workspace、一套人格；dot 改为 desk；目录上移为 `desk-<name>`；绑定表改为根目录 `desk-bindings.json`；迁移由 AI agent 按一次性说明完成 |
@@ -276,3 +276,5 @@ daemon 与 TUI 可能同时首次启动。空绑定表的发布必须原子且�
 2026-10-23：完成 desk 领域与全部消费者的统一重构，使用 `workspace/desk-<name>/`、`desk.json` 与根 `desk-bindings.json`。默认初始化、授权消息自动接入、共享人格加载、两种前端、七份 runtime playbook、评测上下文与当前用户手册同步落地。
 
 通用迁移脚本及其专用测试、旧布局守卫、旧格式推断和兼容字段读取均已删除；仅保留独立[离线迁移说明](../../desk-migration.md)。未迁移真实部署，也未启动正式 daemon。具体检查、故障注入、行为评测与接口结构变更见[验收记录](./acceptance.md)。
+
+2026-10-24：[追加修复](./followup.md) P1 把 `inbox/`、`logs/`、`subagent-artifacts/`、`.memory-work/` 与 `subagent-runs.jsonl` 的路径集中到 `src/desk/paths.ts`（磁盘名称不变），并把这些目录补入 AGENTS.md 的工位文件清单。

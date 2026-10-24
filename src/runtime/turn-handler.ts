@@ -74,7 +74,6 @@ export interface TurnHandlerDeps {
 	deskPort: (channelId: string) => DeskCommandPort;
 	/** Names a channel and says whether it is bound to `desk` — the asking channel's desk. */
 	describeChannel: (desk: string, channelId: string) => ChannelDescription;
-	/** Channels registered in a desk's `desk.json` (for `/events history`). */
 	cliVersion: string;
 	startedAt: number;
 	isShuttingDown: () => boolean;

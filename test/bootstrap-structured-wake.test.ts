@@ -6,7 +6,7 @@ import type { AgentRunner } from "../src/agent/types.js";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import { writeBindings } from "../src/desk/bindings.js";
 import { getDeskDir } from "../src/desk/paths.js";
-import { allocateConversation, createDesk } from "../src/desk/registry.js";
+import { allocateConversation, createDeskRecord } from "../src/desk/registry.js";
 import type { DingTalkBot } from "../src/dingtalk/bot.js";
 import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import type { Executor } from "../src/executor.js";
@@ -136,7 +136,7 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 	bootstrapAppHome(runtimePaths);
 	const channelId = `dm_${name}`;
 	// Spec 058: the channel must be bound to a desk before any turn can run in it.
-	await createDesk(runtimePaths.workspaceDir, "news", new Date());
+	createDeskRecord(runtimePaths.workspaceDir, "news", new Date());
 	const conversation = await allocateConversation(runtimePaths.workspaceDir, "news", channelId, "dm", new Date());
 	await writeBindings(runtimePaths.workspaceDir, {
 		version: 1,
@@ -345,7 +345,7 @@ describe("runtime structured wake delivery", () => {
 			const taskId = `T-rebound-${kind}`;
 			const deskDir = await waitingTask(harness.deskDir, taskId);
 			const wake = await createWake(harness, kind, taskId, deskDir);
-			await createDesk(harness.runtimePaths.workspaceDir, "lab", new Date());
+			createDeskRecord(harness.runtimePaths.workspaceDir, "lab", new Date());
 			await expect(harness.runtime.desks.bind(harness.channelId, "lab")).resolves.toMatchObject({ kind: "bound" });
 
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
