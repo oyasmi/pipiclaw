@@ -2,8 +2,8 @@ import { type ChildProcess, fork } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 
-export async function startDaemon(homeDir: string) {
-	const child = fork(fileURLToPath(new URL("./daemon-worker.mjs", import.meta.url)), [homeDir], {
+export async function startDaemon(homeDir: string, worker = "./daemon-worker.mjs", args: string[] = []) {
+	const child = fork(fileURLToPath(new URL(worker, import.meta.url)), [homeDir, ...args], {
 		env: { ...process.env, PIPICLAW_HOME: homeDir, PI_OFFLINE: "1" },
 		stdio: ["ignore", "ignore", "pipe", "ipc"],
 	});

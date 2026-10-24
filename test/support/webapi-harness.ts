@@ -19,7 +19,7 @@ export { reply } from "./mock-provider/script.js";
 /** The desk a key (and the harness's socket conversations) works in. */
 export const WEBAPI_DESK = "e2e";
 
-async function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const server = createServer();
 		server.once("error", reject);

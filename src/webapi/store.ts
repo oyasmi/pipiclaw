@@ -12,7 +12,7 @@
  * died mid-turn) is marked failed then, once — it is never re-run, because its tools may already
  * have had effects.
  */
-import { chmod, mkdir, readdir, readFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -42,6 +42,8 @@ export class WebApiStore {
 	/** Response ids per conversation, in the order they were created. */
 	private readonly order = new Map<string, string[]>();
 	private readonly appender: JsonlAppender;
+	/** The tail of the disk writes `saveResponse` has queued. */
+	private writes: Promise<void> = Promise.resolve();
 
 	private constructor(private readonly dir: string) {
 		this.appender = createJsonlAppender({
@@ -129,6 +131,10 @@ export class WebApiStore {
 			return;
 		}
 		const ids: string[] = [];
+		// A crash can leave a partial last line; end it, or the next snapshot would be glued onto it and lost.
+		if (text.length > 0 && !text.endsWith("\n")) {
+			await appendFile(join(this.conversationDir(conversationId), "responses.jsonl"), "\n");
+		}
 		for (const line of text.split("\n")) {
 			if (!line.trim()) continue;
 			try {
@@ -200,20 +206,32 @@ export class WebApiStore {
 		return this.order.get(conversationId)?.at(-1);
 	}
 
-	/** Record a response's current state: the first call for an id also registers it in the conversation. */
-	async saveResponse(record: ResponseRecord): Promise<void> {
+	/**
+	 * Record a response's current state: the first call for an id also registers it in the conversation.
+	 * Registration is immediate; the disk writes happen in call order, so the last snapshot on disk is
+	 * always the last one saved (the first save also writes the index line, which would otherwise let a
+	 * later snapshot overtake it).
+	 */
+	saveResponse(record: ResponseRecord): Promise<void> {
 		const isNew = !this.responses.has(record.id);
 		this.responses.set(record.id, record);
 		if (isNew) {
 			const ids = this.order.get(record.conversation_id) ?? [];
 			ids.push(record.id);
 			this.order.set(record.conversation_id, ids);
-			await this.appender.appendStrict({
-				path: join(this.dir, "responses.jsonl"),
-				record: { id: record.id, conversation_id: record.conversation_id },
-			});
 		}
-		await this.appendSnapshot(record);
+		const snapshot = structuredClone(record);
+		const written = this.writes.then(async () => {
+			if (isNew) {
+				await this.appender.appendStrict({
+					path: join(this.dir, "responses.jsonl"),
+					record: { id: snapshot.id, conversation_id: snapshot.conversation_id },
+				});
+			}
+			await this.appendSnapshot(snapshot);
+		});
+		this.writes = written.catch(() => undefined);
+		return written;
 	}
 
 	private appendSnapshot(record: ResponseRecord): Promise<void> {
