@@ -780,3 +780,31 @@ A、B、C 三个阶段在同一个开发分支上完成，作为一个版本发�
 **用例数（B）**：单测 948 → 964（+16），e2e 63 → 69（+6）。单测新增：`webapi-config`（3：loopback 判断与配置拒绝表、key 命令与校验、文件权限）、`webapi-security`（3：先鉴权后读体、Origin / Host、污染 / 超限 / 媒体类型）、`webapi-store`（1）、`webapi-request`（5：策略表、WebSocket 禁用字段、标记顺序、拒绝 URL / file_id、先量后解码）、`webapi-websocket`（2：拒绝码与 32 通道上限与 steer 失败码、60 分钟上限与断开取消）、`webapi-turn-output`（2：事件序号与重放、失败工具与截断）。每个都对应一种不同的故障。计划里的 `webapi-responses`（假 Ingress 的状态机）、`webapi-input` 独立文件没有写：状态机由 W1–W5 的真实运行时覆盖，输入规则合进 `webapi-request`，以免重复。
 e2e 新增 `test/e2e/deterministic/webapi.test.ts` 的 W1–W6（流式回合、忙碌排队、WebSocket steer 拆分、取消、合成唤醒、SIGKILL 重启，最后一个用独立进程 `webapi-worker.mjs`），每个的 mutation check 写在用例注释里。计划里"任务步骤被 cancel 时任务暂停"没有放进 W4：该语义属于 `/stop` 与任务驱动，既有的 stop / tasks e2e 已覆盖，webapi 只是复用同一个 `cancel` 入口。
 **门禁**：`npm run check`、`test:e2e`（69/69）、`eval:typecheck`、`build && node dist/main.js --version` 全绿。`memory.test.ts` 的 M8 在整套并行跑时出现过一次失败，单独重跑 3 次、以及不带本分支改动时都通过，未复现；记录在此，不在本阶段处理。
+
+### 阶段 C（TUI 作为 Web API 客户端）
+
+**偏差与就地决定**：
+
+1. **daemon 锁由内嵌运行时自己尝试获取**，不是 `runTui` 先拿再交出去：`bootstrapEmbedded(paths, io)` 内部用新加的 `tryAcquireDaemonLock`，被占用时返回 `undefined`（TUI 转而连接 socket），拿到则直接交给 `createRuntimeContext({ daemonLock })`。语义与计划一致——锁只获取一次、没有"释放再获取"的空隙——同时 `tui/` 不需要知道锁文件的位置（`runtime/` 不能被它 import）。`runTui(argv, { startEmbeddedRuntime }, io, paths)` 的 hook 签名因此是 `(paths, io) => handle | undefined`。
+2. **`/desk` 绑定在客户端侧的校验**：`--desk x` 的新会话先发 `/desk bind x`（`--create` 再前置 `/desk new x`），然后读 `desk-bindings.json` 确认该会话确实绑在 `x` 上；没绑上就把服务端的回复打印出来并以 1 退出，不写 `state/tui/conversations.json`。恢复旧会话时同样校验——会话后来被 `/desk bind` 到别的工位时，视为已失效、另建一个。理由：服务端对绑定失败的回复是一段给人看的文字，客户端没有可靠的方式从文字判断成败。`tui/` 因此可以 import `desk/`（只读 `bindings`）。
+3. **`webapiSocketPath(appHomeDir)`** 放在 `src/paths.ts`，TUI 和 daemon 共用，避免两边各拼一次路径。
+4. **忙碌状态靠事件计数**：客户端不问服务端"现在忙不忙"，而是数 `response.create` 已发未确认、进行中、已接受 steer 但后继尚未宣布的数量（`session.ts`）。`steered` 的 `response.incomplete` 算一次终态，后继的 `response.created` 算一次开始，所以 steer 中间不会短暂显示空闲。Ctrl-C / `/stop` / 连接断开时计数全部清零。
+5. **回合进行中输入**：普通文本 → `response.steer`；以 `/` 开头的命令 → `response.create`，由服务端（D17）决定能不能此时运行，不再像旧 TUI 那样在客户端本地拒绝会话类命令。`/followup` 在客户端排队，空闲时发出；`/stop` 清空它。
+6. **没有本地 `/help`、`/status` 等**：`commands.ts` 只剩 `/exit`、`/quit`、`/stop`、`/steer`、`/followup`，其余原样发给服务端（D25）。
+7. **TUI 状态栏**不再显示模型和上下文占比（那是 runner 的内部状态，客户端拿不到）；只显示 `终端 · <desk> · 运行中/空闲`。需要时用 `/status`。
+8. **SDK 请求超时**设为 30 分钟（SDK 把 `timeout: 0` 当作立即超时）：`--print` 是同步请求，时长等于 agent 工作的时长。
+9. **失败的请求**（如没有 API key）在 `runTui` 里变成一条错误消息加退出码 1，不打印堆栈。
+
+**删除**：`src/tui/app.ts`（运行时组装）、`turn-controller.ts`、`terminal-context.ts`、`terminal-media-sender.ts`、`channel-label.ts`、`progress.ts`；`tools/background-delivery.ts`（任务和事件的创建不再拒绝终端——TUI 的会话现在是 `webapi:` 频道，由 daemon 或内嵌运行时驱动）；`ConversationKind` 的 `"tui"` 和 `desk/paths.ts` 里的 `tui-N`；`conversations/tui-N/.lock`（单 TUI 约束随之取消：两个终端是两个会话，可以同时打开同一个工位，和两个钉钉群绑同一个工位一样）。`rg -n '"tui"' src` 现在只剩 CLI 子命令名和 `settings.json` 的 `tui` 键。
+
+**架构**：`tui` 的可 import 范围收窄为 `shared`、`commands`、`foundation`、`tools-contract`、`config`、`desk`、`app`（只用 `app/home.ts` 的 CLI 外壳类型），`scripts/check-architecture.mjs` 与 AGENTS.md 同步。
+
+**测试发现并修复的缺陷**：`response.create` 最初没带 `conversation`，WebSocket 上每条消息都会隐式新建一个会话（`tui-client` T1 在断言 `responses.jsonl` 时发现）。
+
+**用例数（C）**：单测 964 → 971（+7），e2e 69 → 70。
+- 删除：e2e `tui-command.test.ts`（2）。旧 TUI 的 `turn-controller` / `terminal-context` 在仓库里本来就没有单测；`task-manage.test.ts` 里"终端创建任务被拒"的断言随功能删除（同一用例内，不减用例数）。
+- 新增 e2e（3）：T1 终端绑工位、一个回合、一次 steer、一次 Ctrl-C 取消（真实 socket、真实运行时，断言 provider 请求和 `responses.jsonl` 终态）；T2 `--print` 走 `runTui` 的整条路径；T3 没有 daemon 时内嵌运行时启动、退出后释放 app home（同一个 home 连跑两次）。计划只要求 T1，T2 是唯一覆盖 `runTui` 参数到请求的整条链路，T3 是唯一不注入假 hook 地走 `bootstrapEmbedded` 的用例，所以保留。
+- 新增单测（7）：`tui-session`（5：命令到动作的映射；steer / 命令 / followup / stop 的状态机；steer 后继不出现空闲；空闲轮询只显示服务端自己产生的内容；渲染模式）、`tui-cli`（2：daemon 持有 app home 时的指引；客户端失败时仍停止内嵌运行时）。
+- 重写：`e2e/live/tui.test.ts`（真实模型，仍是手动 / 夜间）改走 `runTui` + `bootstrapEmbedded`。
+
+**门禁**：`npm run check`、`test:e2e`（70/70）、`eval:typecheck`、`build && node dist/main.js --version` 全绿；`tui --print` 在空 home 里实际跑过一次（启动内嵌运行时、socket、报出缺 API key 的消息、退出时释放锁）。
