@@ -2,7 +2,7 @@
 
 ## Project
 
-Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-works/pi-coding-agent`. It adds AI Card streaming, layered memory, scheduled work, desks (named work contexts of one assistant, used by DingTalk channels and the TUI), and unified delegation to internal agents or external Claude Code, Codex CLI, and custom executors.
+Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-works/pi-coding-agent`. It adds AI Card streaming, layered memory, scheduled work, desks (named work contexts of one assistant, used by DingTalk channels and Web API conversations, the terminal being a Web API client), and unified delegation to internal agents or external Claude Code, Codex CLI, and custom executors.
 
 ## Core Structure
 
@@ -44,10 +44,10 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 
 ## Runtime Model
 
-- App-level files: `channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`
+- App-level files: `channel.json` (the `dingtalk` and `webapi` sections, each with an `enabled` switch, spec 061), `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`. App-level state: `state/daemon.lock` (one runtime process per app home), `state/webapi/` (the socket and the Web API's conversations and responses), `state/tui/conversations.json` (the terminal client's last conversation per desk)
 - Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `ENVIRONMENT.md`, `CHANNELS.md` (generated channel index), `skills/`, `sub-agents/`, `desk-bindings.json` (channel id → desk, the only binding record)
 - Desk-level files (`desk-<desk>/`, spec 060): `desk.json`, `memory/<name>.md` + generated `MEMORY.md` index, `journal/YYYY-MM-DD.md`, `tasks/<id>.md` (contract, with its delivery `channel`) + `tasks/<id>.jsonl` (loop log) + `tasks/.sessions/` (one agent session per task), `events/`, delegation records and `subagent-artifacts/`, `inbox/` (inbound images and the full text of oversized messages), `logs/` (full output of truncated commands), `.memory-work/<conversation>/<id>.json` (durable pending boundary reflection) and `<id>.done` (completion receipt), working files. The desk directory is the agent's default cwd; desk.json may set another absolute cwd without moving state. App-home initialization creates `default`; authorized human ingress persists a missing DingTalk binding to it before attachments or command routing. Existing bindings, including broken targets, are preserved. Other desks are created explicitly (`/desk new`, `pipiclaw tui --desk <x> --create`). Reads and synthetic wakes never auto-bind. The TUI opens `default` unless `--desk` is given
-- Conversation-level files (`desk-<desk>/conversations/<kind>-<n>/`, one per channel that has talked to the desk): session JSONL files, `active-session.json`, `context.jsonl`, `log.jsonl`, `last_prompt.json`. A channel id is an address, never a path segment
+- Conversation-level files (`desk-<desk>/conversations/<kind>-<n>/`, one per channel that has talked to the desk): session JSONL files, `active-session.json`, `context.jsonl`, `log.jsonl`, `last_prompt.json`. A channel id (`<transport>:<native>`, e.g. `dingtalk:dm:<staffId>`, `webapi:conv_<id>`) is an address, never a path segment
 - `memory/<name>.md` is one durable fact per file (frontmatter metadata); `MEMORY.md` is generated from it — never hand-edited
 - `journal/YYYY-MM-DD.md` is the day-by-day working record, written only by the background reflect pass
 - `log.jsonl`, rotated logs, and `context.jsonl` are cold storage, not normal working memory; access them through `session_search` when needed
@@ -128,7 +128,7 @@ e2e hard rules:
 
 ## User-Facing Copy Conventions
 
-Everything the runtime says to a person follows these rules — slash-command replies, runtime pushes (task receipts, delegation notices, wake failures, busy hints), progress cards, error bubbles and the TUI. They come from the 2026-08-24 command review and were widened to all user copy by [spec 053](docs/specs/053-user-facing-copy/design.md), whose §D4 glossary is the single source of interface terms (等待条件, 最晚检查时间, 任务说明, 工作项, 任务记录, 观察期, 工作日记, 工具调用 …). Design words (等待票, 兜底, 契约, 结算, 墓碑化) stay in specs and model-facing text only.
+Everything the runtime says to a person follows these rules — slash-command replies, runtime pushes (task receipts, delegation notices, wake failures, busy hints), progress cards, error bubbles and the terminal. They come from the 2026-08-24 command review and were widened to all user copy by [spec 053](docs/specs/053-user-facing-copy/design.md), whose §D4 glossary is the single source of interface terms (等待条件, 最晚检查时间, 任务说明, 工作项, 任务记录, 观察期, 工作日记, 工具调用 …). Design words (等待票, 兜底, 契约, 结算, 墓碑化) stay in specs and model-facing text only.
 
 **Audiences and language.** Three audiences, one language each: users (DingTalk, TUI) read Chinese, keeping only identifiers they type or see in files in English (command names, ids, model refs, paths, frontmatter keys — introduced by a Chinese label, e.g. `类型（type）`); deployers and operators (CLI stdout/stderr, runtime logs) read English, deliberately; the model's text (prompts, tool `content`, step briefs, wake text) is out of scope here.
 
@@ -156,4 +156,4 @@ Shape rules:
 - The package version lives in `package.json` and the top-level package entry in `package-lock.json`
 - Web tools are configured through app-level `tools.json`; security policy is configured through app-level `security.json`
 - Workspace skills live only under `workspace/skills/`; do not add channel-scoped skill directories
-- The daemon owns durable external-run wake/recovery; TUI does not. `/stop` never cancels dispatched runs
+- The runtime (the daemon, or the one `pipiclaw tui` embeds when no daemon runs) owns durable external-run wake/recovery; an embedded runtime stops with the terminal. `/stop` never cancels dispatched runs

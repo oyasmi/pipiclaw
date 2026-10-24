@@ -260,6 +260,21 @@ export PIPICLAW_DEBUG=1
 
 之后运行时会在对应频道的会话区（`desk-<name>/conversations/<kind>-<n>/`）中写出 `last_prompt.json`。
 
+## 渠道与 Web API 部署（Channels and the Web API）
+
+`channel.json` 的 `dingtalk` 和 `webapi` 两段各有一个 `enabled` 开关，至少打开一个。常见的部署方式：
+
+- **只用钉钉**：`webapi.enabled` 保持 `false`，不加载 Web API 的代码，也不监听任何端口。
+- **钉钉 + 本机 Web API**：`webapi: { "enabled": true, "socket": true }`。daemon 在 `state/webapi/api.sock` 监听（目录 `0700`、socket `0600`），本机脚本和 `pipiclaw tui` 通过它访问，不需要 key。
+- **只用 Web API**：`dingtalk.enabled` 设为 `false`。没有钉钉凭据也能运行，适合只被脚本或其他服务调用的部署。
+- **让别的机器访问**：加 `tcp` 和 `keys`（`pipiclaw webapi key add <名字> --desk <工位>`），key 只显示一次。`tcp` 绑在 loopback 以外的地址时**必须**配 `tls`，否则拒绝启动；更稳妥的做法是 Pipiclaw 只绑 `127.0.0.1`，由 nginx / Caddy 之类的反向代理终止 TLS 并做访问控制。改动 key 后重启 daemon 生效。
+
+一个 app home 同时只能有一个运行时进程，由 `state/daemon.lock` 保证：第二个 `pipiclaw` 会拒绝启动并说出持有者的 pid 和主机；`pipiclaw tui` 遇到 daemon 就连接它的 socket，没有 daemon 才在本进程里起运行时。进程被杀留下的锁，下次启动时（同一主机、pid 已不存在）自动回收。
+
+某个频道所属的渠道没有启用时（例如暂时关了钉钉），该频道的任务和定时事件被跳过，待投递记录保留，渠道重新启用后恢复。Web API 的说明、安全默认值与审计见 [Web API](./webapi.md)。
+
+从旧版本升级到带渠道层的版本时，`channel.json` 的结构、频道 id 和终端会话需要一次离线迁移，见[渠道层迁移说明](./channel-migration.md)。
+
 ## 升级流程（Upgrade Procedure）
 
 建议用下面的顺序升级：
@@ -334,7 +349,7 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 
 ### 首次运行
 
-第一次运行 `pipiclaw` 会在 `${PIPICLAW_HOME:-~/.pipiclaw}` 下生成配置模板，并打印接下来的三步：填 `channel.json` 的 `clientId`、`clientSecret`（钉钉开放平台 → 应用 → 凭证；`cardTemplateId` 可选，用于 AI Card 流式输出），用 `pipiclaw auth login` 或 `models.json` 配置模型，然后再次运行。这一次的退出码是 **0**——生成模板是预期结果，不是错误。之后如果 `channel.json` 仍是 `your-*` 占位值，启动会报出具体字段并以退出码 1 退出。用 systemd / pm2 托管时，不要把第一次运行放进带自动重启的服务里。
+第一次运行 `pipiclaw` 会在 `${PIPICLAW_HOME:-~/.pipiclaw}` 下生成配置模板，并打印接下来的三步：填 `channel.json` 的 `dingtalk.clientId`、`dingtalk.clientSecret`（钉钉开放平台 → 应用 → 凭证；`cardTemplateId` 可选，用于 AI Card 流式输出），用 `pipiclaw auth login` 或 `models.json` 配置模型，然后再次运行。这一次的退出码是 **0**——生成模板是预期结果，不是错误。之后如果 `channel.json` 仍是 `your-*` 占位值，启动会报出具体字段并以退出码 1 退出。用 systemd / pm2 托管时，不要把第一次运行放进带自动重启的服务里。
 
 启动成功后直接私聊或在群里 @机器人即可。首次运行已创建 `workspace/desk-default/`，每个新频道在第一条获准消息到来时自动绑定到它，无需逐群操作；各频道共享记忆、任务和文件，保留独立会话。`pipiclaw tui` 也默认打开它。当前格式已有其他工位时会补建缺少的 `default`，已有绑定不改动；若 `default` 已被绑定却目录缺失，或已有目录里的 `desk.json` 损坏，则保留故障，避免把原助手替换为空工位。
 
@@ -375,7 +390,7 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 - `/tasks show <id>` 中是否已暂停、正在等 `ticket`，或预算已经耗尽；等待票尚未到期属于正常等待
 - `/tasks log <id>` 是否记录了连续空转、等待票过期或委派失败；`/tasks doctor` 是否发现手工编辑造成的坏 frontmatter
 - 预算停止后按回执处理：`steps`、`usd` 可用 `/tasks resume <id> +...` 加码
-- `tools.json` 的 `tools.tasks.enabled` 是否关闭；TUI 没有常驻 TaskDriver，长期任务应交给 DingTalk daemon
+- `tools.json` 的 `tools.tasks.enabled` 是否关闭；没有 daemon 时只有 `pipiclaw tui` 打开期间任务才会推进，长期任务应交给常驻 daemon；任务的投递频道所属渠道没有启用时任务被跳过
 
 ### 智能体角色没有被正常使用
 

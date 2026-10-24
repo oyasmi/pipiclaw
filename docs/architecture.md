@@ -12,16 +12,16 @@ Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtim
 
 ```
 pipiclaw            # 默认：长驻钉钉 daemon（等价 pipiclaw run）
-pipiclaw tui [--desk <名字>] [提示] # 默认打开默认工位，同一 agent 内核，无需钉钉凭据
+pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客户端；没有 daemon 时内嵌运行时，无需钉钉凭据
 ```
 
 核心设计取向（从实现中反推出来的一致性原则）：
 
 | 原则 | 体现 |
 |---|---|
-| **频道（channel）是隔离单元** | 每个钉钉会话（`dm_<staffId>` / `group_<conversationId>`）拥有独立的 ChannelRunner、AgentSession、记忆文件、任务台账、串行队列 |
+| **频道（channel）是隔离单元** | 每个频道（`dingtalk:dm:<staffId>` / `dingtalk:group:<conversationId>` / `webapi:conv_<id>`，格式 `<渠道>:<渠道内地址>`）拥有独立的 ChannelRunner、AgentSession、记忆文件、任务台账、串行队列 |
 | **一切串行化都显式建模** | 消息队列、投递队列、记忆写队列各司其职（见 §5），共享文件用 write-temp-then-rename 原子写 |
-| **传输层与 agent 层解耦** | Runner 只依赖 `ChannelContext` 投递契约，不知道钉钉存在；TUI 是第二个实现 |
+| **传输层与 agent 层解耦** | 渠道（钉钉、Web API）实现 `Transport`，把入站消息交给 `runtime/ingress.ts` 这一条入口；Runner 只通过 `ChannelContext` 的结构化回合输出（`emit(TurnEvent)` / `finish(TurnOutcome)`）说话，不知道有哪些渠道；终端是 Web API 的客户端，不是渠道 |
 | **状态全部落在仓库外** | 配置、工作区、记忆、任务、日志都在 `APP_HOME_DIR`（`~/.pipiclaw`，可用 `PIPICLAW_HOME` 覆盖） |
 | **后台工作是"扫描 + 门控"** | 记忆维护、任务驱动都是定时 tick + 确定性 gate，LLM 只在 gate 放行后才被调用 |
 
@@ -53,6 +53,7 @@ pipiclaw tui [--desk <名字>] [提示] # 默认打开默认工位，同一 agen
 | 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |
 | 10 | `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
 | 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `transport.ts`（`Transport` 实现）、`bot.ts`（门面）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（回合输出口） |
+| 11 | `src/webapi/` | Web API 渠道：OpenAI Responses 形状的 HTTP / WebSocket 服务（本机 socket + 可选 TCP）、key、会话与 Response 的存储（`state/webapi/`）、`pipiclaw webapi key` 命令 | `transport.ts`、`server.ts`、`service.ts`、`response-state.ts`、`store.ts`、`routes/` |
 | 11 | `src/tui/` | 终端：Web API 本地 socket 的客户端（官方 SDK）、前端与渲染 | `cli.ts`、`client.ts`、`session.ts`、`render.ts`、`frontend.ts` |
 | 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`ingress.ts`、`transports.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-driver.ts` |
 | — | `src/main.ts`、`src/index.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理；公共库出口（spec 035） | — |
@@ -108,6 +109,19 @@ flowchart TB
 - **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
 - **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到工位目录；完成后同样先经过 durable dispatch，再唤醒发起委派的那个频道（仍绑定在该工位上时）。
 
+## 4.0 渠道层（spec 061）
+
+渠道是消息的来源与去处。`channel/` 定义契约，`runtime/` 只通过契约使用渠道，渠道互不 import：
+
+- **`Transport`**（`channel/transport.ts`）：一个渠道的实现——`start/stop`、`openTurn(turn)` 返回本回合的 `ChannelContext`、`push`（回合之外说话）、`sendMedia`、`describe`、`conversationKindOf`，以及 `policy`（忙碌时排队还是并入、文本形式的 `/stop` 等是不是控制命令）。现有两个：`dingtalk/transport.ts` 和 `webapi/transport.ts`。
+- **`Ingress`**（`channel/ingress.ts`，实现在 `runtime/ingress.ts`）：渠道把每条入站消息交给它，绑定、命令解析、忙碌判断、排队、取消和 steer 只在这里决定；渠道代码不按命令名分支，也不持有频道队列。
+- **频道 id** 是 `<渠道>:<渠道内地址>`；运行时把后半部分当作不透明字符串，只有对应的渠道解释它。
+- **回合输出**是结构化事件：agent 调用 `ctx.emit(TurnEvent)`（工具开始/结束、推理、说明、最终答案…）和 `ctx.finish(TurnOutcome)`，由渠道决定怎么呈现——钉钉渲染成 AI Card 与纯文本，Web API 映射成 Responses 的 item 与流式事件。
+- **启用**：`channel.json` 的 `dingtalk` / `webapi` 段各有 `enabled`；`runtime/transports.ts` 只在对应渠道打开时才动态加载它的代码。频道所属的渠道没有启用时，该频道不可达：任务驱动和事件跳过它，待投递记录保留。
+- **终端**不是渠道：它是 Web API 本地 socket 的客户端（`src/tui/`）；没有 daemon 时由 `bootstrapEmbedded` 在本进程里起一个只开 socket 的运行时。
+
+Web API 的协议、字段策略和安全默认值见 [webapi.md](./webapi.md)。
+
 ## 4. 一条消息的生命周期
 
 ```mermaid
@@ -162,7 +176,7 @@ sequenceDiagram
 
 `compaction-summary.ts` 复用独立摘要执行：鉴权、快照和全部分段/重试共享 60 秒总期限，20 秒无有效输出取消，off thinking，每次最多 4096 输出 tokens。`compaction-input.ts` 只在摘要请求中缩减大工具载荷，保留头尾、哈希与原 JSONL 引用；普通长历史按完整覆盖、带重叠的片段递进摘要，最多四段，不任意删除中段。空、截断、超预算摘要保留原状态。手动 /compact 和 SDK 阈值/溢出仍有同样的受限恢复路径，现有后台候选可被 SDK 采用；扩展失败显式返回 cancel。自动失败/取消冷却 30 秒，slash command 和 steer 入队不启动额外前台压缩，自动入口遵守 compaction.enabled。
 
-`agent/stop-watchdog.ts` 由钉钉和 TUI 共用：停止超过 3 秒未收敛时，宿主退休旧 runner 并更换队列/执行引用，保留活动会话文件。旧 SDK 订阅和投递关闭，迟到的回合不再改变新代次或结算通知；`/new` 仍表示显式新建会话。摘要后台生成和并发采用候选结果不属于当前实现。
+`agent/stop-watchdog.ts` 由所有渠道共用（经 `runtime/ingress.ts`）：停止超过 3 秒未收敛时，宿主退休旧 runner 并更换队列/执行引用，保留活动会话文件。旧 SDK 订阅和投递关闭，迟到的回合不再改变新代次或结算通知；`/new` 仍表示显式新建会话。摘要后台生成和并发采用候选结果不属于当前实现。
 
 ### 投递层（ChannelContext）
 
@@ -190,7 +204,7 @@ sequenceDiagram
 | `RunQueue`（`createRunQueue`） | `agent/turn/run-queue.ts` | **一轮之内的出站投递调用**：进度/通知按序发往钉钉 API，错误只记日志不打断轮次 | 每轮 |
 | `DeskMemoryQueue` | `memory/desk-memory-queue.ts` | **同一工位的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`memory_save`、`/memory` 命令共用**进程级单例**，按工位名排队并持有 `.locks/memory.lock`（与 TUI 进程互斥），绝不能各自内联或按频道排队，否则同一工位的几个频道会争写同一批记忆文件（spec 058 INV-8） | 每工位（跨子系统、跨进程共享） |
 | `ChannelStore.writeQueue` | `channel/store.ts` | 会话区 `log.jsonl` 追加与轮转 | 每频道 |
-| 跨进程短锁 | `shared/file-lock.ts` | `desk-<name>/.locks/` 下的 `memory.lock`（记忆写）、`task-<id>.lock`（任务修改）、`desk-json.lock`（`desk.json` 读改写）；TUI 运行期间另持有 `conversations/tui-N/.lock`。daemon 与 TUI 可以同时使用同一个工位，靠的就是这些锁 | 每工位 / 每会话区（跨进程） |
+| 跨进程短锁 | `shared/file-lock.ts` | `desk-<name>/.locks/` 下的 `memory.lock`（记忆写）、`task-<id>.lock`（任务修改）、`desk-json.lock`（`desk.json` 读改写）。一个 app home 同时只有一个运行时进程（`state/daemon.lock`），同一个工位的多个频道、多个进程内的写入靠的就是这些锁 | 每工位 / 每会话区（跨进程） |
 | `DurableDispatchService.queue` | `runtime/durable-dispatch.ts` | 外发箱记录的读写 | 每记录 id |
 | `SubAgentRunManager.queue` | `subagents/runs.ts` | 一个 run 的 register/settle/cancel：保证结算、记账、唤醒各只发生一次（三个幂等标记见下） | 每 runId（manager 本身每工位一个单例） |
 | `writeFileAtomically` | `shared/atomic-file.ts` | 配置/状态文件：写临时文件再 rename | 每次写 |
@@ -294,7 +308,7 @@ spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每�
 | `read` / `bash` / `edit` / `write` / `grep` / `glob` | ✅ | 恒开，无开关 |
 | `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；支持五种搜索 provider 与 Readability/Jina 抓取，支持代理） |
 | `session_search` / `memory_save` / `memory_search` / `memory_forget` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
-| `send_media` | ❌ | 无配置开关；由传输能力决定——仅当驱动的 transport 提供了 `MediaSender`（钉钉机器人或终端）时才构建并进入工具索引 |
+| `send_media` | ❌ | 无配置开关；由传输能力决定——仅当驱动的 transport 提供了 `MediaSender`（目前只有钉钉）时才构建并进入工具索引 |
 | `task_list`/`task_create`/`task_update`/`task_close`/`task_log`/`task_step_end` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要；`task_step_end` 另外只在任务会话里注册 |
 | `subagent` / `subagent_list` / `subagent_run` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
 | `subagent_inline` | ❌（防递归） | 注册表之外追加，`tools.subagentInline.enabled`（默认开） |
@@ -335,7 +349,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 
 ```
 ~/.pipiclaw/                       # APP_HOME_DIR（PIPICLAW_HOME 可覆盖）
-├── channel.json                   # 钉钉凭据 + busyMessageDefault/responseMode（0600）
+├── channel.json                   # 渠道开关：dingtalk（凭据、busyMessageDefault、responseMode）与 webapi（监听、keys）（0600）
 ├── auth.json / models.json        # 模型密钥 / 模型定义（0600）
 ├── settings.json                  # 运行时设置：模型、fallback、模块开关、日志级别（0600）
 ├── tools.json / security.json     # 工具开关 / 守卫开关（0600）
@@ -353,7 +367,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │       ├── MEMORY.md              # 生成的记忆索引（勿手改，写入后自动重建）
 │       ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，只由反思 pass 写
 │       ├── memory-review.jsonl    # 反思/工具写入的动作与拒绝原因审计
-│       ├── conversations/<kind>-<n>/ # 每个与本工位对话过的频道一个会话区（dm-1、group-1、tui-1…）
+│       ├── conversations/<kind>-<n>/ # 每个与本工位对话过的频道一个会话区（dm-1、group-1、webapi-1…）
 │       │   ├── log.jsonl  context.jsonl  last_prompt.json
 │       │   ├── active-session.json # 当前聊天 session 指针；无指针时用 context.jsonl
 │       │   └── <session>.jsonl     # /new 等操作创建的聊天会话
@@ -368,7 +382,10 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │           └── archive/            # 已关闭契约与日志
 └── state/
     ├── auth/identity.json         # OpenAI OAuth 安装身份（首次登录创建）
+    ├── daemon.lock                # 一个 app home 同时只有一个运行时进程
     ├── dingtalk/conversations.json # 各频道的钉钉路由元数据
+    ├── webapi/                    # Web API：api.sock（0600）、conversations/<conv_id>/（会话与 Response 快照）
+    ├── tui/conversations.json     # 终端客户端：工位 → 上次用的 Web API 会话
     ├── dispatch/                  # durable-dispatch 外发箱
     ├── events/history.jsonl       # 事件审计
     ├── jobs/<name>/                # 后台作业状态与输出索引
@@ -417,7 +434,7 @@ playbook 正文不进提示词，agent 触发时用 `read` 按需加载。
 
 ## 12. 启动与关闭
 
-**启动**（`bootstrap()`）：解析参数 → 初始化 app home（缺失文件按模板生成；首次生成 `channel.json` 模板则提示填写后退出）→ 校验钉钉配置 → 加载 settings/tools/security 并输出诊断 → `createRuntimeContext` 装配全部组件 → 启动四个后台服务和 bot 连接。
+**启动**（`bootstrap()`）：解析参数 → 初始化 app home（缺失文件按模板生成；首次生成 `channel.json` 模板则提示填写后退出）→ 读取 `channel.json` 并加载打开的渠道（`dingtalk` / `webapi`，关闭的渠道不加载代码）→ 获取 `state/daemon.lock` → 加载 settings/tools/security 并输出诊断 → `createRuntimeContext` 装配全部组件 → 启动四个后台服务和 bot 连接。
 
 **关闭**（SIGINT/SIGTERM/manual，幂等）：
 

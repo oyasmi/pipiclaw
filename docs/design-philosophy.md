@@ -34,7 +34,7 @@ Pipiclaw 的恢复语义是 at-least-once，而不是虚构的 exactly-once。�
 
 ## 6. 传输是端口，不是核心
 
-Pipiclaw 以钉钉为第一运行场景，但 Agent 的工作语义不应被钉钉协议绑死。消息、进度、最终答复、媒体和生命周期通过 transport-neutral contract 连接；DingTalk、TUI 以及未来的其他入口共享同一套运行时原则。
+Pipiclaw 以钉钉为第一运行场景，但 Agent 的工作语义不应被钉钉协议绑死。消息、进度、最终答复、媒体和生命周期通过 transport-neutral contract 连接；DingTalk、Web API（终端是它的客户端）以及未来的其他入口共享同一套运行时原则。
 
 ## 7. 长期质量由结果证明，而不是由活动证明
 

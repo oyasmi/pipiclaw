@@ -114,7 +114,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		argumentHint: "<消息>",
 		description: "在当前工具调用结束后调整正在运行的回合",
 		examples: ["/steer 改用上海时区，只汇总最新的更新"],
-		note: "回合进行中直接发送的普通消息默认按 `/steer` 处理。部署者可以在 channel.json 把 `busyMessageDefault` 设为 `followUp`，改为排到当前回合之后执行；`responseMode` 控制答复的输出形态。",
+		note: "回合进行中直接发送的普通消息默认按 `/steer` 处理。部署者可以在 channel.json 的 `dingtalk` 段把 `busyMessageDefault` 设为 `followUp`，改为排到当前回合之后执行；`responseMode` 控制答复的输出形态。",
 		availableWhileBusy: true,
 		runnerHandled: true,
 	},

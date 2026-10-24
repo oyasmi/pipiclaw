@@ -9,6 +9,7 @@
 | 在终端或钉钉中完成第一次对话 | [项目 README：快速开始](../README.md#快速开始) |
 | 理解私聊、群聊、AI Card、忙时消息和斜杠命令 | [交互与命令](./interaction-and-commands.md) |
 | 配置钉钉、模型、Web 工具或代理 | [配置速查](./configuration.md) |
+| 用官方 OpenAI SDK 从脚本或其他服务使用 Pipiclaw | [Web API](./webapi.md) |
 | 查某个配置字段的准确取值和默认值 | [配置字段参考](./configuration-reference.md) |
 
 ## 我想让它完成实际工作
@@ -28,7 +29,7 @@
 |---|---|
 | 决定文件、命令、网络和外部智能体能碰什么 | [安全指南](./security.md) |
 | 部署常驻进程、看日志、升级、备份或排障 | [部署与运维](./deployment-and-operations.md) |
-| 让 AI agent 按具体数据完成一次性存储迁移 | [迁移说明](./desk-migration.md)，执行前核对目标版本 |
+| 让 AI agent 按具体数据完成一次性存储迁移 | [工位迁移说明](./desk-migration.md)、[渠道层迁移说明](./channel-migration.md)，执行前核对目标版本 |
 | 理解 fallback、记忆维护、后台作业、委派和任务 driver | [运行机制](./runtime-mechanisms.md) |
 | 评估并发、资源占用和拆分实例的时机 | [并发与容量](./scaling-and-concurrency.md) |
 

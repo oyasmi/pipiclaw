@@ -6,6 +6,10 @@
 
 ### 不兼容变更
 
+- **渠道层与 Web API（spec 061）。** `channel.json` 改为 `dingtalk` / `webapi` 两段，各有 `enabled` 开关，至少打开一个；根级的钉钉字段不再被读取。频道 id 变为 `<渠道>:<渠道内地址>`（`dingtalk:dm:<staffId>`、`dingtalk:group:<会话 id>`、`webapi:conv_<id>`）。`src/index.ts` 的导出名不变，但 `ChannelContext` 变为结构化的回合输出（`emit(TurnEvent)` / `finish(TurnOutcome)`），`DingTalkEvent` / `DingTalkHandler` 是 `ChannelEvent` / `Ingress` 的别名，`DingTalkBot` 的构造参数改变，`BootstrapOptions` 不再有 `dingtalkConfig` / `createBot`。
+- **终端成为 Web API 的客户端。** `pipiclaw tui` 通过本机 socket 连接 daemon；没有 daemon 时在本进程里启动一个只开 socket 的运行时（打开期间任务和事件也会运行，退出即关闭）。终端不再自己写工位，`tui` 频道和 `conversations/tui-N/` 取消，单工位只能开一个终端的限制随之取消；同一个 `--desk` 退出重进续上次的对话，`--new` 另开一个。终端不再拒绝 `task_create` 和 `event_manage create`。
+- **一个 app home 同时只能有一个运行时进程**（`state/daemon.lock`）。
+- **升级由运维离线完成。** 运行时不读旧格式的 `channel.json`、旧频道 id 和 `tui` 会话，旧版本也不能读转换后的数据；按[渠道层迁移说明](docs/channel-migration.md)在备份副本上演练后再升级。
 - **工位（desk）取代 dot（spec 059、060）。** 现在只有一个助手、一个 workspace；原来的 dot 变成*工位*：一个有名字的工作范围，拥有记忆、日记、任务、事件、委派记录和工作文件。工位位于 `workspace/desk-<名字>/`（含 `desk.json`），频道绑定在 `workspace/desk-bindings.json`。命令是 `/desk`，TUI 选项是 `--desk`；不提供 `/dot`、`--dot` 别名。
 - **只有一套人格。** 身份与规则只来自 workspace 的 `SOUL.md` / `AGENTS.md`；工位目录里的 `SOUL.md` / `AGENTS.md` 不再替换它们。
 - **一开始就有默认工位。** 启动时初始化 `default`；新的钉钉私聊和群在第一条获准消息到来时自动绑定到它（不需要 `/desk bind`）；`pipiclaw tui` 不带 `--desk` 时固定打开 `default`。已有绑定不会被覆盖，读操作和后台唤醒也不会创建绑定。因此默认情况下所有频道共享同一份记忆、任务和事件——需要分开的内容请使用另一个工位。
@@ -14,13 +18,13 @@
 
 ### 新增
 
+- **Web API**（[docs/webapi.md](docs/webapi.md)）：OpenAI Responses 形状的 HTTP 与 WebSocket 服务，官方 `openai` SDK 可直接连接——同步、流式、`background`（含续流与取消）、会话与 items、WebSocket 的 steering 与多通道；工具调用以 `mcp_call` item 呈现。默认只监听本机 socket；TCP 需要 key（`pipiclaw webapi key add|list|remove`），非 loopback 必须 TLS；Origin / Host 校验、鉴权先于读请求体、请求与连接限额、审计日志。
 - `desk.json` 可设置绝对路径 `cwd`：作为该工位里 agent 的工作目录（shell、相对路径、委派默认目录）；记忆、任务和事件仍留在工位目录。
 - `task_list` 返回每个任务的投递频道；每回合的任务清单会标出汇报到其他频道的任务。
 
 ### 变更
 
 - 同一工位的任何频道都可以通过 `event_manage` 修改和删除该工位的事件，修改会保留事件原来的投递频道；此前投递到其他频道的事件在这里是只读的。
-- 终端拒绝 `task_create` 和 `event_manage create`（终端不运行后台工作），并提示到已绑定的钉钉频道里创建。
 - 运行时手册和系统提示改为按“工位由其频道共享”来说明：记住的事实要标明是谁的；在别的频道发起的作业或委派，完成时唤醒那个频道，不会唤醒当前频道。`/desk` 的回复和 TUI 帮助不再把默认工位称作“默认助手”。
 
 ### 删除

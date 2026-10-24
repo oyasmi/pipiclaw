@@ -12,9 +12,9 @@ Pipiclaw 区分两样东西：**频道（channel）**是消息的地址，**工�
 
 | 场景 | 频道 ID | 说明 |
 |------|---------|------|
-| 私聊 | `dm_{staffId}` | 按发送者区分 |
-| 群聊 | `group_{conversationId}` | 按群区分 |
-| 终端 | `tui` | `pipiclaw tui` 默认打开 `default`，可用 `--desk <名字>` 选择 |
+| 私聊 | `dingtalk:dm:{staffId}` | 按发送者区分 |
+| 群聊 | `dingtalk:group:{conversationId}` | 按群区分 |
+| Web API / 终端 | `webapi:conv_{id}` | 一个会话一个频道；`pipiclaw tui` 默认打开 `default`，可用 `--desk <名字>` 选择 |
 
 - **同一个工位下的频道**共享记忆、日志、任务、事件和文件；对话上下文按频道分开（每个频道在工位里有自己的会话区 `conversations/<kind>-<n>/`），别的频道说过的原话要用 `session_search` 查。
 - **不同工位** 之间不共享记忆和检索。要让私聊的内容不进群，就不要把它们绑到同一个工位。

@@ -512,6 +512,17 @@ $PIPICLAW_HOME/security.json
 - 如果这台机器上还有其他高价值目录，继续补 deny
 - 如果你已经用独立账号或 Docker 跑 Pipiclaw，这套模板仍然有价值，但可以适度放宽
 
+## Web API 的网络入口
+
+打开 `channel.json` 的 `webapi` 段会给 Pipiclaw 增加一个新的入口（[Web API](./webapi.md)）。默认值偏保守：
+
+- **默认关闭**，关闭时不加载代码、不监听。
+- **只监听本机 unix socket**（`state/webapi/api.sock`，权限 `0600`，目录 `0700`）；socket 上不需要 key，能打开它的就是运行 daemon 的系统用户。TCP 要显式打开，每个请求都必须带 bearer key；绑定在非 loopback 地址时必须配 TLS，否则拒绝启动。
+- **key 的权限等于宿主机上的 shell 权限**——agent 有 `bash`，只受上面的命令、路径和网络守卫约束。key 只存 SHA-256，`desks` 限定它能使用的工位，会话和 Response 按创建它的 key 隔离。
+- 带 `Origin` 头的请求（浏览器的跨站请求、跨站 WebSocket）一律 403，不提供 CORS；loopback TCP 校验 `Host` 防 DNS rebinding。鉴权在读请求体之前完成，失败直接 401，不进入运行时。
+- 请求体、连接数、速率、WebSocket 流数量都有上限；TCP 按来源 IP 限流。
+- 审计：每个请求（主体、方法、路径、会话、状态码）和每次鉴权失败（来源、原因）都写进审计日志，不记录 key、请求体或输出。
+
 ## 外部智能体的授权边界
 
 外部智能体没有单独的 `security.json` 配置段。把下面三项写进一个角色文件，本身就是一份持续有效、可版本管理的授权：

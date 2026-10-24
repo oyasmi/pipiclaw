@@ -20,7 +20,7 @@
 | `bash` | 执行 shell 命令与外部程序 | 恒开 | — | 是 |
 | `web_search` | 搜索公网，返回标题/URL/摘要 | **关** | `tools.web.enable` | 是 |
 | `web_fetch` | 抓取 URL 并提取正文 | **关** | `tools.web.enable` | 是 |
-| `send_media` | 把本地文件作为附件发进当前会话 | 随前端 | 传输层是否支持（钉钉/TUI 都支持） | 否 |
+| `send_media` | 把本地文件作为附件发进当前会话 | 随前端 | 传输层是否支持（钉钉支持，Web API 含终端不支持） | 否 |
 | `job` | 查看/等待/取消 `bash async` 后台作业 | 恒开 | — | 否 |
 | `session_search` | 检索本工位所有频道的冷存储历史对话 | 恒开 | — | 否 |
 | `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
@@ -78,7 +78,7 @@
 - **目标会话由运行时绑定**，不是模型参数。agent 无法把文件发到当前会话以外的地方。
 - 路径经与 `read` **相同**的 path guard，越界文件在读取前就被拒绝并记入审计日志。
 
-只要传输层支持出站附件就自动启用——钉钉与终端 TUI 都支持，没有独立开关。
+只要传输层支持出站附件就自动启用——目前钉钉支持；Web API（含终端）没有附件通道，此时工具会告诉模型把文件在服务器上的路径告知用户。没有独立开关。
 
 ## 记忆与知识类
 
@@ -103,7 +103,7 @@
 `subagent`（角色优先）把一项聚焦工作交给一个**已配置**的角色，只传 `agent`/`task` 加上可选的 `workingDirectory`/`purpose`/`taskId`——工具、模型、预算、上下文策略全部来自角色文件，调用侧不能覆盖。`subagent_inline` 是没有合适角色时的一次性执行者，携带 `systemPrompt` 及 `tools`/`model`/`effort`/`context`/`thinkingLevel`/`mutates` 等覆盖字段；可以用 `tools.subagentInline.enabled: false` 整体关掉（默认开）。
 
 - **内置角色**使用 Pipiclaw 的模型和工具，通常在 120 秒同步宽限内直接返回；超时后转为后台 run。
-- **外部角色**启动 Claude Code、Codex CLI 或 `exec`，恒为异步，派发后立即返回 `runId`；DingTalk daemon 会在完成时唤醒发起委派的频道。TUI 不持久化或重新认领外部 run。
+- **外部角色**启动 Claude Code、Codex CLI 或 `exec`，恒为异步，派发后立即返回 `runId`；DingTalk daemon 会在完成时唤醒发起委派的频道；没有 daemon 时，终端内嵌的运行时只在终端打开期间做这件事。
 
 委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。
 

@@ -63,7 +63,7 @@ pipiclaw tui --help
 
 ```text
 ~/.pipiclaw/
-├── channel.json      # 钉钉应用
+├── channel.json      # 渠道开关：钉钉应用、Web API
 ├── auth.json         # 模型凭据
 ├── models.json       # 自定义模型提供方
 ├── settings.json     # 默认模型与运行设置
@@ -113,15 +113,20 @@ pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
 
 ```json
 {
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "",
-  "cardTemplateKey": "content",
-  "allowFrom": []
+  "dingtalk": {
+    "enabled": true,
+    "clientId": "your-dingtalk-client-id",
+    "clientSecret": "your-dingtalk-client-secret",
+    "robotCode": "",
+    "cardTemplateId": "",
+    "cardTemplateKey": "content",
+    "allowFrom": []
+  },
+  "webapi": { "enabled": false, "socket": true }
 }
 ```
 
+- `dingtalk` 和 `webapi` 两段各有 `enabled` 开关，至少打开一个；`webapi` 让脚本和其他服务用官方 OpenAI SDK 使用 Pipiclaw（见 [Web API](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md)）。
 - 硬性必填只有 `clientId` 和 `clientSecret`。
 - `robotCode` 留空时回退到 `clientId`。
 - `cardTemplateId` 可暂时留空；正式使用建议配置 AI Card。
@@ -177,7 +182,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.m
 
 外部智能体不会经过 Pipiclaw 的命令和路径守卫。上述推荐条目使用放开权限的 CLI 参数；使用前必须阅读[智能体委派指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md)中的授权、安全边界和 sandbox 说明。
 
-长时间外部委派应运行在钉钉 daemon 中；TUI 当前不提供外部 run 的完成通知和退出后的重新认领。
+长时间外部委派应运行在常驻 daemon 中；没有 daemon 时终端内嵌的运行时只在终端打开期间处理外部 run 的完成通知。
 
 ### 5. 可选：启用 Web 工具
 
@@ -195,7 +200,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.m
 2. 执行 npm install -g @oyasmi/pipiclaw；权限失败时不要自行 sudo。
 3. 运行一次 pipiclaw 初始化 ~/.pipiclaw/；它因 channel.json 仍是模板而提示补全并退出是正常现象。
 4. 询问我要使用 API key、自定义 provider，还是 pipiclaw auth login 支持的订阅登录；不要编造缺失值。
-5. 如果我要接入钉钉，逐项收集 clientId、clientSecret、可选的 cardTemplateId 和 allowFrom，写入 channel.json，并清除所有 your-* 占位值。
+5. 如果我要接入钉钉，逐项收集 clientId、clientSecret、可选的 cardTemplateId 和 allowFrom，写入 channel.json 的 dingtalk 段，并清除所有 your-* 占位值。
 6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui；钉钉模式用 pipiclaw，启动后直接私聊或在群里 @机器人，无需创建或绑定工位。
 7. 如实列出做过的操作、修改的文件、验证结果和仍缺少的信息，不要假装成功。
 ```

@@ -39,7 +39,7 @@ POSIX 环境；Windows 请使用 WSL2。
 
 | 文件 | 它是什么 | 谁写 / 多久变 |
 |---|---|---|
-| `channel.json` | 钉钉应用凭据，以及这个传输自己的投递行为（`responseMode`、`busyMessageDefault`、`allowFrom`） | 部署时填一次，之后基本不动 |
+| `channel.json` | 开哪些渠道（`dingtalk`、`webapi`），以及各渠道自己的凭据和投递行为（钉钉的 `responseMode`、`busyMessageDefault`、`allowFrom`；Web API 的监听与 key） | 部署时填一次，之后基本不动 |
 | `auth.json` | 模型凭据 | 由 `pipiclaw auth login/logout` 写；轮换密钥时变，不建议手改 |
 | `models.json` | 模型与供应商定义（`baseUrl`、`api`、`models[]`） | 接入新网关或新模型时变 |
 | `settings.json` | **产品意图**：默认模型、fallback、模块开关、日志级别 | 调口味时变 |
@@ -59,7 +59,7 @@ workspace 下的文件是另一类：它们是给模型读的**内容**（身份
 
 | 目标 | 文件 | 最少要改什么 |
 |---|---|---|
-| 接入钉钉 | `channel.json` | `clientId`、`clientSecret`；`robotCode` 可留空；`cardTemplateId` 推荐配置 |
+| 接入钉钉 | `channel.json` 的 `dingtalk` 段 | `clientId`、`clientSecret`；`robotCode` 可留空；`cardTemplateId` 推荐配置 |
 | 配模型凭据 | `auth.json` 或环境变量 | Anthropic 默认用 `ANTHROPIC_API_KEY` 或 `auth.json.anthropic.key` |
 | 自定义模型 | `models.json` | provider 的 `baseUrl`、`api`、`apiKey`、`models[].id` |
 | 选默认模型 | `settings.json` | `defaultProvider` + `defaultModel` |
@@ -72,24 +72,29 @@ workspace 下的文件是另一类：它们是给模型读的**内容**（身份
 | 加可复用流程 | `workspace/skills/` | 通过 `write`/`edit` 创建/维护 workspace skill，`skill` 工具只读列出/加载 |
 | 让 LLM 请求走代理 | 环境变量 `PIPICLAW_PROXY` | 见下方「LLM 请求走代理」 |
 
-## 钉钉最小配置
+## 渠道最小配置
 
 `channel.json`：
 
 ```json
 {
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "",
-  "cardTemplateKey": "content",
-  "allowFrom": []
+  "dingtalk": {
+    "enabled": true,
+    "clientId": "your-dingtalk-client-id",
+    "clientSecret": "your-dingtalk-client-secret",
+    "robotCode": "",
+    "cardTemplateId": "",
+    "cardTemplateKey": "content",
+    "allowFrom": []
+  },
+  "webapi": { "enabled": false, "socket": true }
 }
 ```
 
 要点：
 
-- 硬性必填只有 `clientId` 和 `clientSecret`。
+- `dingtalk` 和 `webapi` 两段各有 `enabled` 开关，至少打开一个；关闭的一段不会被检查，也不加载代码。Web API 的字段见 [Web API](./webapi.md)。
+- 硬性必填只有 `clientId` 和 `clientSecret`（`dingtalk.enabled: true` 时）。
 - `robotCode` 留空时回退到 `clientId`。
 - `cardTemplateId` 留空也能工作，但不会使用 AI Card；正式使用建议补上。
 - `allowFrom: []` 或省略表示允许所有发送者；灰度时填 staff ID。
@@ -310,11 +315,11 @@ export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
 
 | 场景 | 建议路径 |
 |---|---|
-| 先跑通第一条消息 | 只补 `channel.json` 的钉钉字段和一个可用模型凭据；AI Card 可先留空 |
+| 先跑通第一条消息 | 只补 `channel.json` 的 `dingtalk` 字段和一个可用模型凭据；AI Card 可先留空 |
 | 已有企业 LLM 网关 | 在 `models.json` 定义 provider，在 `settings.json` 固定默认模型 |
 | 本地 Ollama | `models.json` 定义本地 provider；如启用 `networkGuard`，把本地地址加入 allow |
 | 控制后台记忆成本 | 保留 `memoryMaintenance.enabled: true`，优先关闭 `sessionSearch.summarizeWithModel`；`memoryRecall.*` 已随 spec 050 退役 |
-| 多用户灰度 | `channel.json.allowFrom` 填 staff ID 列表 |
+| 多用户灰度 | `channel.json` 的 `dingtalk.allowFrom` 填 staff ID 列表 |
 | 长期 daemon | 用 systemd/pm2/supervisor；日志和账本默认落在 `state/` |
 | 部署环境无法直连模型 API | 设环境变量 `PIPICLAW_PROXY`（只代理 LLM 请求，钉钉不受影响），见「LLM 请求走代理」 |
 

@@ -6,6 +6,10 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Breaking
 
+- **Channel plane and Web API (spec 061).** `channel.json` is now two sections, `dingtalk` and `webapi`, each with an `enabled` switch (at least one must be on); the old root-level DingTalk fields are no longer read. Channel ids are `<transport>:<native>` (`dingtalk:dm:<staffId>`, `dingtalk:group:<conversationId>`, `webapi:conv_<id>`). The names exported from `src/index.ts` are unchanged, but `ChannelContext` is now a structured turn output (`emit(TurnEvent)` / `finish(TurnOutcome)`), `DingTalkEvent` / `DingTalkHandler` alias `ChannelEvent` / `Ingress`, `DingTalkBot` takes different constructor arguments, and `BootstrapOptions` no longer has `dingtalkConfig` / `createBot`.
+- **The terminal is a Web API client.** `pipiclaw tui` connects to the daemon's local socket; with no daemon it starts a runtime inside the process with only that socket on (tasks and events run while the terminal is open, and stop when it exits). The terminal no longer writes a desk itself: the `tui` channel and `conversations/tui-N/` are gone, and so is the one-terminal-per-desk limit; the same `--desk` resumes its last conversation and `--new` starts another. The terminal no longer refuses `task_create` and `event_manage create`.
+- **One runtime process per app home** (`state/daemon.lock`).
+- **Upgrades are offline operator work.** The runtime does not read the old `channel.json` shape, old channel ids or `tui` conversations, and an old version cannot read converted data; rehearse on a backup copy following the [channel migration guide](docs/channel-migration.md) before upgrading.
 - **Desks replace dots (specs 059, 060).** There is one assistant and one workspace; what used to be a dot is now a *desk*, a named work scope that owns memory, journal, tasks, events, delegation records and working files. Desks live in `workspace/desk-<name>/` (with `desk.json`) and the channel bindings in `workspace/desk-bindings.json`. The command is `/desk`, the TUI option is `--desk`; there are no `/dot` or `--dot` aliases.
 - **One persona.** Identity and rules come only from the workspace `SOUL.md` / `AGENTS.md`; a `SOUL.md` / `AGENTS.md` inside a desk directory no longer replaces them.
 - **A default desk exists from the start.** Startup initializes `default`, a new DingTalk private chat or group is bound to it on its first authorized message (no `/desk bind` needed), and `pipiclaw tui` without `--desk` always opens `default`. Existing bindings are never overwritten; reads and background wakes never create one. By default every channel therefore shares one memory, task and event set — use a separate desk when something must stay apart.
@@ -14,13 +18,13 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Added
 
+- **Web API** ([docs/webapi.md](docs/webapi.md)): an OpenAI Responses-shaped HTTP and WebSocket server that the official `openai` SDK connects to — synchronous, streaming, `background` (with resume and cancel), conversations and items, WebSocket steering and named streams; tool calls appear as `mcp_call` items. It listens on the local socket only by default; TCP needs a key (`pipiclaw webapi key add|list|remove`) and non-loopback addresses require TLS; Origin and Host checks, authentication before the body is read, request and connection limits, and an audit log.
 - `desk.json` may set an absolute `cwd`: the agent's working directory (shell, relative paths, default delegation directory) for that desk, while memory, tasks and events stay in the desk directory.
 - `task_list` reports each task's delivery channel, and the per-turn task agenda marks tasks that report to another channel.
 
 ### Changed
 
 - Any channel of a desk can update or delete any of the desk's events through `event_manage`; an update keeps the event's original delivery channel. Previously events delivering to another channel were read-only there.
-- The terminal refuses `task_create` and `event_manage create` (it never runs background work), with a pointer to a bound DingTalk channel.
 - Runtime playbooks and the system prompt now describe a desk as shared by its channels: attribute remembered facts to a person, and a job or delegation started in another channel wakes that channel, not this one. `/desk` replies and the TUI help call the default desk what it is rather than a "default assistant".
 
 ### Removed

@@ -24,7 +24,7 @@ order: 10
 - **任务步骤**（`[TASK_STEP:<id>]`，有 `task_step_end`）：在任务自己的会话里推进契约；派发的委派和作业自动绑定本任务。没有 `task_create`、`memory_save`、`event_manage`，这是执行边界，不要换文件写入绕过。
 - **子代理**：不继承聊天历史；上下文与工作目录由本次委派决定。准备委派时读 `agent-delegation.md` 的“任务指令”。
 
-DingTalk daemon 是长期宿主，负责 task driver、job/委派完成唤醒和外部 run 重启对账。TUI 只适合前台回合，没有这些常驻保证；不要在 TUI 中建立依赖退出后自动恢复的工作。
+daemon 是长期宿主，负责 task driver、job/委派完成唤醒和外部 run 重启对账。没有 daemon 时，`pipiclaw tui` 内嵌的运行时只在终端打开期间提供这些，退出后不会恢复；不要在这种情况下建立依赖退出后自动恢复的工作。
 
 ## 已有上下文
 

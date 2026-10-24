@@ -49,7 +49,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.
 
 外部委派会立刻返回 `runId`，完成时自动唤醒发起委派的频道（它已换绑到别的工位时不唤醒，结果仍保存在 run 记录里）。过程中可用 `/subagents` 查看，用 `/subagents cancel <runId>` 终止。不要为了等结果反复轮询或重复派发。
 
-> **运行入口边界**：完成唤醒、`state/subagent-runs/` 持久化和 daemon 重启对账由钉钉常驻 runtime 装配。TUI 可以发现和启动角色，但当前不会主动显示外部 run 的完成通知，也不会在退出后重新认领它；长时间外部委派请使用 daemon。
+> **运行入口边界**：完成唤醒、`state/subagent-runs/` 持久化和 daemon 重启对账由钉钉常驻 runtime 装配。没有 daemon 时，`pipiclaw tui` 内嵌的运行时在终端打开期间同样装配这些，终端退出即关闭，之后需要 daemon 重新对账；长时间外部委派请使用 daemon。
 
 ## 它是什么
 

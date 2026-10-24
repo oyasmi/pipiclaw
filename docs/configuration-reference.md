@@ -70,7 +70,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 
 | 文件 | 范围 | 用途 | 自动创建 |
 |------|------|------|----------|
-| `~/.pipiclaw/channel.json` | 全局 | 钉钉应用配置 | 是 |
+| `~/.pipiclaw/channel.json` | 全局 | 渠道开关与钉钉 / Web API 配置 | 是 |
 | `~/.pipiclaw/auth.json` | 全局 | 模型提供方凭据（provider credentials） | 是 |
 | `~/.pipiclaw/models.json` | 全局 | 自定义模型提供方 / 模型 | 是 |
 | `~/.pipiclaw/settings.json` | 全局 | Pipiclaw 运行时设置 | 是 |
@@ -294,7 +294,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 `send_media` 把 workspace 内的本地文件作为**原生附件**发进当前会话：`.jpg .jpeg .png .gif .webp .bmp` 内联为图片，其余作为可下载文件。用于把生成好的报表、截图、图表、导出文件真正交到用户手里。
 
-没有 `tools.json` 开关——只要驱动本次会话的传输层实现了出站附件端口就自动注册，钉钉与终端 TUI 均已实现。两个性质值得管理员知道：
+没有 `tools.json` 开关——只要驱动本次会话的传输层实现了出站附件端口就自动注册，钉钉已实现；Web API（含终端）没有附件通道，此时工具会告诉模型把文件在服务器上的路径告知用户。两个性质值得管理员知道：
 
 - **目标会话在构建期绑定**，不是模型参数：agent 无法把文件发到当前会话以外的地方，也无从指定收件人。
 - 路径经与 `read` **完全相同**的 path guard（`security.json`），越界文件在读取字节前就被拒绝并写入审计日志。
@@ -320,18 +320,25 @@ DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身�
 - driver 睡到最近的票据时刻或内置 15 分钟上限；步骤 `continue` 后会立即 nudge，连续两步没有工具调用则暂停任务并通知用户。
 - 单次扫描全局最多派发 4 个 channel；同一 channel 每 tick 最多唤醒一个任务，并按 channel 和任务轮转保证公平。
 - `work`、`ask` 票由各自所有者推送兑现（任一绑定委派/作业结算即兑现 `work`）；过了 runtime 派生的兜底时限会重开一次，连续第二次过期则暂停并通知用户。
-- TUI 会保留任务台账和摘要，但没有常驻 TaskDriver；需要自动恢复的长期任务应运行在 DingTalk daemon。
+- 内嵌运行时（没有 daemon 时的 `pipiclaw tui`）在终端打开期间驱动任务；终端退出后，没有 daemon 的任务不会继续，需要自动恢复的长期任务应运行在 daemon 下。
 
 ## 终端 TUI（Terminal TUI）
 
-除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）。TUI 每次打开一个工位，与这个工位的钉钉频道共享记忆、任务、事件和工作文件，但有自己的会话。
+终端是 Web API 的**客户端**（[Web API](./webapi.md)）：`pipiclaw tui` 用官方 `openai` SDK 连接 `state/webapi/api.sock`，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）。终端的会话和钉钉的私聊、群一样是一个频道（`webapi:conv_…`），绑定在某个工位上，与这个工位的其他频道共享记忆、任务、事件和工作文件，但有自己的对话。
+
+**有没有 daemon 都能用**：
+
+- daemon 在运行（持有 `state/daemon.lock`）时，终端连接它的 socket。daemon 没有打开 Web API 的 socket 时终端会报错并说明两种做法：在 `channel.json` 里打开 `webapi`（`"enabled": true, "socket": true`）并重启 daemon，或先停掉 daemon。
+- 没有 daemon 时，终端在本进程里启动完整的运行时（只开 Web API 的 socket，不连钉钉、不开 TCP），退出时按 daemon 的顺序关闭。这期间事件和任务驱动也在运行；钉钉频道的任务和事件在内嵌运行时里不可达，按规则被跳过。
 
 ### 启动（Usage）
 
 ```bash
-pipiclaw tui --desk news                       # 交互式，打开工位 `news`
-pipiclaw tui --desk lab --create               # 工位不存在时先创建
-echo "问题" | pipiclaw tui --desk news --print  # 一次性：跑一轮、打印答案、退出（可脚本化）
+pipiclaw tui                                    # 交互式，打开 `default` 工位，续上次的对话
+pipiclaw tui --desk news                        # 打开工位 `news`
+pipiclaw tui --desk lab --create                # 工位不存在时先创建
+pipiclaw tui --desk news --new                  # 在 `news` 开一个新对话，而不是续上次
+echo "问题" | pipiclaw tui --desk news --print  # 一次性：发一个同步请求、打印答案、退出（可脚本化）
 pipiclaw tui --desk news --print "总结今天的进展"  # 一次性，prompt 走命令行位置参数
 ```
 
@@ -339,30 +346,28 @@ pipiclaw tui --desk news --print "总结今天的进展"  # 一次性，prompt �
 
 | 选项 | 说明 |
 |------|------|
-| `--desk <name>` | 要打开的工位；只存在一个可用工位时可省略。不检查它是否已绑定、daemon 是否在运行。工位不存在时报错并列出已有的工位。 |
-| `--create` | 工位不存在时先创建它（与 `/desk new` 相同，不绑定任何频道）。 |
+| `--desk <name>` | 要打开的工位，省略时是 `default`。该工位上次用的对话会被续上（记录在 `state/tui/conversations.json`）；对话已被 `/desk bind` 到别的工位时视为失效，另建一个。新对话的第一条消息是 `/desk bind <name>`，绑定失败（例如工位不存在）时打印服务端的回复并以 1 退出。 |
+| `--create` | 先发 `/desk new <name>` 再绑定（与钉钉里的 `/desk new` 相同）。 |
+| `--new` | 总是开一个新对话。 |
 | `--print`, `-p` | 一次性非交互模式：运行位置参数（或管道 stdin）作为唯一 prompt，打印最终答案后退出。 |
 | `--quiet`, `-q` | 纯文本模式下只输出最终答案（进度与提示写入 stderr 的部分被静音）。 |
 | `--plain` | 即使在 TTY 下也强制使用纯文本前端（不进入全屏 UI）。 |
 | `--version` / `--help` | 打印版本 / 帮助。 |
 
-**命令**：交互模式支持运行时命令 `/help` `/stop` `/desk` `/status` `/usage` `/events` `/tasks` `/subagents` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前工位的记忆。`/desk list` 和 `/desk new` 可用；`/desk bind` 只在钉钉频道里可用。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
+**命令**：终端自己只处理 `/exit`、`/quit`（退出）、`/stop`（断开连接，等于取消当前回合，下一条消息自动重连）、`/steer <文本>`（插入当前回合）和 `/followup <文本>`（在客户端排队，当前回合结束后再发）。其余一切——`/help` `/status` `/usage` `/events` `/tasks` `/subagents` `/skills` `/desk`、`/model` `/new` `/compact` `/session` `/memory`——原样发给服务端，规则与钉钉相同。回合进行中，普通文本会插入当前回合；以 `/` 开头的命令交给服务端判断此时能不能运行。`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。
 
 非 TTY（管道 / 重定向）或 `--print` 会自动使用纯文本前端；真实终端下使用带滚动记录、状态行、斜杠命令补全的富界面。
 
 ### 会话续接（Resume）
 
-TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠工位的终端会话区而不是靠挑选历史会话：
-
-- **退出重进即自动续上次对话。** 当前聊天上下文由 `workspace/desk-<name>/conversations/tui-N/active-session.json` 指向的 session JSONL 持久化；没有指针时使用 `context.jsonl`。`/new` 会创建新文件并更新指针，旧会话仍保留。再次 `pipiclaw tui --desk <name>` 会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
-- **同一个工位同一时间只能开一个 TUI。** 运行期间 TUI 持有 `conversations/tui-N/.lock`，第二个 TUI 打开同一个工位会报错退出并给出持有者的 pid。进程被杀掉留下的锁，下次启动时（同一主机、pid 已不存在）自动回收。
-- **钉钉频道的对话不会出现在 TUI 里。** TUI 与工位的钉钉频道共享记忆、任务和文件，但会话各自独立；要在终端里接着某件事做，靠的是记忆层和任务，而不是接管频道的会话。
-- **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `memory/*.md`（生成 `MEMORY.md` 索引）与 `journal/`（见「记忆分层」），会在下一次会话首轮整份带回。
-- **暂无会话选择器**，即不能在 TUI 里从多个历史会话之间挑一个切过去。
+- **退出重进即自动续上次对话**：同一个 `--desk` 的对话保存在 `state/tui/conversations.json`，对话本身是一个 Web API 会话，模型上下文在工位的会话区 `conversations/webapi-N/` 里。`/new` 开新的模型会话，旧的仍保留。
+- **多个终端可以同时打开同一个工位**：它们默认会续上同一个对话（排队执行）；想要各用各的，给其中一个加 `--new`。
+- **服务端自己产生的内容会显示出来**：空闲时终端每隔几秒读一次会话的 items，后台作业完成、任务汇报等没有请求方的回复会显示在对话里。
+- **钉钉频道的对话不会出现在终端里**，只共享记忆、任务和文件。
 
 ### `tui` 设置（settings.json）
 
-`settings.json` 顶层可选 `tui` 块控制输出形态（与钉钉的 `channel.json.responseMode` 相互独立）：
+`settings.json` 顶层可选 `tui` 块控制终端显示多少过程（与钉钉的 `channel.json.responseMode` 相互独立）：
 
 ```json
 {
@@ -372,31 +377,58 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠工�
 }
 ```
 
-`responseMode` 取值与钉钉一致：`full_progress_then_plain_final`（默认，流式进度 + 纯文本最终答复）、`rolling_progress_then_plain_final`（仅保留最近进度）、`final_card_only`（隐藏进度）。缺省即默认值。
+`responseMode` 取值与钉钉一致：`full_progress_then_plain_final`（默认，流式进度 + 纯文本最终答复）、`rolling_progress_then_plain_final`（与默认相同的显示）、`final_card_only`（隐藏进度，只在结束时显示答复）。缺省即默认值。
 
 ### 与钉钉常驻服务的并发约束（Concurrency Caveat）
 
-TUI 可以打开一个正由钉钉常驻服务使用的工位：
+终端可以打开一个正由钉钉使用的工位：
 
-- 工位的记忆（`memory/*.md`、`MEMORY.md`、`journal/`）、任务文件和 `desk.json` 的写入都持有 `desk-<name>/.locks/` 下的跨进程短锁，两个进程会排队而不是交错写坏。
-- TUI 的会话在它自己的会话区 `conversations/tui-N/`，daemon 从不写它；钉钉频道的会话区也只由 daemon 写。
-- 定时事件文件是整文件原子写，两个进程同时改同名事件时以后写的为准。
-- 同一个工位同时只能开一个 TUI；第二个会报错退出，并给出持有者的 pid。
+- 终端不再自己写工位。所有写入都由运行时（daemon 或内嵌运行时）完成，一个 app home 同时只有一个运行时进程（`state/daemon.lock`）。
+- 工位的记忆、任务文件和 `desk.json` 的写入仍持有 `desk-<name>/.locks/` 下的跨进程短锁，与以前一样。
+- 终端的会话区是 `conversations/webapi-N/`，钉钉频道的是 `dm-N`、`group-N`，互不共享。
 
-## 钉钉配置文件 `channel.json`（`channel.json`）
+## 渠道配置文件 `channel.json`（`channel.json`）
 
-`channel.json` 用来配置 DingTalk 接入。
+`channel.json` 配置 Pipiclaw 开哪些渠道：`dingtalk`（钉钉）和 `webapi`（[Web API](./webapi.md)）两段，各有 `enabled` 开关。**至少要打开一个**，否则拒绝启动；关闭的渠道不加载代码、不监听、不写自己的状态目录，里面的字段（包括占位值）也不会被检查。
+
+```json
+{
+  "dingtalk": { "enabled": true, "clientId": "…", "clientSecret": "…" },
+  "webapi": { "enabled": false, "socket": true }
+}
+```
+
+旧版本的 `channel.json`（字段在根级）不再被读取，转换见[迁移说明](./channel-migration.md)。
+
+### `webapi` 段
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `enabled` | `false` | 是否打开 Web API |
+| `socket` | `true` | 在 `state/webapi/api.sock` 监听（`0600`），不需要 key |
+| `tcp` | 不监听 | `"host:port"`（IPv6 写 `"[::1]:8787"`）；每个请求都要带 key |
+| `tls` | 无 | `{ "cert", "key" }` 绝对路径；`tcp` 不是 loopback 时必须配置 |
+| `keys` | `[]` | `{ "name", "sha256", "desks" }` 的数组；用 `pipiclaw webapi key add\|list\|remove` 管理 |
+
+key 命令、字段策略、错误与安全说明见 [Web API](./webapi.md)。
+
+## 钉钉配置（`channel.json` 的 `dingtalk` 段）
+
+以下字段都写在 `dingtalk` 段里（`enabled: true` 时）。
 
 ### 最小示例（Minimal Example）
 
 ```json
 {
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "",
-  "cardTemplateKey": "content",
-  "allowFrom": []
+  "dingtalk": {
+    "enabled": true,
+    "clientId": "your-dingtalk-client-id",
+    "clientSecret": "your-dingtalk-client-secret",
+    "robotCode": "",
+    "cardTemplateId": "",
+    "cardTemplateKey": "content",
+    "allowFrom": []
+  }
 }
 ```
 

@@ -63,7 +63,7 @@ The first real start of `pipiclaw` or `pipiclaw tui` creates:
 
 ```text
 ~/.pipiclaw/
-├── channel.json      # DingTalk app
+├── channel.json      # Channel switches: DingTalk app, Web API
 ├── auth.json         # model credentials
 ├── models.json       # custom model providers
 ├── settings.json     # default model and runtime settings
@@ -113,16 +113,21 @@ Edit `~/.pipiclaw/channel.json`:
 
 ```json
 {
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "",
-  "cardTemplateKey": "content",
-  "allowFrom": []
+  "dingtalk": {
+    "enabled": true,
+    "clientId": "your-dingtalk-client-id",
+    "clientSecret": "your-dingtalk-client-secret",
+    "robotCode": "",
+    "cardTemplateId": "",
+    "cardTemplateKey": "content",
+    "allowFrom": []
+  },
+  "webapi": { "enabled": false, "socket": true }
 }
 ```
 
-- The only hard-required fields are `clientId` and `clientSecret`.
+- The `dingtalk` and `webapi` sections each have an `enabled` switch; turn on at least one. `webapi` lets scripts and other services use Pipiclaw through the official OpenAI SDK (see [Web API](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md)).
+- The only hard-required DingTalk fields are `clientId` and `clientSecret`.
 - When `robotCode` is empty it falls back to `clientId`.
 - `cardTemplateId` can be left empty for now; configuring an AI Card is recommended for real use.
 - `allowFrom: []` means all senders are allowed; during a limited rollout, fill in tester staff IDs.
@@ -177,7 +182,7 @@ Common control entry points:
 
 External agents do not go through Pipiclaw's command and path guards. The recommended entries above use permissive CLI flags; before using them, read the authorization, security boundary, and sandbox notes in the [Agent delegation guide](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md).
 
-Long-running external delegations should run in the DingTalk daemon; the TUI currently does not provide completion notifications for external runs or re-adoption after exit.
+Long-running external delegations should run in the long-lived daemon; without one, the runtime embedded in `pipiclaw tui` handles external-run completions only while the terminal is open.
 
 ### 5. Optional: enable web tools
 
@@ -195,7 +200,7 @@ Please install and initialize Pipiclaw for me:
 2. Run npm install -g @oyasmi/pipiclaw; on a permission failure do not sudo on your own.
 3. Run pipiclaw once to initialize ~/.pipiclaw/; it prompting you to complete channel.json and exiting because it is still a template is normal.
 4. Ask me whether I want to use an API key, a custom provider, or a subscription login supported by pipiclaw auth login; do not invent missing values.
-5. If I want to connect DingTalk, collect clientId, clientSecret, optional cardTemplateId, and allowFrom item by item, write them into channel.json, and remove all your-* placeholder values.
+5. If I want to connect DingTalk, collect clientId, clientSecret, optional cardTemplateId, and allowFrom item by item, write them into the `dingtalk` section of channel.json, and remove all your-* placeholder values.
 6. When configuration is done, ask first whether to start. Terminal mode uses pipiclaw tui; DingTalk mode uses pipiclaw, and after it starts message the bot directly or @ it in a group — no desk needs to be created or bound.
 7. Honestly list the operations performed, files changed, verification results, and information still missing; do not pretend it succeeded.
 ```
