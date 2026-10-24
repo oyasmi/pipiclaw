@@ -3,7 +3,6 @@
  * "nothing to stop/steer" replies). The stateless report commands (`/tasks`, `/events`, …) never
  * reach here — they go through `commands/router.ts`.
  */
-import type { ChannelContext } from "../channel/channel-context.js";
 import {
 	formatMissingQueueMessage,
 	formatNoRunningTurn,
@@ -50,22 +49,13 @@ function renderHelpWithDiscovery(host: BuiltinCommandHost, args: string): string
 	return sections.join("\n\n");
 }
 
-async function sendCommandReply(ctx: ChannelContext, text: string, commandName?: string): Promise<void> {
-	// Command echoes are ephemeral control-plane traffic, not conversation: keep them out of
-	// log.jsonl so they are never re-consumed as memory-extraction input (review 2026-08-24 §1.2).
-	const title = commandName ? `/${commandName}` : undefined;
-	const delivered = await ctx.respondPlain(text, false, title);
-	if (!delivered) {
-		await ctx.replaceMessage(text);
-		await ctx.flush();
-	}
-}
-
-export async function handleBuiltinCommand(
-	host: BuiltinCommandHost,
-	ctx: ChannelContext,
-	command: RunnerBuiltInCommand,
-): Promise<void> {
+/**
+ * The reply to a runner-handled built-in command. It is returned, not delivered: the caller sends
+ * it as a command reply (titled, never archived — command echoes are ephemeral control-plane
+ * traffic, not conversation, and must not be re-consumed as memory-extraction input; review
+ * 2026-08-24 §1.2).
+ */
+export async function handleBuiltinCommand(host: BuiltinCommandHost, command: RunnerBuiltInCommand): Promise<string> {
 	try {
 		// `/help` and `/context` read the session (prompt templates, active model).
 		// The session runtime is built asynchronously after construction, so a command
@@ -73,22 +63,17 @@ export async function handleBuiltinCommand(
 		await host.ensureSessionReady();
 		switch (command.name) {
 			case "help":
-				await sendCommandReply(ctx, renderHelpWithDiscovery(host, command.args), "help");
-				return;
+				return renderHelpWithDiscovery(host, command.args);
 			case "context":
-				await sendCommandReply(ctx, host.renderContextReport(command.args), "context");
-				return;
+				return host.renderContextReport(command.args);
 			case "stop":
-				await sendCommandReply(ctx, formatNoRunningTurn("stop"), "stop");
-				return;
+				return formatNoRunningTurn("stop");
 			case "steer":
 				requireQueuedMessage(command.args, "steer");
-				await sendCommandReply(ctx, formatNoRunningTurn("steer"), "steer");
-				return;
+				return formatNoRunningTurn("steer");
 			case "followup":
 				requireQueuedMessage(command.args, "followup");
-				await sendCommandReply(ctx, formatNoRunningTurn("followup"), "followup");
-				return;
+				return formatNoRunningTurn("followup");
 			default: {
 				// The stateless report commands (events/tasks/status/usage/subagents/skills — see
 				// `BUILT_IN_COMMANDS`'s `runnerHandled: false` entries) are routed to their own
@@ -101,6 +86,6 @@ export async function handleBuiltinCommand(
 	} catch (err) {
 		const errMsg = errorMessage(err);
 		log.logWarn("agent.command.failed", "Built-in command failed", { channelId: host.channelId, reason: errMsg });
-		await sendCommandReply(ctx, `命令执行失败：${errMsg}`, command.name);
+		return `命令执行失败：${errMsg}`;
 	}
 }

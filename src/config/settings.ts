@@ -3,7 +3,6 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
-import type { ResponseMode } from "../channel/channel-context.js";
 import * as log from "../log.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import type { ConfigDiagnostic } from "../shared/config-diagnostic.js";
@@ -151,15 +150,21 @@ export const SETTINGS_TOP_LEVEL_KEYS = [
 const _settingsKeysComplete: AssertNoMissingKeys<PipiclawSettings, typeof SETTINGS_TOP_LEVEL_KEYS> = true;
 void _settingsKeysComplete;
 
+/** The terminal's output presets; the same three names DingTalk's `responseMode` uses, interpreted by the TUI itself. */
+export type TuiResponseMode =
+	| "full_progress_then_plain_final"
+	| "rolling_progress_then_plain_final"
+	| "final_card_only";
+
 export interface PipiclawTuiSettings {
 	/**
-	 * Output shape for the terminal TUI, reusing the DingTalk response-mode
-	 * vocabulary: `full_progress_then_plain_final` (default) streams full progress
+	 * Output shape for the terminal TUI, using the same vocabulary as the DingTalk
+	 * channel's `responseMode`: `full_progress_then_plain_final` (default) streams full progress
 	 * then a plain final answer; `rolling_progress_then_plain_final` keeps only
 	 * recent progress; `final_card_only` hides progress. Independent of the
 	 * DingTalk channel's `responseMode` in `channel.json`.
 	 */
-	responseMode: ResponseMode;
+	responseMode: TuiResponseMode;
 }
 
 const DEFAULT_TUI: PipiclawTuiSettings = {
@@ -320,7 +325,7 @@ const ENUM_SETTINGS: readonly { path: string; values: readonly string[] }[] = [
 			"full_progress_then_plain_final",
 			"rolling_progress_then_plain_final",
 			"final_card_only",
-		] satisfies readonly ResponseMode[],
+		] satisfies readonly TuiResponseMode[],
 	},
 	{ path: "delegation.notices", values: ["off", "settled", "live"] satisfies PipiclawDelegationSettings["notices"][] },
 ];

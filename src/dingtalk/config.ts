@@ -4,9 +4,9 @@
  */
 import { readFileSync } from "fs";
 import { BootstrapExitError, type BootstrapIO, type BootstrapPaths, DEFAULT_BOOTSTRAP_PATHS } from "../app/home.js";
-import { isResponseModeConfig, normalizeResponseMode, type ResponseMode } from "../channel/channel-context.js";
 import { docsUrl } from "../paths.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isResponseModeConfig, normalizeResponseMode, type ResponseMode } from "./response-mode.js";
 
 export type BusyMessageMode = "steer" | "followUp";
 export type BusyMessageDefaultConfig = BusyMessageMode | "followup";

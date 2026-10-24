@@ -31,6 +31,11 @@ export function isAssistantEventMessage(value: unknown): value is AssistantEvent
 	);
 }
 
+/** A message the user side wrote: the turn's prompt, or one injected into a running loop (steer, follow-up). */
+export function isUserEventMessage(value: unknown): boolean {
+	return isMessageWithRole(value) && value.role === "user";
+}
+
 export function isAssistantUsageMessage(value: unknown): value is AssistantUsageMessage {
 	if (!isMessageWithRole(value) || value.role !== "assistant" || !("usage" in value) || !isRecord(value.usage)) {
 		return false;

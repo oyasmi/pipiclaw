@@ -3,7 +3,6 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_INBOUND_IMAGE_BYTES } from "../../../src/channel/attachments.js";
 import type { InboundImage } from "../../../src/channel/channel-event.js";
-import type { DingTalkBot } from "../../../src/dingtalk/bot.js";
 import type { InboundMessages } from "../../../src/dingtalk/inbound.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
@@ -52,8 +51,8 @@ describe("E2E deterministic: inbound image attachments", () => {
 		});
 		// First contact is an image: the default binding must exist before media persistence,
 		// not just when the resulting event reaches routeInboundEvent.
-		// Mutation (2026-10-23): remove prepareChannel in inbound.ts; the image part is lost.
-		const bot = (harness.runtime as typeof harness.runtime & { bot: DingTalkBot }).bot as unknown as {
+		// Mutation (2026-10-23): drop the ingress's ensureBinding before it persists attachments; the image part is lost.
+		const bot = harness.bot as unknown as {
 			inbound: InboundMessages;
 			downloadMessageFile(code: string): Promise<{ data: Buffer }>;
 		};

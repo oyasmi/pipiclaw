@@ -1,11 +1,11 @@
 /**
  * The epilogue of a turn, shared by every exit path out of `ChannelRunner.run()`: the debug dump,
- * delivery of whatever final message the turn settled on, usage and ledger accounting, the
- * end-of-turn memory flush, and clearing run state.
+ * telling the channel how the turn ended, usage and ledger accounting, the end-of-turn memory
+ * flush, and clearing run state.
  */
 import { writeFile } from "fs/promises";
 import { join } from "path";
-import type { ChannelContext } from "../../channel/channel-context.js";
+import type { TurnOutcome } from "../../channel/channel-context.js";
 import type { DeskConversation } from "../../desk/types.js";
 import * as log from "../../log.js";
 import { formatModelReference } from "../../models/reference.js";
@@ -18,18 +18,11 @@ import type { SessionHost } from "../session/session-host.js";
 import type { FinalOutcome, RunState } from "../types.js";
 import type { createRunQueue } from "./run-queue.js";
 import { renderTurnErrorReply } from "./turn-error.js";
+import type { TurnOutput } from "./turn-output.js";
 import type { TurnHandle, TurnStateMachine } from "./turn-state.js";
 
 function isSilentOutcome(outcome: FinalOutcome): outcome is { kind: "silent" } {
 	return outcome.kind === "silent";
-}
-
-function isFinalOutcome(outcome: FinalOutcome): outcome is { kind: "final"; text: string } {
-	return outcome.kind === "final";
-}
-
-function getFinalOutcomeText(outcome: FinalOutcome): string | null {
-	return isFinalOutcome(outcome) ? outcome.text : null;
 }
 
 export interface TurnFinisherDeps {
@@ -69,6 +62,28 @@ export class TurnFinisher {
 		return this.deps.getRunState();
 	}
 
+	/** How the turn ended, in the channel's terms. An error that came after an answer is still a completed turn. */
+	private outcomeOf(fallbackAttempted: boolean, fallbackTargetRef: string | undefined): TurnOutcome {
+		const { runState } = this;
+		const usage = { ...runState.totalUsage, cost: { ...runState.totalUsage.cost } };
+		if (runState.stopReason === "error" && runState.errorMessage && !runState.answerEmitted) {
+			const compactionError = runState.lastCompactionError;
+			return {
+				kind: "failed",
+				usage,
+				message: renderTurnErrorReply({
+					errorMessage: runState.errorMessage,
+					compactionError:
+						compactionError && compactionError !== runState.errorMessage ? compactionError : undefined,
+					fallbackRef: fallbackAttempted ? fallbackTargetRef : undefined,
+				}),
+			};
+		}
+		if (isSilentOutcome(runState.finalOutcome)) return { kind: "silent", usage };
+		if (runState.stopReason === "aborted" && !runState.answerEmitted) return { kind: "cancelled", usage };
+		return { kind: "completed", usage };
+	}
+
 	/**
 	 * The epilogue shared by every exit path out of `run()`'s try/catch: debug dump, delivery of
 	 * whatever final message the turn settled on, usage/ledger accounting, the end-of-turn memory
@@ -77,7 +92,7 @@ export class TurnFinisher {
 	 * instance state, so it is threaded through explicitly rather than promoted to a field.
 	 */
 	async finish(input: {
-		ctx: ChannelContext;
+		ctx: TurnOutput;
 		ownTurn: TurnHandle;
 		implicitTurn: boolean;
 		promptSubmitted: boolean;
@@ -123,70 +138,9 @@ export class TurnFinisher {
 			}
 		}
 		await runQueue.drain();
-		const finalOutcome = this.runState.finalOutcome;
-		const finalOutcomeText = getFinalOutcomeText(finalOutcome);
-
-		try {
-			if (
-				this.runState.stopReason === "error" &&
-				this.runState.errorMessage &&
-				!this.runState.finalResponseDelivered
-			) {
-				try {
-					const compactionError = this.runState.lastCompactionError;
-					await ctx.replaceMessage(
-						renderTurnErrorReply({
-							errorMessage: this.runState.errorMessage,
-							compactionError:
-								compactionError && compactionError !== this.runState.errorMessage ? compactionError : undefined,
-							fallbackRef: fallbackAttempted ? fallbackTargetRef : undefined,
-						}),
-					);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.error_reply.failed", "Error reply failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			} else if (isSilentOutcome(finalOutcome)) {
-				try {
-					await ctx.deleteMessage();
-					log.logInfo(`[${this.channelId}] Silent response ended progress delivery`);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.silent_cleanup.failed", "Silent-response cleanup failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			} else if (this.runState.stopReason === "aborted" && !this.runState.finalResponseDelivered) {
-				try {
-					await ctx.deleteMessage();
-					log.logInfo(`[${this.channelId}] Aborted response discarded active delivery state`);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.abort_cleanup.failed", "Aborted-response cleanup failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			} else if (finalOutcomeText && !this.runState.finalResponseDelivered) {
-				try {
-					await ctx.replaceMessage(finalOutcomeText);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.final_reply.failed", "Final reply replacement failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			}
-
-			await ctx.flush();
-		} finally {
-			await ctx.close();
-		}
+		// The transport turns this into its own ending: a closed card, a settled response, a
+		// delivered fallback for an answer that did not get through.
+		await ctx.finish(this.outcomeOf(fallbackAttempted, fallbackTargetRef));
 
 		// Log usage summary. Gated on tokens as well as cost: a local (or pricing-less) model
 		// bills nothing, and skipping it here left both the log and the ledger empty.

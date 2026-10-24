@@ -1,15 +1,6 @@
 /**
- * Formatting helpers for turn progress entries and for clipping over-length user input.
+ * Helpers for clipping over-length user input and for reading a tool result as text.
  */
-import type { ProgressEntryKind } from "../types.js";
-
-function sanitizeProgressText(text: string): string {
-	return text
-		.replace(/\uFFFC/g, "")
-		.replace(/\r/g, "")
-		.trim();
-}
-
 /**
  * Head + tail of an over-length message, with the middle replaced by a marker.
  *
@@ -31,23 +22,6 @@ export function clipUserInput(text: string, maxChars: number, fullTextPath?: str
 		? `; the complete message is saved at ${fullTextPath} — page through it with the read tool before drawing conclusions about the omitted part`
 		: "";
 	return `${normalized.slice(0, headChars)}\n\n[... omitted ${normalized.length - maxChars} chars${recovery} ...]\n\n${normalized.slice(-tailChars)}`;
-}
-
-export function formatProgressEntry(kind: ProgressEntryKind, text: string): string {
-	const cleaned = sanitizeProgressText(text);
-	if (!cleaned) return "";
-
-	const normalized = cleaned.replace(/\n+/g, " ").trim();
-	switch (kind) {
-		case "tool":
-			return `➜ ${normalized}`;
-		case "thinking":
-			return `✦ ${normalized}`;
-		case "error":
-			return `✕ ${normalized}`;
-		case "assistant":
-			return normalized;
-	}
 }
 
 export function extractToolResultText(result: unknown): string {

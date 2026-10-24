@@ -1,14 +1,48 @@
 /**
- * The DingTalk implementation of the delivery contract (`ChannelContext`): per-turn progress, AI-Card
- * streaming or plain messages, and final-answer delivery for one turn.
+ * The DingTalk implementation of the turn output port (`ChannelContext`): it reads a turn's
+ * structured events and renders them as AI-Card progress, plain messages and a final answer,
+ * including the "card failed, send it plainly" fallbacks.
  */
-import type { ChannelContext, ProgressStyle } from "../channel/channel-context.js";
-import { type ChannelEvent, senderOf } from "../channel/channel-event.js";
-import type { ChannelStore } from "../channel/store.js";
+import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
+import type { TurnInfo } from "../channel/transport.js";
 import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { DingTalkBotPort } from "./handler.js";
+import { describeToolCall } from "../tools/contract/presentation.js";
+import { formatProgressEntry } from "./progress.js";
+import type { FinalDelivery, ProgressStyle } from "./response-mode.js";
+
+/**
+ * What a turn's delivery needs from the DingTalk side: the card surface and the plain-message
+ * send. `DingTalkBot` implements it; the shape stays structural so this file does not import it.
+ */
+export interface DeliveryPort {
+	readonly progressStyle: ProgressStyle;
+	readonly finalDelivery: FinalDelivery;
+	sendPlain(channelId: string, text: string, opts?: { title?: string; markdown?: boolean }): Promise<boolean>;
+	getCardGeneration(channelId: string): symbol;
+	isCardGenerationCurrent(channelId: string, generation: symbol): boolean;
+	replaceCard(
+		channelId: string,
+		content: string,
+		finalize?: boolean,
+		failed?: boolean,
+		generation?: symbol,
+	): Promise<boolean>;
+	appendToCard(
+		channelId: string,
+		content: string,
+		finalize?: boolean,
+		failed?: boolean,
+		generation?: symbol,
+	): Promise<boolean>;
+	finalizeCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
+	finalizeExistingCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
+	discardCard(channelId: string, generation?: symbol): void;
+}
+
+/** Records a delivered answer in the channel's conversation log. */
+export type ArchiveBotResponse = (channelId: string, text: string) => Promise<void>;
 
 const MIN_UPDATE_INTERVAL_MS = 800;
 const ROLLING_WINDOW_SIZE = 3;
@@ -23,6 +57,8 @@ const PROGRESS_ENTRY_PREFIX = "- ";
 // has its own timeout, so the sync loop is already bounded; this only guards against
 // an unforeseen stall so run()'s finally can never hang the channel forever.
 const FLUSH_DEADLINE_MS = 60_000;
+/** How long a turn may stay silent before a "正在处理…" card appears. */
+const CARD_WARMUP_MS = 3500;
 
 type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
 
@@ -52,65 +88,186 @@ class ChannelDeliveryController {
 	private replayRequired = false;
 	private finalReplacementText = "";
 
+	/** Deliveries run one after another in the order the events arrived. */
+	private chain: Promise<void> = Promise.resolve();
+	private lastAnswer = "";
+	private finished: Promise<void> | undefined;
+	private readonly event: { channelId: string };
+
 	constructor(
-		private event: ChannelEvent,
-		private bot: DingTalkBotPort,
-		private store: ChannelStore,
-		/** Per-turn override of the channel's configured progress style; see `createDingTalkContext`. */
-		private readonly progressStyleOverride?: ProgressStyle,
+		turn: TurnInfo,
+		private bot: DeliveryPort,
+		private archive: ArchiveBotResponse,
+		/** A quiet turn (a background wake) shows no progress, whatever the channel is configured for. */
+		private readonly quiet: boolean,
 	) {
-		this.cardGeneration = bot.getCardGeneration(event.channelId);
+		this.event = { channelId: turn.channelId };
+		this.cardGeneration = bot.getCardGeneration(turn.channelId);
 	}
 
 	private get isCurrent(): boolean {
 		return this.bot.isCardGenerationCurrent(this.event.channelId, this.cardGeneration);
 	}
 
-	/** The style this turn actually delivers with: the override when present, else the channel's. */
+	/** The style this turn actually delivers with. */
 	private get progressStyle(): ProgressStyle {
-		return this.progressStyleOverride ?? this.bot.progressStyle;
+		return this.quiet ? "none" : this.bot.progressStyle;
 	}
 
 	buildContext(): ChannelContext {
 		return {
-			message: {
-				text: this.event.text,
-				rawText: this.event.text,
-				...senderOf(this.event),
-				channel: this.event.channelId,
-				ts: this.event.ts,
-				images: this.event.images,
-			},
-			// The group title when the transport supplied one; the raw id is the fallback so a
-			// synthetic event (which carries no conversation payload) still names its channel.
-			channelName: (this.event.source === "human" ? this.event.channelName : undefined) ?? this.event.channelId,
-			respond: async (text: string, shouldLog = true) => this.appendProgress(text, shouldLog),
-			respondPlain: async (text: string, shouldLog = true, title?: string) => this.sendFinal(text, shouldLog, title),
-			replaceMessage: async (text: string) => this.replaceWithFinal(text),
-			respondInThread: async (text: string) => {
-				if (this.closed || !this.isCurrent || !text.trim()) {
-					return;
+			emit: (event) => this.enqueue(() => this.deliver(event), event.type),
+			finish: (outcome) => {
+				// /stop and /new end the turn at once: the card is closed and this turn's later writes
+				// are dropped now, not after whatever delivery is still in flight has finished.
+				if (outcome.kind === "cancelled") {
+					this.bot.discardCard(this.event.channelId, this.cardGeneration);
 				}
-				const delivered = await this.bot.sendPlain(this.event.channelId, text);
-				if (!delivered) {
-					log.logWarn("delivery.notice.failed", "Light notice delivery failed", {
-						channelId: this.event.channelId,
-						fields: { text: text.substring(0, 200) },
-					});
-				}
+				this.finished ??= this.enqueueFinish(outcome);
+				return this.finished;
 			},
-			setTyping: async (_isTyping: boolean) => {},
-			setWorking: async (_working: boolean) => {},
-			deleteMessage: async () => this.silence(),
-			primeCard: (delayMs: number) => this.primeCard(delayMs),
-			flush: async () => this.flush(),
-			close: async () => this.close(),
-			progressStyle: this.progressStyle,
-			finalDelivery: this.bot.finalDelivery,
 		};
 	}
 
-	private primeCard(delayMs: number): void {
+	private enqueue(work: () => Promise<void>, context: string): void {
+		this.chain = this.chain.then(async () => {
+			try {
+				await work();
+			} catch (err) {
+				log.logWarn("delivery.api.failed", "DingTalk API call failed", {
+					reason: errorMessage(err),
+					fields: { context },
+				});
+			}
+		});
+	}
+
+	private async enqueueFinish(outcome: TurnOutcome): Promise<void> {
+		this.enqueue(() => this.conclude(outcome), "finish");
+		await this.chain;
+	}
+
+	/** Render one event; what the old pipeline did in its `respond*` calls, now chosen here. */
+	private async deliver(event: TurnEvent): Promise<void> {
+		switch (event.type) {
+			case "tool.start":
+				await this.appendProgress(
+					formatProgressEntry("tool", describeToolCall(event.tool, event.args)),
+					false,
+					true,
+				);
+				return;
+			case "tool.update":
+				await this.appendProgress(formatProgressEntry("tool", event.text), false);
+				return;
+			case "tool.end":
+				if (event.failure) await this.appendProgress(formatProgressEntry("error", event.failure), false);
+				return;
+			case "reasoning":
+				await this.appendProgress(formatProgressEntry("thinking", event.text), false);
+				return;
+			case "commentary":
+				await this.deliverCommentary(event.text, event.level);
+				return;
+			case "answer":
+				await this.deliverAnswer(event.text);
+				return;
+			case "compaction":
+				if (event.phase === "start") {
+					await this.appendProgress(formatProgressEntry("assistant", "正在压缩上下文…"), false);
+				}
+				return;
+			case "steer.applied":
+				return;
+		}
+	}
+
+	private async deliverCommentary(text: string, level: "error" | "warning" | "notice" | undefined): Promise<void> {
+		switch (level) {
+			case undefined:
+				await this.appendProgress(formatProgressEntry("assistant", text), false);
+				return;
+			case "error":
+				await this.appendProgress(formatProgressEntry("error", text), false);
+				return;
+			case "warning":
+				if (this.progressStyle !== "none") {
+					await this.appendProgress(formatProgressEntry("error", text), false);
+				} else {
+					await this.notice(`⚠️ ${text}`);
+				}
+				return;
+			case "notice":
+				await this.notice(text);
+				return;
+		}
+	}
+
+	private async deliverAnswer(text: string): Promise<void> {
+		this.lastAnswer = text;
+		if (this.bot.finalDelivery === "card") {
+			await this.replaceWithFinal(text);
+		} else {
+			await this.sendFinal(text, true);
+		}
+	}
+
+	/** A standalone side message: not part of the progress, sent even when progress is off. */
+	private async notice(text: string): Promise<void> {
+		if (this.closed || !this.isCurrent || !text.trim()) {
+			return;
+		}
+		const delivered = await this.bot.sendPlain(this.event.channelId, text);
+		if (!delivered) {
+			log.logWarn("delivery.notice.failed", "Light notice delivery failed", {
+				channelId: this.event.channelId,
+				fields: { text: text.substring(0, 200) },
+			});
+		}
+	}
+
+	/**
+	 * The turn's end: whatever it settled on is made visible (or cleaned up), then the card is
+	 * closed. An answer that never reached the user gets one more try as a card.
+	 */
+	private async conclude(outcome: TurnOutcome): Promise<void> {
+		try {
+			switch (outcome.kind) {
+				case "failed":
+					try {
+						await this.replaceWithFinal(outcome.message ?? "");
+					} catch (err) {
+						log.logWarn("delivery.error_reply.failed", "Error reply failed", {
+							channelId: this.event.channelId,
+							reason: errorMessage(err),
+						});
+					}
+					break;
+				case "silent":
+					await this.silence();
+					break;
+				case "cancelled":
+					break;
+				case "completed":
+					if (this.lastAnswer && !this.finalResponseDelivered) {
+						try {
+							await this.replaceWithFinal(this.lastAnswer);
+						} catch (err) {
+							log.logWarn("delivery.final_reply.failed", "Final reply replacement failed", {
+								channelId: this.event.channelId,
+								reason: errorMessage(err),
+							});
+						}
+					}
+					break;
+			}
+			await this.flush();
+		} finally {
+			await this.close();
+		}
+	}
+
+	primeCard(delayMs: number): void {
 		if (
 			this.closed ||
 			this.ending ||
@@ -144,7 +301,7 @@ class ChannelDeliveryController {
 	}
 
 	private archiveBotResponse(text: string): void {
-		void this.store.logBotResponse(this.event.channelId, text, Date.now().toString()).catch((err) => {
+		void this.archive(this.event.channelId, text).catch((err) => {
 			log.logWarn("channel.archive.write_failed", "Bot response archive failed", {
 				channelId: this.event.channelId,
 				reason: errorMessage(err),
@@ -152,7 +309,7 @@ class ChannelDeliveryController {
 		});
 	}
 
-	private async appendProgress(text: string, shouldLog: boolean): Promise<void> {
+	private async appendProgress(text: string, shouldLog: boolean, isToolCall = false): Promise<void> {
 		if (this.closed || this.ending || !this.isCurrent || !text.trim()) return;
 		// Final-card-only mode shows no progress; ignore any stray progress writes
 		// so we never create or flicker a card before the final replacement.
@@ -162,7 +319,7 @@ class ChannelDeliveryController {
 		if (this.progressStartedAt === 0) {
 			this.progressStartedAt = Date.now();
 		}
-		if (text.startsWith("➜ ")) {
+		if (isToolCall) {
 			this.toolCallCount++;
 		}
 		if (this.progressSegments.length > 0) {
@@ -511,19 +668,18 @@ class ChannelDeliveryController {
 }
 
 /**
- * Build the delivery contract for one turn.
- *
- * `progressStyleOverride` lets the caller quiet a turn the user did not ask for. Background wakes
- * (task driver, finished jobs, scheduled events) pass `"none"`: without it every autonomous step
- * created an AI card in the human's conversation even when the check-in ended `[SILENT]`. The
- * final answer is unaffected; it is delivered by `respondPlain`/`replaceMessage` either way, so a
- * background turn that has something to say still says it.
+ * The output port for one turn. A `quiet` turn (a background wake) draws no progress; its answer is
+ * delivered the same way, so a wake that has something to say still says it.
  */
 export function createDingTalkContext(
-	event: ChannelEvent,
-	bot: DingTalkBotPort,
-	store: ChannelStore,
-	progressStyleOverride?: ProgressStyle,
+	turn: TurnInfo,
+	port: DeliveryPort,
+	archive: ArchiveBotResponse,
+	quiet: boolean,
 ): ChannelContext {
-	return new ChannelDeliveryController(event, bot, store, progressStyleOverride).buildContext();
+	const controller = new ChannelDeliveryController(turn, port, archive, quiet);
+	const context = controller.buildContext();
+	// Same warm-up as before: a card that says "正在处理…" appears if the first output is slow.
+	if (!quiet) controller.primeCard(CARD_WARMUP_MS);
+	return context;
 }

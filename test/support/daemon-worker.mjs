@@ -2,6 +2,7 @@
 // Only DingTalk delivery/socket I/O is replaced; bootstrap, queues, runs and storage are real.
 import { join } from "node:path";
 import { DingTalkBot } from "../../dist/dingtalk/bot.js";
+import { DingTalkTransport } from "../../dist/dingtalk/transport.js";
 import { createRuntimeContext } from "../../dist/runtime/bootstrap.js";
 
 const homeDir = process.argv[2];
@@ -40,30 +41,33 @@ class CapturedBot extends DingTalkBot {
 const runtime = await createRuntimeContext({
 	paths,
 	dingtalkConfig: config,
+	transports: [
+		new DingTalkTransport({
+			config,
+			archiveBotResponse: (channelId, text) => runtime.store.logBotResponse(channelId, text, String(Date.now())),
+			createBot: (ingress) => new CapturedBot(ingress, config),
+		}),
+	],
 	registerSignalHandlers: false,
 	startServices: false,
-	createBot: (handler) => new CapturedBot(handler, config),
 	createEventsWatcher: () => ({ start() {}, stop() {} }),
 });
 process.on("message", async ({ action, text, channelId, runId, desk = "e2e" }) => {
 	try {
 		let value;
 		if (action === "send") {
-			await runtime.bot.routeInboundEvent({
-				type: "dm",
+			await runtime.ingress.routeEvent({
+				source: "human",
 				channelId,
 				text,
 				ts: String(Date.now()),
 				user: "e2e",
 				userName: "E2E",
-				conversationId: "conv_e2e",
-				conversationType: "1",
 			});
 		} else if (action === "turn") {
-			await runtime.handler.handleEvent({
-				type: "dm", channelId, text, ts: String(Date.now()), user: "e2e", userName: "E2E",
-				conversationId: "conv_e2e", conversationType: "1",
-			}, runtime.bot);
+			await runtime.ingress.handleEvent({
+				source: "human", channelId, text, ts: String(Date.now()), user: "e2e", userName: "E2E",
+			});
 		} else if (action === "maintenance") {
 			await runtime.memoryMaintenance.runOnce();
 		} else if (action === "record") {

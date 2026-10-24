@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session/session-events.js";
+import { TurnOutput } from "../src/agent/turn/turn-output.js";
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
-import type { ChannelContext } from "../src/channel/channel-context.js";
+import type { TurnEvent } from "../src/channel/channel-context.js";
 import type { UsageLedger, UsageLedgerEntry } from "../src/usage/ledger.js";
 
 function createQueue(): RunQueue {
@@ -31,33 +32,15 @@ function createLedger(records: Array<Omit<UsageLedgerEntry, "ts">> = []): UsageL
 	};
 }
 
-function createContext(respond = vi.fn(async () => {})): ChannelContext {
-	return {
-		message: {
-			text: "",
-			rawText: "",
-			user: "tester",
-			userName: "Tester",
-			channel: "dingtalk:dm:tester",
-			ts: "1000",
-		},
-		respond,
-		respondPlain: vi.fn(async () => true),
-		replaceMessage: vi.fn(async () => {}),
-		respondInThread: vi.fn(async () => {}),
-		setTyping: vi.fn(async () => {}),
-		setWorking: vi.fn(async () => {}),
-		deleteMessage: vi.fn(async () => {}),
-		primeCard: vi.fn(),
-		flush: vi.fn(async () => {}),
-		close: vi.fn(async () => {}),
-		progressStyle: "full",
-		finalDelivery: "plain",
-	};
+/** A turn output that records what the handler emits. */
+function createOutput(): { ctx: TurnOutput; events: TurnEvent[] } {
+	const events: TurnEvent[] = [];
+	const ctx = new TurnOutput({ emit: (event) => events.push(event), finish: async () => {} }, "dingtalk:dm:tester");
+	return { ctx, events };
 }
 
 function handlerContext(
-	ctx: ChannelContext,
+	ctx: TurnOutput,
 	runState: RunState,
 	overrides: Partial<SessionEventHandlerContext> = {},
 ): SessionEventHandlerContext {
@@ -77,10 +60,118 @@ function handlerContext(
 	};
 }
 
+const assistant = (content: unknown[], stopReason = "endTurn") => ({
+	role: "assistant",
+	stopReason,
+	content,
+});
+
+describe("turn events from session events", () => {
+	it("turns a tool round trip into start and end events and its narrative into reasoning and commentary", async () => {
+		const { ctx, events } = createOutput();
+		const context = handlerContext(ctx, createEmptyRunState());
+
+		await handleSessionEvent(
+			{
+				type: "message_end",
+				message: assistant(
+					[
+						{ type: "thinking", thinking: "plan it" },
+						{ type: "text", text: "Let me check." },
+						{ type: "toolCall", id: "t1", name: "bash", arguments: {} },
+					],
+					"toolUse",
+				),
+			},
+			context,
+		);
+		await handleSessionEvent(
+			{ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls" } },
+			context,
+		);
+		await handleSessionEvent(
+			{
+				type: "tool_execution_end",
+				toolCallId: "t1",
+				toolName: "bash",
+				isError: false,
+				result: { content: [{ type: "text", text: "a.txt" }], details: { kind: "bash" } },
+			},
+			context,
+		);
+
+		expect(events).toEqual([
+			{ type: "reasoning", text: "plan it" },
+			{ type: "commentary", text: "Let me check." },
+			{ type: "tool.start", callId: "t1", tool: "bash", args: { command: "ls" } },
+			{ type: "tool.end", callId: "t1", ok: true, output: "a.txt" },
+		]);
+	});
+
+	it("emits an answer only for a non-empty, non-[SILENT] reply, and records how the turn is ending", async () => {
+		const turnEnd = (text: string) => ({
+			type: "turn_end",
+			message: assistant([{ type: "text", text }]),
+			toolResults: [],
+		});
+		const cases: Array<{ text: string; answered: boolean; outcome: RunState["finalOutcome"]["kind"] }> = [
+			{ text: "Done.", answered: true, outcome: "final" },
+			{ text: "[SILENT]", answered: false, outcome: "silent" },
+			// A reply with nothing in it ends the turn quietly instead of leaving a card waiting.
+			{ text: "   ", answered: false, outcome: "silent" },
+		];
+		for (const { text, answered, outcome } of cases) {
+			const { ctx, events } = createOutput();
+			const runState = createEmptyRunState();
+			await handleSessionEvent(turnEnd(text), handlerContext(ctx, runState));
+			expect(
+				events.filter((event) => event.type === "answer"),
+				text,
+			).toHaveLength(answered ? 1 : 0);
+			expect(runState.answerEmitted).toBe(answered);
+			expect(runState.finalOutcome.kind).toBe(outcome);
+		}
+	});
+
+	it("marks a message injected after the turn's own prompt as applied steering, and lets the answer after it through", async () => {
+		const { ctx, events } = createOutput();
+		const context = handlerContext(ctx, createEmptyRunState());
+		const user = (text: string) => ({ type: "message_start", message: { role: "user", content: text } });
+		const final = (text: string) => ({
+			type: "turn_end",
+			message: assistant([{ type: "text", text }]),
+			toolResults: [],
+		});
+
+		await handleSessionEvent(user("the prompt"), context);
+		await handleSessionEvent(final("first answer"), context);
+		await handleSessionEvent(user("a steering message"), context);
+		await handleSessionEvent(final("answer after steering"), context);
+
+		expect(events).toEqual([
+			{ type: "answer", text: "first answer" },
+			{ type: "steer.applied" },
+			{ type: "answer", text: "answer after steering" },
+		]);
+	});
+
+	it("does not emit a turn's own error as an answer", async () => {
+		const { ctx, events } = createOutput();
+		await handleSessionEvent(
+			{
+				type: "turn_end",
+				message: assistant([{ type: "text", text: "partial" }], "error"),
+				toolResults: [],
+			},
+			handlerContext(ctx, createEmptyRunState()),
+		);
+		expect(events).toEqual([]);
+	});
+});
+
 describe("session compaction events", () => {
-	it("surfaces compaction failure diagnostics to DingTalk and run state", async () => {
-		const respond = vi.fn(async () => {});
-		const ctx = createContext(respond);
+	it("surfaces compaction failure as an error line and in run state, without the raw provider text", async () => {
+		const { ctx, events } = createOutput();
 		const runState = createEmptyRunState();
 
 		await handleSessionEvent(
@@ -93,14 +184,15 @@ describe("session compaction events", () => {
 		);
 
 		expect(runState.lastCompactionError).toBe("Context overflow recovery failed: summarization failed");
-		// The card gets a classified error line; the raw provider text stays in run state and the log.
-		expect(respond).toHaveBeenCalledTimes(1);
-		expect(respond).toHaveBeenCalledWith(expect.stringMatching(/^✕ /), false);
-		expect(String((respond.mock.calls[0] as unknown[])[0])).not.toContain("summarization failed");
+		const lines = events.filter((event) => event.type === "commentary");
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatchObject({ level: "error" });
+		// The classified user line; the raw provider text stays in run state and the log.
+		expect(JSON.stringify(lines[0])).not.toContain("summarization failed");
 	});
 
 	it("clears stale compaction diagnostics after a successful compaction", async () => {
-		const ctx = createContext();
+		const { ctx } = createOutput();
 		const runState = createEmptyRunState();
 		runState.lastCompactionError = "previous failure";
 
@@ -115,35 +207,6 @@ describe("session compaction events", () => {
 
 		expect(runState.lastCompactionError).toBeUndefined();
 	});
-
-	it("hides compaction progress and intermediate assistant text in final_card_only mode", async () => {
-		const respond = vi.fn(async () => {});
-		const ctx = createContext(respond);
-		ctx.progressStyle = "none";
-		ctx.finalDelivery = "card";
-		const runState = createEmptyRunState();
-
-		await handleSessionEvent({ type: "compaction_start", reason: "threshold" }, handlerContext(ctx, runState));
-
-		expect(respond).not.toHaveBeenCalled();
-
-		await handleSessionEvent(
-			{
-				type: "message_end",
-				message: {
-					role: "assistant",
-					stopReason: "toolUse",
-					content: [
-						{ type: "text", text: "Let me check that for you." },
-						{ type: "toolCall", id: "t1", name: "bash", arguments: {} },
-					],
-				},
-			},
-			handlerContext(ctx, runState),
-		);
-
-		expect(respond).not.toHaveBeenCalled();
-	});
 });
 
 describe("usage accounting", () => {
@@ -157,7 +220,7 @@ describe("usage accounting", () => {
 	};
 
 	it("adds assistant usage to both totalUsage (console) and assistantUsage (ledger)", async () => {
-		const ctx = createContext();
+		const { ctx } = createOutput();
 		const runState = createEmptyRunState();
 
 		await handleSessionEvent(
@@ -191,7 +254,7 @@ describe("usage accounting", () => {
 					usage: unknownUsage,
 				},
 			},
-			handlerContext(createContext(), unknownState, { isModelCostKnown: () => false }),
+			handlerContext(createOutput().ctx, unknownState, { isModelCostKnown: () => false }),
 		);
 		expect(unknownState.usageSources).toBe(1);
 		expect(unknownState.costKnown).toBe(false);
@@ -209,13 +272,13 @@ describe("usage accounting", () => {
 					usage: unknownUsage,
 				},
 			},
-			handlerContext(createContext(), knownState, { isModelCostKnown: () => true }),
+			handlerContext(createOutput().ctx, knownState, { isModelCostKnown: () => true }),
 		);
 		expect(knownState.costKnown).toBe(true);
 	});
 
 	it("folds sub-agent usage into the turn tally without double counting, and no longer writes the ledger itself (spec 040 D7)", async () => {
-		const ctx = createContext();
+		const { ctx } = createOutput();
 		const runState = createEmptyRunState();
 		const records: Array<Omit<UsageLedgerEntry, "ts">> = [];
 		const context = handlerContext(ctx, runState, { ledger: createLedger(records) });

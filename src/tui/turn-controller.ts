@@ -11,6 +11,7 @@ import { forceEndStuckTurnAfterStop } from "../agent/stop-watchdog.js";
 import type { AgentRunner } from "../agent/types.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
 import type { ChannelStore } from "../channel/store.js";
+import type { TurnInfo } from "../channel/transport.js";
 import {
 	formatBusyHint,
 	formatFollowupQueued,
@@ -24,10 +25,11 @@ import {
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { createEmptyUsageTotals } from "../usage/totals.js";
 import { bold, dim } from "./colors.js";
 import { type DispatchDeps, dispatch } from "./commands.js";
 import type { Frontend } from "./frontend.js";
-import { createTerminalContext, type DeliveryTraits, type TurnInput } from "./terminal-context.js";
+import { createTerminalContext, type DeliveryTraits } from "./terminal-context.js";
 
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
 // Cap the exit-time memory flush so a slow/stuck LLM consolidation can't trap
@@ -214,11 +216,12 @@ export class TurnController {
 			if (this.deps.runner !== runner) return;
 			const ctx = createTerminalContext(input, this.deps.frontend, this.deps.store, this.deps.traits);
 			try {
-				await runner.run(ctx, this.deps.store);
+				await runner.run(input, ctx, this.deps.store);
 			} catch (err) {
 				this.deps.frontend.showNotice(`处理失败：${errorMessage(err)}`);
 			} finally {
-				await ctx.close();
+				// The runner finishes the output itself; this settles a turn that failed before it could.
+				await ctx.finish({ kind: "completed", usage: createEmptyUsageTotals() });
 				runner.endTurn();
 				if (this.deps.runner === runner) {
 					this.deps.frontend.setBusy(false);
@@ -250,17 +253,17 @@ export class TurnController {
 		if (next !== undefined) this.beginTurn(next);
 	}
 
-	private makeTurnInput(text: string): TurnInput {
+	private makeTurnInput(text: string): TurnInfo {
 		return {
 			text,
 			user: "tui",
 			userName: this.deps.userName,
-			channel: this.deps.channelId,
+			channelId: this.deps.channelId,
 			ts: Date.now().toString(),
 		};
 	}
 
-	private async archiveIncoming(input: TurnInput): Promise<void> {
+	private async archiveIncoming(input: TurnInfo): Promise<void> {
 		try {
 			await this.deps.store.logMessage(this.deps.channelId, {
 				date: formatLocalTime(),

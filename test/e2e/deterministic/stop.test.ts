@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChannelRunner } from "../../../src/agent/channel-runner.js";
-import type { DingTalkBot } from "../../../src/dingtalk/bot.js";
 import * as apiKeys from "../../../src/models/api-keys.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
@@ -90,9 +89,14 @@ describe("E2E deterministic: /stop", () => {
 			recovered = resolve;
 		});
 		const run = ChannelRunner.prototype.run;
-		vi.spyOn(ChannelRunner.prototype, "run").mockImplementation(async function (this: ChannelRunner, ctx, store) {
-			const result = await run.call(this, ctx, store);
-			if (ctx.message.text === "WEDGE_RETURN") {
+		vi.spyOn(ChannelRunner.prototype, "run").mockImplementation(async function (
+			this: ChannelRunner,
+			info,
+			ctx,
+			store,
+		) {
+			const result = await run.call(this, info, ctx, store);
+			if (info.text === "WEDGE_RETURN") {
 				atEpilogue();
 				await epilogueGate;
 			}
@@ -104,9 +108,9 @@ describe("E2E deterministic: /stop", () => {
 			recovered();
 		});
 		let oldTurn: Promise<void> = Promise.resolve();
-		const handle = harness.runtime.handler.handleEvent.bind(harness.runtime.handler);
-		vi.spyOn(harness.runtime.handler, "handleEvent").mockImplementation((event, bot) => {
-			const pending = handle(event, bot);
+		const handle = harness.runtime.ingress.handleEvent.bind(harness.runtime.ingress);
+		vi.spyOn(harness.runtime.ingress, "handleEvent").mockImplementation((event) => {
+			const pending = handle(event);
 			if (event.text === "WEDGE_RETURN") oldTurn = pending;
 			return pending;
 		});
@@ -118,14 +122,13 @@ describe("E2E deterministic: /stop", () => {
 			await epilogue;
 			await harness.sendUserMessageNoWait("/stop");
 			await recovery;
-			const bot = (harness.runtime as typeof harness.runtime & { bot: DingTalkBot }).bot;
-			expect(bot.allChannelQueuesIdle()).toBe(true);
+			expect(harness.runtime.ingress.isIdle()).toBe(true);
 			await harness.sendUserMessageNoWait("AFTER_RECOVERY");
 			const nextRequest = await nextGate.arrived;
 			expect(JSON.stringify(nextRequest.messages)).toContain("WEDGE_RETURN");
 			releaseEpilogue();
 			await oldTurn;
-			expect(harness.runtime.handler.isRunning(harness.channelId)).toBe(true);
+			expect(harness.runtime.ingress.isRunning(harness.channelId)).toBe(true);
 		} finally {
 			releaseEpilogue();
 			nextGate.release();

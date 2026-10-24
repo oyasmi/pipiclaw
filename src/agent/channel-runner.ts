@@ -7,9 +7,10 @@ import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-age
 import { mkdir } from "fs/promises";
 import { join } from "path";
 import { resolveActiveSessionFile } from "../channel/active-session-store.js";
-import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
+import type { ChannelContext } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
+import type { SendMedia, TurnInfo } from "../channel/transport.js";
 import { isKnownCommandName, type RunnerBuiltInCommand, slashCommandName } from "../commands/catalog.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
 import type { DeskConversation } from "../desk/types.js";
@@ -44,6 +45,7 @@ import { SessionHost } from "./session/session-host.js";
 import { reportSettingsDiagnostics } from "./session/settings-diagnostics.js";
 import { createRunQueue } from "./turn/run-queue.js";
 import { TurnFinisher } from "./turn/turn-finish.js";
+import { TurnOutput } from "./turn/turn-output.js";
 import { createTurnProgress, TurnPipeline } from "./turn/turn-pipeline.js";
 import { assembleTurnPrompt } from "./turn/turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn/turn-recovery.js";
@@ -71,7 +73,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
-	private readonly mediaSender?: MediaSender;
+	private readonly sendMedia?: SendMedia;
 	private readonly workspaceDir: string;
 	/** Re-read per use, not captured once: an edited security.json takes effect without a restart. */
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
@@ -104,7 +106,7 @@ export class ChannelRunner implements AgentRunner {
 		this.authConfigPath = paths.authConfigPath;
 		this.modelsConfigPath = paths.modelsConfigPath;
 		this.onSessionEvent = paths.onSessionEvent;
-		this.mediaSender = paths.mediaSender;
+		this.sendMedia = paths.sendMedia;
 
 		this.executor = deps.executor;
 		this.jobManager = paths.jobManager;
@@ -190,7 +192,7 @@ export class ChannelRunner implements AgentRunner {
 			authConfigPath: this.authConfigPath,
 			modelsConfigPath: this.modelsConfigPath,
 			onSessionEvent: this.onSessionEvent,
-			mediaSender: this.mediaSender,
+			sendMedia: this.sendMedia,
 			// The working directory: the desk directory unless `desk.json` sets `cwd` (spec 058, D9).
 			cwd: conversation.cwd,
 			describeConversation: paths.describeConversation,
@@ -267,6 +269,9 @@ export class ChannelRunner implements AgentRunner {
 	requestStop(): void {
 		this.host.compaction.cancel("stop");
 		this.turnState.requestStop();
+		// The user stopped this turn: the channel hears it at once, and whatever the aborted
+		// provider still emits is dropped (the abort itself may take a moment to unwind).
+		this.cancelOutput();
 	}
 
 	getTurnStatus(): TurnStatus {
@@ -274,7 +279,8 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async run(
-		ctx: ChannelContext,
+		info: TurnInfo,
+		channel: ChannelContext,
 		store: ChannelStore,
 	): Promise<{
 		stopReason: string;
@@ -285,12 +291,13 @@ export class ChannelRunner implements AgentRunner {
 		silent: boolean;
 	}> {
 		const startedAt = Date.now();
-		this.resetRunState(ctx, store);
+		const ctx = new TurnOutput(channel, this.channelId);
+		this.resetRunState(info, ctx, store);
 		// Direct callers (tests) may skip the transport's beginTurn/endTurn wrapper;
 		// then run() owns the whole turn itself.
 		const implicitTurn = !this.turnState.isBusy();
 		if (implicitTurn) {
-			this.beginTurn(ctx.message.text);
+			this.beginTurn(info.text);
 		}
 		// Every later phase write goes through this reference: once `forceEndTurn`
 		// has released this turn, the machine's current turn may already belong to the next one.
@@ -306,7 +313,7 @@ export class ChannelRunner implements AgentRunner {
 			this.host.assertContextHealthy();
 			await this.models.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
-			const input = await this.pipeline.prepareUserInput(ctx);
+			const input = await this.pipeline.prepareUserInput(info, ctx);
 
 			// Ensure the conversation directory (and with it the desk directory) exists.
 			await mkdir(this.conversationDir, { recursive: true });
@@ -327,7 +334,7 @@ export class ChannelRunner implements AgentRunner {
 			// (spec 049 D7) — a model's image support is looked up here explicitly because the
 			// SDK's own handling of an unsupported model is to silently replace each image block
 			// with a text placeholder.
-			turn.images = await this.pipeline.prepareTurnImages(ctx);
+			turn.images = await this.pipeline.prepareTurnImages(info, ctx);
 
 			// Estimated against the fully assembled prompt (recall + task digest + bootstrap all
 			// included above), not just the bare user message — those pieces can add thousands of
@@ -340,7 +347,7 @@ export class ChannelRunner implements AgentRunner {
 
 			turn.fallbackAttempted = await runPromptWithFallback(
 				turn.promptText,
-				this.pipeline.buildFallbackDeps(ctx, runQueue, turn, ownTurn),
+				this.pipeline.buildFallbackDeps(info, ctx, turn, ownTurn),
 			);
 		} catch (err) {
 			this.runState.stopReason = "error";
@@ -374,15 +381,14 @@ export class ChannelRunner implements AgentRunner {
 		};
 	}
 
-	async handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void> {
-		await handleBuiltinCommand(
+	async handleBuiltinCommand(command: RunnerBuiltInCommand): Promise<string> {
+		return handleBuiltinCommand(
 			{
 				channelId: this.channelId,
 				ensureSessionReady: () => this.host.ensureSessionReady(),
 				promptTemplates: () => this.session.promptTemplates,
 				renderContextReport: (args) => this.renderContextReport(args),
 			},
-			ctx,
 			command,
 		);
 	}
@@ -492,9 +498,8 @@ export class ChannelRunner implements AgentRunner {
 		if (this.retired) return;
 		this.retired = true;
 		this.requestStop();
-		// close() marks the delivery context closed synchronously before awaiting its drain,
-		// so late events from the old provider cannot overwrite the new session's response.
-		void this.runState.ctx?.close().catch(() => undefined);
+		// requestStop() above ended the turn's output synchronously, so late events from the old
+		// provider cannot overwrite the new session's response.
 		this.forceEndTurn("runner generation retired");
 
 		this.host.retireLiveSession();
@@ -574,13 +579,18 @@ export class ChannelRunner implements AgentRunner {
 		}
 	}
 
-	private resetRunState(ctx: ChannelContext, store: ChannelStore): void {
+	private cancelOutput(): void {
+		const output = this.runState.ctx;
+		if (!output || output.isFinished) return;
+		void output.cancel({ usage: { ...this.runState.totalUsage, cost: { ...this.runState.totalUsage.cost } } });
+	}
+
+	private resetRunState(info: TurnInfo, ctx: TurnOutput, store: ChannelStore): void {
 		this.runState = createEmptyRunState();
 		this.runState.ctx = ctx;
 		this.runState.logCtx = {
-			channelId: ctx.message.channel,
-			userName: ctx.message.userName,
-			channelName: ctx.channelName,
+			channelId: info.channelId,
+			userName: info.userName,
 		};
 		this.runState.store = store;
 	}

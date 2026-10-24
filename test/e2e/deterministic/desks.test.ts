@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBindingsPath, getDeskDir } from "../../../src/desk/paths.js";
-import type { DingTalkBot } from "../../../src/dingtalk/bot.js";
 import type { InboundMessages } from "../../../src/dingtalk/inbound.js";
 import { type DurableDispatchRecord, DurableDispatchService } from "../../../src/runtime/durable-dispatch.js";
 import { createTaskDocument } from "../../../src/tasks/create.js";
@@ -37,7 +36,7 @@ describe("E2E deterministic: desks and bindings", () => {
 		await harness.sendWake("orphan wake", { channelId: "dingtalk:dm:orphan", desk: "default" });
 		expect(harness.runtime.desks.boundDesk("dingtalk:dm:orphan")).toBeUndefined();
 		expect(harness.modelRequestCount()).toBe(0);
-		const inbound = (harness.runtime as typeof harness.runtime & { bot: DingTalkBot }).bot as unknown as {
+		const inbound = harness.bot as unknown as {
 			inbound: InboundMessages;
 		};
 

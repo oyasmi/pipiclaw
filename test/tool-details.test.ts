@@ -1,9 +1,10 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session/session-events.js";
+import { TurnOutput } from "../src/agent/turn/turn-output.js";
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
-import type { ChannelContext } from "../src/channel/channel-context.js";
+import type { TurnEvent } from "../src/channel/channel-context.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
@@ -103,25 +104,19 @@ function createQueue(): RunQueue {
 	};
 }
 
-function createContext(respond: ReturnType<typeof vi.fn>): ChannelContext {
-	return {
-		message: { text: "", rawText: "", user: "u", userName: "U", channel: "dingtalk:dm:1", ts: "1" },
-		respond,
-		respondPlain: vi.fn(async () => true),
-		replaceMessage: vi.fn(async () => {}),
-		respondInThread: vi.fn(async () => {}),
-		setTyping: vi.fn(async () => {}),
-		setWorking: vi.fn(async () => {}),
-		deleteMessage: vi.fn(async () => {}),
-		primeCard: vi.fn(),
-		flush: vi.fn(async () => {}),
-		close: vi.fn(async () => {}),
-		progressStyle: "full",
-		finalDelivery: "plain",
-	} as unknown as ChannelContext;
+/** A turn output that records the events the handler emits. */
+function createOutput(): { ctx: TurnOutput; events: TurnEvent[] } {
+	const events: TurnEvent[] = [];
+	const ctx = new TurnOutput({ emit: (event) => events.push(event), finish: async () => {} }, "dingtalk:dm:1");
+	return { ctx, events };
 }
 
-function handlerContext(ctx: ChannelContext, runState: RunState): SessionEventHandlerContext {
+/** The failure line the user would see for each finished tool call. */
+function failureLines(events: TurnEvent[]): Array<string | undefined> {
+	return events.flatMap((event) => (event.type === "tool.end" ? [event.failure] : []));
+}
+
+function handlerContext(ctx: TurnOutput, runState: RunState): SessionEventHandlerContext {
 	return {
 		ctx,
 		logCtx: { channelId: "dingtalk:dm:1", userName: "U" },
@@ -134,7 +129,7 @@ function handlerContext(ctx: ChannelContext, runState: RunState): SessionEventHa
 	};
 }
 
-async function endEvent(ctx: ChannelContext, result: unknown, isError: boolean) {
+async function endEvent(ctx: TurnOutput, result: unknown, isError: boolean) {
 	await handleSessionEvent(
 		{ type: "tool_execution_end", toolCallId: "c1", toolName: "task_update", result, isError },
 		handlerContext(ctx, createEmptyRunState()),
@@ -143,8 +138,7 @@ async function endEvent(ctx: ChannelContext, result: unknown, isError: boolean) 
 
 describe("rejections stay out of the user's chat", () => {
 	it("shows no error bubble for a rejection the model can fix itself", async () => {
-		const respond = vi.fn(async (_text: string, _final?: boolean) => {});
-		const ctx = createContext(respond);
+		const { ctx, events } = createOutput();
 
 		await endEvent(
 			ctx,
@@ -155,27 +149,26 @@ describe("rejections stay out of the user's chat", () => {
 			false,
 		);
 
-		expect(respond).not.toHaveBeenCalled();
+		expect(failureLines(events)).toEqual([undefined]);
 	});
 
 	it("still shows an error bubble for a real tool failure or a user-only scope decision", async () => {
-		const respond = vi.fn(async (_text: string, _final?: boolean) => {});
-		const failureCtx = createContext(respond);
+		const failure = createOutput();
 
 		await endEvent(
-			failureCtx,
+			failure.ctx,
 			{ content: [{ type: "text", text: "Command blocked [network]" }], details: { kind: "bash" } },
 			true,
 		);
 
-		expect(respond).toHaveBeenCalledTimes(1);
-		expect(String(respond.mock.calls[0][0])).toContain("Command blocked");
+		expect(failureLines(failure.events)).toHaveLength(1);
+		expect(failureLines(failure.events)[0]).toContain("Command blocked");
 
 		// A user-only scope decision is thrown as a plain Error, so it arrives with isError and
 		// must remain visible instead of being treated as model-fixable tool validation.
-		const scopeCtx = createContext(vi.fn(async (_text: string, _final?: boolean) => {}));
+		const scope = createOutput();
 		await endEvent(
-			scopeCtx,
+			scope.ctx,
 			{
 				content: [{ type: "text", text: 'Task "x" requires a user decision outside its current scope' }],
 				details: { kind: "task_update" },
@@ -183,10 +176,8 @@ describe("rejections stay out of the user's chat", () => {
 			true,
 		);
 
-		expect(scopeCtx.respond).toHaveBeenCalledTimes(1);
-		expect(String((scopeCtx.respond as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain(
-			"user decision outside its current scope",
-		);
+		expect(failureLines(scope.events)).toHaveLength(1);
+		expect(failureLines(scope.events)[0]).toContain("user decision outside its current scope");
 	});
 });
 
@@ -206,7 +197,7 @@ describe("registry wiring", () => {
 		// Still thrown (so the SDK marks the result isError), with the model-facing text unchanged.
 		expect(error?.message).toMatch(/^Path blocked \[[a-z-]+\]\nReason: /);
 
-		const respond = vi.fn(async (_text: string, _final?: boolean) => {});
+		const { ctx, events } = createOutput();
 		await handleSessionEvent(
 			{
 				type: "tool_execution_end",
@@ -216,10 +207,10 @@ describe("registry wiring", () => {
 				result: { content: [{ type: "text", text: error?.message }], details: {} },
 				isError: true,
 			},
-			handlerContext(createContext(respond), createEmptyRunState()),
+			handlerContext(ctx, createEmptyRunState()),
 		);
-		expect(respond).toHaveBeenCalledTimes(1);
-		const line = String(respond.mock.calls[0][0]);
+		expect(failureLines(events)).toHaveLength(1);
+		const line = String(failureLines(events)[0]);
 		expect(line).toContain("/etc/pipiclaw-probe");
 		expect(line).not.toMatch(/blocked|Resolved path|Reason:/);
 		expect(line.split("\n")).toHaveLength(1);

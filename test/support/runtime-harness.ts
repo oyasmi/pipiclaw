@@ -5,10 +5,9 @@ import type { HumanEvent, WakeEvent } from "../../src/channel/channel-event.js";
 import { loadBindings, writeBindings } from "../../src/desk/bindings.js";
 import { allocateConversation, createDeskRecord } from "../../src/desk/registry.js";
 import type { DeskConversation } from "../../src/desk/types.js";
-import type { DingTalkBot } from "../../src/dingtalk/bot.js";
+import { DingTalkTransport } from "../../src/dingtalk/transport.js";
 import { waitFor } from "../e2e/helpers/wait.js";
-import { type CapturedDelivery, E2EFakeDingTalkBot } from "./fake-bot.js";
-import { HarnessDingTalkBot } from "./harness-bot.js";
+import { type CapturedDelivery, HarnessDingTalkBot } from "./harness-bot.js";
 import type { CapturedRequest } from "./mock-provider/script.js";
 import { startMockProvider } from "./mock-provider/server.js";
 import { cleanupE2ETestHome, createDeterministicHome, createE2ETestHome, type E2ETestHome } from "./setup.js";
@@ -70,8 +69,15 @@ export async function createRuntimeHarness(options?: {
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
 	const channelId = options?.channelId ?? "dingtalk:dm:e2e_user";
 	const { conversationDir, deskDir } = await bindChannelOnDisk(home.workspaceDir, channelId);
-	const fakeBot = new E2EFakeDingTalkBot();
-	const runtime = await createRuntimeContext({
+	const deliveries: CapturedDelivery[] = [];
+	const dingtalkConfig = {
+		clientId: "e2e-client-id",
+		clientSecret: "e2e-client-secret",
+		robotCode: "e2e-client-id",
+		cardTemplateKey: "content",
+		stateDir: join(home.homeDir, "state"),
+	};
+	const runtime: Awaited<ReturnType<typeof createRuntimeContext>> = await createRuntimeContext({
 		paths: {
 			appName: "pipiclaw",
 			appHomeDir: home.homeDir,
@@ -84,17 +90,17 @@ export async function createRuntimeHarness(options?: {
 			securityConfigPath: join(home.homeDir, "security.json"),
 			eventHistoryPath: join(home.homeDir, "state", "events", "history.jsonl"),
 		},
-		dingtalkConfig: {
-			clientId: "e2e-client-id",
-			clientSecret: "e2e-client-secret",
-			robotCode: "e2e-client-id",
-			cardTemplateKey: "content",
-			stateDir: join(home.homeDir, "state"),
-		},
+		dingtalkConfig,
+		transports: [
+			new DingTalkTransport({
+				config: dingtalkConfig,
+				archiveBotResponse: (id, text) => runtime.store.logBotResponse(id, text, Date.now().toString()),
+				createBot: (ingress, config) => new HarnessDingTalkBot(ingress, config, deliveries),
+			}),
+		],
 		registerSignalHandlers: false,
 		startServices: options?.startServices ?? false,
 		memoryMaintenanceSchedulerIntervalMs: options?.memoryMaintenanceSchedulerIntervalMs,
-		createBot: () => fakeBot as unknown as DingTalkBot,
 		createEventsWatcher: () => ({ start() {}, stop() {} }),
 	});
 
@@ -105,23 +111,20 @@ export async function createRuntimeHarness(options?: {
 		desk: E2E_DESK,
 		deskDir,
 		conversationDir,
-		deliveries: fakeBot.deliveries,
+		deliveries,
 		async sendUserMessage(text: string, overrides?: Partial<HumanEvent>): Promise<void> {
-			await runtime.handler.handleEvent(
-				{
-					source: "human",
-					channelId,
-					ts: Date.now().toString(),
-					user: "e2e_user",
-					userName: "E2E Tester",
-					text,
-					...overrides,
-				},
-				fakeBot as unknown as DingTalkBot,
-			);
+			await runtime.ingress.handleEvent({
+				source: "human",
+				channelId,
+				ts: Date.now().toString(),
+				user: "e2e_user",
+				userName: "E2E Tester",
+				text,
+				...overrides,
+			});
 		},
 		async assertResolvedModel(expectedModelId: string): Promise<void> {
-			const status = await runtime.handler.runRuntimeCommand(
+			const status = await runtime.ingress.runRuntimeCommand(
 				{
 					source: "human",
 					channelId,
@@ -148,6 +151,8 @@ export async function createRuntimeHarness(options?: {
 
 export interface DeterministicHarness {
 	readonly runtime: import("../../src/runtime/bootstrap.js").RuntimeContext;
+	/** The DingTalk bot behind the transport: real inbound parsing, captured outbound calls. */
+	readonly bot: HarnessDingTalkBot;
 	homeDir: string;
 	workspaceDir: string;
 	channelId: string;
@@ -289,11 +294,19 @@ export async function createDeterministicHarness(options?: {
 			startServices: options?.services ?? false,
 			jobSweepIntervalMs: options?.services ? 150 : undefined,
 			createEventsWatcher: options?.events ? undefined : () => ({ start() {}, stop() {} }),
-			createBot: (handler) => {
-				bot = new HarnessDingTalkBot(handler, dingtalkConfig as never, deliveries);
-				return bot as unknown as import("../../src/dingtalk/bot.js").DingTalkBot;
-			},
+			transports: [
+				new DingTalkTransport({
+					config: dingtalkConfig as never,
+					archiveBotResponse: (id, text) => runtime.store.logBotResponse(id, text, Date.now().toString()),
+					createBot: (ingress, config) => {
+						bot = new HarnessDingTalkBot(ingress, config, deliveries);
+						return bot;
+					},
+				}),
+			],
 		});
+		// Background services start the transports themselves; otherwise inbound parsing still needs its ingress.
+		if (!options?.services) await runtime.transports.startAll(runtime.ingress);
 	}
 	try {
 		await boot();
@@ -329,10 +342,14 @@ export async function createDeterministicHarness(options?: {
 	}
 
 	async function waitForIdle(): Promise<void> {
-		await waitFor("channel idle", () => bot.allChannelQueuesIdle() && !runtime.handler.isRunning(channelId), {
-			timeoutMs: 30_000,
-			intervalMs: 25,
-		});
+		await waitFor(
+			"channel idle",
+			() => runtime.ingress.isIdle() && !bot.hasPendingIngest() && !runtime.ingress.isRunning(channelId),
+			{
+				timeoutMs: 30_000,
+				intervalMs: 25,
+			},
+		);
 	}
 
 	function assertNoUnmatchedRequests(): void {
@@ -356,28 +373,31 @@ export async function createDeterministicHarness(options?: {
 		get runtime() {
 			return runtime;
 		},
+		get bot() {
+			return bot;
+		},
 		model,
 		async sendUserMessage(text, overrides): Promise<void> {
-			await bot.routeInboundEvent(buildEvent(text, overrides));
+			await runtime.ingress.routeEvent(buildEvent(text, overrides));
 			await waitForIdle();
 		},
 		async sendUserMessageNoWait(text, overrides): Promise<void> {
-			await bot.routeInboundEvent(buildEvent(text, overrides));
+			await runtime.ingress.routeEvent(buildEvent(text, overrides));
 		},
 		async sendWake(text, overrides): Promise<void> {
 			// The durable-dispatch / task-driver path: an internal event, not a user
 			// message. `_isEvent = true` so background wakes get progressStyle "none".
 			// Every in-process producer stamps the desk it produced the wake for (D7).
-			await runtime.handler.handleEvent(buildWake(text, overrides), bot as never);
+			await runtime.ingress.handleEvent(buildWake(text, overrides));
 			await waitForIdle();
 		},
 		enqueueWake(text, overrides): boolean {
-			return bot.enqueueEvent(buildWake(text, overrides));
+			return runtime.ingress.enqueueEvent(buildWake(text, overrides));
 		},
 		async runCommand(name, args = ""): Promise<string> {
 			// The direct idle-runtime-command path the TUI and the busy DingTalk switch use
 			// (`handler.runRuntimeCommand`) — no turn is reserved for it.
-			return runtime.handler.runRuntimeCommand(buildEvent(`/${name} ${args}`) as never, name as never, args);
+			return runtime.ingress.runRuntimeCommand(buildEvent(`/${name} ${args}`), name as never, args);
 		},
 		waitForIdle,
 		waitForDelivery: (predicate) => bot.whenDelivered(predicate),

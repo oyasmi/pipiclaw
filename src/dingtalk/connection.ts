@@ -42,7 +42,8 @@ export interface StreamConnectionOptions {
 export class StreamConnection {
 	private client: DWClient | null = null;
 	private lastSocketAvailableTime = Date.now();
-	private activeMessageProcessing = false;
+	/** Turns being processed right now; the keep-alive watchdog leaves the socket alone while any are. */
+	private activeMessageProcessing = 0;
 	private keepAliveTimer: NodeJS.Timeout | null = null;
 	private reconnectTimer: NodeJS.Timeout | null = null;
 	// Dedicated timer for the in-flight backoff sleep inside doReconnect, kept
@@ -87,11 +88,11 @@ export class StreamConnection {
 
 	/** A turn is running: the keep-alive watchdog must not treat the quiet socket as dead. */
 	beginMessageProcessing(): void {
-		this.activeMessageProcessing = true;
+		this.activeMessageProcessing++;
 	}
 
 	endMessageProcessing(): void {
-		this.activeMessageProcessing = false;
+		this.activeMessageProcessing = Math.max(0, this.activeMessageProcessing - 1);
 		this.lastSocketAvailableTime = Date.now();
 	}
 
@@ -353,7 +354,7 @@ export class StreamConnection {
 				if (this.options.isStopped()) return;
 
 				const elapsed = Date.now() - this.lastSocketAvailableTime;
-				if (elapsed > 90 * 1000 && !this.activeMessageProcessing) {
+				if (elapsed > 90 * 1000 && this.activeMessageProcessing === 0) {
 					// No pong / activity for >90s: the socket is (half-)dead and may
 					// never emit a close event. Proactively force a reconnect instead
 					// of waiting indefinitely. scheduleReconnect no-ops if an attempt

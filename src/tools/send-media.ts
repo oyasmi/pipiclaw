@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { basename, extname } from "path";
 import { Type } from "typebox";
-import type { MediaSender } from "../channel/channel-context.js";
+import type { SendMedia } from "../channel/transport.js";
 import type { FileStore } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
@@ -21,7 +21,7 @@ const sendMediaSchema = Type.Object({
 
 export interface SendMediaToolOptions {
 	/** Transport that actually delivers the attachment. Bound to `channelId`. */
-	mediaSender: MediaSender;
+	sendMedia: SendMedia;
 	/** The channel this tool instance is bound to — supplied by the runtime, not the model. */
 	channelId: string;
 	securityConfig?: SecurityConfig;
@@ -87,7 +87,7 @@ export function createSendMediaTool(
 			// so a PNG sent with fileName "报告" must still be delivered as an image (fix plan §4).
 			const kind = IMAGE_EXTENSIONS.has(extname(path).toLowerCase()) ? "image" : "file";
 
-			const result = await options.mediaSender.sendMedia(options.channelId, { data, fileName: name, kind });
+			const result = await options.sendMedia(options.channelId, { data, fileName: name, kind });
 			if (!result.ok) {
 				throw new Error(result.error ?? "Failed to send the file to the channel.");
 			}

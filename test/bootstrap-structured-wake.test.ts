@@ -1,20 +1,20 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunner } from "../src/agent/types.js";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import type { WakeEvent } from "../src/channel/channel-event.js";
 import { writeBindings } from "../src/desk/bindings.js";
 import { getDeskDir } from "../src/desk/paths.js";
 import { allocateConversation, createDeskRecord } from "../src/desk/registry.js";
-import type { DingTalkBot } from "../src/dingtalk/bot.js";
 import type { Executor } from "../src/executor.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { createFakeSessionBinding, createFakeTurnState } from "./helpers/fake-turn-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+import { RecordingTransport } from "./support/recording-transport.js";
 
 const { createRunnerMock } = vi.hoisted(() => ({ createRunnerMock: vi.fn() }));
 
@@ -24,21 +24,6 @@ vi.mock("../src/agent/runner-factory.js", async () => {
 });
 
 const tempDir = useTempDirs("pipiclaw-bootstrap-wake-");
-
-class WakeBot {
-	getCardGeneration = () => Symbol("test-card-turn");
-	isCardGenerationCurrent = () => true;
-	readonly events: WakeEvent[] = [];
-	start = vi.fn(async () => {});
-	stop = vi.fn(async () => {});
-	sendPlain = vi.fn(async () => true);
-	discardCard = vi.fn();
-	clearPendingMessages = vi.fn(() => 0);
-	enqueueEvent = vi.fn((event: WakeEvent) => {
-		this.events.push(event);
-		return true;
-	});
-}
 
 function paths(): BootstrapPaths {
 	const appHomeDir = tempDir();
@@ -72,7 +57,7 @@ function runner(): AgentRunner {
 			durationMs: 1,
 			costKnown: true,
 		})),
-		handleBuiltinCommand: vi.fn(async () => {}),
+		handleBuiltinCommand: vi.fn(async () => "HELP"),
 		isKnownSlashCommand: vi.fn(() => false),
 		queueSteer: vi.fn(async () => {}),
 		flushMemoryForShutdown: vi.fn(async () => {}),
@@ -146,7 +131,7 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 	mkdirSync(join(deskDir, "tasks", "archive"), { recursive: true });
 	const fakeRunner = Object.assign(runner(), { conversation });
 	createRunnerMock.mockReturnValue(fakeRunner);
-	const bot = new WakeBot();
+	const transport = new RecordingTransport();
 	const jobProbe = { id: "" };
 	const executor: Executor = {
 		exec: async (command) => {
@@ -159,13 +144,19 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 		executor,
 		paths: runtimePaths,
 		dingtalkConfig: { clientId: "id", clientSecret: "secret", stateDir: runtimePaths.workspaceDir },
+		transports: [transport],
 		registerSignalHandlers: false,
 		startServices: false,
-		createBot: () => bot as unknown as DingTalkBot,
 		createEventsWatcher: () => ({ start() {}, stop() {} }),
 		wakeTransitionHooks: hooks,
 	});
-	return { runtimePaths, channelId, deskDir, fakeRunner, bot, runtime, jobProbe };
+	// Durable dispatch hands each wake to the ingress queue; capture it instead, so a case can replay it.
+	const events: WakeEvent[] = [];
+	vi.spyOn(runtime.ingress, "enqueueEvent").mockImplementation((event) => {
+		events.push(event);
+		return true;
+	});
+	return { runtimePaths, channelId, deskDir, fakeRunner, transport, events, runtime, jobProbe };
 }
 
 async function createWake(
@@ -216,7 +207,7 @@ async function createWake(
 		harness.jobProbe.id = (await manager.start("true", "job", 60, { taskId, channelId: harness.channelId })).id;
 		await manager.list();
 	}
-	const wake = harness.bot.events.at(-1);
+	const wake = harness.events.at(-1);
 	if (!wake?.internalWake || wake.internalWake.kind !== kind) throw new Error(`missing ${kind} wake`);
 	if (deskDir) await parkOnResource(deskDir, taskId, wake.internalWake.resourceId);
 	return wake;
@@ -235,14 +226,11 @@ describe("runtime structured wake delivery", () => {
 			const deskDir = await waitingTask(harness.deskDir, taskId);
 			const wake = await createWake(harness, kind, taskId, deskDir);
 
-			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot);
+			await harness.runtime.ingress.handleEvent(wake);
 			expect(harness.fakeRunner.run, kind).toHaveBeenCalledTimes(1);
 			expect((await readStoredTask(deskDir, taskId))?.fields.state).toBe("open");
 
-			await harness.runtime.handler.handleEvent(
-				{ ...wake, text: `[REDELIVERY:2] ${wake.text}` },
-				harness.bot as unknown as DingTalkBot,
-			);
+			await harness.runtime.ingress.handleEvent({ ...wake, text: `[REDELIVERY:2] ${wake.text}` });
 			expect(harness.fakeRunner.run, `${kind} redelivery`).toHaveBeenCalledTimes(1);
 			expect((await readStoredTask(deskDir, taskId))?.fields.state).toBe("open");
 			await harness.runtime.shutdown();
@@ -251,17 +239,14 @@ describe("runtime structured wake delivery", () => {
 
 	it("still sends ordinary text without internalWake through runner.run", async () => {
 		const harness = await createHarness("ordinary_text");
-		await harness.runtime.handler.handleEvent(
-			{
-				source: "human",
-				channelId: harness.channelId,
-				user: "user",
-				userName: "User",
-				text: "ordinary text",
-				ts: "1",
-			},
-			harness.bot as unknown as DingTalkBot,
-		);
+		await harness.runtime.ingress.handleEvent({
+			source: "human",
+			channelId: harness.channelId,
+			user: "user",
+			userName: "User",
+			text: "ordinary text",
+			ts: "1",
+		});
 		expect(harness.fakeRunner.run).toHaveBeenCalledOnce();
 		await harness.runtime.shutdown();
 	});
@@ -285,7 +270,7 @@ describe("runtime structured wake delivery", () => {
 				`${encodeURIComponent(wake.dispatchId ?? "")}.json`,
 			);
 
-			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot);
+			await harness.runtime.ingress.handleEvent(wake);
 			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();
 			expect(existsSync(dispatchPath)).toBe(true);
 			expect(JSON.parse(readFileSync(dispatchPath, "utf-8")), kind).toMatchObject({ status: "pending" });
@@ -293,7 +278,7 @@ describe("runtime structured wake delivery", () => {
 			expect((await readStoredTask(deskDir, taskId))?.fields.state).toBe("parked");
 
 			fail = false;
-			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot);
+			await harness.runtime.ingress.handleEvent(wake);
 			expect(harness.fakeRunner.run, `${kind} retry`).toHaveBeenCalledOnce();
 			expect(existsSync(dispatchPath)).toBe(false);
 			expect((await readStoredTask(deskDir, taskId))?.fields.state).toBe("open");
@@ -308,7 +293,7 @@ describe("runtime structured wake delivery", () => {
 			await doneTask(harness.deskDir, taskId);
 			const wake = await createWake(harness, kind, taskId);
 
-			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot);
+			await harness.runtime.ingress.handleEvent(wake);
 			// No ticket could be redeemed (the task is archived) and nothing else is driving it
 			// (it isn't `open` either) — dropping this wake would lose the result for good, so it
 			// must still reach a normal turn instead of the old unconditional early return.
@@ -326,7 +311,7 @@ describe("runtime structured wake delivery", () => {
 			// is open with nothing left to redeem, so this wake has nothing to add.
 			const wake = await createWake(harness, kind, taskId);
 
-			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot);
+			await harness.runtime.ingress.handleEvent(wake);
 			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();
 			await harness.runtime.shutdown();
 		}
@@ -345,7 +330,7 @@ describe("runtime structured wake delivery", () => {
 			createDeskRecord(harness.runtimePaths.workspaceDir, "lab", new Date());
 			await expect(harness.runtime.desks.bind(harness.channelId, "lab")).resolves.toMatchObject({ kind: "bound" });
 
-			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot);
+			await harness.runtime.ingress.handleEvent(wake);
 			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();
 			expect((await readStoredTask(deskDir, taskId))?.fields.state, kind).toBe("open");
 			await harness.runtime.shutdown();
@@ -364,10 +349,10 @@ describe("runtime structured wake delivery", () => {
 			desk: "news",
 			presentation: "awaited",
 		};
-		await harness.runtime.handler.handleEvent(awaited, harness.bot as unknown as DingTalkBot);
+		await harness.runtime.ingress.handleEvent(awaited);
 		expect(harness.fakeRunner.run).toHaveBeenCalledOnce();
-		const runMock = harness.fakeRunner.run as unknown as Mock;
-		expect(runMock.mock.calls[0]?.[0]?.progressStyle).toBe("none");
+		// A wake's output port is quiet: no progress, only its result.
+		expect(harness.transport.turns.at(-1)?.quiet).toBe(true);
 
 		const background: WakeEvent = {
 			...awaited,
@@ -375,9 +360,9 @@ describe("runtime structured wake delivery", () => {
 			dispatchId: "task-driver:presentation:check",
 			presentation: undefined,
 		};
-		await harness.runtime.handler.handleEvent(background, harness.bot as unknown as DingTalkBot);
+		await harness.runtime.ingress.handleEvent(background);
 		expect(harness.fakeRunner.run).toHaveBeenCalledTimes(2);
-		expect(runMock.mock.calls[1]?.[0]?.progressStyle).toBe("none");
+		expect(harness.transport.turns.at(-1)?.quiet).toBe(true);
 		await harness.runtime.shutdown();
 	});
 });

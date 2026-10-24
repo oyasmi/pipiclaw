@@ -1,7 +1,7 @@
 /**
- * The daemon's composition root: loads config and builds the bot, durable dispatch, jobs, delegation
- * runs, the events, memory and task services, then wires the per-channel handler (`turn-handler.ts`)
- * and the ordered shutdown (`shutdown.ts`).
+ * The daemon's composition root: loads config and builds the transports, the ingress, durable
+ * dispatch, jobs, delegation runs, the events, memory and task services, then wires the ordered
+ * shutdown (`shutdown.ts`).
  */
 import { join } from "path";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
@@ -23,6 +23,7 @@ import { prepareAppServices } from "../app/services.js";
 import type { WakeEvent } from "../channel/channel-event.js";
 import { CHANNELS_INDEX_FILENAME, type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ChannelStore } from "../channel/store.js";
+import type { PushMessage, Transport } from "../channel/transport.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
 import { buildDeskList } from "../desk/commands.js";
@@ -30,10 +31,7 @@ import { initializeDefaultDesk } from "../desk/default.js";
 import { getDeskDir } from "../desk/paths.js";
 import { listDesks } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
-import { DingTalkBot } from "../dingtalk/bot.js";
-import { describeDingTalkChannel, parseDingTalkChannelId } from "../dingtalk/channel-ids.js";
 import { type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
-import type { DingTalkHandler } from "../dingtalk/handler.js";
 import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
@@ -48,11 +46,12 @@ import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-re
 import { getUsageLedger } from "../usage/ledger.js";
 import { DeskRuntime } from "./desk-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
+import { createIngress, type IngressService } from "./ingress.js";
 import { createShutdown } from "./shutdown.js";
 import { TaskDriver } from "./task-driver.js";
 import { createTaskSpawner } from "./task-spawn.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
-import { createTurnHandler } from "./turn-handler.js";
+import { createTransportRegistry, loadTransports } from "./transports.js";
 import type { ArchivedMessage } from "./turn-run.js";
 
 export interface BootstrapOptions {
@@ -64,7 +63,6 @@ export interface BootstrapOptions {
 }
 
 export interface AppContext {
-	bot: DingTalkBot;
 	store: ChannelStore;
 	shutdown: () => Promise<void>;
 }
@@ -74,7 +72,9 @@ export interface RuntimeContext {
 	runs: SubAgentRuntime;
 	/** Bindings and active desks (spec 058, D6); exposed for the e2e harness and evals. */
 	desks: DeskRuntime;
-	handler: DingTalkHandler;
+	/** The inbound pipeline; exposed for the e2e harness and evals. */
+	ingress: IngressService;
+	transports: ReturnType<typeof createTransportRegistry>;
 	store: ChannelStore;
 	/** Production driver instance, exposed so evals can invoke the real scan path. */
 	taskDriver: { start(): void; stop(): void; nudge?(): void; runOnce?: (now?: Date) => Promise<void> };
@@ -139,7 +139,8 @@ interface RuntimeContextOptions {
 	executor?: Executor;
 	paths: BootstrapPaths;
 	dingtalkConfig: DingTalkConfig;
-	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
+	/** Replaces the configured transports (tests and embedders); `dingtalkConfig` is then unused. */
+	transports?: Transport[];
 	/** Builds one desk's events watcher (tests pass an inert one). */
 	createEventsWatcher?: (target: { desk: string; deskDir: string }) => {
 		start(): void;
@@ -170,9 +171,7 @@ interface RuntimeContextOptions {
 	settingsManager?: PipiclawSettingsManager;
 }
 
-export async function createRuntimeContext(
-	options: RuntimeContextOptions,
-): Promise<RuntimeContext & { bot: DingTalkBot }> {
+export async function createRuntimeContext(options: RuntimeContextOptions): Promise<RuntimeContext> {
 	initializeDefaultDesk(options.paths);
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
@@ -191,11 +190,24 @@ export async function createRuntimeContext(
 	const executor = options.executor ?? createExecutor();
 	const dispatch = (event: WakeEvent) => durableDispatch?.dispatch(event) ?? false;
 
-	// The one authority on bindings and active desks (spec 058, D6). `bot`, `taskDriver` and the
+	// The transports this process hosts. A delivered answer is archived through `store`, which is
+	// built below: the closure only runs once a turn is under way.
+	const transports = createTransportRegistry(
+		options.transports ??
+			(await loadTransports({
+				dingtalkConfig: options.dingtalkConfig,
+				archiveBotResponse: (channelId, text) => store.logBotResponse(channelId, text, Date.now().toString()),
+			})),
+	);
+	/** Say something to a channel outside any turn; whether it was delivered. */
+	const pushTo = (channelId: string, message: PushMessage): Promise<boolean> =>
+		transports.forChannel(channelId)?.push(channelId, message) ?? Promise.resolve(false);
+
+	// The one authority on bindings and active desks (spec 058, D6). `ingress`, `taskDriver` and the
 	// spawner are resolved lazily by its callbacks: none of them runs before this function returns.
 	const deskRuntime: DeskRuntime = new DeskRuntime({
 		workspaceDir,
-		conversationKindOf: (channelId) => parseDingTalkChannelId(channelId)?.kind,
+		conversationKindOf: (channelId) => transports.conversationKindOf(channelId),
 		recover: async (conversations) => {
 			// Spec 043, D10 point 1: repair turns interrupted by the last shutdown/crash before any of
 			// these channels takes traffic — a dangling session would 400 against the provider on
@@ -226,7 +238,7 @@ export async function createRuntimeContext(
 				: createEventsWatcher({
 						...target,
 						isBound: (channelId) => deskRuntime.isBoundTo(channelId, target.desk),
-						bot,
+						sink: ingress,
 						executor,
 						commandGuardConfig: loadSecurityConfigWithDiagnostics(appHomeDir).config.commandGuard,
 						historyPath: options.paths.eventHistoryPath,
@@ -237,7 +249,7 @@ export async function createRuntimeContext(
 							notify: (desk, channelId, text) => deskRuntime.sendFromDesk(desk, channelId, text),
 						}),
 					}),
-		send: (channelId, text) => bot.sendPlain(channelId, text),
+		send: (channelId, text) => pushTo(channelId, { text }),
 		isChannelBusy: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 		releaseRunner: (channelId) => releaseCachedRunner(channelRunners, channelId),
 		onBindingChanged: () => channelIndex.noteBindingChanged(),
@@ -258,9 +270,8 @@ export async function createRuntimeContext(
 		getBoundDesk: (channelId) => deskRuntime.boundDesk(channelId),
 	});
 	await channelIndex.load();
-	// How a channel is named to a user. DingTalk is the only transport the daemon hosts until the
-	// channel registry (spec 061, A2) takes this over.
-	const labelOf = (channelId: string) => describeDingTalkChannel(channelId, channelIndex.nameOf(channelId));
+	// How a channel is named to a user: its transport says.
+	const labelOf = (channelId: string) => transports.describeChannel(channelId, channelIndex.nameOf(channelId));
 	const describeChannel = (desk: string, channelId: string) => ({
 		label: labelOf(channelId),
 		boundHere: deskRuntime.isBoundTo(channelId, desk),
@@ -313,10 +324,12 @@ export async function createRuntimeContext(
 				const owner = deskRuntime.channelOfConversation(conversation.desk, dir);
 				return owner ? labelOf(owner) : undefined;
 			},
-			// The DingTalk bot is the media sender for this transport; enables `send_media`.
-			// `bot` is defined below in this same scope and initialized before any message
-			// (and thus any getRunner call) can arrive.
-			mediaSender: bot,
+			// Enables `send_media`: the file goes out through the transport that owns this channel.
+			sendMedia: async (id, media) =>
+				(await transports.forChannel(id)?.sendMedia(id, media)) ?? {
+					ok: false,
+					error: "This channel cannot receive attachments. Tell the user the file's path on the server instead.",
+				},
 		});
 		channelRunners.set(channelId, runner);
 		void evictIdleRunnersOverCap(channelRunners);
@@ -330,8 +343,9 @@ export async function createRuntimeContext(
 	const getRuns = (): SubAgentRuntime => runs;
 	const getTaskDriver = (): TaskDriverLike => taskDriver;
 
-	const handler = createTurnHandler({
+	const ingress = createIngress({
 		options,
+		transports,
 		store,
 		channelRunners,
 		sessionResetChains,
@@ -341,7 +355,7 @@ export async function createRuntimeContext(
 		archiveIncomingMessage,
 		getRunner,
 		resolveChannel: (channelId) => deskRuntime.resolve(channelId),
-		prepareChannel: (channelId) => deskRuntime.ensureDefaultBinding(channelId),
+		ensureBinding: (channelId, desk) => deskRuntime.ensureDefaultBinding(channelId, desk),
 		deskPort: (channelId) => ({
 			list: async () =>
 				buildDeskList(
@@ -362,15 +376,13 @@ export async function createRuntimeContext(
 		getJobs,
 		getRuns,
 		getTaskDriver,
+		pushTo,
 	});
 
-	const bot = options.createBot
-		? options.createBot(handler, options.dingtalkConfig)
-		: new DingTalkBot(handler, options.dingtalkConfig);
 	const dispatchStateDir = join(appHomeDir, "state", "dispatch");
 	durableDispatch = new DurableDispatchService({
 		stateDir: dispatchStateDir,
-		bot,
+		bot: ingress,
 		// A structured wake that keeps failing before it can mark itself complete would otherwise
 		// redeliver forever. Surface it once instead of looping silently; the record stays on disk
 		// for inspection until a human clears it. Like every background notice, only to a channel
@@ -481,7 +493,8 @@ export async function createRuntimeContext(
 		deskRuntime,
 		runs,
 		jobs,
-		bot,
+		transports,
+		ingress,
 		store,
 		channelIndex,
 		channelRunners,
@@ -510,16 +523,16 @@ export async function createRuntimeContext(
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();
 		durableDispatch.start();
-		void bot.start();
+		await transports.startAll(ingress);
 	}
 
 	return {
-		handler,
+		ingress,
+		transports,
 		jobs,
 		runs,
 		desks: deskRuntime,
 		store,
-		bot,
 		taskDriver,
 		memoryMaintenance: memoryMaintenanceScheduler,
 		shutdown: shutdownWithReason,
@@ -549,7 +562,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	const { settingsManager } = prepareAppServices(paths);
 
 	log.logStartup(paths.workspaceDir);
-	let runtime: Awaited<ReturnType<typeof createRuntimeContext>>;
+	let runtime: RuntimeContext;
 	try {
 		runtime = await createRuntimeContext({
 			paths,
@@ -565,7 +578,6 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	}
 
 	return {
-		bot: runtime.bot,
 		store: runtime.store,
 		shutdown: async () => {
 			await runtime.shutdown("manual");

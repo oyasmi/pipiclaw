@@ -1,8 +1,7 @@
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkBot } from "../src/dingtalk/bot.js";
-import type { DingTalkEvent } from "../src/dingtalk/handler.js";
+import type { WakeEvent } from "../src/channel/channel-event.js";
 import type { EventAction, EventsWatcherOptions } from "../src/events/types.js";
 import { EventsWatcher } from "../src/events/watcher.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
@@ -76,11 +75,11 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 }
 
 class FakeBot {
-	public readonly events: DingTalkEvent[] = [];
+	public readonly events: WakeEvent[] = [];
 
 	constructor(private readonly enqueueResult: boolean = true) {}
 
-	enqueueEvent(event: DingTalkEvent): boolean {
+	enqueueEvent(event: WakeEvent): boolean {
 		this.events.push(event);
 		return this.enqueueResult;
 	}
@@ -124,7 +123,7 @@ function createWatcher(
 	spawnTask?: EventsWatcherOptions["spawnTask"],
 	isBound: EventsWatcherOptions["isBound"] = () => true,
 ): EventsWatcher {
-	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig, {
+	return new EventsWatcher(dir, bot, executor, guardConfig, {
 		desk: "news",
 		isBound,
 		historyPath,
@@ -627,7 +626,7 @@ describe("EventsWatcher", () => {
 		it("delivers one occurrence once across both the outbox retry and restart recovery paths", async () => {
 			const dir = createTempDir();
 			const stateDir = join(createTempDir(), "dispatch");
-			const delivered: DingTalkEvent[] = [];
+			const delivered: WakeEvent[] = [];
 			let accept = false;
 			const service = new DurableDispatchService({
 				stateDir,
@@ -641,13 +640,11 @@ describe("EventsWatcher", () => {
 			});
 			const filename = "reminder.json";
 			writeFileSync(join(dir, filename), "{}");
-			const watcher = new EventsWatcher(
-				dir,
-				new FakeBot() as unknown as DingTalkBot,
-				createMockExecutor(),
-				undefined,
-				{ desk: "news", isBound: () => true, dispatch: (event) => service.dispatch(event) },
-			);
+			const watcher = new EventsWatcher(dir, new FakeBot(), createMockExecutor(), undefined, {
+				desk: "news",
+				isBound: () => true,
+				dispatch: (event) => service.dispatch(event),
+			});
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 			const definition = {
 				type: "one-shot" as const,
@@ -690,7 +687,7 @@ describe("EventsWatcher", () => {
 		);
 		const beforeStart = new Date(Date.now() - 60_000);
 		utimesSync(filePath, beforeStart, beforeStart);
-		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot, createMockExecutor(), undefined, {
+		const watcher = new EventsWatcher(dir, new FakeBot(), createMockExecutor(), undefined, {
 			desk: "news",
 			isBound: () => true,
 			dispatch: async () => {

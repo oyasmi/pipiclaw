@@ -1,51 +1,38 @@
 /**
- * DingTalk transport facade: owns the per-channel queues and the public surface the runtime and the
- * delivery controller call. The Stream socket, access token, AI cards, media and inbound parsing
- * are separate collaborators (`connection.ts`, `access-token.ts`, `cards.ts`, `media.ts`,
- * `inbound.ts`) that this class wires together and forwards to.
+ * The DingTalk side of the wire: owns the Stream connection, the AI cards, media and the plain-send
+ * path, and hands every authorized inbound message to the runtime's ingress. It routes nothing and
+ * queues nothing — commands, busy handling and turn ordering are the runtime's (spec 061, D6). The
+ * Stream socket, access token, AI cards, media and inbound parsing are separate collaborators
+ * (`connection.ts`, `access-token.ts`, `cards.ts`, `media.ts`, `inbound.ts`) that this class wires
+ * together and forwards to.
  */
-import {
-	type FinalDelivery,
-	finalDeliveryOf,
-	type MediaSender,
-	type MediaSendResult,
-	normalizeResponseMode,
-	type OutboundMedia,
-	type ProgressStyle,
-	progressStyleOf,
-	type ResponseMode,
-} from "../channel/channel-context.js";
-import { type ChannelEventSink, type HumanEvent, senderOf, type WakeEvent } from "../channel/channel-event.js";
-import { formatBusyHint, parseBuiltInCommand, renderBuiltInHelp, slashCommandName } from "../commands/catalog.js";
+import type { MediaSendResult, OutboundMedia } from "../channel/transport.js";
 import * as log from "../log.js";
 import { AccessTokenProvider } from "./access-token.js";
 import { type ConversationMeta, sendRobotMessage } from "./api.js";
 import { CardController } from "./cards.js";
-// Turn serialization is runtime policy; the queue lives in its own module and
-// this transport only consumes it.
-import { ChannelQueue } from "./channel-queue.js";
 import { type BusyMessageMode, type DingTalkConfig, normalizeBusyMessageDefault } from "./config.js";
 import { StreamConnection } from "./connection.js";
 import { ConversationMetaStore } from "./conversation-meta.js";
-import type { DingTalkBotPort, DingTalkHandler } from "./handler.js";
-import { InboundMessages } from "./inbound.js";
+import type { DeliveryPort } from "./delivery.js";
+import { type DingTalkIngress, InboundMessages } from "./inbound.js";
 import { DingTalkMedia } from "./media.js";
+import {
+	type FinalDelivery,
+	finalDeliveryOf,
+	normalizeResponseMode,
+	type ProgressStyle,
+	progressStyleOf,
+	type ResponseMode,
+} from "./response-mode.js";
 
-// Bounds enqueueStreamMessage (user messages + busy-message requeues), mirroring the
-// existing cap on enqueueEvent. Without a limit, a busy channel getting flooded with
-// messages (or repeated followUp requeues) grows this queue without bound — each item
-// still runs a full serialized turn, so an unbounded queue means unbounded backlog time
-// and unbounded memory, not just a slow channel.
-const USER_MESSAGE_QUEUE_LIMIT = 20;
-const EVENT_QUEUE_LIMIT = 5;
 // Channel metadata is persisted on disk, so these in-memory caches can be safely
 // reclaimed after inactivity. A stale unfinished card falls back to a fresh card
 // on the next update rather than retaining one channel forever.
 const CHANNEL_CACHE_TTL_MS = 60 * 60 * 1000;
 const CHANNEL_CACHE_SWEEP_MS = 10 * 60 * 1000;
 
-export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPort {
-	private handler: DingTalkHandler;
+export class DingTalkBot implements DeliveryPort {
 	private config: DingTalkConfig;
 
 	private tokens: AccessTokenProvider;
@@ -56,15 +43,10 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 	private connection: StreamConnection;
 
 	private channelLastActiveAt = new Map<string, number>();
-
-	// Per-channel queues
-	private queues = new Map<string, ChannelQueue>();
-
 	private channelCacheSweepTimer: NodeJS.Timeout | null = null;
 	private isStopped = false;
 
-	constructor(handler: DingTalkHandler, config: DingTalkConfig) {
-		this.handler = handler;
+	constructor(ingress: DingTalkIngress, config: DingTalkConfig) {
 		this.config = {
 			...config,
 			busyMessageDefault: normalizeBusyMessageDefault(config.busyMessageDefault),
@@ -87,7 +69,6 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 		});
 		this.media = new DingTalkMedia({
 			config: this.config,
-			handler: this.handler,
 			getAccessToken,
 			getConversationMeta: (channelId) => this.conversations.get(channelId),
 			sendRobotMessage: sendRobot,
@@ -101,12 +82,11 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 		});
 		this.inbound = new InboundMessages({
 			config: this.config,
-			handler: this.handler,
+			ingress,
 			conversations: this.conversations,
 			isStopped: () => this.isStopped,
 			ack: (messageId) => this.connection.ack(messageId),
-			resolveInboundAttachments: (channelId, parsed) => this.media.resolveInboundAttachments(channelId, parsed),
-			routeInboundEvent: (event) => this.routeInboundEvent(event),
+			collectAttachments: (parsed) => this.media.collectInboundAttachments(parsed),
 		});
 	}
 
@@ -158,67 +138,26 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 			clearInterval(this.channelCacheSweepTimer);
 			this.channelCacheSweepTimer = null;
 		}
-		for (const queue of this.queues.values()) {
-			queue.stop();
-		}
 		await this.connection.disconnect();
 	}
 
 	/**
-	 * Enqueue an event for processing.
-	 * Returns true if enqueued, false if queue is full (max 5).
+	 * A turn is being processed: the keep-alive watchdog must not tear the socket down under it.
+	 * Returns the release to call when the turn is over.
 	 */
-	enqueueEvent(event: WakeEvent): boolean {
-		if (this.isStopped) {
-			return false;
-		}
-		const queue = this.getQueue(event.channelId);
-		if (queue.size() >= EVENT_QUEUE_LIMIT) {
-			log.logEvent("warn", "runtime.channel_queue.full", "Discarding incoming event", {
-				ctx: { channelId: event.channelId, userName: senderOf(event).userName },
-				fields: { messageLength: event.text.length },
-			});
-			return false;
-		}
-		log.logEvent("debug", "runtime.channel_queue.enqueued", "Incoming event queued", {
-			ctx: { channelId: event.channelId, userName: senderOf(event).userName },
-			fields: { messageLength: event.text.length },
-		});
-		queue.enqueue(async () => {
-			this.connection.beginMessageProcessing();
-			try {
-				this.handler.reserveEvent?.(event);
-				await this.handler.handleEvent(event, this);
-			} finally {
-				this.connection.endMessageProcessing();
-			}
-		});
-		return true;
+	holdConnection(): () => void {
+		this.connection.beginMessageProcessing();
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.connection.endMessageProcessing();
+		};
 	}
 
-	private enqueueStreamMessage(event: HumanEvent, textOverride?: string): void {
-		const queuedEvent = textOverride === undefined ? event : { ...event, text: textOverride };
-		const queue = this.getQueue(event.channelId);
-		if (queue.size() >= USER_MESSAGE_QUEUE_LIMIT) {
-			log.logWarn("dingtalk.queue.full", "Message discarded: channel queue full", {
-				channelId: event.channelId,
-				fields: { limit: USER_MESSAGE_QUEUE_LIMIT, preview: queuedEvent.text.substring(0, 50) },
-			});
-			this.sendPlain(
-				event.channelId,
-				`⚠️ 消息积压过多（超过 ${USER_MESSAGE_QUEUE_LIMIT} 条待处理），本条消息已丢弃，请稍后重试。`,
-			).catch(() => undefined);
-			return;
-		}
-		queue.enqueue(async () => {
-			this.connection.beginMessageProcessing();
-			try {
-				this.handler.reserveEvent?.(queuedEvent);
-				await this.handler.handleEvent(queuedEvent, this);
-			} finally {
-				this.connection.endMessageProcessing();
-			}
-		});
+	/** Test seam (spec 048): true while an inbound message is still being downloaded or handed over. */
+	hasPendingIngest(): boolean {
+		return this.inbound.hasPendingIngest();
 	}
 
 	// ==========================================================================
@@ -305,7 +244,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 	}
 
 	// ==========================================================================
-	// Media (image / file) delivery — MediaSender contract (see media.ts)
+	// Media (image / file) delivery (see media.ts)
 	// ==========================================================================
 
 	sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult> {
@@ -313,148 +252,12 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 	}
 
 	/**
-	 * Inbound file fetch used while resolving attachments (`media.ts`). `protected` so the
+	 * Inbound file fetch used while collecting attachments (`media.ts`). `protected` so the
 	 * deterministic e2e harness can override it and run the inbound path with zero network, the
 	 * same pattern `HarnessDingTalkBot` already uses for outbound calls.
 	 */
 	protected downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null> {
 		return this.media.downloadMessageFile(downloadCode);
-	}
-
-	/**
-	 * Command / busy / `/new` routing for one inbound event, ending in `enqueueStreamMessage`
-	 * for a normal message. Split out of `onStreamMessage` so the deterministic e2e harness
-	 * (spec 048) can exercise the real transport queue and busy semantics without a socket.
-	 */
-	async routeInboundEvent(event: HumanEvent): Promise<void> {
-		const { channelId } = event;
-		if (this.handler.prepareChannel) await this.handler.prepareChannel(channelId);
-		const content = event.text;
-		const builtInCommand = parseBuiltInCommand(content);
-		const isSlashCommand = content.trim().startsWith("/");
-
-		// `/new` is an emergency boundary as well as a session command. Route it before
-		// busy checking and before the old channel queue, so a wedged compaction/provider
-		// request cannot prevent recovery.
-		if (slashCommandName(content) === "new") {
-			await this.handler.handleNewSession(event, this);
-			return;
-		}
-
-		// Check if busy
-		if (this.handler.isRunning(channelId)) {
-			// All built-in transport commands are usable while a task streams.
-			if (builtInCommand) {
-				switch (builtInCommand.name) {
-					case "help":
-						await this.sendPlain(channelId, renderBuiltInHelp(builtInCommand.args), {
-							title: "/help",
-							markdown: true,
-						});
-						return;
-					case "stop": {
-						const outcome = await this.handler.handleStop(channelId, this);
-						await this.sendPlain(
-							channelId,
-							outcome.pausedTaskId
-								? `已停止当前回合。任务 \`${outcome.pausedTaskId}\` 已暂停，用 \`/tasks resume ${outcome.pausedTaskId}\` 继续。`
-								: "已停止当前回合。",
-							{ title: "/stop", markdown: true },
-						);
-						return;
-					}
-					case "steer":
-					case "followup": {
-						const mode = builtInCommand.name === "steer" ? "steer" : "followUp";
-						const result = await this.handler.handleBusyMessage(event, this, mode, builtInCommand.args);
-						if (result.kind === "requeue") {
-							this.enqueueStreamMessage(event, result.text);
-						}
-						return;
-					}
-					default: {
-						// Every remaining BuiltInCommandName is a stateless report (events/tasks/status/usage/
-						// context/subagents/skills), narrowed to RuntimeCommandName by TS after the four
-						// cases above. Busy has no sendCommandReply-style retry semantics, so `/context` is
-						// answered here like the rest instead of the runner-handled path idle uses for it
-						// (see the IDLE_RUNTIME_COMMAND_NAMES comment in bootstrap.ts).
-						const response = await this.handler.runRuntimeCommand(
-							event,
-							builtInCommand.name,
-							builtInCommand.args,
-						);
-						const delivered = await this.sendPlain(channelId, response, {
-							title: `/${builtInCommand.name}`,
-							markdown: true,
-						});
-						if (!delivered) {
-							log.logWarn("delivery.command_reply.failed", "Command reply delivery failed", {
-								channelId: channelId,
-								fields: { command: builtInCommand.name, chars: response.length },
-							});
-						}
-						return;
-					}
-				}
-			}
-
-			// Other session commands (/model, /compact, …) and unknown slash commands cannot
-			// run mid-turn: they would need the idle session layer.
-			if (isSlashCommand) {
-				await this.sendPlain(channelId, formatBusyHint());
-				return;
-			}
-
-			const result = await this.handler.handleBusyMessage(event, this, this.busyMessageDefault, content);
-			if (result.kind === "requeue") {
-				this.enqueueStreamMessage(event, result.text);
-			}
-			return;
-		}
-
-		// Enqueue for processing
-		this.enqueueStreamMessage(event);
-	}
-
-	/**
-	 * Drop queued-but-not-started messages for a channel (e.g. on /stop) so they
-	 * do not run after the user halts the current task. Returns dropped count.
-	 */
-	clearPendingMessages(channelId: string): number {
-		const queue = this.queues.get(channelId);
-		return queue ? queue.clearPending() : 0;
-	}
-
-	/**
-	 * Detach all queued work from the previous session generation. The in-flight callback may
-	 * still unwind on its old queue object, while subsequent messages get a fresh queue.
-	 */
-	resetChannelQueue(channelId: string): number {
-		const queue = this.queues.get(channelId);
-		const dropped = queue?.clearPending() ?? 0;
-		queue?.stop();
-		this.queues.delete(channelId);
-		this.discardCard(channelId);
-		return dropped;
-	}
-
-	/** Test seam (spec 048): true when no channel queue has pending or in-flight work. */
-	allChannelQueuesIdle(): boolean {
-		if (this.inbound.hasPendingIngest()) return false;
-		for (const queue of this.queues.values()) {
-			if (!queue.isIdle()) return false;
-		}
-		return true;
-	}
-
-	private getQueue(channelId: string): ChannelQueue {
-		this.touchChannel(channelId);
-		let queue = this.queues.get(channelId);
-		if (!queue) {
-			queue = new ChannelQueue();
-			this.queues.set(channelId, queue);
-		}
-		return queue;
 	}
 
 	private touchChannel(channelId: string): void {
@@ -465,12 +268,10 @@ export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPo
 		const cutoff = now - CHANNEL_CACHE_TTL_MS;
 		for (const [channelId, lastActiveAt] of this.channelLastActiveAt) {
 			if (lastActiveAt > cutoff) continue;
-			const queue = this.queues.get(channelId);
-			if (!queue?.isIdle() || this.cards.hasCreationInFlight(channelId)) continue;
+			if (this.cards.hasCreationInFlight(channelId)) continue;
 
 			if (this.cards.hasCardUpdatedSince(channelId, cutoff)) continue;
 			this.cards.dropChannel(channelId);
-			this.queues.delete(channelId);
 			this.channelLastActiveAt.delete(channelId);
 		}
 	}

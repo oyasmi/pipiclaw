@@ -91,7 +91,7 @@ export class EventsWatcher {
 
 	constructor(
 		private eventsDir: string,
-		private bot: ChannelEventSink,
+		private sink: ChannelEventSink,
 		private executor: Executor,
 		private commandGuardConfig: SecurityConfig["commandGuard"] | undefined,
 		private options: EventsWatcherOptions,
@@ -599,7 +599,7 @@ export class EventsWatcher {
 
 		const enqueued = this.options.dispatch
 			? await this.options.dispatch(syntheticEvent)
-			: this.bot.enqueueEvent(syntheticEvent);
+			: this.sink.enqueueEvent(syntheticEvent);
 
 		if (enqueued) {
 			this.appendEventHistory(filename, event, "enqueued", "ok", { queue: { accepted: true } });
@@ -787,11 +787,11 @@ export class EventsWatcher {
 export function createEventsWatcher(
 	input: EventsWatcherOptions & {
 		deskDir: string;
-		bot: ChannelEventSink;
+		sink: ChannelEventSink;
 		executor: Executor;
 		commandGuardConfig?: SecurityConfig["commandGuard"];
 	},
 ): EventsWatcher {
-	const { deskDir, bot, executor, commandGuardConfig, ...options } = input;
-	return new EventsWatcher(join(deskDir, "events"), bot, executor, commandGuardConfig, options);
+	const { deskDir, sink, executor, commandGuardConfig, ...options } = input;
+	return new EventsWatcher(join(deskDir, "events"), sink, executor, commandGuardConfig, options);
 }

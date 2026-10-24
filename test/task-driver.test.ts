@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WakeEvent } from "../src/channel/channel-event.js";
 import type { PipiclawTaskDriverSettings } from "../src/config/settings.js";
-import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import { createTaskDriverEvent, TaskDriver, taskStopReceipt } from "../src/runtime/task-driver.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
@@ -51,7 +51,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	}
 
 	function driver(
-		dispatch: (event: DingTalkEvent) => boolean | Promise<boolean>,
+		dispatch: (event: WakeEvent) => boolean | Promise<boolean>,
 		extra: Partial<ConstructorParameters<typeof TaskDriver>[0]> = {},
 	): TaskDriver {
 		return new TaskDriver({
@@ -78,7 +78,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			"later",
 			taskDoc({ state: "parked", ticket: { kind: "time", at: FUTURE, by: FUTURE } }),
 		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledTimes(1);
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:open]");
@@ -94,7 +94,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		await writeTask(channelId, "open", taskDoc({ state: "open" }));
 		await writeTask("dingtalk:dm:a", "dm-first", taskDoc({ state: "open" }));
 		await writeTask("dingtalk:dm:a", "dm-second", taskDoc({ state: "open" }));
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch.mock.calls.map(([event]) => event.channelId).sort()).toEqual(["dingtalk:dm:a", channelId].sort());
 		expect(dispatch.mock.calls.find(([event]) => event.channelId === channelId)?.[0]).toMatchObject({
@@ -109,7 +109,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			"held",
 			taskDoc({ state: "open", paused: { by: "user", reason: "hold", at: PAST } }),
 		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
 	});
@@ -120,7 +120,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			"timed",
 			taskDoc({ state: "parked", ticket: { kind: "time", at: PAST, by: PAST } }),
 		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
 		const instance = driver(dispatch);
 
 		// Spec 058, D8: the delivery channel was rebound elsewhere. The task freezes whole — its
@@ -146,8 +146,8 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			usage: createUsage(NOW),
 		});
 		await writeTask("dingtalk:dm:a", "stuck", parked);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const notify = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
+		const notify = vi.fn((_event: WakeEvent) => true);
 		const instance = driver(dispatch, { notify });
 
 		await instance.runOnce(NOW);
@@ -169,8 +169,8 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			"spent",
 			taskDoc({ state: "open", budget: { steps: 2 }, usage: { ...createUsage(NOW), steps: 2 } }),
 		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const notify = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
+		const notify = vi.fn((_event: WakeEvent) => true);
 		await driver(dispatch, { notify }).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledOnce();
@@ -188,8 +188,8 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 				tools: [],
 			});
 		}
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const notify = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
+		const notify = vi.fn((_event: WakeEvent) => true);
 		await driver(dispatch, { notify }).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
 		expect((await readStoredTask(deskDir, "idle"))?.fields.paused?.reason).toContain("没有任何工具调用");
@@ -206,14 +206,14 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 				tools: ["bash"],
 			});
 		}
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledOnce();
 	});
 
 	it("does not queue a second step for a task it just dispatched", async () => {
 		await writeTask("dingtalk:dm:a", "open", taskDoc({ state: "open" }));
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const dispatch = vi.fn((_event: WakeEvent) => true);
 		const instance = driver(dispatch);
 		await instance.runOnce(NOW);
 		await instance.runOnce(NOW);

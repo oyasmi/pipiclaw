@@ -1,11 +1,11 @@
 /**
- * Inbound messages: acknowledge and deduplicate raw Stream frames, parse a robot message into a
- * `ChannelEvent`, apply the sender allow-list, resolve image attachments, and hand the event to the
- * bot's routing. The per-channel ingestion queue lives here so an attachment download can never be
- * overtaken by a later message on the same channel.
+ * Inbound messages: acknowledge and deduplicate raw Stream frames, parse a robot message, apply the
+ * sender allow-list, download image attachments, and hand the result to the runtime's ingress. The
+ * per-channel ingestion queue lives here so an attachment download can never be overtaken by a
+ * later message on the same channel.
  */
 import type { DWClientDownStream } from "dingtalk-stream";
-import type { HumanEvent, InboundImage } from "../channel/channel-event.js";
+import type { InboundAttachment, InboundMessage, Ingress } from "../channel/ingress.js";
 import * as log from "../log.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -13,7 +13,6 @@ import { isRecord } from "../shared/type-guards.js";
 import { dingtalkDmChannelId, dingtalkGroupChannelId } from "./channel-ids.js";
 import type { DingTalkConfig } from "./config.js";
 import type { ConversationMetaStore } from "./conversation-meta.js";
-import type { DingTalkHandler } from "./handler.js";
 import { type ParsedInboundMessage, parseInboundMessage } from "./inbound-media.js";
 
 interface DingTalkIncomingMessage {
@@ -36,19 +35,17 @@ interface DingTalkIncomingMessage {
 	};
 }
 
+/** What the DingTalk side needs from the runtime: the one door inbound messages go through. */
+export type DingTalkIngress = Pick<Ingress, "receive">;
+
 export interface InboundMessagesDeps {
 	config: DingTalkConfig;
-	handler: DingTalkHandler;
+	ingress: DingTalkIngress;
 	conversations: ConversationMetaStore;
 	isStopped: () => boolean;
 	/** Acknowledge a downstream frame to DingTalk. */
 	ack: (messageId: string) => void;
-	resolveInboundAttachments: (
-		channelId: string,
-		parsed: ParsedInboundMessage,
-	) => Promise<{ text: string; images: InboundImage[] }>;
-	/** Command / busy / `/new` routing for a built event (the bot's `routeInboundEvent`). */
-	routeInboundEvent: (event: HumanEvent) => Promise<void>;
+	collectAttachments: (parsed: ParsedInboundMessage) => Promise<{ text: string; attachments: InboundAttachment[] }>;
 }
 
 export class InboundMessages {
@@ -118,7 +115,7 @@ export class InboundMessages {
 	}
 
 	async onStreamMessage(data: DingTalkIncomingMessage): Promise<void> {
-		const { config, handler } = this.deps;
+		const { config, ingress } = this.deps;
 		if (this.deps.isStopped()) {
 			return;
 		}
@@ -148,16 +145,14 @@ export class InboundMessages {
 		const channelId =
 			conversationType === "2" ? dingtalkGroupChannelId(conversationId) : dingtalkDmChannelId(senderId);
 
-		// Parsing above is free; resolving image attachments below is a real network round-trip.
-		// Serialize the whole "resolve attachments → build event → route" unit per channel (spec
-		// 049 D3): without this, a message needing a download can be overtaken, in delivery order,
-		// by a later download-free message on the same channel — nothing upstream of
-		// `enqueueStreamMessage` otherwise waits on anything asynchronous.
+		// Parsing above is free; downloading image attachments below is a real network round-trip.
+		// Serialize the whole "download attachments → hand over" unit per channel (spec 049 D3):
+		// without this, a message needing a download can be overtaken, in delivery order, by a later
+		// download-free message on the same channel.
 		this.pendingInboundIngestCount++;
 		try {
 			await this.inboundIngestQueue.run(channelId, async () => {
-				if (handler.prepareChannel) await handler.prepareChannel(channelId);
-				const { text: content, images } = await this.deps.resolveInboundAttachments(channelId, parsed);
+				const { text: content, attachments } = await this.deps.collectAttachments(parsed);
 
 				log.logEvent("info", "runtime.dingtalk.message_received", "Accepted incoming message", {
 					ctx: { channelId, userName: senderName },
@@ -176,23 +171,16 @@ export class InboundMessages {
 					senderId,
 				});
 
-				// The one place a real person's message is seen before command/busy routing splits
-				// the path, so the channel index counts every human message and no synthetic wake.
-				handler.noteChannelActivity?.({ channelId, name: channelName, at: Date.now() });
-
-				// Build event
-				const event: HumanEvent = {
-					source: "human",
+				const message: InboundMessage = {
 					channelId,
-					ts: Date.now().toString(),
 					user: senderId,
 					userName: senderName,
 					text: content,
+					ts: Date.now().toString(),
 					...(channelName ? { channelName } : {}),
-					...(images.length > 0 ? { images } : {}),
+					...(attachments.length > 0 ? { attachments } : {}),
 				};
-
-				await this.deps.routeInboundEvent(event);
+				await ingress.receive(message);
 			});
 		} finally {
 			this.pendingInboundIngestCount--;

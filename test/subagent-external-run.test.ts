@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent } from "../src/dingtalk/handler.js";
+import type { WakeEvent } from "../src/channel/channel-event.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { launchExternalRun } from "../src/subagents/external/run.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
@@ -138,7 +138,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-1");
 		mkdirSync(artifactDir, { recursive: true });
 
-		const dispatched: DingTalkEvent[] = [];
+		const dispatched: WakeEvent[] = [];
 		configureSubAgentRuntime({
 			dispatch: (event) => {
 				dispatched.push(event);
@@ -418,7 +418,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-2");
 		mkdirSync(artifactDir, { recursive: true });
 
-		const dispatched: DingTalkEvent[] = [];
+		const dispatched: WakeEvent[] = [];
 		configureSubAgentRuntime({
 			dispatch: (event) => {
 				dispatched.push(event);
@@ -468,7 +468,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-3");
 		mkdirSync(artifactDir, { recursive: true });
 
-		const dispatched: DingTalkEvent[] = [];
+		const dispatched: WakeEvent[] = [];
 		configureSubAgentRuntime({
 			dispatch: (event) => {
 				dispatched.push(event);
@@ -512,7 +512,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 	it("captures a real short-lived child that closes before launchExternalRun returns", async () => {
 		const workspaceDir = createTempWorkspace();
 		const artifactDir = join(workspaceDir, "dingtalk:dm:short", "subagent-artifacts", "run-short");
-		const dispatched: DingTalkEvent[] = [];
+		const dispatched: WakeEvent[] = [];
 		configureSubAgentRuntime({
 			dispatch: (event) => {
 				dispatched.push(event);
@@ -644,7 +644,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
 			mkdirSync(artifactDir, { recursive: true });
 
-			const dispatched: DingTalkEvent[] = [];
+			const dispatched: WakeEvent[] = [];
 			configureSubAgentRuntime({
 				dispatch: (event) => {
 					dispatched.push(event);
@@ -799,7 +799,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-5");
 		mkdirSync(artifactDir, { recursive: true });
 
-		const dispatched: DingTalkEvent[] = [];
+		const dispatched: WakeEvent[] = [];
 		configureSubAgentRuntime({
 			dispatch: (event) => {
 				dispatched.push(event);

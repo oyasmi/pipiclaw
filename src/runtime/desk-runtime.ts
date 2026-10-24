@@ -12,7 +12,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadBindings, writeBindings } from "../desk/bindings.js";
 import type { BindOutcome } from "../desk/commands.js";
-import { DEFAULT_DESK, getDeskDir, isDeskName, normalizeDeskName } from "../desk/paths.js";
+import { getDeskDir, isDeskName, normalizeDeskName } from "../desk/paths.js";
 import { allocateConversation, createDeskRecord, findConversation, readDeskRecord } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
 import type {
@@ -263,13 +263,16 @@ export class DeskRuntime {
 		return this.bindingWrites.run("bindings", () => this.bindNow(channelId, normalizeDeskName(name)));
 	}
 
-	/** Human ingress only. Background work and reads must never manufacture a binding. */
-	async ensureDefaultBinding(channelId: string): Promise<void> {
+	/**
+	 * Human ingress only: bind a channel that has no binding yet to `desk` (the sender's default).
+	 * Background work and reads must never manufacture a binding.
+	 */
+	async ensureDefaultBinding(channelId: string, desk: string): Promise<void> {
 		if (this.bindings.bindings[channelId]) return;
 		await this.bindingWrites.run("bindings", async () => {
 			// Another first message or an explicit bind may have committed while this one waited.
 			if (this.bindings.bindings[channelId]) return;
-			await this.bindNow(channelId, DEFAULT_DESK);
+			await this.bindNow(channelId, desk);
 		});
 	}
 

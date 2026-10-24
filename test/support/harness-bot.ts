@@ -1,12 +1,26 @@
 import { DingTalkBot } from "../../src/dingtalk/bot.js";
 import type { DingTalkConfig } from "../../src/dingtalk/config.js";
-import type { DingTalkHandler } from "../../src/dingtalk/handler.js";
-import type { CapturedDelivery } from "./fake-bot.js";
+import type { DingTalkIngress } from "../../src/dingtalk/inbound.js";
+
+export interface CapturedDelivery {
+	method:
+		| "ensureCard"
+		| "appendToCard"
+		| "replaceCard"
+		| "streamToCard"
+		| "finalizeExistingCard"
+		| "finalizeCard"
+		| "discardCard"
+		| "sendPlain";
+	channelId: string;
+	text?: string;
+	ts: number;
+}
 
 /**
- * A real `DingTalkBot` — real `ChannelQueue`, real `/steer` / `/followup` / `/stop`
- * / `/new` and busy routing (`routeInboundEvent`) — with every outbound call
- * captured instead of hitting the DingTalk API and no socket ever opened.
+ * A real `DingTalkBot` — inbound parsing, cards, the plain-send path — with every outbound call
+ * captured instead of hitting the DingTalk API and no socket ever opened. Routing, queueing and
+ * busy handling are the runtime's real `Ingress`, behind the real `DingTalkTransport`.
  *
  * This is what makes the deterministic e2e layer (spec 048) able to exercise
  * concurrency and interruption end to end without a live transport.
@@ -17,11 +31,11 @@ export class HarnessDingTalkBot extends DingTalkBot {
 		resolve: (delivery: CapturedDelivery) => void;
 	}>();
 	constructor(
-		handler: DingTalkHandler,
+		ingress: DingTalkIngress,
 		config: DingTalkConfig,
 		readonly deliveries: CapturedDelivery[],
 	) {
-		super(handler, config);
+		super(ingress, config);
 	}
 
 	private capture(method: CapturedDelivery["method"], channelId: string, text?: string): void {

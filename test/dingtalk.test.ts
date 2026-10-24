@@ -2,8 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WakeEvent } from "../src/channel/channel-event.js";
-import type { DingTalkHandler } from "../src/dingtalk/handler.js";
+import type { InboundMessage, IngressResult } from "../src/channel/ingress.js";
 
 const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
@@ -96,29 +95,18 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-dingtalk-");
 
-function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandler {
-	return {
-		isRunning: vi.fn(() => false),
-		handleEvent: vi.fn(async () => {}),
-		handleStop: vi.fn(async () => ({})),
-		handleNewSession: vi.fn(async () => {}),
-		runRuntimeCommand: vi.fn(async () => ""),
-		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
-		...overrides,
-	};
+function createIngress() {
+	return { receive: vi.fn(async (_message: InboundMessage): Promise<IngressResult> => ({ kind: "started" })) };
 }
 
-function createBot(
-	handlerOverrides: Partial<DingTalkHandler> = {},
-	configOverrides: Partial<ConstructorParameters<typeof DingTalkBot>[1]> = {},
-): {
+function createBot(configOverrides: Partial<ConstructorParameters<typeof DingTalkBot>[1]> = {}): {
 	bot: DingTalkBot;
-	handler: DingTalkHandler;
+	ingress: ReturnType<typeof createIngress>;
 	stateDir: string;
 } {
 	const stateDir = createTempDir();
-	const handler = createHandler(handlerOverrides);
-	const bot = new DingTalkBot(handler, {
+	const ingress = createIngress();
+	const bot = new DingTalkBot(ingress, {
 		clientId: "client-id",
 		clientSecret: "client-secret",
 		cardTemplateId: "tmpl",
@@ -126,7 +114,7 @@ function createBot(
 		stateDir,
 		...configOverrides,
 	});
-	return { bot, handler, stateDir };
+	return { bot, ingress, stateDir };
 }
 
 /** The bot's collaborators, reached through their private fields (the bot keeps no state of its own for them). */
@@ -144,9 +132,6 @@ type PrivateBotApi = {
 		};
 	};
 	connection: { client: unknown; isReconnecting: boolean; doReconnect(immediate?: boolean): Promise<boolean> };
-	queues: Map<string, unknown>;
-	getQueue(channelId: string): unknown;
-	cleanupIdleChannelCaches(now?: number): void;
 };
 
 function getPrivateApi(bot: DingTalkBot): PrivateBotApi {
@@ -193,8 +178,8 @@ afterEach(() => {
 describe("dingtalk", () => {
 	// `parseInboundMessage` itself (text/picture/richText shapes, marker placement) is covered by
 	// its own unit tests in test/inbound-media.test.ts (spec 049); these cases drive the transport.
-	it("routes authorized messages to DM and group channels and persists metadata", async () => {
-		const { bot, handler, stateDir } = createBot();
+	it("hands authorized messages to the ingress as DM and group channels and persists metadata", async () => {
+		const { bot, ingress, stateDir } = createBot();
 		const privateApi = getPrivateApi(bot);
 
 		await privateApi.inbound.onStreamMessage({
@@ -206,13 +191,15 @@ describe("dingtalk", () => {
 		});
 		await flushMicrotasks();
 
-		expect(handler.handleEvent).toHaveBeenCalledWith(
+		expect(ingress.receive).toHaveBeenCalledWith(
 			expect.objectContaining({
 				channelId: "dingtalk:dm:staff_1",
-				source: "human",
+				user: "staff_1",
+				userName: "Alice",
 				text: "check dm",
+				// A DM has no title, so the peer's nickname is the only handle it will ever have.
+				channelName: "Alice",
 			}),
-			bot,
 		);
 
 		await privateApi.inbound.onStreamMessage({
@@ -221,16 +208,16 @@ describe("dingtalk", () => {
 			senderNick: "Bob",
 			conversationId: "conv_group",
 			conversationType: "2",
+			conversationTitle: "  投资理财  ",
 		});
 		await flushMicrotasks();
 
-		expect(handler.handleEvent).toHaveBeenCalledWith(
+		expect(ingress.receive).toHaveBeenCalledWith(
 			expect.objectContaining({
 				channelId: "dingtalk:group:conv_group",
-				source: "human",
 				text: "check group",
+				channelName: "投资理财",
 			}),
-			bot,
 		);
 
 		// Spec 058, D17: one file for every channel, keyed by channel id.
@@ -243,257 +230,25 @@ describe("dingtalk", () => {
 		});
 	});
 
-	it("names channels from group titles or nicknames, records busy-path activity, and ignores unauthorized senders", async () => {
-		const noteChannelActivity = vi.fn();
-		const { bot, handler } = createBot({ noteChannelActivity });
-		const privateApi = getPrivateApi(bot);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "hi" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_group",
-			conversationType: "2",
-			conversationTitle: "  投资理财  ",
-		});
-		await flushMicrotasks();
-
-		expect(noteChannelActivity).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:group:conv_group", name: "投资理财" }),
-		);
-		expect(handler.handleEvent).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:group:conv_group", channelName: "投资理财" }),
-			bot,
-		);
-
-		// A DM carries no title, so the peer's nickname is the only handle it will ever have.
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "hi" },
-			senderStaffId: "staff_2",
-			senderNick: "Bob",
-			conversationId: "conv_dm",
-			conversationType: "1",
-		});
-		await flushMicrotasks();
-
-		expect(noteChannelActivity).toHaveBeenLastCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:dm:staff_2", name: "Bob" }),
-		);
-
-		// The hook sits before busy/command routing, so a steer still counts as human activity,
-		// while an unauthorized sender is ignored entirely.
-		const guardedActivity = vi.fn();
-		const guarded = createBot(
-			{ noteChannelActivity: guardedActivity, isRunning: vi.fn(() => true) },
-			{ allowFrom: ["staff_ok"] },
-		);
-		guarded.bot.sendPlain = vi.fn(async () => true);
-		const guardedApi = getPrivateApi(guarded.bot);
-
-		await guardedApi.inbound.onStreamMessage({
-			text: { content: "blocked" },
-			senderStaffId: "staff_nope",
-			senderNick: "Mallory",
+	it("ignores senders outside the allow-list entirely", async () => {
+		const guarded = createBot({ allowFrom: ["staff_ok"] });
+		const api = getPrivateApi(guarded.bot);
+		const message = (sender: string) => ({
+			text: { content: "hello" },
+			senderStaffId: sender,
+			senderNick: "X",
 			conversationId: "conv_group",
 			conversationType: "2",
 			conversationTitle: "投资理财",
 		});
+
+		await api.inbound.onStreamMessage(message("staff_nope"));
 		await flushMicrotasks();
-		expect(guardedActivity).not.toHaveBeenCalled();
-		expect(guarded.handler.handleEvent).not.toHaveBeenCalled();
+		expect(guarded.ingress.receive).not.toHaveBeenCalled();
 
-		await guardedApi.inbound.onStreamMessage({
-			text: { content: "keep going" },
-			senderStaffId: "staff_ok",
-			senderNick: "Alice",
-			conversationId: "conv_group",
-			conversationType: "2",
-			conversationTitle: "投资理财",
-		});
+		await api.inbound.onStreamMessage(message("staff_ok"));
 		await flushMicrotasks();
-		expect(guardedActivity).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:group:conv_group", name: "投资理财" }),
-		);
-	});
-
-	it("routes busy transport commands correctly", async () => {
-		const { bot, handler } = createBot({
-			isRunning: vi.fn(() => true),
-		});
-		bot.sendPlain = vi.fn(async () => true);
-		const privateApi = getPrivateApi(bot);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/stop" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		expect(handler.handleStop).toHaveBeenCalledWith("dingtalk:dm:staff_1", bot);
-		expect(bot.sendPlain).toHaveBeenCalledWith("dingtalk:dm:staff_1", "已停止当前回合。", {
-			title: "/stop",
-			markdown: true,
-		});
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/steer focus src" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
-			bot,
-			"steer",
-			"focus src",
-		);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/followup next task" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
-			bot,
-			"followUp",
-			"next task",
-		);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/events list" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
-			"events",
-			"list",
-		);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/status" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
-			expect.objectContaining({ channelId: "dingtalk:dm:staff_1" }),
-			"status",
-			"",
-		);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "plain busy text" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ text: "plain busy text" }),
-			bot,
-			"steer",
-			"plain busy text",
-		);
-
-		// Read-only runtime commands like /context answer while a turn is streaming too —
-		// no reason to make the user wait for the turn to finish.
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/context detail" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
-			expect.objectContaining({ text: "/context detail" }),
-			"context",
-			"detail",
-		);
-	});
-
-	it("tells the user a session command is idle-only when busy", async () => {
-		const { bot, handler } = createBot({
-			isRunning: vi.fn(() => true),
-		});
-		bot.sendPlain = vi.fn(async () => true);
-		const privateApi = getPrivateApi(bot);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/model anthropic/x" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-
-		expect(handler.handleBusyMessage).not.toHaveBeenCalled();
-		const reply = (bot.sendPlain as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as string;
-		expect(reply).toContain("当前已有回合在运行");
-		expect(reply).toContain("`/status`");
-		expect(reply).toContain("`/model`");
-	});
-
-	it("routes /new around a busy turn instead of rejecting or queueing it", async () => {
-		const handleNewSession = vi.fn(async () => {});
-		const { bot, handler } = createBot({
-			isRunning: vi.fn(() => true),
-			handleNewSession,
-		});
-		const privateApi = getPrivateApi(bot);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "/new" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-
-		expect(handleNewSession).toHaveBeenCalledWith(expect.objectContaining({ text: "/new" }), bot);
-		expect(handler.handleBusyMessage).not.toHaveBeenCalled();
-		expect(handler.handleEvent).not.toHaveBeenCalled();
-	});
-
-	it("requeues a busy plain message as normal work when the busy window has closed", async () => {
-		const { bot, handler } = createBot(
-			{
-				isRunning: vi.fn(() => true),
-				handleBusyMessage: vi.fn(async () => ({ kind: "requeue" as const, text: "second message" })),
-			},
-			{ busyMessageDefault: "followUp" },
-		);
-		bot.sendPlain = vi.fn(async () => true);
-		const privateApi = getPrivateApi(bot);
-
-		await privateApi.inbound.onStreamMessage({
-			text: { content: "second message" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		await flushMicrotasks();
-
-		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ text: "second message" }),
-			bot,
-			"followUp",
-			"second message",
-		);
-		expect(handler.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "second message" }), bot);
-		expect(bot.sendPlain).not.toHaveBeenCalledWith(
-			"dingtalk:dm:staff_1",
-			expect.stringContaining("Could not queue this message"),
-		);
+		expect(guarded.ingress.receive).toHaveBeenCalledTimes(1);
 	});
 
 	it("refreshes, caches, and coalesces access token requests", async () => {
@@ -546,15 +301,8 @@ describe("dingtalk", () => {
 			axiosMock.get.mockResolvedValueOnce({ data: fileBytes });
 		}
 
-		it("downloads a picture message, persists it, and attaches it to the event", async () => {
-			const persistInboundImage = vi.fn(
-				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
-					path: "/workspace/dingtalk:dm:staff_1/inbox/image-1.jpg",
-					mimeType: image.mimeType ?? "application/octet-stream",
-					byteSize: image.data.byteLength,
-				}),
-			);
-			const { bot, handler } = createBot({ persistInboundImage });
+		it("downloads a picture message and hands its bytes to the ingress as an attachment", async () => {
+			const { bot, ingress } = createBot();
 			setCachedToken(bot);
 			mockDownload(JPEG_BYTES);
 			const privateApi = getPrivateApi(bot);
@@ -569,16 +317,13 @@ describe("dingtalk", () => {
 			});
 			await flushMicrotasks();
 
-			expect(persistInboundImage).toHaveBeenCalledWith("dingtalk:dm:staff_1", {
-				data: expect.any(Buffer),
-				mimeType: "image/jpeg",
-			});
-			expect(handler.handleEvent).toHaveBeenCalledWith(
+			// The transport only downloads: persisting, sniffing the format and settling the marker
+			// are the runtime's (`inbound-images.test.ts`).
+			expect(ingress.receive).toHaveBeenCalledWith(
 				expect.objectContaining({
 					text: "[图片1]",
-					images: [expect.objectContaining({ mimeType: "image/jpeg" })],
+					attachments: [{ kind: "image", index: 1, data: JPEG_BYTES }],
 				}),
-				bot,
 			);
 			// The credential exchange must name the message's own downloadCode, not a stray value.
 			expect(axiosMock.post).toHaveBeenCalledWith(
@@ -589,7 +334,7 @@ describe("dingtalk", () => {
 		});
 
 		it("keeps the rest of the message when one image fails to download", async () => {
-			const { bot, handler } = createBot();
+			const { bot, ingress } = createBot();
 			setCachedToken(bot);
 			axiosMock.post.mockResolvedValueOnce({ data: { downloadUrl: "https://example.invalid/file" } });
 			axiosMock.get.mockRejectedValueOnce(new Error("network down"));
@@ -605,57 +350,13 @@ describe("dingtalk", () => {
 			});
 			await flushMicrotasks();
 
-			expect(handler.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "[图片1：接收失败]" }), bot);
-			const sentEvent = vi.mocked(handler.handleEvent).mock.calls[0]?.[0];
-			expect(sentEvent && "images" in sentEvent).toBe(false);
-		});
-
-		it("persists an unrecognized format but excludes it from the model-facing images list", async () => {
-			const persistInboundImage = vi.fn(
-				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
-					path: "/workspace/dingtalk:dm:staff_1/inbox/image-1.bin",
-					mimeType: "application/octet-stream",
-					byteSize: image.data.byteLength,
-					unsupportedFormat: true,
-				}),
-			);
-			const { bot, handler } = createBot({ persistInboundImage });
-			setCachedToken(bot);
-			mockDownload(Buffer.from("this is not an image"));
-			const privateApi = getPrivateApi(bot);
-
-			await privateApi.inbound.onStreamMessage({
-				msgtype: "picture",
-				senderStaffId: "staff_1",
-				senderNick: "Alice",
-				conversationId: "conv_dm",
-				conversationType: "1",
-				content: { downloadCode: "code-1" },
-			});
-			await flushMicrotasks();
-
-			expect(persistInboundImage).toHaveBeenCalledWith("dingtalk:dm:staff_1", {
-				data: expect.any(Buffer),
-				mimeType: null,
-			});
-			expect(handler.handleEvent).toHaveBeenCalledWith(
-				expect.objectContaining({
-					text: "[图片1：格式不支持，已保存]",
-					images: [expect.objectContaining({ unsupportedFormat: true })],
-				}),
-				bot,
-			);
+			expect(ingress.receive).toHaveBeenCalledWith(expect.objectContaining({ text: "[图片1：接收失败]" }));
+			const sent = ingress.receive.mock.calls[0]?.[0];
+			expect(sent && "attachments" in sent).toBe(false);
 		});
 
 		it("never overtakes a download in the channel's delivery order (spec 049 D3)", async () => {
-			const persistInboundImage = vi.fn(
-				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
-					path: "/workspace/dingtalk:dm:staff_1/inbox/image-1.jpg",
-					mimeType: image.mimeType ?? "application/octet-stream",
-					byteSize: image.data.byteLength,
-				}),
-			);
-			const { bot, handler } = createBot({ persistInboundImage });
+			const { bot, ingress } = createBot();
 			setCachedToken(bot);
 			const privateApi = getPrivateApi(bot);
 
@@ -679,7 +380,7 @@ describe("dingtalk", () => {
 				content: { downloadCode: "code-1" },
 			});
 			await flushMicrotasks();
-			expect(handler.handleEvent).not.toHaveBeenCalled();
+			expect(ingress.receive).not.toHaveBeenCalled();
 
 			// Fire-and-forget, exactly like the production socket callback (`handleRawMessage`
 			// never awaits `onStreamMessage`) — the second message's own ingestion job is chained
@@ -695,23 +396,19 @@ describe("dingtalk", () => {
 			await flushMicrotasks();
 
 			// Without the per-channel ingestion queue (spec 049 D3), the second message — which
-			// needs no download — would already have reached handleEvent here.
-			expect(handler.handleEvent).not.toHaveBeenCalled();
+			// needs no download — would already have reached the ingress here.
+			expect(ingress.receive).not.toHaveBeenCalled();
 
 			download.release?.();
 			await firstMessage;
 			await secondMessage;
 			await flushMicrotasks();
 
-			expect(handler.handleEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({ text: "[图片1]" }), bot);
-			expect(handler.handleEvent).toHaveBeenNthCalledWith(
-				2,
-				expect.objectContaining({ text: "second, no image" }),
-				bot,
-			);
+			expect(ingress.receive).toHaveBeenNthCalledWith(1, expect.objectContaining({ text: "[图片1]" }));
+			expect(ingress.receive).toHaveBeenNthCalledWith(2, expect.objectContaining({ text: "second, no image" }));
 		});
 
-		it("reflects in-flight downloads in allChannelQueuesIdle()", async () => {
+		it("reports in-flight downloads as pending ingest", async () => {
 			const { bot } = createBot();
 			setCachedToken(bot);
 			const privateApi = getPrivateApi(bot);
@@ -735,17 +432,17 @@ describe("dingtalk", () => {
 			});
 			await flushMicrotasks();
 
-			expect(bot.allChannelQueuesIdle()).toBe(false);
+			expect(bot.hasPendingIngest()).toBe(true);
 
 			download.release?.();
 			await pending;
 			await flushMicrotasks();
 
-			expect(bot.allChannelQueuesIdle()).toBe(true);
+			expect(bot.hasPendingIngest()).toBe(false);
 		});
 	});
 
-	it("persists conversation metadata, reloads it after a restart, writes only on change or after a failed write, and reclaims idle queues", () => {
+	it("persists conversation metadata, reloads it after a restart, writes only on change or after a failed write", () => {
 		const { bot, stateDir } = createBot();
 		const privateApi = getPrivateApi(bot);
 		const meta = { conversationId: "conv_1", conversationType: "1", senderId: "staff_1" };
@@ -769,10 +466,6 @@ describe("dingtalk", () => {
 		rmSync(metadataPath, { recursive: true });
 		privateApi.conversations.set("dingtalk:dm:staff_2", dm2);
 		expect(new ConversationMetaStore({ stateDir }, () => {}).get("dingtalk:dm:staff_2")).toEqual(dm2);
-
-		privateApi.getQueue("dingtalk:dm:staff_1");
-		privateApi.cleanupIdleChannelCaches(Date.now() + 2 * 60 * 60 * 1000);
-		expect(privateApi.queues.has("dingtalk:dm:staff_1")).toBe(false);
 	});
 
 	it("sends plain DM and group messages using cached metadata", async () => {
@@ -872,62 +565,6 @@ describe("dingtalk", () => {
 			}),
 			expect.any(Object),
 		);
-	});
-
-	it("enforces queue limits and stops cleanly", async () => {
-		let releaseCurrent: (() => void) | null = null;
-		const { bot, handler } = createBot({
-			handleEvent: vi.fn(
-				() =>
-					new Promise<void>((resolve) => {
-						releaseCurrent = resolve;
-					}),
-			),
-		});
-
-		const event = (suffix: number): WakeEvent => ({
-			source: "wake",
-			channelId: "dingtalk:dm:queue",
-			ts: `${suffix}`,
-			producer: "EVENT",
-			desk: "news",
-			text: `job ${suffix}`,
-		});
-
-		const results = [1, 2, 3, 4, 5, 6, 7].map((index) => bot.enqueueEvent(event(index)));
-		expect(results).toEqual([true, true, true, true, true, true, false]);
-		expect(handler.handleEvent).toHaveBeenCalledTimes(1);
-
-		const socket = createSocketMock(1);
-		getPrivateApi(bot).connection.client = { socket };
-
-		await bot.stop();
-		expect(socket.removeAllListeners).toHaveBeenCalledTimes(1);
-		expect(socket.close).toHaveBeenCalledTimes(1);
-		expect(bot.enqueueEvent(event(8))).toBe(false);
-
-		expect(releaseCurrent).not.toBeNull();
-		releaseCurrent!();
-	});
-
-	it("reserves a queued turn before entering its async handler", async () => {
-		const order: string[] = [];
-		const { bot } = createBot({
-			reserveEvent: vi.fn(() => order.push("reserve")),
-			handleEvent: vi.fn(async () => {
-				order.push("handle");
-			}),
-		});
-		bot.enqueueEvent({
-			source: "wake",
-			channelId: "dingtalk:dm:reserve",
-			ts: "1",
-			producer: "EVENT",
-			desk: "news",
-			text: "work",
-		});
-		await flushMicrotasks();
-		expect(order).toEqual(["reserve", "handle"]);
 	});
 
 	it("acks downstream messages and deduplicates repeated deliveries", async () => {

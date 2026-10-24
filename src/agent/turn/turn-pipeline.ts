@@ -5,8 +5,8 @@
  * `TurnProgress` it fills in; `ChannelRunner.run()` calls these in order.
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ChannelContext } from "../../channel/channel-context.js";
 import type { InboundImage } from "../../channel/channel-event.js";
+import type { TurnInfo } from "../../channel/transport.js";
 import type { DeskConversation } from "../../desk/types.js";
 import * as log from "../../log.js";
 import type { FallbackRunDeps } from "../../models/fallback.js";
@@ -17,8 +17,7 @@ import { SessionRetryAttempt } from "../session/session-adapter.js";
 import type { SessionHost } from "../session/session-host.js";
 import { MAX_USER_MESSAGE_CHARS, type RunState } from "../types.js";
 import { estimateIncomingMessageTokens } from "./context-budget.js";
-import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
-import type { createRunQueue } from "./run-queue.js";
+import { clipUserInput } from "./progress-formatter.js";
 import { buildFirstTurnMemoryBootstrap, buildTaskDigestForTurn, renderDeskTurnContext } from "./turn-context.js";
 import { renderFallbackSwitch } from "./turn-error.js";
 import {
@@ -28,6 +27,7 @@ import {
 	prepareInboundImages,
 	shouldPreserveRawInput,
 } from "./turn-input.js";
+import type { TurnOutput } from "./turn-output.js";
 import type { TurnHandle, TurnStateMachine } from "./turn-state.js";
 
 /** What `run()` accumulates across its steps; the epilogue reports it as the turn was actually sent. */
@@ -97,23 +97,26 @@ export class TurnPipeline {
 
 	/** Oversized input is spilled to disk and clipped; the user is told. Slash commands pass through raw. */
 	async prepareUserInput(
-		ctx: ChannelContext,
+		turn: TurnInfo,
+		ctx: TurnOutput,
 	): Promise<{ clippedInput: string; userMessage: string; preserveRawInput: boolean }> {
-		const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
+		const normalizedInputLength = turn.text.replace(/\r/g, "").trim().length;
 		let oversizedInputPath: string | undefined;
 		if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
-			oversizedInputPath = await persistOversizedInput(this.deskDir, this.channelId, ctx.message.text);
-			await ctx.respondInThread(
-				oversizedInputPath
+			oversizedInputPath = await persistOversizedInput(this.deskDir, this.channelId, turn.text);
+			ctx.emit({
+				type: "commentary",
+				level: "notice",
+				text: oversizedInputPath
 					? `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理；完整内容已存到 \`${oversizedInputPath}\`，需要时让我读取这个文件查看被省略的部分。`
 					: `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理。`,
-			);
+			});
 		}
-		const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS, oversizedInputPath);
+		const clippedInput = clipUserInput(turn.text, MAX_USER_MESSAGE_CHARS, oversizedInputPath);
 		return {
 			clippedInput,
-			userMessage: formatUserMessage(clippedInput, ctx.message.userName),
-			preserveRawInput: shouldPreserveRawInput(ctx.message.text),
+			userMessage: formatUserMessage(clippedInput, turn.userName),
+			preserveRawInput: shouldPreserveRawInput(turn.text),
 		};
 	}
 
@@ -164,21 +167,16 @@ export class TurnPipeline {
 	}
 
 	/** Inbound images for the current model, with a notice to the user for each one that was left out. */
-	async prepareTurnImages(ctx: ChannelContext): Promise<PreparedInboundImages> {
-		const prepared = await prepareInboundImages(ctx.message.images, this.session.model ?? this.models.activeModel);
+	async prepareTurnImages(turn: TurnInfo, ctx: TurnOutput): Promise<PreparedInboundImages> {
+		const prepared = await prepareInboundImages(turn.images, this.session.model ?? this.models.activeModel);
 		for (const notice of prepared.notices) {
-			await ctx.respondInThread(notice);
+			ctx.emit({ type: "commentary", level: "notice", text: notice });
 		}
 		return prepared;
 	}
 
 	/** The seams `runPromptWithFallback` drives: submit the prompt, observe/reset the error, switch model. */
-	buildFallbackDeps(
-		ctx: ChannelContext,
-		runQueue: ReturnType<typeof createRunQueue>,
-		turn: TurnProgress,
-		ownTurn: TurnHandle,
-	): FallbackRunDeps {
+	buildFallbackDeps(info: TurnInfo, ctx: TurnOutput, turn: TurnProgress, ownTurn: TurnHandle): FallbackRunDeps {
 		let attempt: SessionRetryAttempt | undefined;
 		const canRetry = () =>
 			!this.deps.isRetired() &&
@@ -217,6 +215,8 @@ export class TurnPipeline {
 				this.runState.stopReason = "stop";
 				this.runState.errorMessage = undefined;
 				this.runState.finalOutcome = { kind: "none" };
+				// The retried prompt is this turn's first user message again, not an injected one.
+				this.runState.userMessagesStarted = 0;
 				this.runState.lastCompactionError = undefined;
 			},
 			canRetry,
@@ -249,19 +249,14 @@ export class TurnPipeline {
 				// The fallback model's vision support can differ from the one this turn started
 				// on; re-resolve against it rather than resend whatever was prepared for the
 				// model that just failed.
-				turn.images = await this.prepareTurnImages(ctx);
+				turn.images = await this.prepareTurnImages(info, ctx);
 			},
 			notifySwitch: (from, to, errorSummary) => {
 				turn.fallbackTargetRef = to;
 				if (this.runState.logCtx) {
 					log.logModelFallback(this.runState.logCtx, from, to, errorSummary);
 				}
-				const text = renderFallbackSwitch(from, to, errorSummary);
-				if (ctx.progressStyle !== "none") {
-					runQueue.queue.enqueue(() => ctx.respond(formatProgressEntry("error", text), false), "fallback switch");
-				} else {
-					runQueue.queue.enqueue(() => ctx.respondInThread(`⚠️ ${text}`), "fallback switch");
-				}
+				ctx.emit({ type: "commentary", level: "warning", text: renderFallbackSwitch(from, to, errorSummary) });
 			},
 			markPrimaryFailed: () => {
 				this.models.markPrimaryFailed();
@@ -302,7 +297,7 @@ export class TurnPipeline {
 		const queuedMessage = formatUserMessage(clippedText, userName);
 		const preparedImages = await prepareInboundImages(images, this.session.model ?? this.models.activeModel);
 		for (const notice of preparedImages.notices) {
-			await this.runState.ctx?.respondInThread(notice);
+			this.runState.ctx?.emit({ type: "commentary", level: "notice", text: notice });
 		}
 
 		this.assertBusyWindowOpen();

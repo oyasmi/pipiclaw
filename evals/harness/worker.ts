@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import type { MediaSendResult, OutboundMedia } from "../../src/channel/channel-context.js";
-import type { ChannelEvent, WakeEvent } from "../../src/channel/channel-event.js";
-import type { DingTalkBot } from "../../src/dingtalk/bot.js";
-import type { DingTalkBotPort, DingTalkHandler } from "../../src/dingtalk/handler.js";
+import type { ChannelEvent } from "../../src/channel/channel-event.js";
+import type { MediaSendResult, OutboundMedia } from "../../src/channel/transport.js";
+import { DingTalkBot } from "../../src/dingtalk/bot.js";
+import { DingTalkTransport } from "../../src/dingtalk/transport.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/tasks/contract.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
@@ -219,31 +219,19 @@ function eventTrace(event: unknown): void {
 	}
 }
 
-class EvalBot implements DingTalkBotPort {
-	private generation = Symbol("eval-card");
-	getCardGeneration(): symbol {
-		return this.generation;
-	}
-	isCardGenerationCurrent(_channelId: string, generation: symbol): boolean {
-		return generation === this.generation;
-	}
-	clearPendingMessages(): number {
-		return 0;
-	}
-	resetChannelQueue(): number {
-		this.generation = Symbol("eval-card");
-		return 0;
-	}
-	handler?: DingTalkHandler;
-	readonly pending = new Set<Promise<void>>();
-	get progressStyle(): "none" {
+/**
+ * A real `DingTalkBot` whose outbound calls are captured instead of sent, and which shows no
+ * progress: the eval observes what the agent delivers, not how a card looks.
+ */
+class EvalBot extends DingTalkBot {
+	override get progressStyle(): "none" {
 		return "none";
 	}
-	get finalDelivery(): "plain" {
+	override get finalDelivery(): "plain" {
 		return "plain";
 	}
-	async start(): Promise<void> {}
-	async stop(): Promise<void> {}
+	override async start(): Promise<void> {}
+	override async stop(): Promise<void> {}
 	private capture(
 		method: CapturedDelivery["method"],
 		channelId: string,
@@ -262,37 +250,34 @@ class EvalBot implements DingTalkBotPort {
 		localDeliveries.push(delivery);
 		send({ protocol: 1, type: "delivery", delivery });
 	}
-	async streamToCard(channelId: string, text: string): Promise<boolean> {
-		this.capture("streamToCard", channelId, text);
-		return true;
-	}
-	async appendToCard(channelId: string, text: string): Promise<boolean> {
+	override async appendToCard(channelId: string, text: string): Promise<boolean> {
 		this.capture("appendToCard", channelId, text);
 		return true;
 	}
-	async replaceCard(channelId: string, text: string): Promise<boolean> {
+	override async replaceCard(channelId: string, text: string): Promise<boolean> {
 		this.capture("replaceCard", channelId, text);
 		return true;
 	}
-	async ensureCard(channelId: string): Promise<void> {
+	override async ensureCard(channelId: string): Promise<void> {
 		this.capture("ensureCard", channelId);
 	}
-	async finalizeExistingCard(channelId: string, text: string): Promise<boolean> {
+	override async finalizeExistingCard(channelId: string, text: string): Promise<boolean> {
 		this.capture("finalizeExistingCard", channelId, text);
 		return true;
 	}
-	async finalizeCard(channelId: string, text: string): Promise<boolean> {
+	override async finalizeCard(channelId: string, text: string): Promise<boolean> {
 		this.capture("finalizeCard", channelId, text);
 		return true;
 	}
-	discardCard(channelId: string): void {
+	override discardCard(channelId: string, generation?: symbol): void {
 		this.capture("discardCard", channelId);
+		super.discardCard(channelId, generation);
 	}
-	async sendPlain(channelId: string, text: string): Promise<boolean> {
+	override async sendPlain(channelId: string, text: string): Promise<boolean> {
 		this.capture("sendPlain", channelId, text);
 		return true;
 	}
-	async sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult> {
+	override async sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult> {
 		this.capture("sendMedia", channelId, undefined, {
 			fileName: media.fileName,
 			kind: media.kind,
@@ -300,30 +285,6 @@ class EvalBot implements DingTalkBotPort {
 			hash: hash(media.data),
 		});
 		return { ok: true };
-	}
-	enqueueEvent(event: WakeEvent): boolean {
-		if (!this.handler) return false;
-		const taskId =
-			/^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text)?.[1] ??
-			(event.source === "wake" ? event.internalWake?.taskId : undefined);
-		const priorActor = currentActorId;
-		const priorSession = currentSessionId;
-		if (taskId) {
-			currentActorId = `task:${taskId}`;
-			currentSessionId = `${caseId}:${channelId}:task:${taskId}`;
-		}
-		const pending = this.handler
-			.handleEvent(event, this)
-			.finally(() => {
-				currentActorId = priorActor;
-				currentSessionId = priorSession;
-			})
-			.finally(() => this.pending.delete(pending));
-		this.pending.add(pending);
-		return true;
-	}
-	async drain(): Promise<void> {
-		while (this.pending.size > 0) await Promise.all([...this.pending]);
 	}
 }
 
@@ -371,8 +332,14 @@ async function main(): Promise<void> {
 	process.chdir(workspaceDir);
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
-	const bot = new EvalBot();
-	const runtime = await createRuntimeContext({
+	const dingtalkConfig = {
+		clientId: "eval",
+		clientSecret: "eval",
+		robotCode: "eval",
+		cardTemplateKey: "content",
+		stateDir: join(homeDir, "state"),
+	};
+	const runtime: Awaited<ReturnType<typeof createRuntimeContext>> = await createRuntimeContext({
 		paths: {
 			appName: "pipiclaw",
 			appHomeDir: homeDir,
@@ -385,19 +352,16 @@ async function main(): Promise<void> {
 			securityConfigPath: join(homeDir, "security.json"),
 			eventHistoryPath: join(homeDir, "state/events/history.jsonl"),
 		},
-		dingtalkConfig: {
-			clientId: "eval",
-			clientSecret: "eval",
-			robotCode: "eval",
-			cardTemplateKey: "content",
-			stateDir: join(homeDir, "state"),
-		},
+		dingtalkConfig,
+		transports: [
+			new DingTalkTransport({
+				config: dingtalkConfig,
+				archiveBotResponse: (id, text) => runtime.store.logBotResponse(id, text, Date.now().toString()),
+				createBot: (ingress, config) => new EvalBot(ingress, config),
+			}),
+		],
 		registerSignalHandlers: false,
 		startServices: false,
-		createBot: (handler) => {
-			bot.handler = handler;
-			return bot as unknown as DingTalkBot;
-		},
 		createEventsWatcher: () => ({ start() {}, stop() {} }),
 		observer: eventTrace,
 		onTaskDriverDispatch: (event, accepted) => {
@@ -409,8 +373,32 @@ async function main(): Promise<void> {
 		},
 	});
 
+	// A wake the runtime queues itself (a task step, a completion) runs as that task's actor, so the
+	// trace can tell its tool calls from the main agent's.
+	const handleEvent = runtime.ingress.handleEvent.bind(runtime.ingress);
+	runtime.ingress.handleEvent = async (event) => {
+		const taskId =
+			/^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text)?.[1] ??
+			(event.source === "wake" ? event.internalWake?.taskId : undefined);
+		const priorActor = currentActorId;
+		const priorSession = currentSessionId;
+		if (taskId) {
+			currentActorId = `task:${taskId}`;
+			currentSessionId = `${caseId}:${channelId}:task:${taskId}`;
+		}
+		try {
+			await handleEvent(event);
+		} finally {
+			currentActorId = priorActor;
+			currentSessionId = priorSession;
+		}
+	};
 	const sendEvent = async (event: ChannelEvent): Promise<void> => {
-		await runtime.handler.handleEvent(event, bot);
+		await handleEvent(event);
+	};
+	/** Wait for every queued turn (task wakes the runtime enqueued) to finish. */
+	const drain = async (): Promise<void> => {
+		while (!runtime.ingress.isIdle()) await new Promise((resolve) => setTimeout(resolve, 5));
 	};
 	const execute = async (step: Step): Promise<void> => {
 		stepIndex++;
@@ -425,7 +413,7 @@ async function main(): Promise<void> {
 				userName: "Evaluator",
 				text: interpolate(step.text, canaryPath, workspaceDir, deskDir),
 			});
-			await bot.drain();
+			await drain();
 			if (
 				!step.text.trim().startsWith("/") &&
 				!localTrace.slice(before).some((event) => event.kind === "model-result")
@@ -444,7 +432,7 @@ async function main(): Promise<void> {
 				userName: "Evaluator",
 				text: step.kind === "newSession" ? "/new" : "/compact",
 			});
-			await bot.drain();
+			await drain();
 			if (step.kind === "newSession") {
 				sessionGeneration++;
 				currentSessionId = `${caseId}:${channelId}:segment-${segment}:session-${sessionGeneration}`;
@@ -476,7 +464,7 @@ async function main(): Promise<void> {
 				throw new Error("Runtime did not expose TaskDriver.runOnce; use the production runtime driver.");
 			}
 			await runtime.taskDriver.runOnce(step.at ? new Date(step.at) : new Date());
-			await bot.drain();
+			await drain();
 			currentPhase = "runtime";
 		} else if (step.kind === "runMemoryMaintenance") {
 			currentPhase = "scheduler";
@@ -484,7 +472,7 @@ async function main(): Promise<void> {
 				throw new Error("Runtime did not expose the memory maintenance scheduler; use the production instance.");
 			}
 			await runtime.memoryMaintenance.runOnce(step.at ? new Date(step.at) : new Date());
-			await bot.drain();
+			await drain();
 			currentPhase = "runtime";
 		} else if (step.kind === "waitFor") {
 			currentPhase = step.failureCategory ?? "fixture";
@@ -506,7 +494,7 @@ async function main(): Promise<void> {
 					},
 				};
 				if (step.predicate(context)) {
-					await bot.drain();
+					await drain();
 					break;
 				}
 				if (Date.now() >= deadline)

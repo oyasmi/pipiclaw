@@ -18,7 +18,7 @@ A module is a path under `src/`. Dependencies run strictly downward through the 
 | 2 | `tasks` | `src/tasks/` | the one-off task project: contract, waiting tickets, loop log, budget, `/tasks`. Scheduling and wake wiring live in `runtime/task-*.ts` so this module stays a leaf | layers 0–1 | `contract.ts`, `ticket.ts`, `loop-log.ts`, `bound-work.ts`, `commands.ts` |
 | 2 | `desk` | `src/desk/` | the desk: a named work context (built-in `default`, others explicitly created) that owns memory, tasks, events and working files (spec 060); `desk.json`, `desk-bindings.json`, conversation allocation, `/desk` parsing and rendering. Never parses a channel id | layers 0–1 | `types.ts`, `paths.ts`, `registry.ts`, `commands.ts` |
 | 2 | `playbooks` | `src/playbooks/` | read-only runtime playbooks shipped with the package | layers 0–1 | `catalog.ts`, `*.md` |
-| 3 | `channel` | `src/channel/` | the transport-neutral channel domain: the delivery and event contracts, the channel-id format, the channel index, persisted state | layers 0–1, security, desk | `channel-context.ts`, `channel-event.ts`, `channel-id.ts`, `channel-index.ts`, `store.ts` |
+| 3 | `channel` | `src/channel/` | the transport-neutral channel domain: the transport and ingress contracts, the turn output port, the event and channel-id formats, the channel index, persisted state | layers 0–1, security, desk, usage | `transport.ts`, `ingress.ts`, `channel-context.ts`, `channel-event.ts`, `channel-id.ts`, `channel-index.ts`, `store.ts` |
 | 3 | `tools-contract` | `src/tools/contract/` | tool-result `details` contract, how a tool call is shown, the tool-name lists | layers 0–1, security | `details.ts`, `presentation.ts`, `names.ts` |
 | 4 | `config` | `src/config/` | `settings.json` and `tools.json` loading and validation | layers 0–1, channel (types only) | `settings.ts`, `tools.ts` |
 | 5 | `models` | `src/models/` | model references, the model runtime, API keys, backup-model fallback | layers 0–1, config | `reference.ts`, `runtime.ts`, `fallback.ts` |
@@ -32,9 +32,9 @@ A module is a path under `src/`. Dependencies run strictly downward through the 
 | 9 | `agent` | `src/agent/` | per-(desk, channel) orchestration: the SDK session, one turn, prompts, session commands | layers 0–8 | `channel-runner.ts`, `session/session-host.ts`, `turn/turn-pipeline.ts`, `prompt/` |
 | 10 | `commands-router` | `src/commands/router.ts` | the one dispatch point for stateless report commands, shared by both transports | layers 0–9 | `router.ts` |
 | 10 | `app` | `src/app/` | the process shell: app-home scaffolding, CLI args, shared services, LLM proxy, `pipiclaw auth` | layers 0–9 | `home.ts`, `services.ts`, `proxy.ts`, `auth-command.ts` |
-| 11 | `dingtalk` | `src/dingtalk/` | the DingTalk Stream transport: connection, AI cards, media, inbound routing, `channel.json` | layers 0–10 | `bot.ts`, `handler.ts`, `cards.ts`, `connection.ts`, `delivery.ts`, `config.ts` |
+| 11 | `dingtalk` | `src/dingtalk/` | the DingTalk Stream transport: connection, AI cards, media, inbound normalization, turn delivery, `channel.json` | layers 0–10 | `transport.ts`, `bot.ts`, `cards.ts`, `connection.ts`, `delivery.ts`, `config.ts` |
 | 11 | `tui` | `src/tui/` | the terminal front end: the second `ChannelContext` implementation | layers 0–10 | `app.ts`, `frontend.ts` |
-| 12 | `runtime` | `src/runtime/` | the daemon: composition root and the services that join several subsystems | everything except `tui` | `bootstrap.ts`, `turn-handler.ts`, `shutdown.ts`, `durable-dispatch.ts`, `task-driver.ts` |
+| 12 | `runtime` | `src/runtime/` | the daemon: composition root and the services that join several subsystems | everything except `tui` | `bootstrap.ts`, `ingress.ts`, `transports.ts`, `shutdown.ts`, `durable-dispatch.ts`, `task-driver.ts` |
 | — | `entry` | `src/main.ts`, `src/index.ts` | the executable entry and the public library surface (spec 035) | any | `main.ts`, `index.ts` |
 
 `src/index.ts` is a compatibility promise: its exported names stay stable. Everything else under `src/` is internal and its import paths may change.

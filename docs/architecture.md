@@ -52,9 +52,9 @@ pipiclaw tui [--desk <名字>] [提示] # 默认打开默认工位，同一 agen
 | 9 | `src/agent/` | 单频道 agent 编排：SDK 会话、一轮对话、提示词、内置会话命令 | `channel-runner.ts`（门面）、`session/`（`session-host.ts`、`model-selection.ts`、`session-events.ts`、`command-extension.ts`）、`turn/`（`turn-pipeline.ts`、`turn-finish.ts`、`turn-state.ts`、`run-queue.ts`）、`prompt/`（system prompt 流水线）、`builtin-commands.ts` |
 | 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |
 | 10 | `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
-| 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `bot.ts`（门面）、`handler.ts`（运行时契约）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（投递控制器）、`channel-queue.ts` |
+| 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `transport.ts`（`Transport` 实现）、`bot.ts`（门面）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（回合输出口） |
 | 11 | `src/tui/` | 终端前端（第二个 `ChannelContext` 实现） | `cli.ts`、`app.ts`、`frontend.ts`、`turn-controller.ts` |
-| 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`turn-handler.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-driver.ts` |
+| 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`ingress.ts`、`transports.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-driver.ts` |
 | — | `src/main.ts`、`src/index.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理；公共库出口（spec 035） | — |
 
 ## 3. 运行时拓扑
@@ -68,7 +68,7 @@ flowchart TB
     subgraph daemon [pipiclaw daemon 进程]
         BOT["DingTalkBot<br/>(dingtalk/bot.ts)<br/>连接/重连/去重/allowFrom"]
         CQ["ChannelQueue ×N<br/>每频道消息串行队列"]
-        HANDLER["DingTalkHandler<br/>(runtime/turn-handler.ts)<br/>命令分发 / 准入"]
+        HANDLER["Ingress<br/>(runtime/ingress.ts)<br/>命令分发 / 准入"]
         DESKS["DeskRuntime<br/>(runtime/desk-runtime.ts)<br/>绑定表 / 激活与休眠"]
         RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每个已绑定频道一个，bootstrap 缓存"]
         SESSION["SDK AgentSession + Agent<br/>(pi-coding-agent)"]
@@ -186,7 +186,7 @@ sequenceDiagram
 
 | 队列 | 位置 | 串行化对象 | 粒度 |
 |---|---|---|---|
-| `ChannelQueue` | `dingtalk/channel-queue.ts`（由 dingtalk 传输消费） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
+| `ChannelQueue` | `runtime/channel-queue.ts`（由 `Ingress` 独占） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
 | `RunQueue`（`createRunQueue`） | `agent/turn/run-queue.ts` | **一轮之内的出站投递调用**：进度/通知按序发往钉钉 API，错误只记日志不打断轮次 | 每轮 |
 | `DeskMemoryQueue` | `memory/desk-memory-queue.ts` | **同一工位的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`memory_save`、`/memory` 命令共用**进程级单例**，按工位名排队并持有 `.locks/memory.lock`（与 TUI 进程互斥），绝不能各自内联或按频道排队，否则同一工位的几个频道会争写同一批记忆文件（spec 058 INV-8） | 每工位（跨子系统、跨进程共享） |
 | `ChannelStore.writeQueue` | `channel/store.ts` | 会话区 `log.jsonl` 追加与轮转 | 每频道 |

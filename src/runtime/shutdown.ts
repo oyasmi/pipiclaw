@@ -38,7 +38,9 @@ export interface ShutdownDeps {
 	deskRuntime: { stop(): void; flush?(): Promise<void> };
 	runs: { stop(): void };
 	jobs: { stop(): void };
-	bot: { stop(): Promise<void> };
+	transports: { stopAll(): Promise<void> };
+	/** The inbound pipeline: stops taking work. */
+	ingress: { stop(): void };
 	store: ChannelStore;
 	channelIndex: ChannelIndex;
 	channelRunners: Map<string, AgentRunner>;
@@ -54,7 +56,8 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 		deskRuntime,
 		runs,
 		jobs,
-		bot,
+		transports,
+		ingress,
 		store,
 		channelIndex,
 		channelRunners,
@@ -77,7 +80,8 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			deskRuntime.stop();
 			runs.stop();
 			jobs.stop();
-			await bot.stop();
+			await transports.stopAll();
+			ingress.stop();
 
 			const runningTasks = Array.from(activeTasks);
 			if (runningTasks.length > 0) {

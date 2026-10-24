@@ -83,7 +83,7 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 			expect(JSON.stringify(request.messages)).not.toContain("CHANNEL_A_ONLY");
 			peer.release();
 			await harness.waitForDelivery((d) => d.channelId === otherChannel && d.method === "sendPlain");
-			expect(harness.runtime.handler.isRunning(harness.channelId)).toBe(true);
+			expect(harness.runtime.ingress.isRunning(harness.channelId)).toBe(true);
 			expect(
 				harness.deliveries.filter((d) => d.channelId === harness.channelId && d.method === "sendPlain"),
 			).toHaveLength(0);

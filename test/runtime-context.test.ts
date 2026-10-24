@@ -1,83 +1,25 @@
 import { readFileSync } from "fs";
-import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import { getActiveSessionRefPath } from "../src/channel/active-session-store.js";
-import type { DingTalkBot } from "../src/dingtalk/bot.js";
 import type { DingTalkConfig } from "../src/dingtalk/config.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { bindTestChannel, useTempDirs } from "./helpers/fixtures.js";
+import { bootstrapPathsIn } from "./support/fake-runner.js";
+import { RecordingTransport } from "./support/recording-transport.js";
 
 const createTempDir = useTempDirs("pipiclaw-runtime-");
 
 function createBootstrapPaths(): BootstrapPaths {
-	const appHomeDir = createTempDir();
-	const workspaceDir = join(appHomeDir, "workspace");
-	return {
-		appName: "pipiclaw",
-		appHomeDir,
-		workspaceDir,
-		authConfigPath: join(appHomeDir, "auth.json"),
-		channelConfigPath: join(appHomeDir, "channel.json"),
-		modelsConfigPath: join(appHomeDir, "models.json"),
-		settingsConfigPath: join(appHomeDir, "settings.json"),
-		toolsConfigPath: join(appHomeDir, "tools.json"),
-		securityConfigPath: join(appHomeDir, "security.json"),
-		eventHistoryPath: join(appHomeDir, "state", "events", "history.jsonl"),
-	};
+	return bootstrapPathsIn(createTempDir());
 }
 
-class FakeTestBot {
-	getCardGeneration = () => Symbol("test-card-turn");
-	isCardGenerationCurrent = () => true;
-	deliveries: Array<{ method: string; args: unknown[] }> = [];
-	start = vi.fn(async () => {});
-	stop = vi.fn(async () => {});
-	sendPlain = vi.fn(async (channelId: string, text: string) => {
-		this.deliveries.push({ method: "sendPlain", args: [channelId, text] });
-		return true;
-	});
-	appendToCard = vi.fn(async (channelId: string, text: string) => {
-		this.deliveries.push({ method: "appendToCard", args: [channelId, text] });
-		return true;
-	});
-	replaceCard = vi.fn(async (channelId: string, text: string, finalize: boolean = false) => {
-		this.deliveries.push({ method: "replaceCard", args: [channelId, text, finalize] });
-		return true;
-	});
-	streamToCard = vi.fn(async (channelId: string, text: string) => {
-		this.deliveries.push({ method: "streamToCard", args: [channelId, text] });
-		return true;
-	});
-	ensureCard = vi.fn(async (channelId: string) => {
-		this.deliveries.push({ method: "ensureCard", args: [channelId] });
-	});
-	finalizeExistingCard = vi.fn(async (channelId: string, text: string) => {
-		this.deliveries.push({ method: "finalizeExistingCard", args: [channelId, text] });
-		return true;
-	});
-	finalizeCard = vi.fn(async (channelId: string, text: string) => {
-		this.deliveries.push({ method: "finalizeCard", args: [channelId, text] });
-		return true;
-	});
-	discardCard = vi.fn((channelId: string) => {
-		this.deliveries.push({ method: "discardCard", args: [channelId] });
-	});
-	resetChannelQueue = vi.fn((channelId: string) => {
-		this.deliveries.push({ method: "resetChannelQueue", args: [channelId] });
-		return 0;
-	});
+function createDmMessage(text: string, ts: string) {
+	return { channelId: "dingtalk:dm:tester", ts, user: "tester", userName: "Tester", text };
 }
 
 function createDmEvent(text: string, ts: string) {
-	return {
-		source: "human" as const,
-		channelId: "dingtalk:dm:tester",
-		ts,
-		user: "tester",
-		userName: "Tester",
-		text,
-	};
+	return { source: "human" as const, ...createDmMessage(text, ts) };
 }
 
 afterEach(() => {
@@ -89,7 +31,7 @@ describe("createRuntimeContext", () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 		const conversation = await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
-		const bot = new FakeTestBot();
+		const transport = new RecordingTransport();
 		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
@@ -97,30 +39,34 @@ describe("createRuntimeContext", () => {
 				clientSecret: "client-secret",
 				stateDir: paths.workspaceDir,
 			},
+			transports: [transport],
 			registerSignalHandlers: false,
 			startServices: false,
-			createBot: () => bot as unknown as DingTalkBot,
 			createEventsWatcher: () => ({ start() {}, stop() {} }),
 		});
 
-		await runtime.handler.handleNewSession(createDmEvent("/new", "1000"), bot as unknown as DingTalkBot);
+		await expect(runtime.ingress.receive(createDmMessage("/new", "1000"))).resolves.toEqual({ kind: "replied" });
 
 		// `/new` resets this channel's conversation in its desk (spec 058, D16).
 		const refPath = getActiveSessionRefPath(conversation.conversationDir);
 		const ref = JSON.parse(readFileSync(refPath, "utf-8"));
 		expect(ref).toMatchObject({ version: 1, sessionId: expect.any(String), file: expect.stringMatching(/\.jsonl$/) });
-		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dingtalk:dm:tester");
-		expect(bot.sendPlain).toHaveBeenCalledWith("dingtalk:dm:tester", expect.stringContaining(ref.sessionId));
+		expect(transport.pushes).toHaveLength(1);
+		expect(transport.pushes[0]).toMatchObject({
+			channelId: "dingtalk:dm:tester",
+			message: { text: expect.stringContaining(ref.sessionId) },
+		});
 
 		await runtime.shutdown();
 	});
 
-	it("starts the native task driver with the other runtime services", async () => {
+	it("starts the native task driver and the transports with the other runtime services", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 		// Watchers are per active desk (spec 058, D6): one bound desk, one watcher.
 		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
-		const bot = new FakeTestBot();
+		const transport = new RecordingTransport();
+		const transportStart = vi.spyOn(transport, "start");
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 		const memoryScheduler = { start: vi.fn(), stop: vi.fn() };
 		const taskDriver = { start: vi.fn(), stop: vi.fn() };
@@ -131,9 +77,9 @@ describe("createRuntimeContext", () => {
 				clientSecret: "client-secret",
 				stateDir: paths.workspaceDir,
 			},
+			transports: [transport],
 			registerSignalHandlers: false,
 			startServices: true,
-			createBot: () => bot as unknown as DingTalkBot,
 			createEventsWatcher: () => eventsWatcher,
 			createMemoryMaintenanceScheduler: () => memoryScheduler,
 			createTaskDriver: () => taskDriver,
@@ -142,6 +88,7 @@ describe("createRuntimeContext", () => {
 		expect(eventsWatcher.start).toHaveBeenCalledOnce();
 		expect(memoryScheduler.start).toHaveBeenCalledOnce();
 		expect(taskDriver.start).toHaveBeenCalledOnce();
+		expect(transportStart).toHaveBeenCalledOnce();
 		await runtime.shutdown();
 		expect(taskDriver.stop).toHaveBeenCalledOnce();
 	});
@@ -151,7 +98,7 @@ describe("createRuntimeContext", () => {
 		bootstrapAppHome(paths);
 		// Bound, so the message actually reaches the archive (an unbound channel never archives).
 		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
-		const bot = new FakeTestBot();
+		const transport = new RecordingTransport();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 
 		const runtime = await createRuntimeContext({
@@ -163,9 +110,9 @@ describe("createRuntimeContext", () => {
 				cardTemplateKey: "content",
 				stateDir: paths.workspaceDir,
 			} satisfies DingTalkConfig,
+			transports: [transport],
 			registerSignalHandlers: false,
 			startServices: false,
-			createBot: () => bot as unknown as DingTalkBot,
 			createEventsWatcher: () => eventsWatcher,
 		});
 
@@ -173,11 +120,11 @@ describe("createRuntimeContext", () => {
 
 		const event = createDmEvent("/help", "1000");
 
-		await runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
-		await runtime.handler.handleEvent({ ...event, ts: "1001" }, bot as unknown as DingTalkBot);
+		await runtime.ingress.handleEvent(event);
+		await runtime.ingress.handleEvent({ ...event, ts: "1001" });
 
 		expect(runtime.store.logMessage).toHaveBeenCalledTimes(2);
-		expect(bot.sendPlain).toHaveBeenCalledTimes(2);
+		expect(transport.pushes).toHaveLength(2);
 		await runtime.shutdown();
 	});
 });

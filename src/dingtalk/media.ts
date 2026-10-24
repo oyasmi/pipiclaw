@@ -1,18 +1,17 @@
 /**
- * Media (image / file) for DingTalk: outbound delivery (`MediaSender` contract), and the two-step
- * inbound download plus the per-message attachment resolution built on it (spec 049).
+ * Media (image / file) for DingTalk: outbound delivery, and the two-step inbound download plus the
+ * per-message attachment collection built on it (spec 049).
  */
 import axios from "axios";
-import { MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES_PER_MESSAGE, sniffImageMimeType } from "../channel/attachments.js";
-import type { MediaSendResult, OutboundMedia } from "../channel/channel-context.js";
-import type { InboundImage } from "../channel/channel-event.js";
+import { MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES_PER_MESSAGE } from "../channel/attachments.js";
+import type { InboundAttachment } from "../channel/ingress.js";
+import type { MediaSendResult, OutboundMedia } from "../channel/transport.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { formatSize } from "../tools/truncate.js";
 import { type ConversationMeta, DINGTALK_API, DINGTALK_OAPI, http } from "./api.js";
 import type { DingTalkConfig } from "./config.js";
-import type { DingTalkHandler } from "./handler.js";
 import { MEDIA_DOWNLOAD_TIMEOUT_MS, type ParsedInboundMessage } from "./inbound-media.js";
 
 // DingTalk caps robot image messages at 1MB and file messages at 20MB. We reject
@@ -33,7 +32,6 @@ function extractFileExtension(fileName: string): string {
 
 export interface DingTalkMediaDeps {
 	config: DingTalkConfig;
-	handler: DingTalkHandler;
 	getAccessToken: () => Promise<string | null>;
 	getConversationMeta: (channelId: string) => ConversationMeta | null;
 	sendRobotMessage: (meta: ConversationMeta, msgKey: string, msgParam: string) => Promise<boolean>;
@@ -193,25 +191,24 @@ export class DingTalkMedia {
 	}
 
 	/**
-	 * Resolve one parsed message's image credentials into persisted `InboundImage`s and a text
-	 * with every `[图片N]` marker either left as-is (success) or replaced with a reason (spec 049
-	 * D8): a download failure, an unrecognized format, an oversized file, or a message that
-	 * simply carried more images than `MAX_INBOUND_IMAGES_PER_MESSAGE` allows. A failure on one
-	 * image never drops the rest of the message — only that one marker changes.
+	 * Download one parsed message's images and say, in the text, what became of the ones that did
+	 * not make it (spec 049 D8): a failed download, an oversized file, or more images than
+	 * `MAX_INBOUND_IMAGES_PER_MESSAGE` allows. A failure on one image never drops the rest of the
+	 * message — only that one `[图片N]` marker changes. The bytes of the others go to the runtime as
+	 * attachments (it persists them under the bound desk and settles the remaining markers).
 	 *
 	 * No-op (no network call at all) when the message carries no image credentials, so a plain
 	 * text message never pays for this method's existence.
 	 */
-	async resolveInboundAttachments(
-		channelId: string,
+	async collectInboundAttachments(
 		parsed: ParsedInboundMessage,
-	): Promise<{ text: string; images: InboundImage[] }> {
+	): Promise<{ text: string; attachments: InboundAttachment[] }> {
 		if (parsed.downloadCodes.length === 0) {
-			return { text: parsed.text, images: [] };
+			return { text: parsed.text, attachments: [] };
 		}
 
 		let text = parsed.text;
-		const images: (InboundImage | undefined)[] = [];
+		const attachments: (InboundAttachment | undefined)[] = [];
 		const replaceMarker = (index: number, replacement: string) => {
 			text = text.replace(`[图片${index + 1}]`, replacement);
 		};
@@ -235,25 +232,10 @@ export class DingTalkMedia {
 					return;
 				}
 
-				const mimeType = sniffImageMimeType(downloaded.data);
-				const persisted = await this.deps.handler.persistInboundImage?.(channelId, {
-					data: downloaded.data,
-					mimeType,
-				});
-				if (!persisted) {
-					replaceMarker(index, `[图片${marker}：保存失败]`);
-					return;
-				}
-
-				if (!mimeType) {
-					// Persisted for the record, but never handed to a model — see the handler
-					// contract's doc comment on `persistInboundImage`.
-					replaceMarker(index, `[图片${marker}：格式不支持，已保存]`);
-				}
-				images[index] = persisted;
+				attachments[index] = { kind: "image", index: marker, data: downloaded.data };
 			}),
 		);
 
-		return { text, images: images.filter((image): image is InboundImage => image !== undefined) };
+		return { text, attachments: attachments.filter((attachment): attachment is InboundAttachment => !!attachment) };
 	}
 }

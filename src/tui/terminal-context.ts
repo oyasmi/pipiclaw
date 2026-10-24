@@ -1,90 +1,134 @@
 /**
- * Terminal implementation of the `ChannelContext` delivery contract.
+ * Terminal implementation of the turn output port (`ChannelContext`).
  *
- * The DingTalk delivery controller (`dingtalk/delivery.ts`) drives AI Card
- * streaming; the terminal has none of that protocol, so this controller is a
- * thin mapping from the contract onto a `TranscriptRenderer`. Archiving
- * semantics mirror `delivery.ts` so a channel produces the same conversation log
- * regardless of which surface it is driven from:
- *   - `respond` / `respondPlain` archive when `shouldLog` is set;
- *   - `replaceMessage` / `deleteMessage` do not archive (they only re-render).
+ * The DingTalk delivery (`dingtalk/delivery.ts`) drives AI Card streaming; the terminal has none of
+ * that protocol, so this is a thin mapping from a turn's events onto a `TranscriptRenderer`.
+ * Archiving mirrors `delivery.ts` so a channel produces the same conversation log regardless of
+ * which surface it is driven from: a plainly delivered answer is archived; a replaced or silenced
+ * one only re-renders.
  */
-import type { ChannelContext, FinalDelivery, ProgressStyle } from "../channel/channel-context.js";
+import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
 import type { ChannelStore } from "../channel/store.js";
+import type { TurnInfo } from "../channel/transport.js";
+import type { TuiResponseMode } from "../config/settings.js";
+import { describeToolCall } from "../tools/contract/presentation.js";
 import type { TranscriptRenderer } from "./frontend.js";
-
-/** The minimal per-turn input the terminal context needs (no DingTalk types). */
-export interface TurnInput {
-	text: string;
-	user: string;
-	userName?: string;
-	channel: string;
-	ts: string;
-}
+import { formatProgressEntry } from "./progress.js";
 
 export interface DeliveryTraits {
-	progressStyle: ProgressStyle;
-	finalDelivery: FinalDelivery;
+	progressStyle: "full" | "rolling" | "none";
+	finalDelivery: "plain" | "card";
+}
+
+/** What `settings.json`'s `tui.responseMode` means for the terminal. */
+export function traitsOf(mode: TuiResponseMode): DeliveryTraits {
+	return {
+		progressStyle:
+			mode === "final_card_only" ? "none" : mode === "rolling_progress_then_plain_final" ? "rolling" : "full",
+		finalDelivery: mode === "final_card_only" ? "card" : "plain",
+	};
 }
 
 class TerminalDeliveryController {
 	private closed = false;
 	private finalDelivered = false;
+	private lastAnswer = "";
 
 	constructor(
-		private readonly input: TurnInput,
+		private readonly turn: TurnInfo,
 		private readonly renderer: TranscriptRenderer,
 		private readonly store: ChannelStore,
 		private readonly traits: DeliveryTraits,
 	) {}
 
 	buildContext(): ChannelContext {
-		const { text, user, userName, channel, ts } = this.input;
 		return {
-			message: { text, rawText: text, user, userName, channel, ts },
-			channelName: channel,
-			respond: async (progress: string, shouldLog = true) => this.appendProgress(progress, shouldLog),
-			respondPlain: async (final: string, shouldLog = true) => this.sendFinal(final, shouldLog),
-			replaceMessage: async (final: string) => this.replaceWithFinal(final),
-			respondInThread: async (notice: string) => {
-				if (!this.closed && notice.trim()) {
-					this.renderer.showNotice(notice);
-				}
-			},
-			setTyping: async () => {},
-			setWorking: async (working: boolean) => {
-				if (!this.closed) this.renderer.setWorking(working);
-			},
-			deleteMessage: async () => this.silence(),
-			primeCard: () => {},
-			flush: async () => {},
-			close: async () => {
-				this.closed = true;
-			},
-			progressStyle: this.traits.progressStyle,
-			finalDelivery: this.traits.finalDelivery,
+			emit: (event) => this.deliver(event),
+			finish: async (outcome) => this.conclude(outcome),
 		};
 	}
 
-	private appendProgress(text: string, shouldLog: boolean): void {
+	private deliver(event: TurnEvent): void {
+		switch (event.type) {
+			case "tool.start":
+				this.appendProgress(formatProgressEntry("tool", describeToolCall(event.tool, event.args)));
+				return;
+			case "tool.update":
+				this.appendProgress(formatProgressEntry("tool", event.text));
+				return;
+			case "tool.end":
+				if (event.failure) this.appendProgress(formatProgressEntry("error", event.failure));
+				return;
+			case "reasoning":
+				this.appendProgress(formatProgressEntry("thinking", event.text));
+				return;
+			case "commentary":
+				this.deliverCommentary(event.text, event.level);
+				return;
+			case "answer":
+				this.lastAnswer = event.text;
+				if (this.traits.finalDelivery === "card") this.replaceWithFinal(event.text);
+				else this.sendFinal(event.text);
+				return;
+			case "compaction":
+				if (event.phase === "start") this.appendProgress(formatProgressEntry("assistant", "正在压缩上下文…"));
+				return;
+			case "steer.applied":
+				return;
+		}
+	}
+
+	private deliverCommentary(text: string, level: "error" | "warning" | "notice" | undefined): void {
+		switch (level) {
+			case undefined:
+				this.appendProgress(formatProgressEntry("assistant", text));
+				return;
+			case "error":
+				this.appendProgress(formatProgressEntry("error", text));
+				return;
+			case "warning":
+				if (this.traits.progressStyle !== "none") this.appendProgress(formatProgressEntry("error", text));
+				else this.notice(`⚠️ ${text}`);
+				return;
+			case "notice":
+				this.notice(text);
+				return;
+		}
+	}
+
+	private conclude(outcome: TurnOutcome): void {
+		if (this.closed) return;
+		switch (outcome.kind) {
+			case "failed":
+				this.replaceWithFinal(outcome.message ?? "");
+				break;
+			case "silent":
+			case "cancelled":
+				this.silence();
+				break;
+			case "completed":
+				if (this.lastAnswer && !this.finalDelivered) this.replaceWithFinal(this.lastAnswer);
+				break;
+		}
+		this.closed = true;
+	}
+
+	private appendProgress(text: string): void {
 		if (this.closed || this.finalDelivered || !text.trim()) return;
 		// final_card_only shows no progress; drop stray progress writes.
 		if (this.traits.progressStyle === "none") return;
 		this.renderer.appendProgress(text);
-		if (shouldLog) {
-			this.archive(text);
-		}
 	}
 
-	private sendFinal(text: string, shouldLog: boolean): boolean {
-		if (this.closed || this.finalDelivered) return this.finalDelivered;
-		if (!text.trim()) return false;
+	private notice(text: string): void {
+		if (!this.closed && text.trim()) this.renderer.showNotice(text);
+	}
+
+	private sendFinal(text: string): void {
+		if (this.closed || this.finalDelivered || !text.trim()) return;
 		this.renderer.showFinal(text);
-		if (shouldLog) {
-			this.archive(text);
-		}
+		this.archive(text);
 		this.finalDelivered = true;
-		return true;
 	}
 
 	private replaceWithFinal(text: string): void {
@@ -103,7 +147,7 @@ class TerminalDeliveryController {
 	}
 
 	private archive(text: string): void {
-		void this.store.logBotResponse(this.input.channel, text, Date.now().toString()).catch(() => {
+		void this.store.logBotResponse(this.turn.channelId, text, Date.now().toString()).catch(() => {
 			// Best-effort: a failed archive must never break rendering. delivery.ts
 			// logs a warning here; the TUI keeps quiet to avoid corrupting the view.
 		});
@@ -111,10 +155,10 @@ class TerminalDeliveryController {
 }
 
 export function createTerminalContext(
-	input: TurnInput,
+	turn: TurnInfo,
 	renderer: TranscriptRenderer,
 	store: ChannelStore,
 	traits: DeliveryTraits,
 ): ChannelContext {
-	return new TerminalDeliveryController(input, renderer, store, traits).buildContext();
+	return new TerminalDeliveryController(turn, renderer, store, traits).buildContext();
 }

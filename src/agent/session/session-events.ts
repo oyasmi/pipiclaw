@@ -1,8 +1,8 @@
 /**
- * Translates SDK session events into progress and AI-Card updates, usage accounting and memory
- * activity for the current turn.
+ * Translates SDK session events into the turn's structured output events (`TurnEvent`), usage
+ * accounting and memory activity for the current turn. Nothing here decides how an event looks:
+ * the channel's transport renders it.
  */
-import type { ChannelContext } from "../../channel/channel-context.js";
 import type { ChannelStore } from "../../channel/store.js";
 import * as log from "../../log.js";
 import type { MemoryLifecycle } from "../../memory/lifecycle.js";
@@ -20,8 +20,9 @@ import { describeToolCall } from "../../tools/contract/presentation.js";
 import type { SubAgentToolDetails } from "../../tools/subagent.js";
 import type { UsageLedger } from "../../usage/ledger.js";
 import { addUsage, type UsageTotals } from "../../usage/totals.js";
-import { extractToolResultText, formatProgressEntry } from "../turn/progress-formatter.js";
+import { extractToolResultText } from "../turn/progress-formatter.js";
 import { renderCompactionFailure } from "../turn/turn-error.js";
+import type { TurnOutput } from "../turn/turn-output.js";
 import type { AssistantUsage, PendingTool, RunLogContext, RunQueue, RunState } from "../types.js";
 import {
 	extractCustomCommandResultText,
@@ -38,10 +39,11 @@ import {
 	isToolExecutionStartEvent,
 	isToolExecutionUpdateEvent,
 	isTurnEndEvent,
+	isUserEventMessage,
 } from "./event-guards.js";
 
 export interface SessionEventHandlerContext {
-	ctx: ChannelContext;
+	ctx: TurnOutput;
 	logCtx: RunLogContext;
 	queue: RunQueue;
 	pendingTools: Map<string, PendingTool>;
@@ -75,6 +77,9 @@ function isWorkspaceSkillWrite(
 	return details.path === skillsDir || details.path.startsWith(`${skillsDir}/`);
 }
 
+/** How much of a tool's result a `tool.end` event carries; the full text stays in the log and the session. */
+const TOOL_EVENT_OUTPUT_CHARS = 4000;
+
 function firstLine(text: string): string {
 	return text.trim().split("\n", 1)[0] ?? "";
 }
@@ -92,8 +97,6 @@ function mergeAssistantUsage(runState: RunState, usage: AssistantUsage): void {
 
 export async function handleSessionEvent(event: unknown, context: SessionEventHandlerContext): Promise<void> {
 	const { ctx, logCtx, queue, pendingTools, runState, memoryLifecycle } = context;
-	const showProgress = ctx.progressStyle !== "none";
-	const finalToCard = ctx.finalDelivery === "card";
 
 	if (isToolExecutionStartEvent(event)) {
 		const label = describeToolCall(event.toolName, event.args);
@@ -106,9 +109,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		memoryLifecycle.noteToolCall();
 
 		log.logToolStart(logCtx, event.toolName, label, isRecord(event.args) ? event.args : {});
-		if (showProgress) {
-			queue.enqueue(() => ctx.respond(formatProgressEntry("tool", label), false), "tool label");
-		}
+		ctx.emit({ type: "tool.start", callId: event.toolCallId, tool: event.toolName, args: event.args });
 		return;
 	}
 
@@ -120,9 +121,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		if (!partialText.trim()) {
 			return;
 		}
-		if (showProgress) {
-			queue.enqueue(() => ctx.respond(formatProgressEntry("tool", partialText), false), "tool update");
-		}
+		ctx.emit({ type: "tool.update", callId: event.toolCallId, text: partialText });
 		return;
 	}
 
@@ -160,7 +159,9 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			isWorkspaceSkillWrite(event.toolName, details, context.skillsDir)
 		) {
 			queue.enqueue(() => context.refreshSessionResources?.() ?? Promise.resolve(), "refresh skills");
-			queue.enqueue(() => ctx.respondInThread("已更新 workspace skill，下一条消息起生效。"), "skill notice");
+			queue.enqueue(async () => {
+				ctx.emit({ type: "commentary", text: "已更新 workspace skill，下一条消息起生效。", level: "notice" });
+			}, "skill notice");
 		}
 
 		// A recoverable rejection (bad arguments, unmet precondition the model can fix) is not a
@@ -191,19 +192,32 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 		// Claimed on every error, shown or not, so the parked refusal never outlives its call.
 		const blocked = event.isError ? takeGuardBlock(event.toolCallId, resultStr) : undefined;
-		if (treatAsError && showProgress) {
-			// The tool's error text is written for the model (spec 053, D2): a guard refusal is shown
-			// from its structured form; anything else as its first line only — the full text is in
-			// the log (`agent.tool.failed`).
-			const line = blocked ? renderGuardBlockForUser(blocked) : truncate(firstLine(resultStr), 120);
-			queue.enqueue(() => ctx.respond(formatProgressEntry("error", line), false), "tool error");
-		}
+		// The tool's error text is written for the model (spec 053, D2): a guard refusal is shown
+		// from its structured form; anything else as its first line only — the full text is in
+		// the log (`agent.tool.failed`).
+		const failure = treatAsError
+			? blocked
+				? renderGuardBlockForUser(blocked)
+				: truncate(firstLine(resultStr), 120)
+			: undefined;
+		ctx.emit({
+			type: "tool.end",
+			callId: event.toolCallId,
+			ok: !event.isError && !subAgentDetails?.failed,
+			output: truncate(resultStr, TOOL_EVENT_OUTPUT_CHARS),
+			...(failure ? { failure } : {}),
+		});
 		return;
 	}
 
 	if (isMessageStartEvent(event)) {
 		if (isAssistantEventMessage(event.message)) {
 			log.logResponseStart(logCtx);
+		} else if (isUserEventMessage(event.message)) {
+			// The turn's own prompt is the first user message; any later one is a steering or
+			// follow-up message the SDK injected into the running loop.
+			runState.userMessagesStarted++;
+			if (runState.userMessagesStarted > 1) ctx.emit({ type: "steer.applied" });
 		}
 		return;
 	}
@@ -213,17 +227,8 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		if (commandResultText) {
 			runState.finalOutcome = { kind: "final", text: commandResultText };
 			log.logResponse(logCtx, commandResultText);
-			queue.enqueue(async () => {
-				if (finalToCard) {
-					await ctx.replaceMessage(commandResultText);
-				} else {
-					const delivered = await ctx.respondPlain(commandResultText);
-					if (!delivered) {
-						await ctx.replaceMessage(commandResultText);
-					}
-				}
-				runState.finalResponseDelivered = true;
-			}, "command result");
+			runState.answerEmitted = true;
+			ctx.emit({ type: "answer", text: commandResultText });
 			return;
 		}
 
@@ -264,15 +269,13 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 			const text = textParts.join("\n");
 
-			if (showProgress) {
-				for (const thinking of thinkingParts) {
-					log.logThinking(logCtx, thinking);
-					queue.enqueue(() => ctx.respond(formatProgressEntry("thinking", thinking), false), "thinking");
-				}
+			for (const thinking of thinkingParts) {
+				log.logThinking(logCtx, thinking);
+				ctx.emit({ type: "reasoning", text: thinking });
 			}
 
-			if (text.trim() && hasToolCalls && showProgress) {
-				queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", text), false), "assistant progress");
+			if (text.trim() && hasToolCalls) {
+				ctx.emit({ type: "commentary", text });
 			}
 		}
 		return;
@@ -312,30 +315,18 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			runState.finalOutcome = { kind: "final", text: finalText };
 			memoryLifecycle.noteCompletedAssistantTurn();
 			log.logResponse(logCtx, finalText);
-			queue.enqueue(async () => {
-				if (finalToCard) {
-					await ctx.replaceMessage(finalText);
-					runState.finalResponseDelivered = true;
-				} else {
-					const delivered = await ctx.respondPlain(finalText);
-					if (delivered) {
-						runState.finalResponseDelivered = true;
-					}
-				}
-			}, "final response");
+			runState.answerEmitted = true;
+			ctx.emit({ type: "answer", text: finalText });
 		}
 		return;
 	}
 
 	if (isAutoCompactionStartEvent(event)) {
-		const label = "正在压缩上下文…";
 		log.logEvent("info", "agent.compaction.started", "Compaction started", {
 			ctx: logCtx,
 			fields: { reason: event.reason },
 		});
-		if (showProgress) {
-			queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", label), false), "compaction start");
-		}
+		ctx.emit({ type: "compaction", phase: "start" });
 		return;
 	}
 
@@ -346,21 +337,18 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 				ctx: logCtx,
 				fields: { tokensBefore: event.result.tokensBefore },
 			});
+			ctx.emit({ type: "compaction", phase: "end", ok: true });
 		} else if (event.aborted) {
 			log.logEvent("info", "agent.compaction.aborted", "Compaction aborted", { ctx: logCtx });
+			ctx.emit({ type: "compaction", phase: "end", ok: false });
 		} else if (event.errorMessage) {
 			runState.lastCompactionError = event.errorMessage;
 			log.logEvent("warn", "agent.compaction.failed", "Compaction failed", {
 				ctx: logCtx,
 				fields: { error: event.errorMessage },
 			});
-			if (showProgress) {
-				queue.enqueue(
-					() =>
-						ctx.respond(formatProgressEntry("error", renderCompactionFailure(event.errorMessage ?? "")), false),
-					"compaction error",
-				);
-			}
+			ctx.emit({ type: "compaction", phase: "end", ok: false });
+			ctx.emit({ type: "commentary", text: renderCompactionFailure(event.errorMessage ?? ""), level: "error" });
 		}
 		return;
 	}
@@ -370,15 +358,6 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			ctx: logCtx,
 			fields: { attempt: event.attempt, maxAttempts: event.maxAttempts, error: event.errorMessage },
 		});
-		if (showProgress) {
-			queue.enqueue(
-				() =>
-					ctx.respond(
-						formatProgressEntry("assistant", `模型请求失败，正在重试（${event.attempt}/${event.maxAttempts}）…`),
-						false,
-					),
-				"retry",
-			);
-		}
+		ctx.emit({ type: "commentary", text: `模型请求失败，正在重试（${event.attempt}/${event.maxAttempts}）…` });
 	}
 }

@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { MediaSender } from "../channel/channel-context.js";
+import type { SendMedia } from "../channel/transport.js";
 import type { PipiclawSessionSearchSettings } from "../config/settings.js";
 import type { PipiclawToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
@@ -40,7 +40,7 @@ export interface CreatePipiclawToolsOptions {
 	securityConfig: SecurityConfig;
 	toolsConfig: PipiclawToolsConfig;
 	/** Transport-provided attachment port; when present, enables the `send_media` tool. */
-	mediaSender?: MediaSender;
+	sendMedia?: SendMedia;
 	/**
 	 * Present only while this tool set belongs to a task loop step (spec 051, D3). It enables
 	 * `task_step_end` and removes the three tools a task must not use: `task_create` (a task does
@@ -87,7 +87,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		getAvailableModels: options.getAvailableModels,
 		resolveApiKey: options.resolveApiKey,
 		getSessionSearchSettings: options.getSessionSearchSettings,
-		mediaSender: options.mediaSender,
+		sendMedia: options.sendMedia,
 		taskLoop: options.taskLoop,
 		getToolsUsed: options.getToolsUsed,
 		getStepCost: options.getStepCost,

@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { MediaSender } from "../channel/channel-context.js";
+import type { SendMedia } from "../channel/transport.js";
 import type { PipiclawSessionSearchSettings } from "../config/settings.js";
 import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
@@ -84,7 +84,7 @@ export interface ToolBuildContext {
 	 * Present only on the main path, and only when the driving transport can deliver
 	 * files. Gates the `send_media` tool; sub-agents never receive it.
 	 */
-	mediaSender?: MediaSender;
+	sendMedia?: SendMedia;
 	/**
 	 * Present only inside a task loop step (spec 051, D3): which task this tool set belongs to.
 	 * `task_step_end` is registered only when this is set, so the chat surface can never end a
@@ -212,10 +212,10 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "send_media",
 		// Enabled only when the driving transport supplied a media sender (the DingTalk
 		// bot, or the terminal). Absent it, the tool is not built or advertised.
-		enabledBy: (ctx) => ctx.mediaSender != null,
+		enabledBy: (ctx) => ctx.sendMedia != null,
 		create: (ctx) =>
 			createSendMediaTool(ctx.fileStore, {
-				mediaSender: req(ctx.mediaSender, "mediaSender"),
+				sendMedia: req(ctx.sendMedia, "sendMedia"),
 				channelId: ctx.channelId,
 				securityConfig: ctx.securityConfig,
 				securityContext: ctx.securityContext,

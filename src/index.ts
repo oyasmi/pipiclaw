@@ -11,11 +11,13 @@
  */
 
 export { type BootstrapPaths, type BootstrapResult, isBootstrapExitError } from "./app/home.js";
-export type { ChannelContext, FinalDelivery, ProgressStyle, ResponseMode } from "./channel/channel-context.js";
+export type { ChannelContext } from "./channel/channel-context.js";
+export type { ChannelEvent as DingTalkEvent } from "./channel/channel-event.js";
+export type { Ingress as DingTalkHandler } from "./channel/ingress.js";
 export type { PipiclawSettings } from "./config/settings.js";
 export { DingTalkBot } from "./dingtalk/bot.js";
 export type { DingTalkConfig } from "./dingtalk/config.js";
-export type { DingTalkEvent, DingTalkHandler } from "./dingtalk/handler.js";
+export type { FinalDelivery, ProgressStyle, ResponseMode } from "./dingtalk/response-mode.js";
 export {
 	APP_HOME_DIR,
 	APP_NAME,

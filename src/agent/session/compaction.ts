@@ -286,22 +286,20 @@ export class SessionCompaction {
 			channelId: this.options.conversation.channelId,
 			reason: errorMessage(error),
 		});
-		const ctx = state.ctx;
-		if (ctx)
-			state.queue?.enqueue(
-				() => ctx.respondInThread("⚠️ 上下文压缩未完成，原会话已保留。可用 `/compact` 重试，或用 `/new` 开新会话。"),
-				"compaction failure",
-			);
+		state.ctx?.emit({
+			type: "commentary",
+			level: "notice",
+			text: "⚠️ 上下文压缩未完成，原会话已保留。可用 `/compact` 重试，或用 `/new` 开新会话。",
+		});
 	}
 	private wait(candidate: Candidate): Promise<void> {
 		this.record("waiting", candidate);
 		const state = this.options.getRunState();
-		const ctx = state.ctx;
-		if (ctx)
-			state.queue?.enqueue(
-				() => ctx.respondInThread("⏳ 正在整理上下文，可用 `/stop` 停止当前回合，或用 `/new` 开新会话。"),
-				"compaction wait",
-			);
+		state.ctx?.emit({
+			type: "commentary",
+			level: "notice",
+			text: "⏳ 正在整理上下文，可用 `/stop` 停止当前回合，或用 `/new` 开新会话。",
+		});
 		return candidate.promise;
 	}
 	private record(state: string, candidate: Candidate, fields: Record<string, unknown> = {}): void {

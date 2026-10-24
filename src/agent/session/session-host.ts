@@ -24,7 +24,7 @@ import {
 import { mkdir } from "fs/promises";
 import { dirname, join } from "path";
 import { commitActiveSessionRef, resolveActiveSessionFile } from "../../channel/active-session-store.js";
-import type { MediaSender } from "../../channel/channel-context.js";
+import type { SendMedia } from "../../channel/transport.js";
 import type { PipiclawSettingsManager } from "../../config/settings.js";
 import { loadToolsConfigWithDiagnostics } from "../../config/tools.js";
 import type { DeskConversation } from "../../desk/types.js";
@@ -93,7 +93,7 @@ export interface SessionHostDeps {
 	authConfigPath: string;
 	modelsConfigPath: string;
 	onSessionEvent?: (event: unknown, channelId: string) => void;
-	mediaSender?: MediaSender;
+	sendMedia?: SendMedia;
 	/** The agent's working directory: SDK session and resource-loader cwd, and the tools' relative-path base. */
 	cwd: string;
 	/** A conversation directory's channel name, for labelling `session_search` hits. */
@@ -128,7 +128,7 @@ export class SessionHost {
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
-	private readonly mediaSender?: MediaSender;
+	private readonly sendMedia?: SendMedia;
 	private readonly cwd: string;
 	readonly settingsManager: PipiclawSettingsManager;
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
@@ -193,7 +193,7 @@ export class SessionHost {
 		this.authConfigPath = deps.authConfigPath;
 		this.modelsConfigPath = deps.modelsConfigPath;
 		this.onSessionEvent = deps.onSessionEvent;
-		this.mediaSender = deps.mediaSender;
+		this.sendMedia = deps.sendMedia;
 		this.cwd = deps.cwd;
 		this.settingsManager = deps.settingsManager;
 		this.loadSecurityConfig = deps.loadSecurityConfig;
@@ -703,7 +703,7 @@ export class SessionHost {
 			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
-			mediaSender: this.mediaSender,
+			sendMedia: this.sendMedia,
 			taskLoop: this.taskLoop,
 			getToolsUsed: () => this.runState.toolsUsed,
 			// Assistant usage only: an internal sub-agent's cost is also in `totalUsage`, and a bound

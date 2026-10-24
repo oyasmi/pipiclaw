@@ -1,6 +1,7 @@
-import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
+import type { ChannelContext } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
+import type { SendMedia, TurnInfo } from "../channel/transport.js";
 import type { RunnerBuiltInCommand } from "../commands/catalog.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
 import type { DeskConversation } from "../desk/types.js";
@@ -12,6 +13,7 @@ import type { LoadedSecurityConfig } from "../security/config.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
+import type { TurnOutput } from "./turn/turn-output.js";
 
 export interface RunnerStatusSnapshot {
 	model: string;
@@ -45,7 +47,9 @@ export interface TurnStatus {
 export interface AgentRunner {
 	/** The (desk, channel) pairing this runner serves; fixed for the runner's lifetime. */
 	readonly conversation: DeskConversation;
+	/** Run one turn for `turn`, writing its progress and answer to `ctx`. */
 	run(
+		turn: TurnInfo,
 		ctx: ChannelContext,
 		store: ChannelStore,
 	): Promise<{
@@ -57,7 +61,8 @@ export interface AgentRunner {
 		durationMs?: number;
 		silent?: boolean;
 	}>;
-	handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void>;
+	/** The reply to a runner-handled built-in command (`/help`, `/context`, …), failures included. */
+	handleBuiltinCommand(command: RunnerBuiltInCommand): Promise<string>;
 	/** True if `text` is a slash command the runtime or session layer can handle. */
 	isKnownSlashCommand(text: string): boolean;
 	queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void>;
@@ -132,11 +137,10 @@ export interface RunQueue {
 export interface RunLogContext {
 	channelId: string;
 	userName?: string;
-	channelName?: string;
 }
 
 export interface RunState {
-	ctx: ChannelContext | null;
+	ctx: TurnOutput | null;
 	logCtx: RunLogContext | null;
 	store: ChannelStore | null;
 	queue: RunQueue | null;
@@ -151,7 +155,10 @@ export interface RunState {
 	errorMessage: string | undefined;
 	lastCompactionError: string | undefined;
 	finalOutcome: FinalOutcome;
-	finalResponseDelivered: boolean;
+	/** User-side messages the SDK has started in this turn: the prompt is the first; any later one was injected. */
+	userMessagesStarted: number;
+	/** An `answer` event was emitted this turn (the transport owns whether it reached the user). */
+	answerEmitted: boolean;
 	/**
 	 * Names of the tools this turn actually completed, in call order (spec 051, D6). The task loop
 	 * writes them into its step log so "this step did nothing" is an observed fact rather than the
@@ -175,8 +182,9 @@ export function createEmptyRunState(): RunState {
 		errorMessage: undefined,
 		lastCompactionError: undefined,
 		finalOutcome: { kind: "none" },
+		userMessagesStarted: 0,
 		toolsUsed: [],
-		finalResponseDelivered: false,
+		answerEmitted: false,
 	};
 }
 
@@ -241,8 +249,6 @@ export type AutoCompactionStartEvent = Extract<SessionEvent, { type: "compaction
 export type AutoCompactionEndEvent = Extract<SessionEvent, { type: "compaction_end" }>;
 export type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_start" }>;
 
-export type ProgressEntryKind = "tool" | "thinking" | "error" | "assistant";
-
 export const MAX_USER_MESSAGE_CHARS = 12_000;
 
 export interface RunnerFactoryPaths {
@@ -262,10 +268,10 @@ export interface RunnerFactoryPaths {
 	/** Optional, side-effect-free observer used by the behavior-eval harness. */
 	onSessionEvent?: (event: unknown, channelId: string) => void;
 	/**
-	 * Transport that can deliver file attachments (the DingTalk bot, or the terminal).
+	 * How the channel's transport delivers a file attachment.
 	 * Present enables the `send_media` tool; absent, the tool is not built.
 	 */
-	mediaSender?: MediaSender;
+	sendMedia?: SendMedia;
 	/** How the channel is named to the user (群「名」/ 私聊「名」), for the per-turn context; absent when it has no name. */
 	describeChannel?: (channelId: string) => string | undefined;
 	/** A conversation directory's channel name, for labelling `session_search` hits. */

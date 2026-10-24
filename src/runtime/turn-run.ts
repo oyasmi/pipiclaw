@@ -1,13 +1,14 @@
 /**
- * One turn of the daemon's per-channel pipeline (`DingTalkHandler.handleEvent`): dispatch admission,
- * built-in commands, wake verification, the agent run — as a task step when the wake is one — and
- * the settle-and-release epilogue that runs whatever happens.
+ * One turn of the daemon's per-channel pipeline (what a channel queue runs for each item): dispatch
+ * admission, built-in commands, wake verification, the agent run — as a task step when the wake is
+ * one — and the settle-and-release epilogue that runs whatever happens.
  */
 import type { AgentRunner } from "../agent/types.js";
 import type { BootstrapPaths } from "../app/home.js";
-import { type ChannelContext, muteChannelContext } from "../channel/channel-context.js";
+import type { ChannelContext, TurnOutcome } from "../channel/channel-context.js";
 import { type ChannelEvent, senderOf, type WakeEvent } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
+import type { Transport, TurnInfo } from "../channel/transport.js";
 import {
 	BUILT_IN_COMMANDS,
 	formatUnknownCommandMessage,
@@ -19,29 +20,29 @@ import {
 } from "../commands/catalog.js";
 import { formatNoDeskReply } from "../desk/commands.js";
 import { getDeskDir } from "../desk/paths.js";
-import { createDingTalkContext } from "../dingtalk/delivery.js";
-import type { DingTalkBotPort } from "../dingtalk/handler.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
+import { createEmptyUsageTotals } from "../usage/totals.js";
 import { admitsSyntheticEvent, type ChannelResolution, resolvedDesk } from "./desk-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { relativeImagePaths } from "./inbound-images.js";
 import { parseDriverTaskId } from "./task-driver.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { claimVerifiedWake } from "./task-wake.js";
+import type { TransportRegistry } from "./transports.js";
 import { canAbsorbWake, isCoalescableWake, MAX_COALESCED_WAKES, mergeCompletionWakes } from "./wake-coalescing.js";
 
 /**
  * The `runRuntimeCommand` names usable on the idle-turn path — every `BUILT_IN_COMMANDS` entry
  * *not* marked `runnerHandled`, i.e. every stateless report. `context` is the one deliberate
  * exception even though it isn't runner-handled while busy (see the busy-path switch in
- * `dingtalk/bot.ts`): idle answers it through the runner's ChannelContext-aware command path
- * (thread-reply, delete semantics) instead, so it is routed like the runner-handled built-ins
- * here and excluded from this stateless-report set.
+ * `ingress.ts`): idle answers it through the runner's command path (it reads the live session)
+ * instead, so it is routed like the runner-handled built-ins here and excluded from this
+ * stateless-report set.
  */
 const IDLE_RUNTIME_COMMAND_NAMES = new Set<string>(
 	BUILT_IN_COMMANDS.filter((command) => !command.runnerHandled).map((command) => command.name),
@@ -69,12 +70,47 @@ export interface ArchivedMessage {
 	images?: string[];
 }
 
+/** A turn's output port plus whether it has been finished, so the epilogue never finishes it twice or not at all. */
+interface TrackedOutput {
+	ctx: ChannelContext;
+	finished: boolean;
+}
+
+function trackOutput(ctx: ChannelContext): TrackedOutput {
+	const tracked: TrackedOutput = { ctx: undefined as unknown as ChannelContext, finished: false };
+	tracked.ctx = {
+		emit: (event) => ctx.emit(event),
+		finish: (outcome) => {
+			tracked.finished = true;
+			return ctx.finish(outcome);
+		},
+	};
+	return tracked;
+}
+
+/** A task step is silent: its output never reaches the channel (only `task_step_end`'s report does, through `push`). */
+function silenceAnswers(ctx: ChannelContext): ChannelContext {
+	return { emit: () => undefined, finish: (outcome) => ctx.finish(outcome) };
+}
+
+function turnInfoOf(event: ChannelEvent): TurnInfo {
+	return {
+		channelId: event.channelId,
+		...senderOf(event),
+		text: event.text,
+		...(event.images ? { images: event.images } : {}),
+		...(event.source === "human" && event.ref !== undefined ? { ref: event.ref } : {}),
+		ts: event.ts,
+	};
+}
+
 export interface EventTurnDeps {
 	options: {
 		paths: BootstrapPaths;
 		/** Test-only fault seams for the atomic structured-wake task transition. */
 		wakeTransitionHooks?: Partial<Record<"job" | "subagent", WakeTaskTransitionHooks>>;
 	};
+	transports: TransportRegistry;
 	store: ChannelStore;
 	activeTasks: Set<Promise<void>>;
 	archiveIncomingMessage: (channelId: string, message: ArchivedMessage, contextLabel: string) => Promise<void>;
@@ -94,14 +130,13 @@ export interface EventTurnDeps {
 }
 
 /**
- * The turn pipeline behind `DingTalkHandler.handleEvent`: admit the dispatch, run commands or the
- * agent (as a task step when the wake is one), and always settle the dispatch and release the turn.
+ * The turn pipeline behind a queued item: admit the dispatch, run commands or the agent (as a task
+ * step when the wake is one), and always settle the dispatch and release the turn.
  */
-export function createEventTurnRunner(
-	deps: EventTurnDeps,
-): (inboundEvent: ChannelEvent, bot: DingTalkBotPort) => Promise<void> {
+export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: ChannelEvent) => Promise<void> {
 	const {
 		options,
+		transports,
 		store,
 		activeTasks,
 		archiveIncomingMessage,
@@ -158,14 +193,14 @@ export function createEventTurnRunner(
 		runner: AgentRunner,
 		channelId: string,
 		taskId: string,
-		bot: DingTalkBotPort,
+		transport: Transport,
 	): Promise<void> => {
 		try {
 			const notice = await consumeTaskNotice(runner.conversation.deskDir, taskId);
 			if (notice) {
-				// runner.run closes its per-turn delivery context before returning. Sending through that
-				// closed context silently dropped successful task_step_end notifications (T-run-01).
-				const delivered = await bot.sendPlain(channelId, notice);
+				// runner.run finishes its per-turn output before returning. Sending through that
+				// finished output silently dropped successful task_step_end notifications (T-run-01).
+				const delivered = await transport.push(channelId, { text: notice });
 				if (delivered) await store.logBotResponse(channelId, notice, Date.now().toString());
 				else
 					log.logWarn("taskdriver.notice.delivery_failed", "Task notice delivery failed", {
@@ -186,7 +221,8 @@ export function createEventTurnRunner(
 	/** Mutable state of one turn, shared by the steps below (the wake may be merged or rewritten mid-turn). */
 	interface TurnState {
 		event: ChannelEvent;
-		baseCtx: ChannelContext | undefined;
+		/** The turn's open output port, once there is one; `finishTurn` settles it if the run did not. */
+		output: TrackedOutput | undefined;
 		structuredWakeFinalized: boolean;
 		/** Other completion wakes folded into this turn; finished together with this one. */
 		absorbedDispatchIds: string[];
@@ -239,16 +275,28 @@ export function createEventTurnRunner(
 				});
 			}
 		}
-		return { event, baseCtx: undefined, structuredWakeFinalized, absorbedDispatchIds, mergedWakesHandled: false };
+		return { event, output: undefined, structuredWakeFinalized, absorbedDispatchIds, mergedWakesHandled: false };
 	};
+
+	/** Say something to the channel in answer to `event`, carrying its reference back to the transport. */
+	const replyTo = (
+		transport: Transport,
+		event: ChannelEvent,
+		text: string,
+		opts?: { title?: string; markdown?: boolean },
+	): Promise<boolean> =>
+		transport.push(event.channelId, {
+			text,
+			...opts,
+			...(event.source === "human" && event.ref !== undefined ? { ref: event.ref } : {}),
+		});
 
 	/** A built-in slash command typed on an idle channel: stateless reports here, session commands on the runner. */
 	const runBuiltinCommand = async (
 		turn: TurnState,
 		builtInCommand: NonNullable<ReturnType<typeof parseBuiltInCommand>>,
 		runner: AgentRunner,
-		ctx: ChannelContext,
-		bot: DingTalkBotPort,
+		transport: Transport,
 	): Promise<void> => {
 		const { event } = turn;
 		const commandStartedAt = Date.now();
@@ -258,9 +306,15 @@ export function createEventTurnRunner(
 			fields: { command: builtInCommand.name },
 		});
 		try {
+			let response: string | undefined;
 			if (isIdleRuntimeCommandName(builtInCommand.name)) {
-				const response = await deps.runRuntimeCommand(event, builtInCommand.name, builtInCommand.args);
-				const delivered = await bot.sendPlain(event.channelId, response, {
+				response = await deps.runRuntimeCommand(event, builtInCommand.name, builtInCommand.args);
+			} else if (isRunnerBuiltInCommand(builtInCommand)) {
+				response = await runner.handleBuiltinCommand(builtInCommand);
+			}
+			if (response !== undefined) {
+				// Command echoes are control-plane traffic, not conversation: sent, never archived.
+				const delivered = await replyTo(transport, event, response, {
 					title: `/${builtInCommand.name}`,
 					markdown: true,
 				});
@@ -270,8 +324,6 @@ export function createEventTurnRunner(
 						fields: { command: builtInCommand.name, chars: response.length },
 					});
 				}
-			} else if (isRunnerBuiltInCommand(builtInCommand)) {
-				await runner.handleBuiltinCommand(ctx, builtInCommand);
 			}
 			log.logEvent("info", "runtime.command.completed", "Command completed", {
 				ctx: logCtx,
@@ -330,7 +382,7 @@ export function createEventTurnRunner(
 	const executeTurn = async (
 		turn: TurnState,
 		runner: AgentRunner,
-		bot: DingTalkBotPort,
+		transport: Transport,
 		backgroundOnly: boolean,
 	): Promise<void> => {
 		const { event } = turn;
@@ -353,19 +405,10 @@ export function createEventTurnRunner(
 			"user message",
 		);
 
-		// Background wakes deliver their result, not their process: no progress card, no
-		// thinking stream, nothing to clean up when a check-in ends `[SILENT]`.
-		// Awaited completions deliver their result too, without opening another progress card.
-		// Spec 051, D3: a task-driver dispatch runs as a *task step* — in the task cycle's
-		// own session, with a brief instead of the wake text, and silent unless the step
-		// asked for a notify. Everything below (busy state, /stop, delivery) is unchanged;
-		// only which session the turn is bound to, and what reaches the channel, differ.
-		let baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
-		turn.baseCtx = baseCtx;
-		let ctx = baseCtx;
-
 		if (builtInCommand) {
-			await runBuiltinCommand(turn, builtInCommand, runner, ctx, bot);
+			// A command draws no progress: its output port is quiet, and it closes with the turn.
+			turn.output = trackOutput(transport.openTurn(turnInfoOf(event), { quiet: true }));
+			await runBuiltinCommand(turn, builtInCommand, runner, transport);
 			return;
 		}
 
@@ -374,7 +417,7 @@ export function createEventTurnRunner(
 		// skills, and prompt templates are recognized by isKnownSlashCommand.
 		if (event.text.trim().startsWith("/") && !runner.isKnownSlashCommand(event.text)) {
 			const name = slashCommandName(event.text) ?? "";
-			await bot.sendPlain(event.channelId, formatUnknownCommandMessage(name));
+			await replyTo(transport, event, formatUnknownCommandMessage(name));
 			return;
 		}
 
@@ -392,32 +435,42 @@ export function createEventTurnRunner(
 		// first: routing directly from user-controlled wake text would grant task-only tools.
 		const taskStep = await prepareTaskStep(turn.event, runner);
 		if (taskStep) {
-			await baseCtx.close();
 			turn.event = { ...turn.event, text: taskStep.brief };
-			baseCtx = createDingTalkContext(turn.event, bot, store, "none");
-			turn.baseCtx = baseCtx;
-			ctx = muteChannelContext(baseCtx);
 		}
-		if (!backgroundOnly && !taskStep) ctx.primeCard(3500);
-		const result = await runner.run(ctx, store);
+		// Background wakes deliver their result, not their process: no progress card, no
+		// thinking stream, nothing to clean up when a check-in ends `[SILENT]`. Awaited completions
+		// deliver their result too, without opening another progress card.
+		// Spec 051, D3: a task-driver dispatch runs as a *task step* — in the task cycle's own
+		// session, with a brief instead of the wake text, and silent unless the step asked for a
+		// notify. Everything below (busy state, /stop, delivery) is unchanged; only which session
+		// the turn is bound to, and what reaches the channel, differ.
+		const info = turnInfoOf(turn.event);
+		const opened = transport.openTurn(info, { quiet: backgroundOnly || taskStep !== undefined });
+		turn.output = trackOutput(taskStep ? silenceAnswers(opened) : opened);
+		const result = await runner.run(info, turn.output.ctx, store);
 		if (!deps.isCurrentRunner(runner)) return;
 		turn.mergedWakesHandled = result.stopReason !== "aborted" && result.stopReason !== "error";
-		if (taskStep) await finishTaskStep(runner, turn.event.channelId, taskStep.taskId, bot);
+		if (taskStep) await finishTaskStep(runner, turn.event.channelId, taskStep.taskId, transport);
 
 		if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
 			log.logInfoEvent("agent.turn.stopped", "Turn stopped", { channelId: turn.event.channelId });
 		}
 	};
 
-	/** Always runs: close delivery, settle the dispatch records, release the turn, nudge the task driver. */
+	/** Always runs: finish the output, settle the dispatch records, release the turn, nudge the task driver. */
 	const finishTurn = async (turn: TurnState, runner: AgentRunner): Promise<void> => {
 		const { event } = turn;
-		await turn.baseCtx?.close().catch((error: unknown) => {
-			log.logWarn("delivery.close.failed", "Delivery close failed", {
-				channelId: event.channelId,
-				reason: errorMessage(error),
+		// The runner finishes the output when it runs; a command, or a turn that failed before the
+		// runner took over, finishes here so the transport never keeps one open.
+		if (turn.output && !turn.output.finished) {
+			const outcome: TurnOutcome = { kind: "completed", usage: createEmptyUsageTotals() };
+			await turn.output.ctx.finish(outcome).catch((error: unknown) => {
+				log.logWarn("delivery.close.failed", "Delivery close failed", {
+					channelId: event.channelId,
+					reason: errorMessage(error),
+				});
 			});
-		});
+		}
 		if (!deps.isCurrentRunner(runner)) {
 			runner.endTurn();
 			return;
@@ -473,24 +526,24 @@ export function createEventTurnRunner(
 	const replyWithoutDesk = async (
 		event: ChannelEvent,
 		resolution: Exclude<ChannelResolution, { kind: "bound" }>,
-		bot: DingTalkBotPort,
+		transport: Transport,
 	): Promise<void> => {
 		const command = parseBuiltInCommand(event.text);
 		if (command?.name === "help") {
-			await bot.sendPlain(event.channelId, renderBuiltInHelp(command.args), { title: "/help", markdown: true });
+			await replyTo(transport, event, renderBuiltInHelp(command.args), { title: "/help", markdown: true });
 			return;
 		}
-		await bot.sendPlain(event.channelId, formatNoDeskReply(resolution), { markdown: true });
+		await replyTo(transport, event, formatNoDeskReply(resolution), { markdown: true });
 	};
 
-	const runDeskCommand = async (event: ChannelEvent, args: string, bot: DingTalkBotPort): Promise<void> => {
+	const runDeskCommand = async (event: ChannelEvent, args: string, transport: Transport): Promise<void> => {
 		const logCtx = { channelId: event.channelId, userName: senderOf(event).userName };
 		log.logEvent("info", "runtime.command.started", "Executing command", {
 			ctx: logCtx,
 			fields: { command: "desk" },
 		});
 		const response = await deps.runRuntimeCommand(event, "desk", args);
-		const delivered = await bot.sendPlain(event.channelId, response, { title: "/desk", markdown: true });
+		const delivered = await replyTo(transport, event, response, { title: "/desk", markdown: true });
 		if (!delivered) {
 			log.logWarn("delivery.command_reply.failed", "Command reply delivery failed", {
 				channelId: event.channelId,
@@ -499,11 +552,20 @@ export function createEventTurnRunner(
 		}
 	};
 
-	const runEventTurn = async (inboundEvent: ChannelEvent, bot: DingTalkBotPort): Promise<void> => {
+	const runEventTurn = async (inboundEvent: ChannelEvent): Promise<void> => {
 		if (isShuttingDown()) {
 			log.logInfoEvent("runtime.shutdown.event_ignored", "Event ignored during shutdown", {
 				channelId: inboundEvent.channelId,
 			});
+			return;
+		}
+		const transport = transports.forChannel(inboundEvent.channelId);
+		if (!transport) {
+			log.logWarn("runtime.turn.no_transport", "Turn dropped: no transport hosts the channel", {
+				channelId: inboundEvent.channelId,
+				fields: { dispatchId: inboundEvent.dispatchId },
+			});
+			releaseReservation(inboundEvent);
 			return;
 		}
 
@@ -531,11 +593,11 @@ export function createEventTurnRunner(
 			const command = parseBuiltInCommand(inboundEvent.text);
 			if (command?.name === "desk") {
 				releaseReservation(inboundEvent);
-				await runDeskCommand(inboundEvent, command.args, bot);
+				await runDeskCommand(inboundEvent, command.args, transport);
 				return;
 			}
 			if (resolution.kind !== "bound") {
-				await replyWithoutDesk(inboundEvent, resolution, bot);
+				await replyWithoutDesk(inboundEvent, resolution, transport);
 				return;
 			}
 		}
@@ -546,7 +608,7 @@ export function createEventTurnRunner(
 		if (!turn) return;
 		const task = (async () => {
 			try {
-				await executeTurn(turn, runner, bot, isSyntheticEvent(inboundEvent));
+				await executeTurn(turn, runner, transport, isSyntheticEvent(inboundEvent));
 			} catch (err) {
 				log.logEvent("error", "agent.turn.failed", "Turn failed", {
 					ctx: { channelId: turn.event.channelId, userName: senderOf(turn.event).userName },

@@ -1,155 +1,58 @@
 /**
- * Transport-neutral delivery contract.
+ * The per-turn output port (spec 061, D7): what one turn writes to its channel.
  *
- * `ChannelContext` is the surface a `ChannelRunner` turn writes to: progress
- * updates, the final answer, side notices, and lifecycle hooks. The DingTalk
- * transport implements it via AI Card streaming (`dingtalk/delivery.ts`); the
- * terminal TUI implements it by rendering to the console (`tui/`). The runner
- * and `session-events` depend only on this interface, never on a concrete
- * transport.
- *
- * These declarations previously lived in `dingtalk/bot.ts` under the name
- * `DingTalkContext`; they were lifted out (and renamed) so a second transport
- * can implement the contract without importing anything DingTalk-specific. They
- * live in `src/channel/` rather than `src/runtime/` because a port belongs with
- * the domain it describes, not with one of its adapters: `agent`, `tools` and
- * `tui` all depend on this file, and none of them should be reading anything out
- * of the DingTalk transport's directory to get it.
+ * A turn reports what happened as structured `TurnEvent`s; how that looks is each transport's
+ * business — DingTalk renders progress lines into an AI Card, the Web API turns them into output
+ * items. Nothing here is pre-rendered text, and nothing model-facing travels through it: a tool
+ * call carries its name and raw arguments, and the transport builds the user label itself
+ * (`tools/contract/presentation.ts`'s `describeToolCall`).
  */
-
-import type { InboundImage } from "./channel-event.js";
-
-/**
- * How progress is surfaced during a run. Derived from the transport's response
- * mode so callers never branch on the raw enum string.
- */
-export type ProgressStyle = "full" | "rolling" | "none";
-
-/** How the final answer is delivered. */
-export type FinalDelivery = "plain" | "card";
-
-/**
- * User-facing delivery preset (`channel.json` `responseMode`, `settings.json` `tui.responseMode`).
- * Transport-neutral on purpose: the DingTalk bot and the TUI both map it onto
- * `ProgressStyle` / `FinalDelivery` and nothing else should branch on the raw strings.
- */
-export type ResponseMode = "full_progress_then_plain_final" | "rolling_progress_then_plain_final" | "final_card_only";
-
-const RESPONSE_MODE_VALUES: ResponseMode[] = [
-	"full_progress_then_plain_final",
-	"rolling_progress_then_plain_final",
-	"final_card_only",
-];
-
-export function progressStyleOf(mode: ResponseMode): ProgressStyle {
-	if (mode === "final_card_only") return "none";
-	if (mode === "rolling_progress_then_plain_final") return "rolling";
-	return "full";
-}
-
-export function finalDeliveryOf(mode: ResponseMode): FinalDelivery {
-	return mode === "final_card_only" ? "card" : "plain";
-}
-
-export function isResponseModeConfig(value: unknown): value is ResponseMode {
-	return typeof value === "string" && (RESPONSE_MODE_VALUES as string[]).includes(value);
-}
-
-export function normalizeResponseMode(value: unknown): ResponseMode {
-	if (value === undefined) {
-		return "full_progress_then_plain_final";
-	}
-	if (isResponseModeConfig(value)) {
-		return value;
-	}
-	throw new Error(
-		'Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
-	);
-}
-
-/**
- * A file the agent wants to push to a channel as a native attachment (image or
- * downloadable file), as opposed to text/markdown in the transcript.
- *
- * Bytes travel in-band (`data`) rather than as a path so the sender is decoupled
- * from where the file physically lives — the `send_media` tool reads the file
- * through its `Executor` (which may be remote) and hands over the bytes, exactly
- * as `read` does for images.
- */
-export interface OutboundMedia {
-	/** Raw file contents. */
-	data: Buffer;
-	/** Display name shown to the recipient (e.g. "report.pdf"). */
-	fileName: string;
-	/** `image` renders inline; `file` is a downloadable attachment. */
-	kind: "image" | "file";
-}
-
-export interface MediaSendResult {
-	ok: boolean;
-	/** Human-readable failure reason, surfaced to the agent on `ok: false`. */
-	error?: string;
-}
-
-/**
- * Transport-neutral outbound-attachment port. Implemented by each transport that
- * can deliver files: the DingTalk bot uploads media and sends an image/file
- * message; the terminal writes the file to disk and prints its path. The
- * `send_media` tool depends only on this interface — never on a concrete
- * transport — and is bound to its channel at build time (like `read`/`bash`),
- * so `channelId` is supplied by the runtime, not by the model.
- */
-export interface MediaSender {
-	sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult>;
-}
+import type { UsageTotals } from "../usage/totals.js";
 
 export interface ChannelContext {
-	message: {
-		text: string;
-		rawText: string;
-		user: string;
-		userName?: string;
-		channel: string;
-		ts: string;
-		/** Images the user sent alongside this message (spec 049). Empty on transports (TUI) that
-		 *  do not yet produce inbound attachments — the field stays optional for them. */
-		images?: InboundImage[];
-	};
-	channelName?: string;
-	respond: (text: string, shouldLog?: boolean) => Promise<void>;
-	/** `title` names the reply in transports that show one (e.g. DingTalk's conversation list); ignored where there isn't one. */
-	respondPlain: (text: string, shouldLog?: boolean, title?: string) => Promise<boolean>;
-	replaceMessage: (text: string) => Promise<void>;
-	respondInThread: (text: string) => Promise<void>;
-	setTyping: (isTyping: boolean) => Promise<void>;
-	setWorking: (working: boolean) => Promise<void>;
-	/** End without a final answer. Transports may preserve already-visible progress. */
-	deleteMessage: () => Promise<void>;
-	primeCard: (delayMs: number) => void;
-	flush: () => Promise<void>;
-	close: () => Promise<void>;
-	progressStyle: ProgressStyle;
-	finalDelivery: FinalDelivery;
+	/** Called in order of occurrence and never blocks; a transport serializes its own delivery. */
+	emit(event: TurnEvent): void;
+	/** Called once when the turn ends; the transport closes its card or settles its response here. */
+	finish(outcome: TurnOutcome): Promise<void>;
 }
 
-/**
- * A context whose user-visible writes are dropped (spec 051, D3).
- *
- * Task loop steps are silent by default: a twelve-step cycle should not narrate twelve times into
- * the channel. v3 asked the model to say `[SILENT]` and treated the request as advisory; muting
- * the transport instead makes silence the structural default, and a step that genuinely has
- * something to say routes it through `task_step_end`'s `notify` — which the runtime delivers on
- * the real context after the step ends.
- *
- * Lifecycle calls pass through for cleanup; card priming is a visible write and is muted too.
- */
-export function muteChannelContext(ctx: ChannelContext): ChannelContext {
-	return {
-		...ctx,
-		respond: async () => undefined,
-		respondPlain: async () => true,
-		replaceMessage: async () => undefined,
-		respondInThread: async () => undefined,
-		primeCard: () => undefined,
-	};
+export type TurnEvent =
+	| { type: "tool.start"; callId: string; tool: string; args: unknown }
+	| { type: "tool.update"; callId: string; text: string }
+	/**
+	 * `output` is the tool's result text (clipped). `failure` is present only when the user should
+	 * see this call as an error line, already worded for them; a call the model recovers from by
+	 * itself (a rejected argument) is `ok: false` with no `failure`.
+	 */
+	| { type: "tool.end"; callId: string; ok: boolean; output: string; failure?: string }
+	| { type: "reasoning"; text: string }
+	/**
+	 * A line of the turn's narrative that is not the answer. Without a `level` it is the model's
+	 * own text between tool calls. `level` marks runtime-authored text:
+	 * - `"error"` — a failure line inside the progress (a tool or compaction error); dropped when
+	 *   the transport shows no progress;
+	 * - `"warning"` — the same, but it must not be lost: shown as progress, or as a standalone
+	 *   notice when the transport shows no progress (a model fallback switch);
+	 * - `"notice"` — a standalone side notice, never part of the progress (a skill update, a
+	 *   clipped input, a compaction hint).
+	 */
+	| { type: "commentary"; text: string; level?: "error" | "warning" | "notice" }
+	/** A final answer. `title` names it where the transport shows one (DingTalk's conversation list). */
+	| { type: "answer"; text: string; title?: string }
+	/** The SDK injected a steering or follow-up message into this turn. */
+	| { type: "steer.applied" }
+	| { type: "compaction"; phase: "start" | "end"; ok?: boolean };
+
+export interface TurnOutcome {
+	/**
+	 * - `completed` — the turn ended normally (it may have no answer);
+	 * - `silent` — the model answered `[SILENT]` or nothing: end without a message;
+	 * - `failed` — it ended in error with no answer; `message` says why;
+	 * - `cancelled` — the user stopped it, or its generation was retired.
+	 */
+	kind: "completed" | "silent" | "failed" | "cancelled";
+	/** `failed` only: the reason, already written for the user. */
+	message?: string;
+	/** Everything the turn's LLM calls cost, up to the moment it ended. */
+	usage: UsageTotals;
 }

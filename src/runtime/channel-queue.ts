@@ -1,25 +1,31 @@
 /**
- * The per-channel serial work queue for inbound turns (user message and event limits live in the bot).
+ * The per-channel serial work queue for inbound turns (the limits that apply to it live in
+ * `ingress.ts`).
  */
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 export type QueuedWork = () => Promise<void>;
 
+interface QueuedItem {
+	work: QueuedWork;
+	/** The transport's reference for the message this work answers, so it can be taken back out. */
+	ref?: string;
+}
+
 /**
- * The per-channel turn serialization point: a channel processes one inbound
- * message at a time; later arrivals wait here. This is runtime policy, not a
- * transport detail — DingTalk consumes it via `DingTalkBot`; busy-state itself
- * is owned by the runner's turn state machine (`AgentRunner.beginTurn`).
+ * The per-channel turn serialization point: a channel processes one inbound message at a time;
+ * later arrivals wait here. Busy state itself is owned by the runner's turn state machine
+ * (`AgentRunner.beginTurn`), not by this queue.
  */
 export class ChannelQueue {
-	private queue: QueuedWork[] = [];
+	private queue: QueuedItem[] = [];
 	private processing = false;
 	private stopped = false;
 
-	enqueue(work: QueuedWork): void {
+	enqueue(work: QueuedWork, ref?: string): void {
 		if (this.stopped) return;
-		this.queue.push(work);
+		this.queue.push({ work, ref });
 		this.processNext();
 	}
 
@@ -35,7 +41,7 @@ export class ChannelQueue {
 	private async processNext(): Promise<void> {
 		if (this.processing || this.stopped || this.queue.length === 0) return;
 		this.processing = true;
-		const work = this.queue.shift()!;
+		const { work } = this.queue.shift()!;
 		try {
 			await work();
 		} catch (err) {
@@ -57,5 +63,13 @@ export class ChannelQueue {
 		const dropped = this.queue.length;
 		this.queue = [];
 		return dropped;
+	}
+
+	/** Take one not-yet-started item back out by its `ref`; whether it was found. */
+	removeByRef(ref: string): boolean {
+		const index = this.queue.findIndex((item) => item.ref === ref);
+		if (index < 0) return false;
+		this.queue.splice(index, 1);
+		return true;
 	}
 }

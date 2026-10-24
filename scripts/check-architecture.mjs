@@ -48,7 +48,7 @@ const ALLOWED = {
 	tasks: L01,
 	playbooks: L01,
 	desk: L01,
-	channel: [...L01, "security", "desk"],
+	channel: [...L01, "security", "desk", "usage"],
 	"tools-contract": [...L01, "security"],
 	config: [...L01, "channel"],
 	models: [...L01, "config"],

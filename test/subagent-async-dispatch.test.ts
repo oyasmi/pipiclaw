@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
-import type { DingTalkEvent } from "../src/dingtalk/handler.js";
+import type { WakeEvent } from "../src/channel/channel-event.js";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/tools/subagent.js";
@@ -40,7 +40,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(deskDir, { recursive: true });
 
-		const dispatched: DingTalkEvent[] = [];
+		const dispatched: WakeEvent[] = [];
 		configureSubAgentRuntime({
 			dispatch: (event) => {
 				dispatched.push(event);

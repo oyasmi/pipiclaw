@@ -19,7 +19,6 @@ import {
 	readCliVersion,
 } from "../app/home.js";
 import { prepareAppServices } from "../app/services.js";
-import { finalDeliveryOf, progressStyleOf } from "../channel/channel-context.js";
 import { CHANNELS_INDEX_FILENAME, loadChannelNames } from "../channel/channel-index.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
@@ -39,8 +38,8 @@ import { getUsageLedger } from "../usage/ledger.js";
 import { formatTuiChannelLabel, TUI_CHANNEL_ID } from "./channel-label.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
 import { createFrontend } from "./renderer.js";
-import type { DeliveryTraits } from "./terminal-context.js";
-import { createTerminalMediaSender } from "./terminal-media-sender.js";
+import { traitsOf } from "./terminal-context.js";
+import { createTerminalSendMedia } from "./terminal-media-sender.js";
 import { TurnController } from "./turn-controller.js";
 
 const STORAGE_FLUSH_TIMEOUT_MS = 10_000;
@@ -189,7 +188,7 @@ async function runWithConversation(
 			runManager: runs.get(desk),
 			appHomeDir: paths.appHomeDir,
 			workspaceDir: paths.workspaceDir,
-			describeChannel: (id) => names.get(id),
+			describeChannel: (id) => (names.get(id) ? formatTuiChannelLabel(id, names.get(id)) : undefined),
 			describeConversation: (dir) => {
 				const owner = Object.entries(record?.conversations ?? {}).find(([, entry]) => entry.dir === dir)?.[0];
 				return owner ? formatTuiChannelLabel(owner, names.get(owner)) : undefined;
@@ -197,15 +196,12 @@ async function runWithConversation(
 			authConfigPath: paths.authConfigPath,
 			modelsConfigPath: paths.modelsConfigPath,
 			settingsManager,
-			mediaSender: createTerminalMediaSender(io),
+			sendMedia: createTerminalSendMedia(io),
 		});
 
 	let runner = makeRunner();
 	const tuiSettings = settingsManager.getTuiSettings();
-	const traits: DeliveryTraits = {
-		progressStyle: progressStyleOf(tuiSettings.responseMode),
-		finalDelivery: finalDeliveryOf(tuiSettings.responseMode),
-	};
+	const traits = traitsOf(tuiSettings.responseMode);
 
 	const interactive = !options.print;
 	const frontend = createFrontend({
