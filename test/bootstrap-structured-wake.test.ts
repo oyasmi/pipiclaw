@@ -143,7 +143,6 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 	const runtime = await createRuntimeContext({
 		executor,
 		paths: runtimePaths,
-		dingtalkConfig: { clientId: "id", clientSecret: "secret", stateDir: runtimePaths.workspaceDir },
 		transports: [transport],
 		registerSignalHandlers: false,
 		startServices: false,

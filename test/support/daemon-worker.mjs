@@ -40,7 +40,6 @@ class CapturedBot extends DingTalkBot {
 }
 const runtime = await createRuntimeContext({
 	paths,
-	dingtalkConfig: config,
 	transports: [
 		new DingTalkTransport({
 			config,

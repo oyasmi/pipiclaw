@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import { getActiveSessionRefPath } from "../src/channel/active-session-store.js";
-import type { DingTalkConfig } from "../src/dingtalk/config.js";
+import { StartupRefusal } from "../src/desk/startup-error.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { bindTestChannel, useTempDirs } from "./helpers/fixtures.js";
 import { bootstrapPathsIn } from "./support/fake-runner.js";
@@ -34,11 +34,6 @@ describe("createRuntimeContext", () => {
 		const transport = new RecordingTransport();
 		const runtime = await createRuntimeContext({
 			paths,
-			dingtalkConfig: {
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				stateDir: paths.workspaceDir,
-			},
 			transports: [transport],
 			registerSignalHandlers: false,
 			startServices: false,
@@ -72,11 +67,6 @@ describe("createRuntimeContext", () => {
 		const taskDriver = { start: vi.fn(), stop: vi.fn() };
 		const runtime = await createRuntimeContext({
 			paths,
-			dingtalkConfig: {
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				stateDir: paths.workspaceDir,
-			},
 			transports: [transport],
 			registerSignalHandlers: false,
 			startServices: true,
@@ -103,13 +93,6 @@ describe("createRuntimeContext", () => {
 
 		const runtime = await createRuntimeContext({
 			paths,
-			dingtalkConfig: {
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				robotCode: "client-id",
-				cardTemplateKey: "content",
-				stateDir: paths.workspaceDir,
-			} satisfies DingTalkConfig,
 			transports: [transport],
 			registerSignalHandlers: false,
 			startServices: false,
@@ -126,5 +109,28 @@ describe("createRuntimeContext", () => {
 		expect(runtime.store.logMessage).toHaveBeenCalledTimes(2);
 		expect(transport.pushes).toHaveLength(2);
 		await runtime.shutdown();
+	});
+
+	it("lets one runtime hold an app home at a time, and frees it on shutdown (INV-11)", async () => {
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:tester");
+		const open = () =>
+			createRuntimeContext({
+				paths,
+				transports: [new RecordingTransport()],
+				registerSignalHandlers: false,
+				startServices: false,
+				createEventsWatcher: () => ({ start() {}, stop() {} }),
+			});
+
+		const first = await open();
+		// A second runtime would write the same desks and sessions with no lock between them.
+		await expect(open()).rejects.toThrow(StartupRefusal);
+		await expect(open()).rejects.toThrow(new RegExp(`pid ${process.pid}`));
+
+		await first.shutdown();
+		const second = await open();
+		await second.shutdown();
 	});
 });

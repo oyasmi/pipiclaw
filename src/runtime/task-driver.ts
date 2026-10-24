@@ -19,6 +19,12 @@ export interface TaskDriverOptions {
 	 * not bound to its own desk is suspended: frozen entirely, not merely undelivered (D8).
 	 */
 	isBoundTo: (channelId: string, desk: string) => boolean;
+	/**
+	 * Whether the delivery channel's transport is switched on in this process. A task delivering to
+	 * a transport that is off is suspended the same way (spec 061, INV-8): nothing could be said to
+	 * its channel, so the task waits, untouched, until the transport is back.
+	 */
+	isReachable: (channelId: string) => boolean;
 	isChannelActive: (channelId: string) => boolean;
 	dispatch: (event: WakeEvent) => boolean | Promise<boolean>;
 	/** Optional observability hook. It runs after every production dispatch attempt. */
@@ -350,7 +356,7 @@ export class TaskDriver {
 
 	/**
 	 * The tasks of one desk the driver may touch at all (spec 058, D8): those whose delivery channel
-	 * is bound to this desk. Every other task — no `channel`, or a channel bound elsewhere or nowhere
+	 * is bound to this desk and reachable. Every other task — no `channel`, or a channel bound elsewhere or nowhere, or on a transport that is off
 	 * — is frozen: no ticket redemption, no backstop, no budget or idle check, no step, no receipt.
 	 * Freezing reads nothing back into the file, so a rebound task resumes from exactly where it was.
 	 */
@@ -359,7 +365,7 @@ export class TaskDriver {
 		for (const entry of entries) {
 			const key = attemptKey(desk, entry.id);
 			const channelId = entry.fields.channel;
-			if (channelId && this.options.isBoundTo(channelId, desk)) {
+			if (channelId && this.options.isBoundTo(channelId, desk) && this.options.isReachable(channelId)) {
 				if (this.suspended.delete(key)) {
 					log.logInfoEvent("taskdriver.task.resumed", "Task resumed: delivery channel bound again", {
 						channelId,
@@ -371,9 +377,17 @@ export class TaskDriver {
 			}
 			if (!this.suspended.has(key)) {
 				this.suspended.add(key);
-				log.logInfoEvent("taskdriver.task.suspended", "Task suspended: delivery channel not bound to its desk", {
+				log.logInfoEvent("taskdriver.task.suspended", "Task suspended: delivery channel not usable", {
 					channelId,
-					fields: { taskId: entry.id, desk, reason: channelId ? "channel_not_bound" : "channel_missing" },
+					fields: {
+						taskId: entry.id,
+						desk,
+						reason: !channelId
+							? "channel_missing"
+							: this.options.isBoundTo(channelId, desk)
+								? "channel_unreachable"
+								: "channel_not_bound",
+					},
 				});
 			}
 		}

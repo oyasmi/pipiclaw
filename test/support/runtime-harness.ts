@@ -90,7 +90,6 @@ export async function createRuntimeHarness(options?: {
 			securityConfigPath: join(home.homeDir, "security.json"),
 			eventHistoryPath: join(home.homeDir, "state", "events", "history.jsonl"),
 		},
-		dingtalkConfig,
 		transports: [
 			new DingTalkTransport({
 				config: dingtalkConfig,
@@ -289,7 +288,6 @@ export async function createDeterministicHarness(options?: {
 		process.env.PIPICLAW_HOME = home.homeDir;
 		runtime = await createRuntimeContext({
 			paths,
-			dingtalkConfig,
 			registerSignalHandlers: false,
 			startServices: options?.services ?? false,
 			jobSweepIntervalMs: options?.services ? 150 : undefined,

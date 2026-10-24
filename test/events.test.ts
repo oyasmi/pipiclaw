@@ -122,10 +122,12 @@ function createWatcher(
 	historyPath?: string,
 	spawnTask?: EventsWatcherOptions["spawnTask"],
 	isBound: EventsWatcherOptions["isBound"] = () => true,
+	isReachable: EventsWatcherOptions["isReachable"] = () => true,
 ): EventsWatcher {
 	return new EventsWatcher(dir, bot, executor, guardConfig, {
 		desk: "news",
 		isBound,
+		isReachable,
 		historyPath,
 		spawnTask,
 	});
@@ -505,6 +507,28 @@ describe("EventsWatcher", () => {
 		await unbound.flush();
 		expect(unboundBot.events).toHaveLength(0);
 		expect(readHistory(historyPath).at(-1)).toMatchObject({ action: "skipped", reason: "channel_not_bound" });
+
+		// Spec 061, INV-8: bound, but the channel's transport is switched off in this run. Skipped
+		// the same way, with its own receipt, so the history says why nothing was delivered.
+		const offBot = new FakeBot(true);
+		const off = createWatcher(
+			dir,
+			offBot,
+			createMockExecutor(),
+			undefined,
+			historyPath,
+			undefined,
+			() => true,
+			() => false,
+		);
+		await getEventsWatcherPrivateApi(off).execute(
+			filename,
+			{ type: "periodic", channelId: "dingtalk:dm:42", text: "run maintenance", schedule: "0 3 * * 0" },
+			false,
+		);
+		await off.flush();
+		expect(offBot.events).toHaveLength(0);
+		expect(readHistory(historyPath).at(-1)).toMatchObject({ action: "skipped", reason: "channel_unavailable" });
 	});
 
 	describe("admission gate (spec 031, D4)", () => {
@@ -643,6 +667,7 @@ describe("EventsWatcher", () => {
 			const watcher = new EventsWatcher(dir, new FakeBot(), createMockExecutor(), undefined, {
 				desk: "news",
 				isBound: () => true,
+				isReachable: () => true,
 				dispatch: (event) => service.dispatch(event),
 			});
 			const privateApi = getEventsWatcherPrivateApi(watcher);
@@ -690,6 +715,7 @@ describe("EventsWatcher", () => {
 		const watcher = new EventsWatcher(dir, new FakeBot(), createMockExecutor(), undefined, {
 			desk: "news",
 			isBound: () => true,
+			isReachable: () => true,
 			dispatch: async () => {
 				throw new Error("ENOSPC: no space left on device");
 			},

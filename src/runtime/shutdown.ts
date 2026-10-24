@@ -47,6 +47,8 @@ export interface ShutdownDeps {
 	activeTasks: Set<Promise<void>>;
 	/** Flips the runtime's `isShuttingDown()` the moment shutdown begins. */
 	markShuttingDown: () => void;
+	/** Frees `state/daemon.lock`, last of all: until then no other runtime may open this app home. */
+	releaseDaemonLock: () => Promise<void>;
 }
 
 export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "manual") => Promise<void> {
@@ -167,6 +169,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 				});
 			}
 			await waitForTasks([log.flushLogging()], SHUTDOWN_LOG_FLUSH_WAIT_MS);
+			await deps.releaseDaemonLock();
 		})();
 
 		return shutdownPromise;

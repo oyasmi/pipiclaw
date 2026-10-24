@@ -352,7 +352,6 @@ async function main(): Promise<void> {
 			securityConfigPath: join(homeDir, "security.json"),
 			eventHistoryPath: join(homeDir, "state/events/history.jsonl"),
 		},
-		dingtalkConfig,
 		transports: [
 			new DingTalkTransport({
 				config: dingtalkConfig,

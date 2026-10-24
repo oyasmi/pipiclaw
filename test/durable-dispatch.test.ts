@@ -112,6 +112,31 @@ describe("DurableDispatchService", () => {
 		);
 		expect(readdirSync(stateDir)).toHaveLength(before);
 		expect(received).toHaveLength(1);
+
+		// Spec 061, INV-8: a record for a transport that is switched off waits on disk, untried and
+		// uncounted, and goes out in a run where the transport is back.
+		let reachable = false;
+		const offService = new DurableDispatchService({
+			stateDir,
+			isReachable: () => reachable,
+			bot: {
+				enqueueEvent(next) {
+					received.push(next);
+					return true;
+				},
+			},
+		});
+		const waiting = { ...event(), ts: "789", text: "[EVENT:wait] later" };
+		await expect(offService.dispatch(waiting)).resolves.toBe(false);
+		await offService.drainOnce();
+		expect(received).toHaveLength(1);
+		const pending = readdirSync(stateDir)
+			.map((name) => JSON.parse(readFileSync(join(stateDir, name), "utf-8")))
+			.find((record) => record.event.text === waiting.text);
+		expect(pending).toMatchObject({ status: "pending", deliveries: 0 });
+		reachable = true;
+		await offService.drainOnce();
+		expect(received.map((next) => next.text)).toContain(waiting.text);
 	});
 
 	it("replays an expired lease after a restart and removes it only after completion", async () => {

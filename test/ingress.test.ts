@@ -57,7 +57,6 @@ async function setup(
 	const transport = new RecordingTransport({ whenBusy: "steer", textControlCommands: true, ...options.policy });
 	const runtime = await createRuntimeContext({
 		paths,
-		dingtalkConfig: { clientId: "client-id", clientSecret: "client-secret", stateDir: paths.workspaceDir },
 		transports: [transport],
 		registerSignalHandlers: false,
 		startServices: false,
@@ -408,7 +407,6 @@ describe("stopping and steering through the ingress", () => {
 		const transport = new RecordingTransport();
 		const runtime = await createRuntimeContext({
 			paths,
-			dingtalkConfig: { clientId: "client-id", clientSecret: "client-secret", stateDir: paths.workspaceDir },
 			transports: [transport],
 			registerSignalHandlers: false,
 			startServices: false,

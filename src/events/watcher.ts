@@ -27,6 +27,7 @@ import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import type { TaskCreateInput } from "../tasks/contract-input.js";
 import { describeEventPayload, parseScheduledEventContent } from "./parse.js";
+import { EventPreActionError } from "./pre-action-error.js";
 import type {
 	EventAction,
 	EventHistoryAction,
@@ -61,20 +62,6 @@ function eventDispatchId(desk: string, filename: string, event: ScheduledEvent, 
 	const name = eventNameFromFilename(filename);
 	const when = event.type === "one-shot" ? event.at : occurrence.toISOString();
 	return `event:${desk}:${name}:${when}`;
-}
-
-class EventPreActionError extends Error {
-	readonly kind: "blocked" | "failed";
-	readonly exitCode?: number;
-	readonly durationMs?: number;
-
-	constructor(kind: "blocked" | "failed", message: string, options: { exitCode?: number; durationMs?: number } = {}) {
-		super(message);
-		this.name = "EventPreActionError";
-		this.kind = kind;
-		this.exitCode = options.exitCode;
-		this.durationMs = options.durationMs;
-	}
 }
 
 export class EventsWatcher {
@@ -631,11 +618,19 @@ export class EventsWatcher {
 	/** Whether the watcher may still act on an occurrence (desk active, channel bound); records a skip. */
 	private admits(filename: string, event: ScheduledEvent, deleteAfter: boolean): boolean {
 		if (this.stopped) return false; // a load `stop()` could not cancel: the desk went dormant meanwhile
-		if (this.options.isBound(event.channelId)) return true;
-		this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "channel_not_bound" });
+		const bound = this.options.isBound(event.channelId);
+		if (bound && this.options.isReachable(event.channelId)) return true;
+		this.appendEventHistory(filename, event, "skipped", "skipped", {
+			reason: bound ? "channel_unavailable" : "channel_not_bound",
+		});
 		// A one-shot has no next occurrence: keep the file with a marker, as a full queue does.
-		const reason = `Delivery channel ${event.channelId} was not bound to desk ${this.options.desk} at ${new Date().toISOString()}; this occurrence was skipped.`;
-		if (deleteAfter) this.markInvalid(filename, reason);
+		const why = bound ? "its transport is switched off in channel.json" : `not bound to desk ${this.options.desk}`;
+		if (deleteAfter) {
+			this.markInvalid(
+				filename,
+				`Delivery channel ${event.channelId}: ${why}; this occurrence (${new Date().toISOString()}) was skipped.`,
+			);
+		}
 		return false;
 	}
 

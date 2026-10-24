@@ -138,12 +138,15 @@ export function createE2ETestHome(overrides?: {
 	});
 
 	writeJson(channelConfigPath, {
-		clientId: "e2e-client-id",
-		clientSecret: "e2e-client-secret",
-		robotCode: "e2e-client-id",
-		cardTemplateId: "",
-		cardTemplateKey: "content",
-		allowFrom: [],
+		dingtalk: {
+			enabled: true,
+			clientId: "e2e-client-id",
+			clientSecret: "e2e-client-secret",
+			robotCode: "e2e-client-id",
+			cardTemplateId: "",
+			cardTemplateKey: "content",
+			allowFrom: [],
+		},
 	});
 
 	if (overrides?.enableDebug) {
@@ -218,12 +221,15 @@ export function createDeterministicHome(opts: {
 		memoryMaintenance: { enabled: true },
 	});
 	writeJson(channelConfigPath, {
-		clientId: "e2e-client-id",
-		clientSecret: "e2e-client-secret",
-		robotCode: "e2e-client-id",
-		cardTemplateId: "",
-		cardTemplateKey: "content",
-		allowFrom: [],
+		dingtalk: {
+			enabled: true,
+			clientId: "e2e-client-id",
+			clientSecret: "e2e-client-secret",
+			robotCode: "e2e-client-id",
+			cardTemplateId: "",
+			cardTemplateKey: "content",
+			allowFrom: [],
+		},
 	});
 
 	return { homeDir, workspaceDir, channelConfigPath };

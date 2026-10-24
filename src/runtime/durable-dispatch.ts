@@ -31,6 +31,12 @@ export interface DurableDispatchRecord {
 export interface DurableDispatchOptions {
 	stateDir: string;
 	bot: ChannelEventSink;
+	/**
+	 * Whether the channel's transport is switched on in this process (spec 061, INV-8). A record for
+	 * a transport that is off is not delivered and not counted against its delivery limit: it stays
+	 * on disk until a run in which the transport is back.
+	 */
+	isReachable?: (channelId: string) => boolean;
 	leaseMs?: number;
 	intervalMs?: number;
 	/** Called once, at most, when a dispatch id hits `MAX_DELIVERIES` without ever completing —
@@ -473,6 +479,7 @@ export class DurableDispatchService {
 			// nextAttemptAt) still retries on the very next tick, as before.
 			const nextAttemptMs = record.nextAttemptAt ? new Date(record.nextAttemptAt).getTime() : undefined;
 			if (record.status === "pending" && nextAttemptMs && nextAttemptMs > now) return;
+			if (this.options.isReachable && !this.options.isReachable(record.event.channelId)) return;
 			if (record.deliveries >= MAX_DELIVERIES) {
 				record.status = "exhausted";
 				record.leaseExpiresAt = undefined;

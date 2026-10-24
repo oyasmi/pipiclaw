@@ -31,7 +31,6 @@ import { initializeDefaultDesk } from "../desk/default.js";
 import { getDeskDir } from "../desk/paths.js";
 import { listDesks } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
-import { type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
@@ -39,11 +38,13 @@ import * as log from "../log.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/runtime.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import type { FileLockHandle } from "../shared/file-lock.js";
 import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
+import { acquireDaemonLock } from "./daemon-lock.js";
 import { DeskRuntime } from "./desk-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createIngress, type IngressService } from "./ingress.js";
@@ -60,6 +61,8 @@ export interface BootstrapOptions {
 	paths?: BootstrapPaths;
 	registerSignalHandlers?: boolean;
 	startServices?: boolean;
+	/** Host these transports instead of the ones `channel.json` turns on (tests and embedders). */
+	transports?: Transport[];
 }
 
 export interface AppContext {
@@ -138,9 +141,10 @@ type TaskDriverLike = TaskDriver | { start(): void; stop(): void; nudge?(): void
 interface RuntimeContextOptions {
 	executor?: Executor;
 	paths: BootstrapPaths;
-	dingtalkConfig: DingTalkConfig;
-	/** Replaces the configured transports (tests and embedders); `dingtalkConfig` is then unused. */
+	/** Replaces the transports `channel.json` turns on (tests and embedders). */
 	transports?: Transport[];
+	/** A `state/daemon.lock` the caller already holds (the embedded runtime); taken here when absent. */
+	daemonLock?: FileLockHandle;
 	/** Builds one desk's events watcher (tests pass an inert one). */
 	createEventsWatcher?: (target: { desk: string; deskDir: string }) => {
 		start(): void;
@@ -172,7 +176,22 @@ interface RuntimeContextOptions {
 }
 
 export async function createRuntimeContext(options: RuntimeContextOptions): Promise<RuntimeContext> {
-	initializeDefaultDesk(options.paths);
+	// One runtime per app home (INV-11): a second one would write the same desks, sessions and
+	// state files with no lock between them. Taken before anything is touched.
+	const daemonLock = options.daemonLock ?? (await acquireDaemonLock(options.paths.appHomeDir));
+	try {
+		initializeDefaultDesk(options.paths);
+		return await buildRuntimeContext(options, daemonLock);
+	} catch (error) {
+		await daemonLock.release();
+		throw error;
+	}
+}
+
+async function buildRuntimeContext(
+	options: RuntimeContextOptions,
+	daemonLock: FileLockHandle,
+): Promise<RuntimeContext> {
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const { workspaceDir, appHomeDir } = options.paths;
@@ -195,7 +214,8 @@ export async function createRuntimeContext(options: RuntimeContextOptions): Prom
 	const transports = createTransportRegistry(
 		options.transports ??
 			(await loadTransports({
-				dingtalkConfig: options.dingtalkConfig,
+				paths: options.paths,
+				stateDir: join(appHomeDir, "state"),
 				archiveBotResponse: (channelId, text) => store.logBotResponse(channelId, text, Date.now().toString()),
 			})),
 	);
@@ -238,6 +258,7 @@ export async function createRuntimeContext(options: RuntimeContextOptions): Prom
 				: createEventsWatcher({
 						...target,
 						isBound: (channelId) => deskRuntime.isBoundTo(channelId, target.desk),
+						isReachable: (channelId) => transports.isReachable(channelId),
 						sink: ingress,
 						executor,
 						commandGuardConfig: loadSecurityConfigWithDiagnostics(appHomeDir).config.commandGuard,
@@ -383,6 +404,7 @@ export async function createRuntimeContext(options: RuntimeContextOptions): Prom
 	durableDispatch = new DurableDispatchService({
 		stateDir: dispatchStateDir,
 		bot: ingress,
+		isReachable: (channelId) => transports.isReachable(channelId),
 		// A structured wake that keeps failing before it can mark itself complete would otherwise
 		// redeliver forever. Surface it once instead of looping silently; the record stays on disk
 		// for inspection until a human clears it. Like every background notice, only to a channel
@@ -478,6 +500,7 @@ export async function createRuntimeContext(options: RuntimeContextOptions): Prom
 		: new TaskDriver({
 				getActiveDesks: () => deskRuntime.activeDesks(),
 				isBoundTo,
+				isReachable: (channelId) => transports.isReachable(channelId),
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				dispatch,
 				onDispatch: options.onTaskDriverDispatch,
@@ -502,6 +525,7 @@ export async function createRuntimeContext(options: RuntimeContextOptions): Prom
 		markShuttingDown: () => {
 			shuttingDown = true;
 		},
+		releaseDaemonLock: () => daemonLock.release(),
 	});
 
 	if (registerSignalHandlers) {
@@ -550,15 +574,12 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	printBootstrapSummary(bootstrapResult, io, paths);
 
 	// A freshly written template is the expected first-run outcome, not a failure: guide and exit 0.
-	// A template that exists but is still unfilled is caught by `loadConfig` below and exits 1.
+	// A template that exists but is still unfilled is caught by the transport loader (`loadTransports`) and exits 1.
 	if (bootstrapResult.channelTemplateCreated) {
 		printFirstRunGuide(io, paths);
 		throw new BootstrapExitError(0);
 	}
 
-	const dingtalkConfig = loadConfig(paths, io);
-	// Routing metadata lives in `state/dingtalk/conversations.json` (spec 058, D17).
-	dingtalkConfig.stateDir = join(paths.appHomeDir, "state");
 	const { settingsManager } = prepareAppServices(paths);
 
 	log.logStartup(paths.workspaceDir);
@@ -566,7 +587,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	try {
 		runtime = await createRuntimeContext({
 			paths,
-			dingtalkConfig,
+			...(options.transports ? { transports: options.transports } : {}),
 			registerSignalHandlers,
 			startServices,
 			settingsManager,

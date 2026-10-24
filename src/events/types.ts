@@ -110,6 +110,11 @@ export interface EventsWatcherOptions {
 	 * An occurrence whose channel is not bound is skipped, never redirected.
 	 */
 	isBound: (channelId: string) => boolean;
+	/**
+	 * Whether the channel's transport is switched on in this process (spec 061, INV-8). An
+	 * occurrence for a transport that is off is skipped with a `channel_unavailable` receipt.
+	 */
+	isReachable: (channelId: string) => boolean;
 	historyPath?: string;
 	/**
 	 * Creates the task instance a template event asks for. Injected by the runtime so the events

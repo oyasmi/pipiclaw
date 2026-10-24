@@ -11,7 +11,6 @@ import {
 } from "../src/app/home.js";
 import { prepareAppServices } from "../src/app/services.js";
 import type { WakeEvent } from "../src/channel/channel-event.js";
-import { loadConfig } from "../src/dingtalk/config.js";
 import { bootstrap } from "../src/runtime/bootstrap.js";
 import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -145,58 +144,6 @@ describe("bootstrap", () => {
 		chmodSync(paths.authConfigPath, 0o644);
 		bootstrapAppHome(paths);
 		expect(statSync(paths.authConfigPath).mode & 0o777).toBe(0o600);
-	});
-
-	it("loads and normalizes a ready DingTalk config", () => {
-		const paths = createBootstrapPaths();
-		writeFileSync(
-			paths.channelConfigPath,
-			JSON.stringify(
-				{
-					clientId: "client-id",
-					clientSecret: "secret",
-					robotCode: "",
-					allowFrom: ["alice", " ", "bob"],
-					busyMessageDefault: "followup",
-					responseMode: "rolling_progress_then_plain_final",
-				},
-				null,
-				2,
-			),
-		);
-
-		expect(loadConfig(paths)).toMatchObject({
-			clientId: "client-id",
-			clientSecret: "secret",
-			robotCode: "client-id",
-			cardTemplateKey: "content",
-			allowFrom: ["alice", "bob"],
-			busyMessageDefault: "followUp",
-			responseMode: "rolling_progress_then_plain_final",
-			cardAutoLayout: true,
-		});
-	});
-
-	it("rejects invalid busy message defaults during config loading", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-		writeFileSync(
-			paths.channelConfigPath,
-			JSON.stringify(
-				{
-					clientId: "client-id",
-					clientSecret: "secret",
-					busyMessageDefault: "follow-up",
-				},
-				null,
-				2,
-			),
-		);
-
-		expect(() => loadConfig(paths, io)).toThrowError(BootstrapExitError);
-		expect(io.error).toHaveBeenCalledWith(
-			'  - Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".',
-		);
 	});
 });
 

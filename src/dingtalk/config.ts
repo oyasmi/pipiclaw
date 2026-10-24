@@ -1,11 +1,9 @@
 /**
- * `channel.json`: the DingTalk transport's configuration shape, validation and loading. This is
- * the only loader of that file (spec 054 D7); the app-home scaffolding only writes its template.
+ * `channel.json`'s `dingtalk` section: the DingTalk transport's configuration shape and validation.
+ * The outer file (which sections are on) is `channel/config.ts`'s; the app-home scaffolding only
+ * writes the template.
  */
-import { readFileSync } from "fs";
-import { BootstrapExitError, type BootstrapIO, type BootstrapPaths, DEFAULT_BOOTSTRAP_PATHS } from "../app/home.js";
-import { docsUrl } from "../paths.js";
-import { errorMessage } from "../shared/text-utils.js";
+import { ChannelConfigError } from "../channel/config.js";
 import { isResponseModeConfig, normalizeResponseMode, type ResponseMode } from "./response-mode.js";
 
 export type BusyMessageMode = "steer" | "followUp";
@@ -94,27 +92,17 @@ function listChannelConfigIssues(config: Partial<DingTalkConfig>): string[] {
 	return issues;
 }
 
-export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: BootstrapIO = console): DingTalkConfig {
-	let parsed: DingTalkConfig;
-
-	try {
-		parsed = JSON.parse(readFileSync(paths.channelConfigPath, "utf-8")) as DingTalkConfig;
-	} catch (err) {
-		io.error(`Failed to parse configuration: ${paths.channelConfigPath}`);
-		io.error(errorMessage(err));
-		throw new BootstrapExitError(1);
-	}
+/**
+ * Validate and normalize the `dingtalk` section (already known to be switched on). Throws a
+ * `ChannelConfigError` naming every problem at once.
+ */
+export function parseDingTalkConfig(section: unknown): DingTalkConfig {
+	const { enabled: _enabled, ...fields } = section as Partial<DingTalkConfig> & { enabled?: boolean };
+	const parsed = fields as DingTalkConfig;
 
 	const issues = listChannelConfigIssues(parsed);
 	if (issues.length > 0) {
-		io.error(`Configuration is not ready: ${paths.channelConfigPath}`);
-		for (const issue of issues) {
-			io.error(`  - ${issue}`);
-		}
-		io.error("");
-		io.error(`Fix ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
-		io.error(`Docs: ${docsUrl("configuration.md")}`);
-		throw new BootstrapExitError(1);
+		throw new ChannelConfigError(issues.map((issue) => `dingtalk: ${issue}`));
 	}
 
 	parsed.cardTemplateKey = parsed.cardTemplateKey || "content";

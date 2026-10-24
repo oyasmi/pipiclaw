@@ -27,6 +27,8 @@ function taskDoc(fields: TaskFrontmatter): string {
 describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	let workspaceDir: string;
 	let deskDir: string;
+	/** Channels whose transport is switched off in this run (spec 061, INV-8). */
+	const unreachable = new Set<string>();
 	/** Channels bound to the desk; a task whose `channel` is not in here is suspended (spec 058, D8). */
 	let bound: Set<string>;
 
@@ -57,6 +59,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 		return new TaskDriver({
 			getActiveDesks: () => [{ desk: "news", deskDir }],
 			isBoundTo: (channelId, desk) => desk === "news" && bound.has(channelId),
+			isReachable: (channelId) => !unreachable.has(channelId),
 			isChannelActive: () => false,
 			dispatch,
 			settings: SETTINGS,
@@ -132,6 +135,13 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 
 		// Bound again: it resumes from exactly where it froze.
 		bound.add("dingtalk:dm:a");
+		// Spec 061, INV-8: bound, but its transport is switched off in this run. Same freeze — a
+		// step or a receipt could not reach the channel, and the due ticket must not burn meanwhile.
+		unreachable.add("dingtalk:dm:a");
+		await instance.runOnce(NOW);
+		expect(dispatch).not.toHaveBeenCalled();
+		expect((await readStoredTask(deskDir, "timed"))?.fields.state).toBe("parked");
+		unreachable.delete("dingtalk:dm:a");
 		await instance.runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledOnce();
 		expect((await readStoredTask(deskDir, "timed"))?.fields.state).toBe("open");

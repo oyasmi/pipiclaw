@@ -91,15 +91,23 @@ This file records durable environment facts and notable machine-level changes.
 `;
 
 const CHANNEL_CONFIG_TEMPLATE = {
-	clientId: "your-dingtalk-client-id",
-	clientSecret: "your-dingtalk-client-secret",
-	robotCode: "your-robot-code",
-	cardTemplateId: "your-card-template-id",
-	cardTemplateKey: "content",
-	allowFrom: ["your-staff-id"],
-	busyMessageDefault: "steer",
-	responseMode: "full_progress_then_plain_final",
-	cardAutoLayout: true,
+	dingtalk: {
+		enabled: true,
+		clientId: "your-dingtalk-client-id",
+		clientSecret: "your-dingtalk-client-secret",
+		robotCode: "your-robot-code",
+		cardTemplateId: "your-card-template-id",
+		cardTemplateKey: "content",
+		allowFrom: ["your-staff-id"],
+		busyMessageDefault: "steer",
+		responseMode: "full_progress_then_plain_final",
+		cardAutoLayout: true,
+	},
+	webapi: {
+		enabled: false,
+		socket: true,
+		keys: [],
+	},
 };
 
 const MODELS_CONFIG_TEMPLATE = { providers: {} };
@@ -321,9 +329,11 @@ export function printBootstrapSummary(
  */
 export function printFirstRunGuide(io: BootstrapIO = console, paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): void {
 	io.log("Next steps:");
-	io.log(`  1. Edit ${paths.channelConfigPath} — required: clientId, clientSecret`);
-	io.log("     (DingTalk Open Platform → your app → Credentials). Optional: cardTemplateId for AI Card");
-	io.log("     streaming; set it to an empty string to disable cards.");
+	io.log(`  1. Edit ${paths.channelConfigPath} — switch on at least one channel:`);
+	io.log("     DingTalk: fill the `dingtalk` section — required: clientId, clientSecret (DingTalk Open");
+	io.log("     Platform → your app → Credentials). Optional: cardTemplateId for AI Card streaming; set it");
+	io.log("     to an empty string to disable cards.");
+	io.log("     Web API: set `webapi.enabled` to true (a local socket; see the docs for keys and TCP).");
 	io.log(
 		`  2. Configure a model: run \`${paths.appName} auth login\`, or add a provider to ${paths.modelsConfigPath}.`,
 	);
@@ -338,7 +348,7 @@ export function printFirstRunGuide(io: BootstrapIO = console, paths: BootstrapPa
  */
 export function formatCliCommandsHelp(appName: string): string[] {
 	return [
-		`  ${appName} [run] [options]         Run the DingTalk daemon (default)`,
+		`  ${appName} [run] [options]         Run the daemon (default)`,
 		`  ${appName} tui [options] [prompt]   Chat with the agent in the terminal`,
 		`  ${appName} auth status|login|logout Manage provider credentials`,
 	];

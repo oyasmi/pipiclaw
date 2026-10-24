@@ -2,12 +2,16 @@
  * The channel registry (spec 061, D9): which transports this process hosts and how a channel id
  * finds its transport. The runtime never names a concrete transport anywhere else — it asks here.
  */
+import { readFileSync } from "node:fs";
+import type { BootstrapPaths } from "../app/home.js";
 import { transportOf } from "../channel/channel-id.js";
+import { ChannelConfigError, type EnabledChannelSections, parseChannelConfig } from "../channel/config.js";
 import type { Ingress } from "../channel/ingress.js";
 import type { Transport } from "../channel/transport.js";
+import { StartupRefusal } from "../desk/startup-error.js";
 import type { ConversationKind } from "../desk/types.js";
-import type { DingTalkConfig } from "../dingtalk/config.js";
 import * as log from "../log.js";
+import { docsUrl } from "../paths.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 export interface TransportRegistry {
@@ -58,13 +62,59 @@ export function createTransportRegistry(transports: readonly Transport[]): Trans
 }
 
 /**
- * Build the transports the configuration turns on. A transport's code is imported only when its
- * turn comes, so a disabled transport costs nothing (INV-7).
+ * Build the transports `channel.json` turns on. A transport's code is imported only when its turn
+ * comes, so a disabled transport costs nothing — not its module, not its dependencies, not a
+ * listener (INV-7). A configuration that cannot be used, or that turns nothing on, refuses to start.
  */
 export async function loadTransports(deps: {
-	dingtalkConfig: DingTalkConfig;
+	paths: BootstrapPaths;
+	stateDir: string;
 	archiveBotResponse: (channelId: string, text: string) => Promise<void>;
 }): Promise<Transport[]> {
-	const { DingTalkTransport } = await import("../dingtalk/transport.js");
-	return [new DingTalkTransport({ config: deps.dingtalkConfig, archiveBotResponse: deps.archiveBotResponse })];
+	const { channelConfigPath, appName } = deps.paths;
+	let sections: EnabledChannelSections;
+	try {
+		sections = parseChannelConfig(readFileSync(channelConfigPath, "utf-8"));
+	} catch (error) {
+		if (!(error instanceof ChannelConfigError)) {
+			throw new StartupRefusal(`Cannot read ${channelConfigPath}: ${errorMessage(error)}`);
+		}
+		throw new StartupRefusal(configurationRefusal(channelConfigPath, appName, error.issues));
+	}
+
+	const transports: Transport[] = [];
+	try {
+		if (sections.dingtalk !== undefined) {
+			const [{ DingTalkTransport }, { parseDingTalkConfig }] = await Promise.all([
+				import("../dingtalk/transport.js"),
+				import("../dingtalk/config.js"),
+			]);
+			const config = parseDingTalkConfig(sections.dingtalk);
+			config.stateDir = deps.stateDir;
+			transports.push(new DingTalkTransport({ config, archiveBotResponse: deps.archiveBotResponse }));
+		}
+		if (sections.webapi !== undefined) {
+			throw new ChannelConfigError(["webapi: the Web API channel is not available in this build."]);
+		}
+	} catch (error) {
+		if (!(error instanceof ChannelConfigError)) throw error;
+		throw new StartupRefusal(configurationRefusal(channelConfigPath, appName, error.issues));
+	}
+
+	if (transports.length === 0) {
+		throw new StartupRefusal(
+			`No channel is switched on in ${channelConfigPath}. Set \`dingtalk.enabled\` or \`webapi.enabled\` to true, then run \`${appName}\` again.\nDocs: ${docsUrl("configuration.md")}`,
+		);
+	}
+	return transports;
+}
+
+function configurationRefusal(path: string, appName: string, issues: readonly string[]): string {
+	return [
+		`Configuration is not ready: ${path}`,
+		...issues.map((issue) => `  - ${issue}`),
+		"",
+		`Fix ${path} and run \`${appName}\` again.`,
+		`Docs: ${docsUrl("configuration.md")}`,
+	].join("\n");
 }
