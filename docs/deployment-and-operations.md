@@ -284,7 +284,7 @@ npm install -g @oyasmi/pipiclaw@latest
 
 迁移前停止所有写入者（包括 detached job、外部委派和自动重启），备份完整 app home，再核对目标版本实际接受的格式。首次用新版本启动旧 home 前完成离线整理；不要只搬文件夹、全局替换字符串或覆盖冲突数据。
 
-当前布局由 [Spec 060](./specs/060-desk/design.md) 定义：`workspace/desk-<name>/desk.json` 与 `workspace/desk-bindings.json`。已有绑定保留，普通新渠道由运行时自动接入默认工位。
+当前布局由 [Spec 060](./specs/060-desk/design.md) 定义：`workspace/desk-<name>/desk.json` 与 `workspace/desk-bindings.json`。已有绑定保留，普通新频道由运行时自动接入默认工位。
 
 ## 备份与恢复（Backup and Restore）
 
@@ -352,7 +352,7 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 通常先检查：
 
 - `allowFrom` 是否把测试账号挡住了
-- 机器人回复"默认助手暂时不可用"或"绑定的工位当前不可用"：在服务器上检查 `workspace/desk-<name>/` 和 `desk.json`，从备份恢复；运行时不会擅自把已有绑定换成空工位
+- 机器人回复"本频道目前没有可用的工位"（默认工位 `default` 不可用，或绑定的工位不可用）：在服务器上检查 `workspace/desk-default/`（或 `desk-<name>/`）和 `desk.json`，从备份恢复；运行时不会擅自把已有绑定换成空工位
 - 模型是否真的可用，而不只是配置文件存在
 - AI Card 模板是否有效
 - 钉钉应用的 Stream Mode 是否正常

@@ -22,13 +22,13 @@ In DingTalk daemon mode, external tasks keep running in the background after dis
 
 ### Work does not end when a conversation ends
 
-You can create several **dots** — independent assistants, each with its own long-term memory, daily journal, tasks, scheduled events, and working files. DMs and group chats are bound to a dot: channels bound to the same dot share its memory and tasks while keeping separate conversations, and an unbound channel is not served. Each task is a one-off project with goals, done criteria, and work items in a Markdown contract, and steps, dispatches, and settlements in a JSONL loop log; the built-in task driver advances runnable tasks, redeems due time tickets, and handles ticket expiry. Scheduled and recurring work uses event templates to create an independent task instance per occurrence. The runtime stops with a notice when a budget, idle-loop, or repeated-expiry boundary is reached.
+Pipiclaw is one personal assistant: by default the terminal, DingTalk DMs and group chats all share long-term memory, a daily journal, tasks, scheduled events and working files (kept in the default desk, `default`), while each keeps its own conversation — just start chatting. Sharing also means that something you tell the assistant in a DM may be recalled in a group; when you want to keep a project or purpose apart, use the advanced [desk mechanism](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md#按需分开工位): each desk has its own memory, tasks and files. Each task is a one-off project with goals, done criteria, and work items in a Markdown contract, and steps, dispatches, and settlements in a JSONL loop log; the built-in task driver advances runnable tasks, redeems due time tickets, and handles ticket expiry. Scheduled and recurring work uses event templates to create an independent task instance per occurrence. The runtime stops with a notice when a budget, idle-loop, or repeated-expiry boundary is reached.
 
 ### Natively at home in DingTalk
 
 Pipiclaw uses DingTalk Stream Mode, so no self-hosted message relay or public IP is needed. AI Cards can continuously show thinking, tool execution, and status updates; while a task runs you can still use `/steer` to adjust direction, `/followup` to queue the next thing, and `/stop` to abort the current turn. Generated reports, screenshots, and exported files can be delivered as native DingTalk attachments.
 
-A single bot instance can serve many direct and group chats at once: every DM and every group is a channel, and model turns in different channels can progress in parallel; within one channel turns run serially so one conversation's context is not modified by multiple turns at once. Note that isolation between dots is not code-directory isolation; if several channels point at the same project directory, you should still avoid having the main agent edit the same set of files concurrently, or prepare separate Git worktrees for parallel implementation. See [Scaling and concurrency](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md) for the full boundaries.
+A single bot instance can serve many direct and group chats at once: every DM and every group is a channel, and model turns in different channels can progress in parallel; within one channel turns run serially so one conversation's context is not modified by multiple turns at once. Note that isolation between desks is not code-directory isolation; if several channels point at the same project directory, you should still avoid having the main agent edit the same set of files concurrently, or prepare separate Git worktrees for parallel implementation. See [Scaling and concurrency](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md) for the full boundaries.
 
 ### Autonomous, and always interruptible
 
@@ -43,7 +43,7 @@ Models support built-in providers, OpenAI-compatible gateways, API keys, and sub
 - Providing an always-online dev assistant, internal tech support, or ops collaboration entry point in DingTalk
 - Handing requirement analysis, implementation, review, verification, and documentation to different AI agents working together
 - Following up on coding, investigation, migration, reporting, and periodic work that spans hours or days
-- Keeping mutually isolated context and memory across many group and direct chats
+- Keeping a separate conversation per group and direct chat, sharing one body of memory by default and splitting it with desks when needed
 - Reusing existing model gateways, Claude Code / Codex CLI accounts, and team working conventions
 
 Pipiclaw today targets individuals and small teams, self-hosted, single-instance. It is not a hard multi-tenant SaaS, and it does not provide an OS-level sandbox; the real permissions an external agent holds are determined together by the target CLI's sandbox parameters, the run account, and the host environment.
@@ -69,7 +69,7 @@ The first real start of `pipiclaw` or `pipiclaw tui` creates:
 ├── settings.json     # default model and runtime settings
 ├── tools.json        # capability switches for web tools, tasks, etc.
 ├── security.json     # command, path, and network guards
-└── workspace/        # skills, agent roles, and dots/ (each dot's memory, tasks, events, and conversations)
+└── workspace/        # shared config and extensions; the default desk's data is in desk-default/
 ```
 
 Set `PIPICLAW_HOME=/your/path` to relocate this directory as a whole.
@@ -86,16 +86,16 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw auth login
 ```
 
-Then create a dot and open it in the terminal (a dot is one assistant with its own memory, tasks and files):
+Then chat right in the terminal (the first run initializes the default desk):
 
 ```bash
-pipiclaw tui --dot main --create
+pipiclaw tui
 ```
 
 It can also be used for scripted one-shot requests:
 
 ```bash
-pipiclaw tui --dot main --print "Reply with only: Pipiclaw model call succeeded"
+pipiclaw tui --print "Reply with only: Pipiclaw model call succeeded"
 ```
 
 Only an actual model reply proves that the request path works; `pipiclaw tui --help` and `/model` only prove that the CLI or model catalog is visible. To connect an enterprise gateway, a local model, or set a default model, see [Configuration reference](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md).
@@ -134,14 +134,7 @@ Start the daemon:
 pipiclaw
 ```
 
-In DingTalk, first create a dot and bind the current chat to it (bind every DM or group you want served; an unbound channel only gets a prompt to bind):
-
-```text
-/dot new main
-/dot bind main
-```
-
-Then send `/model` to inspect the model reference, and a normal message to verify a real call:
+In DingTalk, message the bot directly or @ it in a group — there is no desk to create or bind. New DMs and groups join the default desk on their first authorized message; `allowFrom` still controls who may use it. Send `/model` to inspect the model reference, and a normal message to verify a real call:
 
 ```text
 Please introduce yourself and explain what you can do right now
@@ -203,7 +196,7 @@ Please install and initialize Pipiclaw for me:
 3. Run pipiclaw once to initialize ~/.pipiclaw/; it prompting you to complete channel.json and exiting because it is still a template is normal.
 4. Ask me whether I want to use an API key, a custom provider, or a subscription login supported by pipiclaw auth login; do not invent missing values.
 5. If I want to connect DingTalk, collect clientId, clientSecret, optional cardTemplateId, and allowFrom item by item, write them into channel.json, and remove all your-* placeholder values.
-6. When configuration is done, ask first whether to start. Terminal mode uses pipiclaw tui --dot main --create (then --dot main to reopen); DingTalk mode uses pipiclaw, and after it starts send /dot new main and /dot bind main in DingTalk.
+6. When configuration is done, ask first whether to start. Terminal mode uses pipiclaw tui; DingTalk mode uses pipiclaw, and after it starts message the bot directly or @ it in a group — no desk needs to be created or bound.
 7. Honestly list the operations performed, files changed, verification results, and information still missing; do not pretend it succeeded.
 ```
 
@@ -217,15 +210,15 @@ Please install and initialize Pipiclaw for me:
 | `/stop` | Stop the current turn; a task-driven turn also pauses its task |
 | `/steer <message>` | Adjust the running turn |
 | `/followup <message>` | Queue the next request |
-| `/dot [list\|new <name>\|bind <name>]` | List and create dots, bind the current channel to one |
+| `/desk [list\|new <name>\|bind <name>]` | Advanced: create a desk, or switch the current channel to another desk |
 | `/status` | Execution status, model, context, uptime, and version |
-| `/usage [7d\|month]` | Model usage and cost for the current dot and globally |
+| `/usage [7d\|month]` | Model usage and cost for the current desk and globally |
 | `/tasks ...` | View, diagnose, and control long-running tasks |
 | `/subagents ...` | View and control delegation runs and the role directory |
-| `/memory ...` | View the current dot's long-term memory |
+| `/memory ...` | View the current desk's long-term memory |
 | `/model [ref]` | View or switch the model |
 
-`/help`, `/stop`, `/steer`, `/followup`, `/dot`, `/events`, `/tasks`, `/status`, `/usage`, `/context`, and `/subagents` are handled directly by the runtime and work mid-turn. `/stop` does not cancel an already dispatched delegation run; use `/subagents cancel`.
+`/help`, `/stop`, `/steer`, `/followup`, `/desk`, `/events`, `/tasks`, `/status`, `/usage`, `/context`, and `/subagents` are handled directly by the runtime and work mid-turn. `/stop` does not cancel an already dispatched delegation run; use `/subagents cancel`.
 
 See [Interaction and commands](https://github.com/oyasmi/pipiclaw/blob/main/docs/interaction-and-commands.md) for full interaction details.
 

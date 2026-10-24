@@ -2,7 +2,7 @@
 
 Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开管理。目标是让 agent 深入理解 runtime，同时不让系统提示无限增长，也不在 workspace 留下会随升级漂移的文档副本。
 
-工位（desk）的统一概念、目录、默认接入和切换入口由 `runtime-orientation.md` 说明；记忆、事件、作业、委派、任务和交付手册只补充各自的工位范围。当前工位、workspace 路径、工位状态目录、实际 cwd 与渠道地址由运行时动态提供，不能从静态手册或自定义 cwd 猜测。实现要求见 [spec 060 §4.1](./specs/060-desk/design.md#41-runtime-playbook-是实施与验收的一部分)。
+工位（desk）的统一概念、目录、默认接入和切换入口由 `runtime-orientation.md` 说明；记忆、事件、作业、委派、任务和交付手册只补充各自的工位范围。当前工位、workspace 路径、工位状态目录、实际 cwd 与频道地址由运行时动态提供，不能从静态手册或自定义 cwd 猜测。实现要求见 [spec 060 §4.1](./specs/060-desk/design.md#41-runtime-playbook-是实施与验收的一部分)。
 
 ## 四层模型
 

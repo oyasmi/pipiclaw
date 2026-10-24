@@ -22,7 +22,7 @@ Pipiclaw 同时支持两类委派：内置子智能体在进程内完成检索�
 
 ### 工作不会随着一次对话结束
 
-Pipiclaw 默认就是你的同一个个人助手：终端、钉钉私聊和多个群聊共享长期记忆、按天日志、任务、定时事件和工作文件，各自保留独立对话，直接聊天即可。需要隔离项目或用途时，再使用进阶的 [工位机制](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md#按需隔离工作区)：每个工位有独立的记忆、任务和文件。任务是一次性项目，用 Markdown 保存目标、完成标准和工作项，用 JSONL 循环日志记录步骤、派发与结算；内建 task driver 推进可运行任务、兑现到期等待票并处理兜底超时，周期与定时工作由事件模板每次生成独立任务实例，预算耗尽、空转或连续无法兑现等待时会停止并告诉你。
+Pipiclaw 是你的同一个个人助手：终端、钉钉私聊和多个群聊默认共享长期记忆、按天日志、任务、定时事件和工作文件（都记在默认工位 `default` 里），各自保留独立对话，直接聊天即可。共享也意味着私聊里告诉助手的事，可能在群里被想起；需要把项目或用途分开时，再使用进阶的 [工位机制](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md#按需分开工位)：每个工位有独立的记忆、任务和文件。任务是一次性项目，用 Markdown 保存目标、完成标准和工作项，用 JSONL 循环日志记录步骤、派发与结算；内建 task driver 推进可运行任务、兑现到期等待票并处理兜底超时，周期与定时工作由事件模板每次生成独立任务实例，预算耗尽、空转或连续无法兑现等待时会停止并告诉你。
 
 ### 原生工作在钉钉里
 
@@ -43,7 +43,7 @@ Pipiclaw 使用钉钉 Stream Mode，不需要自建消息中转服务或公网 I
 - 在钉钉中提供长期在线的研发助手、内部技术支持或运维协作入口
 - 把需求分析、实现、评审、验证、文档整理交给不同 AI 智能体协作完成
 - 跟进跨小时或跨天的编码、调查、迁移、报告和周期性工作
-- 在多个群和私聊中保留彼此隔离的上下文与记忆
+- 在多个群和私聊中保留各自独立的对话；默认共享同一份积累，需要分开时再用工位
 - 复用现有模型网关、Claude Code / Codex CLI 账号和团队工作规范
 
 Pipiclaw 当前定位是个人与小团队、自托管、单实例运行。它不是强多租户 SaaS，也不提供 OS 级沙箱；外部智能体拥有的真实权限由目标 CLI 的 sandbox 参数、运行账号和宿主环境共同决定。
@@ -69,7 +69,7 @@ pipiclaw tui --help
 ├── settings.json     # 默认模型与运行设置
 ├── tools.json        # Web 工具、任务等能力开关
 ├── security.json     # 命令、路径与网络守卫
-└── workspace/        # 共享配置与扩展；个人助手的数据在 desk-default/
+└── workspace/        # 共享配置与扩展；默认工位的数据在 desk-default/
 ```
 
 设置 `PIPICLAW_HOME=/your/path` 可以整体迁移这个目录。
@@ -86,7 +86,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw auth login
 ```
 
-然后直接在终端里聊天（首次运行自动初始化个人助手）：
+然后直接在终端里聊天（首次运行自动初始化默认工位）：
 
 ```bash
 pipiclaw tui
@@ -134,7 +134,7 @@ pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
 pipiclaw
 ```
 
-在钉钉中直接私聊，或把机器人拉进群后 @它，无需创建或绑定工作区。新私聊和新群默认使用同一个助手；`allowFrom` 仍控制哪些发送者可以使用。发送 `/model` 检查模型引用，再发送一条普通消息验证真实调用：
+在钉钉中直接私聊，或把机器人拉进群后 @它，无需创建或绑定工位。新私聊和新群默认接入默认工位；`allowFrom` 仍控制哪些发送者可以使用。发送 `/model` 检查模型引用，再发送一条普通消息验证真实调用：
 
 ```text
 请介绍一下你自己，并说明你现在能做什么
@@ -196,7 +196,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.m
 3. 运行一次 pipiclaw 初始化 ~/.pipiclaw/；它因 channel.json 仍是模板而提示补全并退出是正常现象。
 4. 询问我要使用 API key、自定义 provider，还是 pipiclaw auth login 支持的订阅登录；不要编造缺失值。
 5. 如果我要接入钉钉，逐项收集 clientId、clientSecret、可选的 cardTemplateId 和 allowFrom，写入 channel.json，并清除所有 your-* 占位值。
-6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui；钉钉模式用 pipiclaw，启动后直接私聊或在群里 @机器人，无需创建或绑定工作区。
+6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui；钉钉模式用 pipiclaw，启动后直接私聊或在群里 @机器人，无需创建或绑定工位。
 7. 如实列出做过的操作、修改的文件、验证结果和仍缺少的信息，不要假装成功。
 ```
 
@@ -210,7 +210,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.m
 | `/stop` | 停止当前回合；任务驱动的回合会同时暂停对应任务 |
 | `/steer <消息>` | 调整正在执行的回合 |
 | `/followup <消息>` | 排队下一条请求 |
-| `/desk [list\|new <名字>\|bind <名字>]` | 进阶：创建隔离工作区，或切换当前频道的工作区 |
+| `/desk [list\|new <名字>\|bind <名字>]` | 进阶：创建工位，或把当前频道切换到另一个工位 |
 | `/status` | 查看执行状态、模型、上下文、运行时长和版本 |
 | `/usage [7d\|month]` | 查看当前工位与全局的模型用量和成本 |
 | `/tasks ...` | 查看、诊断和控制长期任务 |

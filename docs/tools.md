@@ -20,7 +20,7 @@
 | `bash` | 执行 shell 命令与外部程序 | 恒开 | — | 是 |
 | `web_search` | 搜索公网，返回标题/URL/摘要 | **关** | `tools.web.enable` | 是 |
 | `web_fetch` | 抓取 URL 并提取正文 | **关** | `tools.web.enable` | 是 |
-| `send_media` | 把本地文件作为附件发进当前会话 | 随渠道 | 传输层是否支持（钉钉/TUI 都支持） | 否 |
+| `send_media` | 把本地文件作为附件发进当前会话 | 随前端 | 传输层是否支持（钉钉/TUI 都支持） | 否 |
 | `job` | 查看/等待/取消 `bash async` 后台作业 | 恒开 | — | 否 |
 | `session_search` | 检索本工位所有频道的冷存储历史对话 | 恒开 | — | 否 |
 | `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |

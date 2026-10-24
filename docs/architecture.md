@@ -8,11 +8,11 @@
 
 ## 1. 定位与总体形态
 
-Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtime**，个人和团队都可以使用。它包装 `@earendil-works/pi-coding-agent` SDK（`@mariozechner/pi-coding-agent` 的 fork），把一个 coding agent 挂到钉钉（DingTalk Stream 模式）上，并补齐长期运行所需的外围系统——工位（默认助手 `default` 自动初始化，按需创建其他隔离工作区；频道只是绑定到它的地址）、定时事件、持久任务、子代理、安全护栏、用量账本。同一套 agent 内核还有第二个传输前端：终端 TUI。
+Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtime**，个人和团队都可以使用。它包装 `@earendil-works/pi-coding-agent` SDK（`@mariozechner/pi-coding-agent` 的 fork），把一个 coding agent 挂到钉钉（DingTalk Stream 模式）上，并补齐长期运行所需的外围系统——工位（默认工位 `default` 自动初始化，需要分开项目时再创建其他工位；频道只是绑定到工位的地址）、定时事件、持久任务、子代理、安全护栏、用量账本。同一套 agent 内核还有第二个传输前端：终端 TUI。
 
 ```
 pipiclaw            # 默认：长驻钉钉 daemon（等价 pipiclaw run）
-pipiclaw tui [--desk <名字>] [提示] # 默认打开个人助手，同一 agent 内核，无需钉钉凭据
+pipiclaw tui [--desk <名字>] [提示] # 默认打开默认工位，同一 agent 内核，无需钉钉凭据
 ```
 
 核心设计取向（从实现中反推出来的一致性原则）：
@@ -216,7 +216,7 @@ sequenceDiagram
 | `conversations/*/log.jsonl` / 会话 JSONL | 冷存储：各频道的完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 跨本工位的所有会话区检索 |
 | `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（含 actions/skipped/error；重复的相同跳过原因去重） | `review-log.ts` | 否，人工排查用 |
 
-工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于 path guard，因此“管理员拥有”不是 OS 级只读保证。频道 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
+工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于 path guard，因此“管理员拥有”不是 OS 级只读保证。工位 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
 
 ### 6.2 记忆的进与出
 
@@ -263,7 +263,7 @@ flowchart LR
 - **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。
 - **调度器**（`scheduler.ts`）每 tick 轮转选取一个不活跃且到期的频道，单一 job（`reflect-job.ts`）先过确定性 gate（`shouldRunReflect`：`dirty`、空闲时长、距上次反思间隔、增量窗口是否有实质对话），gate 不放行则零 LLM 成本。频道上下文的取法不变：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的磁盘冷上下文。
 - **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、最多 2 次尝试、JSON 解析校验、用量记入账本（kind=`sidecar`）。反思的 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次结果。
-- **子代理的 `memory: index`**（spec 050 D12）注入与主 agent 首轮相同的三段（workspace 背景 + 频道索引 + 当天 journal），预算减半，不做每次调用的 LLM 召回；旧的 `memory: session|relevant` 仍可加载，discovery 时映射为 `index` 并给出警告。
+- **子代理的 `memory: index`**（spec 050 D12）注入与主 agent 首轮相同的三段（workspace 背景 + 工位记忆索引 + 当天 journal），预算减半，不做每次调用的 LLM 召回；旧的 `memory: session|relevant` 仍可加载，discovery 时映射为 `index` 并给出警告。
 
 ## 7. 持久任务与定时事件
 

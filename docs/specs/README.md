@@ -16,7 +16,7 @@
 | `057` | [无人参与评测闭环](./057-autonomous-evals/design.md)：评分器正反例校验、客观验收、封存证据重放和兼容参照；已实施（[验收记录](./057-autonomous-evals/acceptance.md)） |
 | `058` | [Dot](./058-dots/design.md)：把助手个体从频道中独立出来，频道通过绑定指向 dot；删除 project 与频道 id 路径转义；原迁移脚本已退役，参见 060；已实施（[实施计划](./058-dots/plan.md)，实施记录在设计文档末尾） |
 | `059` | [默认个人助手](./059-default-assistant/design.md)：默认接入已实施；dot 布局与脚本方案由 060 接续 |
-| `060` | [Desk：一个助手，多个工位](./060-desk/design.md)：工位目录直接位于 workspace，统一默认初始化，无运行时迁移兼容；已实施（[验收记录](./060-desk/acceptance.md)）；[追加修复](./060-desk/followup.md)待实施 |
+| `060` | [Desk：一个助手，多个工位](./060-desk/design.md)：工位目录直接位于 workspace，统一默认初始化，无运行时迁移兼容；已实施（[验收记录](./060-desk/acceptance.md)）；[追加修复](./060-desk/followup.md)已实施 |
 
 050、051 已完成的实施清单也保存在归档中（[050](../archive/specs/050-memory-v2/plan.md)、[051](../archive/specs/051-long-horizon-task-loop/plan.md)）。
 

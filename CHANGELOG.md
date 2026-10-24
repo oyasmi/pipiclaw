@@ -4,17 +4,24 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Desks replace dots (specs 059, 060).** There is one assistant and one workspace; what used to be a dot is now a *desk*, a named work scope that owns memory, journal, tasks, events, delegation records and working files. Desks live in `workspace/desk-<name>/` (with `desk.json`) and the channel bindings in `workspace/desk-bindings.json`. The command is `/desk`, the TUI option is `--desk`; there are no `/dot` or `--dot` aliases.
+- **One persona.** Identity and rules come only from the workspace `SOUL.md` / `AGENTS.md`; a `SOUL.md` / `AGENTS.md` inside a desk directory no longer replaces them.
+- **A default desk exists from the start.** Startup initializes `default`, a new DingTalk private chat or group is bound to it on its first authorized message (no `/desk bind` needed), and `pipiclaw tui` without `--desk` always opens `default`. Existing bindings are never overwritten; reads and background wakes never create one. By default every channel therefore shares one memory, task and event set — use a separate desk when something must stay apart.
+- **The public `ChannelEvent` type's `dot` field is now `desk`.**
+- **Upgrades are offline operator work.** The migration script and the startup layout guards are gone; stop every Pipiclaw process and follow [the migration notes](docs/desk-migration.md) before starting a home that still has `workspace/dots/`.
+
 ### Added
 
-- `dot.json` may set an absolute `cwd`: the agent's working directory (shell, relative paths, default delegation directory) for that dot, while memory, tasks and events stay in the dot directory.
-- A dot can carry its own `SOUL.md` / `AGENTS.md`; it replaces the workspace file of the same name as a whole for that dot.
-- `pipiclaw tui` without `--dot` opens the only dot when exactly one exists.
+- `desk.json` may set an absolute `cwd`: the agent's working directory (shell, relative paths, default delegation directory) for that desk, while memory, tasks and events stay in the desk directory.
 - `task_list` reports each task's delivery channel, and the per-turn task agenda marks tasks that report to another channel.
 
 ### Changed
 
+- Any channel of a desk can update or delete any of the desk's events through `event_manage`; an update keeps the event's original delivery channel. Previously events delivering to another channel were read-only there.
 - The terminal refuses `task_create` and `event_manage create` (it never runs background work), with a pointer to a bound DingTalk channel.
-- Model-facing descriptions of the memory index, event list, web cache and task list now say "dot" instead of "channel".
+- Runtime playbooks and the system prompt now describe a desk as shared by its channels: attribute remembered facts to a person, and a job or delegation started in another channel wakes that channel, not this one. `/desk` replies and the TUI help call the default desk what it is rather than a "default assistant".
 
 ### Removed
 

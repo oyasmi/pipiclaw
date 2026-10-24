@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | 待实施 |
+| 状态 | 已实施（见 §9 交付记录） |
 | 日期 | 2026-10-24 |
 | 承接 | [design.md](./design.md)、[acceptance.md](./acceptance.md)；审查对象 `cd7f8f4 feat: unify desks and initialize the default work context` |
 | 范围 | 对外资料、runtime playbook 与模型指导、用户文案、代码命名与注释、060 之后可以收窄的几处运行时结构，以及一处与“工位共享”原则冲突的残留限制（S8：事件的频道归属检查） |
@@ -495,4 +495,40 @@ rg -n 'spec 058|before spec|written before|older than' src
 
 ## 9. 交付记录
 
-（实施完成后填写：各阶段提交、检查结果、playbook units 前后对比、mutation 证据、评测 run id 或未执行原因、检索清单的分类结果，以及未覆盖项。）
+2026-10-24，分支 `fix/desk-followup`，五个阶段各一次提交。
+
+| 阶段 | 提交 | 结果 |
+|---|---|---|
+| P1 代码卫生 | `refactor: name desk memory and paths consistently, drop stale dot-era comments` | D1–D9、S3–S6 完成；`npm run check` 通过 |
+| P2 结构收窄与用户文案 | `refactor: share the no-desk reply and the synthetic-wake admission rule` | S1、S2、C1–C5 完成；`npm run check` 与 `npm run test:e2e` 通过 |
+| P2b 工位内共享管理事件 | `feat: let any channel of a desk manage its events` | S8 完成；`npm run check` 与 `npm run test:e2e` 通过 |
+| P3 Playbook 与模型指导 | `docs(playbooks): restate desk scope for one assistant with shared desks` | B1–B8 完成；`npm run check`、`npm run playbooks:measure`、`npm run build` 通过 |
+| P4 对外资料与记录 | `docs: align guides, changelog and English README with desks` | A1–A11、S7 完成；`npm run check` 通过 |
+
+**用例数量：** 单测 918 → 918，确定性 e2e 63 → 63（25 个文件）。S8 改写了 `test/event-manage.test.ts` 里锁定旧契约的两个用例；D2、S3 只改导入和调用。
+
+**mutation 证据：**
+
+- S2：删掉 `admitsSyntheticEvent` 里的工位相等判断，`test/bootstrap-structured-wake.test.ts` 的重绑用例和 e2e `DESK-3` 变红；恢复后全绿。现有覆盖足够，没有扩展用例。
+- S8：让 update 改用调用者的频道作为投递频道，update 用例和“重写旧 immediate 事件”用例变红；恢复 delete 的归属检查，delete 用例变红。均已恢复。
+
+**S6 的选择：** `listDesks` 与“workspace 已有工位”保护共用 `isDeskEntry`，两处都接受指向目录的符号链接。理由：`createDeskRecord` 用 lstat 判断“已存在”，保护缺失绑定表的一侧更保守。
+
+**Playbook units（改前 → 改后）：** runtime-orientation 1,438 → 1,591；memory-and-learning 1,155 → 1,238；agent-delegation + task-lead 4,409 → 4,361；background-jobs 579 → 605；event-scheduling 1,162 → 1,196；outbound-media 478 → 483；七份合计 9,221 → 9,474（上限 9,500）。
+
+**行为评测：** `npm run eval -- plan --changed-since c9aa759` 选中 12 个案例；本机有凭据，运行每日六个 dev 案例：run `2026-10-24T03-24-46-070Z-yj49oa`，6/6 通过，0 行为失败、0 安全违规，约 $0.05（`openai-codex/gpt-5.6-luna`）。这是 smoke，不构成基线。
+
+**未覆盖项**（新增评测案例有持续成本，需用户批准）：
+
+- D-F1：工位里存着 A 的偏好，B 在群里提出相反要求，看模型是否把两人的偏好区分开。
+- D-F2：`job op=list` 里只有别的频道发起的作业在跑，看模型是否结束回合去“等它唤醒”。
+
+**检索清单分类：**
+
+- `\bdots?\b` 在 `src`、`test`、`evals`、`AGENTS.md`、`CLAUDE.md`、`docs/*.md`、`README*.md` 中已无命中（`docs/desk-migration.md` 除外，属预期）。
+- `\p{Han} 工位` / `工位 \p{Han}`：无命中。
+- `渠道`：当前文档和 `src` 无命中；`docs/desk-migration.md` 与 `events-and-tasks.md` 已改为“频道”，“随渠道自动启用”（指传输前端）改为“随前端”。
+- `默认助手|个人助手|personal assistant|隔离工作区`：剩下的命中都指 Pipiclaw 本身（两份 README 的“同一个个人助手”和 system prompt 的 “personal assistant”），属合法用法。
+- `工作区`：剩下的命中都指 workspace 或 skills 目录。
+- `ChannelIndexFor|CHANNEL_INDEX_MAX|channelIndex`：只剩 `ChannelIndex`（`CHANNELS.md`）的命中，工位记忆索引已改为 `memoryIndex`。
+- `spec 058|before spec|written before|older than`：`spec 058` 的约 60 处引用都对应 D*/INV-*，已在 design.md §8.2 给出 desk 含义（补上了表中缺的 D9、D11）；`before spec`/`written before` 的两处命中（`shared/local-time.ts`、`jobs/record.ts`）与工位无关。

@@ -290,7 +290,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 用户可用 `/memory status` 查看记忆条数、按类型分布、观察期条目、上次后台整理时间、索引是否超预算；`/memory list` 按 `name` 列出工位记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的工作日记；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
 
-### 出站附件工具（`send_media`，随渠道自动启用）
+### 出站附件工具（`send_media`，随前端自动启用）
 
 `send_media` 把 workspace 内的本地文件作为**原生附件**发进当前会话：`.jpg .jpeg .png .gif .webp .bmp` 内联为图片，其余作为可下载文件。用于把生成好的报表、截图、图表、导出文件真正交到用户手里。
 
