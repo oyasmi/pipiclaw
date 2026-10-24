@@ -808,3 +808,10 @@ e2e 新增 `test/e2e/deterministic/webapi.test.ts` 的 W1–W6（流式回合、
 - 重写：`e2e/live/tui.test.ts`（真实模型，仍是手动 / 夜间）改走 `runTui` + `bootstrapEmbedded`。
 
 **门禁**：`npm run check`、`test:e2e`（70/70）、`eval:typecheck`、`build && node dist/main.js --version` 全绿；`tui --print` 在空 home 里实际跑过一次（启动内嵌运行时、socket、报出缺 API key 的消息、退出时释放锁）。
+
+### 阶段 R（文档、迁移演练、验收）
+
+- 文档：新增 `docs/webapi.md`、`docs/channel-migration.md`；更新 `configuration`、`configuration-reference`、`deployment-and-operations`、`security`、`interaction-and-commands`、`architecture`、`scaling-and-concurrency`、`events-and-tasks`、`tools`、`sub-agents`、`runtime-mechanisms`、`design-philosophy`、`docs/README.md`、`README.md` / `README.en.md`、`AGENTS.md`、`CLAUDE.md`、三份 playbook、`commands/catalog.ts` 里的 `channel.json` 说明、两份 CHANGELOG 的 `[Unreleased]`、`docs/specs/README.md`。版本号没有改。
+- 迁移演练（R2）用 master 的构建造出旧格式数据，按迁移说明转换后在新版本上校验，过程与结果见 [acceptance.md](./acceptance.md) §6。演练发现并补进迁移说明的一处：`state/memory/<desk>/tui-N.json` 要随会话目录一起改名。
+- 验收清单（R3）与证据见 [acceptance.md](./acceptance.md)。
+- R4（真实部署上线）未执行，等用户批准并在场。
