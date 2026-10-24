@@ -66,7 +66,7 @@ export const EXECUTION_SECTION: PromptSectionDefinition = {
 			"## Working Contract",
 			"- For actionable requests, continue until the requested outcome exists or you are genuinely blocked. Inspect before changing and verify material results.",
 			"- State what remains unverified. Tool definitions are the source of truth for available capabilities and parameters.",
-			"- Jobs and delegations wake this channel on completion. Finish independent work and dispatches; when only waiting remains, end the turn without polling or check-in events.",
+			"- Jobs and delegations you start wake this channel on completion. Finish independent work and dispatches; when only waiting remains, end the turn without polling or check-in events.",
 			"- Before non-trivial use of a runtime mechanism or workspace procedure, read its guide or skill; reuse it while it remains in context.",
 		].join("\n"),
 };
