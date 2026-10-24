@@ -748,3 +748,35 @@ A、B、C 三个阶段在同一个开发分支上完成，作为一个版本发�
 - `events/watcher.ts` 超过 800 行预算，把 `EventPreActionError` 抽到 `events/pre-action-error.ts`。
 - `HumanEvent.allowedDesks`（`/desk bind` 受 key 的 `desks` 限制）没有在 A 阶段加，留到 B3，那时才有调用方。
 
+
+### 阶段 B（Web API）
+
+**B0 核实结果**（对应 §17）：
+
+1. **走 unix socket**：HTTP 必须给 SDK 传 `fetch: undici.fetch`（npm 的 undici），再用 `fetchOptions.dispatcher: new Agent({ connect: { socketPath } })`；把 dispatcher 交给 Node 内置 fetch 会报 `invalid onRequestStart method`（内置 undici 版本与 npm 版不一致）。`ResponsesWS` 用 `new ResponsesWS(client, { createConnection: () => net.connect(socketPath) })` 即可走 socket。两条写法都在 `test/support/webapi-harness.ts`，`docs/webapi.md` 里作为客户端示例。
+2. **background+stream 的流没有终态事件就结束**：SDK 正常结束迭代，不抛错。
+3. **`UsageTotals.input` 不含缓存**（`pi-ai` 报告 `prompt − cacheRead − cacheWrite`）：`input_tokens = input + cacheRead + cacheWrite`，见 `toApiUsage`。
+4. **steering 的 `message_start` 顺序**：steering 消息的 `message_start(role: user)` 在上一个 `turn_end` **之后**才到（随后是 `turn_start`、`message_start`、`message_end`）。拆分点因此定在 `steer.applied`（运行时在 steer 入队后看到用户消息开始的位置），已由 W3 覆盖。
+5. **同时监听 socket 和 TCP**：用两个 Fastify 实例共用路由注册函数；这样一个请求自然知道来自哪个监听器，鉴权、Host 校验、限流据此区分。
+
+**依赖**（精确版本，无 `^`）：`openai@7.32.0`（只用类型和客户端，服务端不调用它）、`fastify@5.12.5`、`@fastify/websocket@11.3.4`、`@fastify/rate-limit@11.2.1`、`ws@8.22.0`，开发依赖 `@types/ws@8.18.2`。`npm audit --omit=dev` 对 fastify 5.12.5 有一条低危公告（header schema 的 `propertyNames`，在 5.12.6 修复，2026-10-13 发布）；本 API 不用 header schema 做鉴权，且不足两周龄，**2026-10-27 之后升级**。其余告警（pi-coding-agent / undici / follow-redirects / ip-address / zod）是已有的。
+
+**偏差与就地决定**：
+
+1. **key 命令放在 `src/webapi/key-command.ts`**，不是 `src/app/`：`app` 层（10）不能 import `webapi`（11），而命令要用 `auth.ts` 和 `config.ts` 的校验；`main.ts` 动态 import，保证 webapi 关闭时不加载。
+2. **`Transport` 增加可选的 `dropped?(channelId, refs)`**：`/stop` 或重置清掉排队消息时，渠道需要知道哪些 Response 永远不会运行，才能把它们标成 `cancelled`。钉钉不实现。
+3. **每个人类消息都会得到 `openTurn` + `finish`**（包括被命令、被拒绝的），`turn-run.ts` 用 `answerOnly` 包装保证这一点；webapi 才不会留下永远 `queued` 的 Response。
+4. **两类审计事件**：`webapi-request`（始终记录：监听器、主体名、方法、路径、状态码、会话 id）和 `webapi-auth`（鉴权 / Origin / Host 失败）。不写 key、请求体和输出。
+5. **请求限制**（`limits.ts`）：请求体 8 MB、单请求 30 s、最多 64 个连接、TCP 每分钟 300 次、WebSocket 最多 16 个进行中响应 / 32 条命名通道 / 60 分钟、每个 Response 最多 4 个待生效 steer、工具输出截断 4000 字符、续流保留 5 分钟。这些都是代码常量。
+6. **steer 对会话绑定的 Response 也可用**（D18）：官方 OpenAI 对会话绑定的 Response 不支持 steering；Pipiclaw 支持，是有意的扩展，写进 `docs/webapi.md`。
+7. **HTTP 校验错误统一走 `errorBody`**：Fastify 的 schema 校验错误、解析错误、413/415 都映射成 `{ error: { message, type, param, code } }`；`removeAdditional: false`，未知字段按 D14 报 `unknown_parameter` 而不是被悄悄丢弃。
+
+**测试发现并修复的缺陷**：
+
+- `Host` 校验最初也作用在 socket 监听器上，socket 上的所有请求都返回 403；改为只对 loopback TCP 校验（`webapi-security` 与 W1 覆盖）。
+- `responses.jsonl` 末行被崩溃截断时，下一次追加会接在残缺行后面，那条快照（尤其是重启时写的 `failed`）随之丢失，下次启动又会再标一次。启动时先补一个换行（`webapi-store` 覆盖）。
+- 新 Response 的首次保存先写索引行再写快照，随后的快照会抢在前面落盘，合成 Response 因此在文件里停在 `in_progress`。`saveResponse` 现在按调用顺序串行落盘（W5 覆盖；注册仍是同步的）。
+
+**用例数（B）**：单测 948 → 964（+16），e2e 63 → 69（+6）。单测新增：`webapi-config`（3：loopback 判断与配置拒绝表、key 命令与校验、文件权限）、`webapi-security`（3：先鉴权后读体、Origin / Host、污染 / 超限 / 媒体类型）、`webapi-store`（1）、`webapi-request`（5：策略表、WebSocket 禁用字段、标记顺序、拒绝 URL / file_id、先量后解码）、`webapi-websocket`（2：拒绝码与 32 通道上限与 steer 失败码、60 分钟上限与断开取消）、`webapi-turn-output`（2：事件序号与重放、失败工具与截断）。每个都对应一种不同的故障。计划里的 `webapi-responses`（假 Ingress 的状态机）、`webapi-input` 独立文件没有写：状态机由 W1–W5 的真实运行时覆盖，输入规则合进 `webapi-request`，以免重复。
+e2e 新增 `test/e2e/deterministic/webapi.test.ts` 的 W1–W6（流式回合、忙碌排队、WebSocket steer 拆分、取消、合成唤醒、SIGKILL 重启，最后一个用独立进程 `webapi-worker.mjs`），每个的 mutation check 写在用例注释里。计划里"任务步骤被 cancel 时任务暂停"没有放进 W4：该语义属于 `/stop` 与任务驱动，既有的 stop / tasks e2e 已覆盖，webapi 只是复用同一个 `cancel` 入口。
+**门禁**：`npm run check`、`test:e2e`（69/69）、`eval:typecheck`、`build && node dist/main.js --version` 全绿。`memory.test.ts` 的 M8 在整套并行跑时出现过一次失败，单独重跑 3 次、以及不带本分支改动时都通过，未复现；记录在此，不在本阶段处理。
