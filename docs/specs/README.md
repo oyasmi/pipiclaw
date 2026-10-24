@@ -1,6 +1,6 @@
 # 设计记录
 
-`docs/specs/` 当前保留 spec 050–060，其中 055 已完成离线实施，真实发布验收待执行；058、059 的初始化与布局设计由 060 接续；060 的 desk 运行时重构已实施，一次性迁移改由 AI agent 按说明执行。编号 050 之前的所有 spec 已完整移到 [历史归档](../archive/README.md)，保留原编号、目录名和文件名；这些历史设计仍可用于追溯决策。
+`docs/specs/` 当前保留 spec 050–061，其中 055 已完成离线实施，真实发布验收待执行；058、059 的初始化与布局设计由 060 接续；060 的 desk 运行时重构已实施，一次性迁移改由 AI agent 按说明执行；061 的渠道层与 Web API 设计已确认，待实施。编号 050 之前的所有 spec 已完整移到 [历史归档](../archive/README.md)，保留原编号、目录名和文件名；这些历史设计仍可用于追溯决策。
 
 ## 保留的设计
 
@@ -17,6 +17,7 @@
 | `058` | [Dot](./058-dots/design.md)：把助手个体从频道中独立出来，频道通过绑定指向 dot；删除 project 与频道 id 路径转义；原迁移脚本已退役，参见 060；已实施（[实施计划](./058-dots/plan.md)，实施记录在设计文档末尾） |
 | `059` | [默认个人助手](./059-default-assistant/design.md)：默认接入已实施；dot 布局与脚本方案由 060 接续 |
 | `060` | [Desk：一个助手，多个工位](./060-desk/design.md)：工位目录直接位于 workspace，统一默认初始化，无运行时迁移兼容；已实施（[验收记录](./060-desk/acceptance.md)）；[追加修复](./060-desk/followup.md)已实施 |
+| `061` | [渠道层与 Web API](./061-channel-plane/design.md)：钉钉与遵循 OpenAI Responses API 的 Web API 并列为两个渠道，`Transport` / `Ingress` 契约与结构化回合输出，`channel.json` 分段与开关，TUI 改为 Web API 客户端；设计已确认，待实施（[实施计划](./061-channel-plane/plan.md)） |
 
 050、051 已完成的实施清单也保存在归档中（[050](../archive/specs/050-memory-v2/plan.md)、[051](../archive/specs/051-long-horizon-task-loop/plan.md)）。
 
