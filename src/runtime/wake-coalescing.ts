@@ -23,10 +23,11 @@ export function isCoalescableWake(event: ChannelEvent): boolean {
 }
 
 /**
- * Whether `candidate` may ride along in `primary`'s turn. The primary already passed admission's
- * desk check (spec 058, D7); a candidate is folded in only when it was produced for that same desk,
- * so a wake left over from before a rebind (or a malformed record with no owning desk) never
- * reaches the new desk's model. It stays queued and its own admission drops it.
+ * Whether `candidate` may ride along in `primary`'s turn. The primary already passed
+ * `admitsSyntheticEvent` (spec 060, D7), so its desk is the channel's current one; a candidate is
+ * folded in only when it was produced for that same desk, so a wake left over from before a rebind
+ * (or a malformed record with no owning desk) never reaches the new desk's model. It stays queued
+ * and its own admission drops it.
  */
 export function canAbsorbWake(primary: ChannelEvent, candidate: ChannelEvent): boolean {
 	return isCoalescableWake(candidate) && candidate.desk !== undefined && candidate.desk === primary.desk;

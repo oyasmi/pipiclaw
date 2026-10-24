@@ -64,16 +64,16 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 function printTuiHelp(io: BootstrapIO): void {
 	io.log("Usage: pipiclaw tui [options] [prompt]");
 	io.log("");
-	io.log("Chat with the pipiclaw agent in the terminal, reusing the same config,");
-	io.log("memory and session as the DingTalk runtime.");
+	io.log("Chat with the pipiclaw agent in the terminal, using the same config and the");
+	io.log("same assistant as the DingTalk runtime.");
 	io.log("");
-	io.log("By default, the terminal opens your personal assistant, sharing its memory,");
-	io.log("tasks and files with DingTalk, while keeping its own conversation,");
+	io.log("By default, the terminal opens the default desk, sharing its memory, tasks and");
+	io.log("files with the DingTalk channels bound to it, while keeping its own conversation,");
 	io.log("which resumes automatically next time. A desk can be open here while the daemon");
 	io.log("serves it; only one terminal at a time per desk.");
 	io.log("");
 	io.log("Options:");
-	io.log("  --desk <name>              Open a desk (default: default)");
+	io.log("  --desk <name>             Open a desk (default: default)");
 	io.log("  --create                  Create the desk if it does not exist");
 	io.log("  --print, -p               One-shot: run [prompt] (or stdin), print the answer, exit");
 	io.log("  --plain                   Use the line-based frontend instead of the full-screen UI");

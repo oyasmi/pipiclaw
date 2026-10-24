@@ -20,7 +20,7 @@ import {
 	type RuntimeCommandName,
 } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
-import { type DeskCommandPort, formatUnavailableDeskReply, formatUnboundChannelReply } from "../desk/commands.js";
+import { type DeskCommandPort, formatNoDeskReply } from "../desk/commands.js";
 import type { BusyMessageMode } from "../dingtalk/config.js";
 import type { BusyMessageResult, DingTalkBotPort, DingTalkHandler, StopOutcome } from "../dingtalk/handler.js";
 import type { JobRuntime } from "../jobs/manager.js";
@@ -29,7 +29,7 @@ import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { readActiveTasks } from "../tasks/contract.js";
 import { pauseTask as pauseStoredTask } from "../tasks/store.js";
-import type { ChannelResolution } from "./desk-runtime.js";
+import { admitsSyntheticEvent, type ChannelResolution } from "./desk-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { persistInboundImage, relativeImagePaths } from "./inbound-images.js";
 import { createTaskDriverEvent, parseDriverTaskId } from "./task-driver.js";
@@ -228,12 +228,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 					try {
 						const resolution = resolveChannel(event.channelId);
 						if (resolution.kind !== "bound") {
-							await _bot.sendPlain(
-								event.channelId,
-								resolution.kind === "unbound"
-									? formatUnboundChannelReply()
-									: formatUnavailableDeskReply(resolution.desk),
-							);
+							await _bot.sendPlain(event.channelId, formatNoDeskReply(resolution));
 							return;
 						}
 						const { conversation } = resolution;
@@ -308,12 +303,9 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 			if (resolution.kind !== "bound") {
 				return runReportCommand(
 					{
-						kind: "unbound",
+						kind: "no-desk",
 						deskPort: deskPort(channelId),
-						refusal:
-							resolution.kind === "unbound"
-								? formatUnboundChannelReply()
-								: formatUnavailableDeskReply(resolution.desk),
+						refusal: formatNoDeskReply(resolution),
 					},
 					name,
 					args,
@@ -477,7 +469,7 @@ export function createTurnHandler(deps: TurnHandlerDeps): DingTalkHandler {
 			// Only a turn admission will accept gets reserved; `handleEvent` releases it if it refuses.
 			const resolution = resolveChannel(event.channelId);
 			if (resolution.kind !== "bound") return;
-			if (isSyntheticEvent(event) && event.desk !== resolution.conversation.desk) return;
+			if (isSyntheticEvent(event) && !admitsSyntheticEvent(resolution, event)) return;
 			// `/desk` runs outside any turn: `/desk bind` must see this channel idle (D5 step 1).
 			if (!isSyntheticEvent(event) && parseBuiltInCommand(event.text)?.name === "desk") return;
 			const runner = getRunner(event.channelId);

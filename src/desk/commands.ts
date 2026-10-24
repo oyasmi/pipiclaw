@@ -93,20 +93,25 @@ export function parseDeskCommand(args: string): DeskCommand {
 
 const NAME_RULE = "工位名只能用 1–32 个小写字母、数字和连字符，且不能以连字符开头或结尾";
 
-/** The reply to anything but `/desk` and `/help` on a channel with no binding (D4). */
-export function formatUnboundChannelReply(): string {
-	return "默认助手暂时不可用，请联系部署者在服务器上检查 `workspace/desk-default/desk.json`，修复后重发消息。";
-}
+/**
+ * Why a channel has no usable desk: it has no binding (the default desk could not take it in), or
+ * it is bound to a desk that is missing or broken on disk. Either way the user sees one thing.
+ */
+export type NoDeskResolution = { kind: "unbound" } | { kind: "unavailable"; desk: string };
 
-/** The reply on a channel bound to a desk that is missing or broken on disk (D4). */
-export function formatUnavailableDeskReply(desk: string): string {
-	return `本频道绑定的工位 \`${desk}\` 当前不可用（目录缺失或 desk.json 有误），需要部署者在服务器上检查；也可以用 \`/desk bind <名字>\` 改绑到别的工位。`;
+/** The reply to anything but `/desk` and `/help` on a channel with no usable desk (D4). */
+export function formatNoDeskReply(resolution: NoDeskResolution): string {
+	const why =
+		resolution.kind === "unbound"
+			? "默认工位 `default` 不可用，请部署者在服务器上检查 `workspace/desk-default/`"
+			: `本频道绑定的工位 \`${resolution.desk}\` 不可用（目录缺失或 desk.json 有误），请部署者在服务器上检查`;
+	return `本频道目前没有可用的工位：${why}；也可以用 \`/desk bind <名字>\` 切到其他已有工位。`;
 }
 
 /** `canBind` is false in the TUI, whose current desk is the one it opened, not one a channel is bound to. */
 function renderList(items: DeskListItem[], channelIndexPath: string, canBind: boolean): string {
 	if (items.length === 0) {
-		return "暂无工位。用 `/desk new <名字>` 创建一个，再用 `/desk bind <名字>` 绑定到本频道。";
+		return "暂无工位。默认工位 `default` 缺失且没有任何绑定，需要部署者在服务器上检查 `workspace/`。";
 	}
 	const lines = ["**工位列表**"];
 	for (const item of items) {

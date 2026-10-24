@@ -29,6 +29,28 @@ export type ChannelResolution =
 	| { kind: "unavailable"; desk: string; reason: string }
 	| { kind: "unbound" };
 
+/** The desk a resolution names, bound or not; `undefined` for a channel with no binding. */
+export function resolvedDesk(resolution: ChannelResolution): string | undefined {
+	switch (resolution.kind) {
+		case "bound":
+			return resolution.conversation.desk;
+		case "unavailable":
+			return resolution.desk;
+		case "unbound":
+			return undefined;
+	}
+}
+
+/**
+ * The one admission rule for a synthetic event (a wake, a scheduled occurrence): it is let in only
+ * while its channel is still bound to — and the desk is available for — the desk it was produced
+ * for (spec 060 D7, INV-5). Covers a wake queued before a restart or a rebind, and a malformed
+ * record that carries no owning desk.
+ */
+export function admitsSyntheticEvent(resolution: ChannelResolution, event: { desk?: string }): boolean {
+	return resolution.kind === "bound" && event.desk !== undefined && resolution.conversation.desk === event.desk;
+}
+
 interface DeskWatcher {
 	start(): void;
 	stop(): void;

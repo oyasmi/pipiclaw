@@ -128,16 +128,16 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "desk",
-		argumentHint: "[list|new <desk>|bind <desk>]",
-		description: "进阶：创建隔离工作区，或切换本频道的工作区",
+		argumentHint: "[list|new <名字>|bind <名字>]",
+		description: "进阶：创建工位，或把本频道切换到另一个工位",
 		// list/new answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
 		availableWhileBusy: true,
 		subcommands: [
 			{ name: "list", description: "列出所有工位和各自绑定的频道（默认动作，可省略）", example: "/desk" },
-			{ name: "new", args: "<工位>", description: "创建一个空工位，不绑定任何频道", example: "/desk new research" },
+			{ name: "new", args: "<名字>", description: "创建一个空工位，不绑定任何频道", example: "/desk new research" },
 			{
 				name: "bind",
-				args: "<desk>",
+				args: "<名字>",
 				description: "把本频道绑定到这个工位，同时解除原来的绑定；回合进行中不能执行",
 				example: "/desk bind research",
 			},

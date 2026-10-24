@@ -17,7 +17,7 @@ import {
 	renderBuiltInHelp,
 	slashCommandName,
 } from "../commands/catalog.js";
-import { formatUnavailableDeskReply, formatUnboundChannelReply } from "../desk/commands.js";
+import { formatNoDeskReply } from "../desk/commands.js";
 import { getDeskDir } from "../desk/paths.js";
 import { createDingTalkContext } from "../dingtalk/delivery.js";
 import type { DingTalkBotPort } from "../dingtalk/handler.js";
@@ -27,7 +27,7 @@ import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
-import type { ChannelResolution } from "./desk-runtime.js";
+import { admitsSyntheticEvent, type ChannelResolution, resolvedDesk } from "./desk-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { relativeImagePaths } from "./inbound-images.js";
 import { parseDriverTaskId } from "./task-driver.js";
@@ -478,11 +478,7 @@ export function createEventTurnRunner(
 			await bot.sendPlain(event.channelId, renderBuiltInHelp(command.args), { title: "/help", markdown: true });
 			return;
 		}
-		await bot.sendPlain(
-			event.channelId,
-			resolution.kind === "unbound" ? formatUnboundChannelReply() : formatUnavailableDeskReply(resolution.desk),
-			{ markdown: true },
-		);
+		await bot.sendPlain(event.channelId, formatNoDeskReply(resolution), { markdown: true });
 	};
 
 	const runDeskCommand = async (event: ChannelEvent, args: string, bot: DingTalkBotPort): Promise<void> => {
@@ -511,21 +507,14 @@ export function createEventTurnRunner(
 
 		const resolution = deps.resolveChannel(inboundEvent.channelId);
 		if (isSyntheticEvent(inboundEvent, isEvent)) {
-			// D7's authoritative check: a wake is admitted only while its channel is still bound to the
-			// desk it was produced for. Covers wakes queued before a restart, a rebind while queued, and
-			// malformed records that carry no owning desk.
-			if (!inboundEvent.desk || resolution.kind !== "bound" || resolution.conversation.desk !== inboundEvent.desk) {
+			// D7's authoritative check (the rule is `admitsSyntheticEvent`; `reserveEvent` applies it early).
+			if (!admitsSyntheticEvent(resolution, inboundEvent)) {
 				log.logInfoEvent("dispatch.wake.desk_mismatch", "Wake dropped: channel not bound to the wake's desk", {
 					channelId: inboundEvent.channelId,
 					fields: {
 						dispatchId: inboundEvent.dispatchId,
 						wakeDesk: inboundEvent.desk,
-						boundDesk:
-							resolution.kind === "unbound"
-								? undefined
-								: resolution.kind === "bound"
-									? resolution.conversation.desk
-									: resolution.desk,
+						boundDesk: resolvedDesk(resolution),
 					},
 				});
 				releaseReservation(inboundEvent);

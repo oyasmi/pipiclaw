@@ -8,13 +8,7 @@ import { renderStatus } from "../src/agent/status-render.js";
 import { renderTurnErrorReply } from "../src/agent/turn/turn-error.js";
 import type { AgentRunner } from "../src/agent/types.js";
 import { BUILT_IN_COMMANDS, formatBusyHint, renderBuiltInHelp, SESSION_COMMANDS } from "../src/commands/catalog.js";
-import {
-	type BindOutcome,
-	type DeskCommandPort,
-	formatUnavailableDeskReply,
-	formatUnboundChannelReply,
-	handleDeskCommand,
-} from "../src/desk/commands.js";
+import { type BindOutcome, type DeskCommandPort, formatNoDeskReply, handleDeskCommand } from "../src/desk/commands.js";
 import { handleEventsCommand } from "../src/events/commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { applyMemoryOps } from "../src/memory/store.js";
@@ -361,8 +355,8 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		for (const outcome of bindOutcomes) {
 			expectUserCopyShape(`/desk bind ${outcome.kind}`, await handleDeskCommand("bind lab", port(true, outcome)));
 		}
-		expectUserCopyShape("unbound channel", formatUnboundChannelReply());
-		expectUserCopyShape("unavailable desk", formatUnavailableDeskReply("news"));
+		expectUserCopyShape("unbound channel", formatNoDeskReply({ kind: "unbound" }));
+		expectUserCopyShape("unavailable desk", formatNoDeskReply({ kind: "unavailable", desk: "news" }));
 	});
 
 	it("keeps /help, /status, /usage and /context in shape", async () => {

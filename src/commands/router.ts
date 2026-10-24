@@ -48,22 +48,22 @@ export interface ReportCommandContext {
 }
 
 /**
- * A channel with no usable desk (spec 058, D4): `/desk` is the one report it can run; every other
+ * A channel with no usable desk (spec 060, D4): `/desk` is the one report it can run; every other
  * name gets `refusal` — why there is no desk, and the next step.
  */
-export interface UnboundCommandContext {
-	kind: "unbound";
+export interface NoDeskCommandContext {
+	kind: "no-desk";
 	deskPort: DeskCommandPort;
 	refusal: string;
 }
 
 export async function runReportCommand(
-	context: ReportCommandContext | UnboundCommandContext,
+	context: ReportCommandContext | NoDeskCommandContext,
 	name: RuntimeCommandName,
 	args: string,
 ): Promise<string> {
 	if (name === "desk") return handleDeskCommand(args, context.deskPort);
-	if (context.kind === "unbound") return context.refusal;
+	if (context.kind === "no-desk") return context.refusal;
 	const { conversation, paths } = context;
 	const { channelId, desk, deskDir } = conversation;
 	switch (name) {

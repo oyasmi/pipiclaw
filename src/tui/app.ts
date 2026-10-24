@@ -63,7 +63,7 @@ async function waitForStorageFlush(task: Promise<unknown>): Promise<void> {
 }
 
 export interface TuiAppOptions {
-	/** The desk to open; defaults to the built-in personal assistant. */
+	/** The desk to open; defaults to the default desk. */
 	desk?: string;
 	/** Create the desk when it does not exist — an explicit creation, like `/desk new` (INV-2). */
 	create?: boolean;
