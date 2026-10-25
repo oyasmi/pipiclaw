@@ -4,7 +4,7 @@
  */
 
 /** Largest request body, and the largest WebSocket message, in bytes. */
-export const MAX_BODY_BYTES = 8 * 1024 * 1024;
+export const MAX_BODY_BYTES = 30 * 1024 * 1024;
 /** How long the server waits for a request to arrive in full; it does not limit how long a turn runs. */
 export const REQUEST_TIMEOUT_MS = 30_000;
 /** Open connections across both listeners. */
@@ -34,7 +34,7 @@ export const MAX_METADATA_KEY_CHARS = 64;
 export const MAX_METADATA_VALUE_CHARS = 512;
 
 /** Largest `input_file` once decoded. */
-export const MAX_INBOUND_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_INBOUND_FILE_BYTES = 10 * 1024 * 1024;
 
 /** Page sizes for list endpoints. */
 export const DEFAULT_PAGE_LIMIT = 20;

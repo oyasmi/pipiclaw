@@ -5,17 +5,17 @@
  */
 
 /**
- * Inbound has no transport-imposed size contract the way outbound does; this mirrors
- * `tools/truncate.ts`'s `MAX_INLINE_BINARY_BYTES` — the same ceiling `read` already applies to an
- * on-disk image — so "a picture the user sent" and "a picture `read` loads from disk" behave
- * identically for the model. Lives in `channel/` because both a transport (rejecting an oversized
+ * Inbound has no transport-imposed size contract the way outbound does. This is the limit a user's
+ * picture is accepted under, deliberately above `tools/truncate.ts`'s `MAX_INLINE_BINARY_BYTES`
+ * (what `read` inlines from disk): a sent photo is the user's own input, and today's vision models
+ * accept it. Lives in `channel/` because both a transport (rejecting an oversized
  * download) and `agent/` (skipping an oversized file before base64-encoding it) need the same
  * number, and `agent/` never imports from `runtime/` (spec 049).
  */
-export const MAX_INBOUND_IMAGE_BYTES = 5 * 1024 * 1024;
+export const MAX_INBOUND_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** Defensive hard cap on how many images one inbound message can carry. */
-export const MAX_INBOUND_IMAGES_PER_MESSAGE = 9;
+export const MAX_INBOUND_IMAGES_PER_MESSAGE = 10;
 
 /**
  * Identify a downloaded file's real format from its magic bytes rather than trusting the

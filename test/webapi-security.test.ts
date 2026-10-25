@@ -126,7 +126,7 @@ describe("webapi door guards", () => {
 		const poisoned = await post('{"input":"x","__proto__":{"admin":true}}');
 		expect(poisoned.statusCode).toBe(400);
 		expect(poisoned.json().error.type).toBe("invalid_request_error");
-		const huge = await post(JSON.stringify({ input: "x".repeat(9 * 1024 * 1024) }));
+		const huge = await post(JSON.stringify({ input: "x".repeat(31 * 1024 * 1024) }));
 		expect(huge.statusCode).toBe(413);
 		expect(huge.json().error.code).toBe("request_too_large");
 		const text = await tcp.inject({

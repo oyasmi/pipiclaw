@@ -224,7 +224,7 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 
 `input` 可包含历史 assistant 消息、system/developer 指令，以及 Pipiclaw 自己输出的 reasoning 摘要和 mcp_call。历史工具记录作为观察信息提供给模型，不会执行。客户端工具闭环（function_call_output）、item_reference 和加密 reasoning 等仍未实现，明确返回 400。
 
-**图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤5 MB，最多 9 张），`input_file` 用 `file_data` 加 `filename`（≤5 MB）。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。作为上下文导入的 input（独立请求、响应链、含其他角色的会话 input）里，文件以 UTF-8 文本内联；PDF、Office 文档等二进制文件返回 400（`param` 指向该 `file_data`），请放在只含 user 消息的 conversation 里发送，文件会保存到工位供工具读取。
+**图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤10 MiB，最多 10 张），`input_file` 用 `file_data` 加 `filename`（≤10 MiB）。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。作为上下文导入的 input（独立请求、响应链、含其他角色的会话 input）里，文件以 UTF-8 文本内联；PDF、Office 文档等二进制文件返回 400（`param` 指向该 `file_data`），请放在只含 user 消息的 conversation 里发送，文件会保存到工位供工具读取。
 
 ## 回合怎么变成 Response
 
@@ -256,7 +256,7 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 | 401 | 缺少或无效的 key（`invalid_api_key`） |
 | 403 | `Host` 不对，或工位不在 key 的 `desks` 内 |
 | 404 | 资源不存在或不属于这把 key |
-| 413 | 请求体超过 8 MB |
+| 413 | 请求体超过 30 MiB |
 | 429 | 限流或队列满，带 `Retry-After` |
 | 500 / 503 | 内部错误 / 正在关机 |
 
@@ -268,7 +268,7 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 - 默认只监听本机 socket；TCP 要显式打开。非 loopback 且不配 `tls` 时是明文 HTTP，key 会明文过网络——只在 TLS 由前置反向代理终止、或可信内网中这样用。
 - 允许带 `Origin` 头的请求（包括 WebSocket 升级）；HTTP 支持任意来源的 CORS，允许浏览器前端直接调用。loopback TCP 仍校验 `Host`，防 DNS rebinding。
 - `OPTIONS` 预检无需 key，不访问业务数据；实际请求在读请求体**之前**鉴权，失败直接 401。key 只存 SHA-256，比较是常量时间的。
-- 限制：请求体 8 MB、单个请求 30 秒内接收完、最多 64 个连接、TCP 上每个来源 IP 每分钟 300 次。
+- 限制：请求体 30 MiB、单个请求 30 秒内接收完、最多 64 个连接、TCP 上每个来源 IP 每分钟 300 次。
 - 审计：每个请求（主体、方法、路径、会话、状态码）和每次鉴权失败（来源、原因）都写进安全审计日志；日志里没有 key、请求体或输出。
 
 ## 已知限制
