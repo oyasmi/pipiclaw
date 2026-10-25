@@ -113,6 +113,14 @@ async function buildApp(
 	app.removeContentTypeParser("text/plain");
 	app.decorateRequest("principal", undefined as unknown as Principal);
 
+	app.addHook("onRequest", async (request, reply) => {
+		if (request.headers.origin === undefined) return;
+		// Write to raw so hijacked SSE responses retain these headers too. Register before
+		// rate limiting and authentication so browsers can read their error responses.
+		reply.raw.setHeader("access-control-allow-origin", "*");
+		reply.raw.setHeader("access-control-expose-headers", "Retry-After");
+	});
+
 	if (listener === "tcp") {
 		// First, so a flood is turned away before it reaches the key check.
 		await app.register(rateLimit, {
@@ -129,7 +137,7 @@ async function buildApp(
 	const refuse = (
 		request: FastifyRequest,
 		reply: FastifyReply,
-		reason: "missing_key" | "invalid_key" | "origin" | "host",
+		reason: "missing_key" | "invalid_key" | "host",
 		error: WebApiError,
 	) => {
 		deps.audit({
@@ -145,15 +153,6 @@ async function buildApp(
 	};
 
 	app.addHook("onRequest", async (request, reply) => {
-		// A browser attaches Origin to a cross-site request; this API is for programs, so none is served.
-		if (request.headers.origin !== undefined) {
-			return refuse(
-				request,
-				reply,
-				"origin",
-				forbidden("origin_not_allowed", "Requests with an Origin header are not accepted."),
-			);
-		}
 		if (listener === "tcp" && hosts.size > 0 && !hosts.has(String(request.headers.host ?? "").toLowerCase())) {
 			return refuse(
 				request,
@@ -161,6 +160,18 @@ async function buildApp(
 				"host",
 				forbidden("host_not_allowed", "The Host header is not one this server answers to."),
 			);
+		}
+		if (
+			request.method === "OPTIONS" &&
+			request.headers.origin !== undefined &&
+			request.headers["access-control-request-method"] !== undefined
+		) {
+			// Preflight carries no bearer key; only the subsequent API request is authenticated.
+			reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
+			reply.header("vary", "Access-Control-Request-Headers");
+			const headers = request.headers["access-control-request-headers"];
+			if (headers) reply.header("access-control-allow-headers", headers);
+			return reply.code(204).send();
 		}
 		if (listener === "socket") {
 			request.principal = LOCAL_PRINCIPAL;

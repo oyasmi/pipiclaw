@@ -519,7 +519,7 @@ $PIPICLAW_HOME/security.json
 - **默认关闭**，关闭时不加载代码、不监听。
 - **只监听本机 unix socket**（`state/webapi/api.sock`，权限 `0600`，目录 `0700`）；socket 上不需要 key，能打开它的就是运行 daemon 的系统用户。TCP 要显式打开，每个请求都必须带 bearer key；`tls` 可选：非 loopback 且不配 `tls` 时是明文 HTTP，由部署方保证前置代理终止 TLS 或网络可信。
 - **key 的权限等于宿主机上的 shell 权限**——agent 有 `bash`，只受上面的命令、路径和网络守卫约束。key 只存 SHA-256，`desks` 限定它能使用的工位，会话和 Response 按创建它的 key 隔离。
-- 带 `Origin` 头的请求（浏览器的跨站请求、跨站 WebSocket）一律 403，不提供 CORS；loopback TCP 校验 `Host` 防 DNS rebinding。鉴权在读请求体之前完成，失败直接 401，不进入运行时。
+- 允许带 `Origin` 头的请求（包括 WebSocket 升级），HTTP 提供任意来源的 CORS，浏览器前端可直接调用。`OPTIONS` 预检无需 key、不访问业务数据，实际 TCP 请求仍必须带 bearer key；不使用 Cookie 鉴权。loopback TCP 校验 `Host` 防 DNS rebinding，实际请求在读请求体之前鉴权，失败直接 401，不进入运行时。
 - 请求体、连接数、速率、WebSocket 流数量都有上限；TCP 按来源 IP 限流。
 - 审计：每个请求（主体、方法、路径、会话、状态码）和每次鉴权失败（来源、原因）都写进审计日志，不记录 key、请求体或输出。
 

@@ -291,7 +291,7 @@ npm run build && node dist/main.js --version
 | `ids.ts` | `resp_`、`conv_`、`msg_`、`mcp_`、`rs_`、`steer_` 的生成（`crypto.randomBytes(16)` 转十六进制）与格式校验 |
 | `errors.ts` | `WebApiError`（status、type、code、param、message）；HTTP 错误体与 WebSocket 错误包络的渲染（D22） |
 | `auth.ts` | 主体（`{ name: string; desks?: string[]; local: boolean }`）；key 的 sha256 与 `timingSafeEqual` 比较（每个存储值都比完） |
-| `server.ts` | 创建 Fastify 实例：`bodyLimit`、超时、`onProtoPoisoning: "error"`、`onConstructorPoisoning: "error"`；`onRequest` 钩子依次做 Origin 拒绝、Host 检查（只对 loopback TCP）、鉴权；对 TCP 注册 `@fastify/rate-limit`；`setErrorHandler` 把 Ajv 错误和其他错误统一转成 D22 的格式；`setNotFoundHandler` 返回 404 错误体；监听 socket（先建 0700 目录，删除残留文件，listen 后 chmod 0600）和可选的 TCP/TLS |
+| `server.ts` | 创建 Fastify 实例：`bodyLimit`、超时、`onProtoPoisoning: "error"`、`onConstructorPoisoning: "error"`；`onRequest` 钩子设置 CORS 头，检查 Host（只对 loopback TCP），允许无 key 的 `OPTIONS` 预检，并对实际请求鉴权；对 TCP 注册 `@fastify/rate-limit`；`setErrorHandler` 把 Ajv 错误和其他错误统一转成 D22 的格式；`setNotFoundHandler` 返回 404 错误体；监听 socket（先建 0700 目录，删除残留文件，listen 后 chmod 0600）和可选的 TCP/TLS |
 | `transport.ts` | 实现 `Transport`；B1 中只有 `start` / `stop` / `describe` 和 `policy`（`whenBusy: "queue"`、`textControlCommands: false`） |
 
 3. `runtime/transports.ts` 注册 webapi（动态 import）。
@@ -307,7 +307,7 @@ npm run build && node dist/main.js --version
   - key 名、哈希、`desks` 的校验。
 - `test/webapi-security.test.ts`：用 Fastify 的 `inject` 测：
   - 无 key、错误 key 返回 401，**并断言请求体解析器从未被调用**（INV-6）；
-  - 带 Origin 返回 403；
+  - 带 Origin 的请求可用，CORS 预检无需 key，实际请求仍鉴权；
   - loopback TCP 上错误的 Host 返回 403，socket 上不检查；
   - 原型污染的 JSON 被拒绝；
   - 超过请求体上限返回 413；

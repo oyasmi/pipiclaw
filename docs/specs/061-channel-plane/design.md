@@ -550,10 +550,10 @@ SSE 直接写 `reply.raw`，不再增加依赖。依赖版本固定到发布满�
 
 | 威胁 | 措施 |
 |---|---|
-| 未鉴权的请求消耗资源 | `onRequest` 钩子鉴权，失败直接 401，**不读请求体**（INV-6）；WebSocket 在升级阶段鉴权 |
+| 未鉴权的请求消耗资源 | 实际 API 请求在 `onRequest` 钩子鉴权，失败直接 401，**不读请求体**（INV-6）；WebSocket 在升级阶段鉴权；`OPTIONS` 预检无需 key，只返回 CORS 元数据 |
 | key 泄漏或被猜中 | key 有 256 位随机熵；只存 sha256；比较时对每个存储值都用 `crypto.timingSafeEqual` 比完，不提前返回 |
 | 明文传输 bearer token | 非 loopback 的 `tcp` 必须配 TLS（D2） |
-| 浏览器跨站请求（CSRF、跨站 WebSocket 劫持） | 带 `Origin` 头的 HTTP 请求和 WebSocket 升级一律 403；不注册 CORS |
+| 浏览器跨站访问 | 允许带 `Origin` 头的 HTTP 请求和 WebSocket 升级；HTTP 提供任意来源的 CORS，支持 `OPTIONS` 预检；实际 TCP 请求仍使用显式 bearer key，不使用 Cookie 鉴权，SSE 与错误响应同样携带 CORS 头 |
 | DNS rebinding | TCP 绑定在 loopback 时，`Host` 必须是 `127.0.0.1:<port>`、`localhost:<port>` 或 `[::1]:<port>`，否则 403。unix socket 上不检查 Host；非 loopback 地址由 TLS 证书约束主机名 |
 | 越权使用工位或会话 | key 只能使用 `desks` 内的工位；会话和 Response 按归属隔离（D12） |
 | 大请求、慢请求 | `bodyLimit` 8MB；`requestTimeout` 30 秒（只限制接收请求的时间，不限制回合时长）；WebSocket `maxPayload` 8MB；base64 先按长度估算大小再解码 |

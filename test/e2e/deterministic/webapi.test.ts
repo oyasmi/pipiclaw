@@ -35,6 +35,19 @@ describe("E2E deterministic: Web API", () => {
 		expect(types).toContain("response.output_text.delta");
 		expect(types.at(-1)).toBe("response.completed");
 
+		// Regression: JSON responses can have CORS headers while hijacked SSE replies lose them.
+		// Mutation checked 2026-10-25: replacing raw.setHeader with reply.header makes W1 fail.
+		const { data: browserStream, response: browserResponse } = await harness.tcp.responses
+			.create(
+				{ model: "pipiclaw", input: "browser", stream: true },
+				{ headers: { Origin: "https://client.example" } },
+			)
+			.withResponse();
+		let lastType: string | undefined;
+		for await (const event of browserStream) lastType = event.type;
+		expect(browserResponse.headers.get("access-control-allow-origin")).toBe("*");
+		expect(lastType).toBe("response.completed");
+
 		const done = await harness.tcp.responses.create({ model: "pipiclaw", input: "again" });
 		expect(done.status).toBe("completed");
 		expect(done.output_text).toBe("pong");

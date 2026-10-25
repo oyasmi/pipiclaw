@@ -48,7 +48,7 @@
 
 - 只开 socket：`webapi.enabled` 默认 `false`；打开后默认 `socket: true`、不监听 TCP。socket 目录 `0700`、文件 `0600`（`test` 里的 harness 也在这个权限下运行）。
 - TCP 非 loopback 必须 TLS：`test/webapi-config.test.ts`（`0.0.0.0` 无 `tls` 被拒绝，`127.0.0.1.evil.com`、`128.x` 不被当成 loopback）。
-- Origin 与 Host：`test/webapi-security.test.ts`（带 `Origin` 的请求在两个监听器上都是 403；loopback TCP 上外来的 `Host` 是 403；socket 上不检查 `Host`、不需要 key）。
+- Origin、CORS 与 Host：`test/webapi-security.test.ts`（两个监听器允许带 `Origin` 的请求并支持无 key 的预检，实际 TCP 请求仍需 key；loopback TCP 上外来的 `Host` 是 403；socket 上不检查 `Host`、不需要 key）。`test/e2e/deterministic/webapi.test.ts` 的 W1 验证流式响应保留 CORS 头；`test/webapi-websocket.test.ts` 验证带 `Origin` 的 WebSocket 升级。
 - 鉴权失败不解析请求体：同上。审计：`webapi-auth` 记录里是来源、原因、方法和路径，没有 key 和请求体（`src/security/types.ts`）。
 - 污染的 JSON、超大请求体、错误的媒体类型：同一个测试里分别得到 400、413、415，且都是 API 的错误格式。
 

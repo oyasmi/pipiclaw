@@ -107,6 +107,25 @@ with client.responses.connect() as connection:
 
 被 steer 的 Response 以 `response.incomplete`（`incomplete_details.reason: "steered"`）结束，后续事件属于新的 Response，它的 `previous_response_id` 指向原来的那个。
 
+### 浏览器前端（TCP）
+
+浏览器可以直接通过 HTTP 调用 TCP 入口，包括 `stream: true` 的 SSE 流。服务端允许任意来源（`Access-Control-Allow-Origin: *`），支持无需 key 的 `OPTIONS` 预检，并允许预检请求中声明的请求头，包括 `Authorization`、`Content-Type` 和 SDK 自带的请求头。实际 API 请求仍必须携带 bearer key。
+
+```js
+const response = await fetch("http://127.0.0.1:8787/v1/responses", {
+  method: "POST",
+  credentials: "omit",
+  headers: {
+    Authorization: "Bearer pk_…",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ model: "pipiclaw", input: "你好" }),
+});
+const result = await response.json();
+```
+
+鉴权使用显式 bearer key，不使用 Cookie；前端不要设置 `credentials: "include"`。成功、错误及 SSE 响应都带 CORS 头，前端也能读取限流响应的 `Retry-After`。预检机制见 [Fetch 标准](https://fetch.spec.whatwg.org/#http-cors-protocol)。
+
 ### JavaScript（走本机 socket，不需要 key）
 
 ```js
@@ -199,7 +218,7 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 |---|---|
 | 400 | 参数错误（`unknown_parameter`、`unsupported_parameter`、`unsupported_value`、`invalid_value`、`missing_required_parameter` 等），`param` 指向字段 |
 | 401 | 缺少或无效的 key（`invalid_api_key`） |
-| 403 | 带了 `Origin` 头、`Host` 不对，或工位不在 key 的 `desks` 内 |
+| 403 | `Host` 不对，或工位不在 key 的 `desks` 内 |
 | 404 | 资源不存在或不属于这把 key |
 | 413 | 请求体超过 8 MB |
 | 429 | 限流或队列满，带 `Retry-After` |
@@ -211,8 +230,8 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 
 - **一把 key 的权限等于宿主机上的 shell 权限**（agent 有 `bash`，受[安全模型](./security.md)的路径和命令守卫约束）。给它的人要和给 shell 的人一样可信。本机 socket 的访问范围等于运行 daemon 的系统用户。
 - 默认只监听本机 socket；TCP 要显式打开。非 loopback 且不配 `tls` 时是明文 HTTP，key 会明文过网络——只在 TLS 由前置反向代理终止、或可信内网中这样用。
-- 浏览器的跨站请求被挡掉：带 `Origin` 头的请求（包括 WebSocket 升级）一律 403，不提供 CORS；loopback TCP 还校验 `Host`，防 DNS rebinding。
-- 鉴权在读请求体**之前**完成，失败直接 401。key 只存 SHA-256，比较是常量时间的。
+- 允许带 `Origin` 头的请求（包括 WebSocket 升级）；HTTP 支持任意来源的 CORS，允许浏览器前端直接调用。loopback TCP 仍校验 `Host`，防 DNS rebinding。
+- `OPTIONS` 预检无需 key，不访问业务数据；实际请求在读请求体**之前**鉴权，失败直接 401。key 只存 SHA-256，比较是常量时间的。
 - 限制：请求体 8 MB、单个请求 30 秒内接收完、最多 64 个连接、TCP 上每个来源 IP 每分钟 300 次。
 - 审计：每个请求（主体、方法、路径、会话、状态码）和每次鉴权失败（来源、原因）都写进安全审计日志；日志里没有 key、请求体或输出。
 

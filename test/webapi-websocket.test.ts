@@ -17,7 +17,7 @@ describe("webapi WebSocket mode", () => {
 
 	async function connect(): Promise<{ ws: WebSocket; messages: Message[]; closed: Promise<number> }> {
 		const ws = new WebSocket(`ws://127.0.0.1:${harness.port}/v1/responses`, {
-			headers: { authorization: `Bearer ${harness.key}` },
+			headers: { authorization: `Bearer ${harness.key}`, origin: "https://client.example" },
 		});
 		const messages: Message[] = [];
 		ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
