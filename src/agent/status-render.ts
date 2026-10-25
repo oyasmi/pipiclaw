@@ -35,9 +35,11 @@ export function renderStatus(options: RenderStatusOptions): string {
 	}
 	const lines = [`**状态** · ${runState}`];
 
-	if (runner) {
+	const snapshot = runner?.getStatusSnapshot();
+	if (runner && !snapshot) {
+		lines.push("- 模型：会话正在启动，稍后再试");
+	} else if (runner && snapshot) {
 		try {
-			const snapshot = runner.getStatusSnapshot();
 			let modelLine = `- 模型：\`${snapshot.model}\`（思考档位 \`${snapshot.thinkingLevel}\`）`;
 			if (snapshot.fallback) {
 				const until = new Date(snapshot.fallback.cooldownUntilMs);

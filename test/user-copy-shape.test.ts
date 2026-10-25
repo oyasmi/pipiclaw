@@ -385,6 +385,9 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			}),
 		} as unknown as AgentRunner;
 		expectUserCopyShape("/status", renderStatus({ runner, version: "1.0.0", uptimeMs: 90_061_000 }));
+		// Runner exists but its SDK session is still being built: no snapshot, no throw.
+		const starting = { isBusy: () => false, getStatusSnapshot: () => undefined } as unknown as AgentRunner;
+		expect(renderStatus({ runner: starting, version: "1.0.0", uptimeMs: 1000 })).not.toContain("不可用");
 
 		const summary = {
 			entryCount: 3,

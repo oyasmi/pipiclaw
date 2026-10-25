@@ -68,7 +68,8 @@ export interface AgentRunner {
 	queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
-	getStatusSnapshot(): RunnerStatusSnapshot;
+	/** `undefined` while the SDK session is still being built. */
+	getStatusSnapshot(): RunnerStatusSnapshot | undefined;
 	/** `/context`: prompt/tool-schema accounting for the live session (spec 025 §9). */
 	renderContextReport(args?: string): string;
 	/** `/subagents list`'s role-directory health tail (spec 040, D6): whatever this runner has

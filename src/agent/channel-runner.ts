@@ -463,7 +463,9 @@ export class ChannelRunner implements AgentRunner {
 		};
 	}
 
-	getStatusSnapshot(): RunnerStatusSnapshot {
+	getStatusSnapshot(): RunnerStatusSnapshot | undefined {
+		// The runner exists before its SDK session does (first message of a fresh channel).
+		if (!this.host.sessionInitialized) return undefined;
 		const model = this.session.model ?? this.models.activeModel;
 		const contextTokens = this.session.getContextUsage()?.tokens;
 		return {
