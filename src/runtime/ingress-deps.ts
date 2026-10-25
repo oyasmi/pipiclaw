@@ -29,6 +29,7 @@ export interface IngressOptions {
 }
 
 export interface IngressDeps {
+	requestExecution?: import("./request-execution.js").RequestExecution;
 	options: IngressOptions;
 	transports: TransportRegistry;
 	store: ChannelStore;

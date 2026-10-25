@@ -28,6 +28,8 @@ import { buildIncrementalMemorySourceWindow } from "./source-window.js";
 export type ConsolidationReason = "new-session" | "shutdown";
 
 export interface MemoryLifecycleOptions {
+	/** Request-owned sessions must never reflect imported client history. */
+	enabled?: boolean;
 	/** The conversation whose session this lifecycle reflects; its memory lands in the desk. */
 	conversation: DeskConversation;
 	workspaceDir: string;
@@ -54,6 +56,7 @@ export class MemoryLifecycle {
 
 	createExtensionFactory(): ExtensionFactory {
 		return (pi) => {
+			if (this.options.enabled === false) return;
 			pi.on("session_compact", async (event: SessionCompactEvent) => {
 				this.handleSessionCompact(event);
 			});
@@ -74,18 +77,21 @@ export class MemoryLifecycle {
 	}
 
 	noteToolCall(): void {
+		if (this.options.enabled === false) return;
 		this.durableDirty = true;
 		this.durableRevision++;
 		this.recordActivity("tool-call");
 	}
 
 	noteCompletedAssistantTurn(): void {
+		if (this.options.enabled === false) return;
 		this.durableDirty = true;
 		this.durableRevision++;
 		this.recordActivity("assistant-turn-completed");
 	}
 
 	async flushForShutdown(): Promise<void> {
+		if (this.options.enabled === false) return;
 		await this.resumeBoundaryReflect();
 		// Let any detached new-session reflect run finish (and update the durable checkpoint)
 		// before deciding whether a final flush is still needed.
@@ -231,6 +237,7 @@ export class MemoryLifecycle {
 
 	/** The agent's bounded compaction operation awaits only durable snapshot persistence. */
 	async prepareCompaction(event: SessionBeforeCompactEvent): Promise<void> {
+		if (this.options.enabled === false) return;
 		await enqueueBoundaryReflectWork(
 			this.options.conversation,
 			event.branchEntries,
@@ -245,6 +252,7 @@ export class MemoryLifecycle {
 	}
 
 	private startBoundaryReflect(): void {
+		if (this.options.enabled === false) return;
 		if (!this.options.appHomeDir) return;
 		this.backgroundNewSessionReflect = drainBoundaryReflectWork({
 			conversation: this.options.conversation,
@@ -270,6 +278,7 @@ export class MemoryLifecycle {
 
 	/** Snapshot the outgoing state for an out-of-band `/new` before its runner is retired. */
 	noteNewSessionBoundary(): void {
+		if (this.options.enabled === false) return;
 		// Snapshot the outgoing session synchronously: the switch has not happened yet, so
 		// getMessages()/getSessionEntries() still reference the session about to be replaced.
 		// Once we yield, this.session is rebound to the new (empty) session and the snapshot
@@ -308,6 +317,7 @@ export class MemoryLifecycle {
 	}
 
 	private recordActivity(kind: MemoryActivityEvent["kind"]): void {
+		if (this.options.enabled === false) return;
 		const now = new Date();
 		const event: MemoryActivityEvent = {
 			kind,

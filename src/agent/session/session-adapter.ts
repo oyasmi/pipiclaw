@@ -110,7 +110,10 @@ export class SessionRetryAttempt<T extends Pick<AgentSession, "sessionManager" |
 	private readonly prefix: string[];
 	private retryBranch: string[] | undefined;
 
-	constructor(readonly session: T) {
+	constructor(
+		readonly session: T,
+		private readonly continuation = false,
+	) {
 		this.manager = session.sessionManager;
 		this.sessionId = session.sessionManager.getSessionId();
 		this.prefix = session.sessionManager.getBranch().map((entry) => entry.id);
@@ -139,7 +142,11 @@ export class SessionRetryAttempt<T extends Pick<AgentSession, "sessionManager" |
 				const message = entry.message;
 				if (message.role === "system") continue;
 				if (message.role === "user" && errors.length === 0) users.push(entry.id);
-				else if (message.role === "assistant" && users.length === 1 && message.stopReason === "error") {
+				else if (
+					message.role === "assistant" &&
+					users.length === (this.continuation ? 0 : 1) &&
+					message.stopReason === "error"
+				) {
 					if (
 						message.content.some((part) => part.type === "toolCall" || (part.type === "text" && part.text.trim()))
 					) {
@@ -153,7 +160,7 @@ export class SessionRetryAttempt<T extends Pick<AgentSession, "sessionManager" |
 			} else if (!["model_change", "thinking_level_change", "usage"].includes(entry.type)) return null;
 		}
 		if (users.length === 0 && errors.length === 0) return { kind: "unsubmitted", targets: [] };
-		if (users.length !== 1 || errors.length === 0) return null;
+		if (users.length !== (this.continuation ? 0 : 1) || errors.length === 0) return null;
 		const targets = [...users, ...errors];
 		const projection = manager.buildSessionProjection();
 		// Even an already omitted entry must have identifiable provenance.

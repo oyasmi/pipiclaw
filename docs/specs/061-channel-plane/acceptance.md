@@ -1,5 +1,7 @@
 # Spec 061 验收记录
 
+> 上下文与保存语义已由 [spec 062](../062-responses-context/design.md) 更新：支持客户端历史重放、store:false、请求级 instructions 与响应分支；以下保留 061 的初始设计/验收记录。
+
 日期：2026-10-24。分支 `feat/channel-plane`，基线 `master` 的 `d6d04fb`。**R4（在真实 `~/.pipiclaw` 上线）未执行**，需要用户明确批准并在场。
 
 ## 1. 门禁

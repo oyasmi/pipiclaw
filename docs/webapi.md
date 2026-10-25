@@ -4,7 +4,7 @@
 > **前置阅读**：[配置指南](./configuration.md)（`channel.json`）、[安全模型](./security.md)。
 > **读完你会得到**：如何打开 Web API、如何鉴权、每个端点和字段的取舍、与 OpenAI Responses 规范的映射，以及能直接运行的 Python / JS 示例。
 
-Web API 是 Pipiclaw 的第二个渠道（与钉钉并列）。它的形状是 **OpenAI Responses API**：用官方 `openai` SDK（Python、JS 等）就能连上，一次请求是一条消息，一个 Response 是这条消息的结果；会话（conversation）就是一个频道，和钉钉里的一个私聊或群一样，绑定在某个工位上，共享该工位的记忆、任务和文件。
+Web API 是 Pipiclaw 的第二个渠道（与钉钉并列）。它的形状是 **OpenAI Responses API**：用官方 `openai` SDK（Python、JS 等）就能连上，一次请求生成一个 Response。支持客户端重放历史、用 `previous_response_id` 接续响应，以及用 `conversation` 维护服务端会话。显式会话是一个频道，绑定工位并使用其记忆、任务和文件；不带会话标识的请求使用独立内存会话。
 
 终端界面（`pipiclaw tui`）也是这个 API 的客户端，用的是同一个本机 socket。
 
@@ -168,6 +168,42 @@ ws.send({ type: "response.create", model: "pipiclaw", input: "你好" });
 
 其他路径和方法（`DELETE`、会话 item 的增删改、`/files` 等）返回 404。
 
+## 上下文管理
+
+每个会话选择一种主要方式，客户端不需要 Pipiclaw 专用参数：
+
+| 方式 | 本轮请求 | 行为 |
+|---|---|---|
+| 客户端管理历史 | 历史消息 + 本轮消息，不传两种标识 | 本次 input 是完整上下文，不自动继承其他请求 |
+| 响应链 | previous_response_id + 本轮输入 | 接续指定已保存响应，支持从旧响应分支 |
+| 服务端会话 | conversation + 本轮输入 | 服务端维护历史，同会话请求排队 |
+
+```python
+# 通用客户端：历史由客户端保存，角色无需过滤。
+response = client.responses.create(
+    model="pipiclaw", store=False, instructions="请用中文回答。",
+    input=[
+        {"role": "user", "content": "我正在修改登录模块。"},
+        {"role": "assistant", "content": "需要排查哪个问题？"},
+        {"role": "user", "content": "继续排查重定向。"},
+    ],
+)
+
+# 响应链：保存不等于自动接续，第二轮显式引用第一轮。
+first = client.responses.create(model="pipiclaw", input="检查登录模块。")
+second = client.responses.create(model="pipiclaw", previous_response_id=first.id, input="接着检查重定向。")
+
+# 服务端会话：只提交本轮输入，保存并复用 conversation.id。
+conversation = client.conversations.create()
+response = client.responses.create(model="pipiclaw", conversation=conversation.id, input="检查登录模块。")
+```
+
+`store` 默认 true，控制响应资源的保存、检索和后续引用；不负责自动关联请求。独立请求的 Response.conversation 为 null。`store=False` 的独立请求不保存聊天会话或响应快照，不自动提炼回放历史，结束后 retrieve/接链返回 404；它仍会执行明确要求的工具操作，审计和用量独立记录。
+
+显式 conversation 即使使用 store:false 也会保存会话 items，响应资源仍不可检索。background:true 要求 store:true。instructions 仅作用于当前生成及工具迭代，接链时不会继承，下一轮需要时再次传入。不要同时发送两种会话标识；显式会话中重复发送完整历史会将它们再次追加。
+
+新的独立请求使用 key 的第一个授权工位（本机 socket 使用 default）；响应链接续原响应的工位并重新检查授权，保留文件、命令、搜索等工具及守卫；持久任务、事件、委派、后台 shell 和 WebSocket steering 需要显式 conversation。普通前台工具的文件修改不因 store:false 而回滚。无会话标识的字符串按模型输入处理，原生斜杠命令使用显式会话；TUI 已处理这一点。
+
 ## 请求字段
 
 Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字拒绝**，不会悄悄忽略。
@@ -175,18 +211,18 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 | 字段 | 处理 |
 |---|---|
 | `model` | 必须是 `"pipiclaw"` |
-| `input` | 字符串，或 `role: "user"` 的 `message` 数组，`content` 为字符串或 `input_text` / `input_image` / `input_file` 数组 |
+| `input` | 字符串，或 user/assistant/system/developer 的 message 数组；用户支持 input_text/input_image/input_file，其余角色支持文本，assistant 可回放 output_text 和 phase |
 | `conversation` | 会话 id 或 `{ "id" }` |
-| `previous_response_id` | 不能和 `conversation` 同用；只能指向所属会话**最新**的 Response（不支持分支） |
-| 都没传 | 隐式新建会话，Response 的 `conversation` 字段带上它的 id |
+| `previous_response_id` | 不能和 `conversation` 同用；指向调用方可访问、已保存并结束的 Response，支持分支 |
+| 都没传 | 以本次 input 独立生成，不创建持久会话；Response.conversation 为 null |
 | `stream`、`background`、`stream_options` | 支持；WebSocket 上不能出现 |
-| `metadata`、`store: true` | 支持；`store: false` 拒绝（会话由服务端保存） |
+| `metadata`、`store` | 支持；store 默认 true，false 不保存可检索的响应资源；显式会话仍保存 items |
 | `user`、`safety_identifier`、`prompt_cache_key`、`service_tier` | 接受并忽略（只是提示） |
-| `instructions` | 拒绝：持久指令写进工位的 `AGENTS.md` |
+| `instructions` | 支持字符串，仅作用于本次生成；不修改工位 AGENTS.md |
 | `tools`、`tool_choice`、`parallel_tool_calls`、`max_tool_calls`、`prompt`、`text`、`reasoning`、`temperature`、`top_p`、`top_logprobs`、`max_output_tokens`、`truncation`、`context_management`、`include`、`moderation`、`access_programs`、`prompt_cache_options`、`prompt_cache_retention` | 不传或 `null` 可以，其他值拒绝：由 Pipiclaw 的 agent 配置决定 |
 | 其他字段 | 拒绝（`unknown_parameter`） |
 
-`input` 里的 `assistant` / `system` / `developer` 角色、`function_call_output`、`item_reference` 等一律拒绝：历史由服务端持有，客户端工具不支持。
+`input` 可包含历史 assistant 消息、system/developer 指令，以及 Pipiclaw 自己输出的 reasoning 摘要和 mcp_call。历史工具记录作为观察信息提供给模型，不会执行。客户端工具闭环（function_call_output）、item_reference 和加密 reasoning 等仍未实现，明确返回 400。
 
 **图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤5 MB，最多 9 张），`input_file` 用 `file_data` 加 `filename`（≤5 MB）。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。
 
@@ -237,7 +273,7 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 
 ## 已知限制
 
-- 不逐 token 流式；不支持客户端工具、结构化输出、分支（`previous_response_id` 指向旧 Response）、Files API、`instructions`。
-- 会话和 Response 一直保留，没有保留期和清理。
+- 不逐 token 流式；不支持客户端工具、结构化输出、Files API、加密 reasoning 回放。
+- 显式会话及 store:true 的响应一直保留，没有保留期和清理；独立 store:false 请求仅在运行时内存中保留到清理窗口结束。
 - 一个会话同一时刻只有一个回合在跑；同一个会话的并发请求排队，不并行。
 - 重启不接续进行中的回合，也不重放已断开的非 background 流。

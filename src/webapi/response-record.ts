@@ -11,13 +11,20 @@ import type {
 	ResponseStatus,
 	ResponseUsage,
 } from "openai/resources/responses/responses";
+import type { ContextMessage } from "../channel/turn-context.js";
 import type { UsageTotals } from "../usage/totals.js";
 
 export type OutputItem = ResponseOutputItem;
 /** A user message the client sent, as `input_items` and the conversation's items list show it. */
-export type InputItem = ResponseInputMessageItem;
+export type InputItem = ResponseInputMessageItem | ResponseOutputMessage;
 
 export interface ResponseRecord {
+	continuation?: ContextMessage[];
+	desk?: string;
+	store?: boolean;
+	request_scoped?: boolean;
+	context?: ContextMessage[];
+	instructions?: string;
 	id: string;
 	conversation_id: string;
 	/** The key name (or `local`) that created the conversation; only it (and `local`) may read the response. */
@@ -66,7 +73,10 @@ export function outputTextOf(output: readonly OutputItem[]): string {
 }
 
 /** The API's Response object for a record. `skeleton` shows it as it looked when it was created. */
-export function toApiResponse(record: ResponseRecord, options: { skeleton?: ResponseStatus } = {}): ApiResponse {
+export function toApiResponse(
+	record: ResponseRecord,
+	options: { skeleton?: ResponseStatus } = {},
+): ApiResponse & { store: boolean } {
 	const skeleton = options.skeleton;
 	const output = skeleton ? [] : record.output;
 	return {
@@ -81,13 +91,14 @@ export function toApiResponse(record: ResponseRecord, options: { skeleton?: Resp
 		usage: skeleton || !record.usage ? undefined : record.usage,
 		error: skeleton || !record.error ? null : record.error,
 		incomplete_details: skeleton || !record.incomplete_details ? null : (record.incomplete_details as never),
-		conversation: { id: record.conversation_id },
+		conversation: record.request_scoped ? null : { id: record.conversation_id },
+		store: record.store !== false,
 		previous_response_id: record.previous_response_id,
 		background: record.background,
 		metadata: record.metadata,
 		// Pipiclaw's own configuration decides these; the API reports their neutral values.
 		access_programs: null,
-		instructions: null,
+		instructions: record.instructions ?? null,
 		parallel_tool_calls: true,
 		temperature: null,
 		tool_choice: "auto",

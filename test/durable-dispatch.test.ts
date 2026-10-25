@@ -54,7 +54,13 @@ describe("DurableDispatchService", () => {
 		});
 		await service.dispatch(event());
 
-		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
+		let notifyFailure!: () => void;
+		const failureLogged = new Promise<void>((resolve) => {
+			notifyFailure = resolve;
+		});
+		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation((event) => {
+			if (event === "dispatch.drain.failed") notifyFailure();
+		});
 		const rejections: unknown[] = [];
 		const onRejection = (reason: unknown): void => {
 			rejections.push(reason);
@@ -64,7 +70,7 @@ describe("DurableDispatchService", () => {
 			chmodSync(stateDir, 0o555); // every atomic write into this directory now fails
 			accept = true;
 			service.start();
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			await failureLogged;
 			expect(rejections).toEqual([]);
 			expect(warnSpy).toHaveBeenCalledWith("dispatch.drain.failed", expect.any(String), expect.anything());
 

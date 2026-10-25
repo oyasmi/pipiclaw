@@ -120,6 +120,8 @@ flowchart TB
 - **启用**：`channel.json` 的 `dingtalk` / `webapi` 段各有 `enabled`；`runtime/transports.ts` 只在对应渠道打开时才动态加载它的代码。频道所属的渠道没有启用时，该频道不可达：任务驱动和事件跳过它，待投递记录保留。
 - **终端**不是渠道：它是 Web API 本地 socket 的客户端（`src/tui/`）；没有 daemon 时由 `bootstrapEmbedded` 在本进程里起一个只开 socket 的运行时。
 
+Web API 的独立生成通过 `runtime/request-execution.ts` 复用 runner，以内存会话执行，不创建频道绑定或聊天归档。结构化历史由 `channel/turn-context.ts` 传递；显式会话继续走原有队列。响应保存与上下文选择独立，见 spec 062。
+
 Web API 的协议、字段策略和安全默认值见 [webapi.md](./webapi.md)。
 
 ## 4. 一条消息的生命周期
@@ -384,7 +386,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
     ├── auth/identity.json         # OpenAI OAuth 安装身份（首次登录创建）
     ├── daemon.lock                # 一个 app home 同时只有一个运行时进程
     ├── dingtalk/conversations.json # 各频道的钉钉路由元数据
-    ├── webapi/                    # Web API：api.sock（0600）、conversations/<conv_id>/（会话与 Response 快照）
+    ├── webapi/                    # Web API：api.sock（0600）、conversations/<conv_id>/（会话与 Response 快照）、standalone.jsonl（独立响应快照）
     ├── tui/conversations.json     # 终端客户端：工位 → 上次用的 Web API 会话
     ├── dispatch/                  # durable-dispatch 外发箱
     ├── events/history.jsonl       # 事件审计

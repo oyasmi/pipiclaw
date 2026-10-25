@@ -185,7 +185,10 @@ export class TurnPipeline {
 			(!attempt || this.host.session === attempt.session);
 		const submit = async (session: AgentSession, text: string) => {
 			const revision = this.host.compaction.revision;
-			await session.prompt(text, turn.images.images.length > 0 ? { images: turn.images.images } : undefined);
+			if (info.context) {
+				this.runState.userMessagesStarted = 1;
+				await this.host.promptContext(info.context);
+			} else await session.prompt(text, turn.images.images.length > 0 ? { images: turn.images.images } : undefined);
 			turn.promptSubmitted = true;
 			if (turn.bootstrapPrepared && revision === this.host.compaction.revision)
 				this.host.firstTurnMemoryBootstrapPending = false;
@@ -195,7 +198,8 @@ export class TurnPipeline {
 				try {
 					await this.host.runPrompt(async () => {
 						if (!canRetry()) return;
-						attempt = new SessionRetryAttempt(this.session);
+						if (info.context) this.host.importContext(info.context);
+						attempt = new SessionRetryAttempt(this.session, Boolean(info.context));
 						await submit(attempt.session, text);
 					});
 				} catch (err) {

@@ -21,6 +21,9 @@ export interface InboundMessage {
 	 * socket). The first entry is the sender's default desk: an unbound channel is bound to it.
 	 */
 	allowedDesks?: readonly string[];
+	context?: import("./turn-context.js").TurnContext;
+	/** Runtime-derived execution desk for a saved response continuation. */
+	desk?: string;
 }
 
 /** `index` is the N of the `[图片N]` / `[文件N]` marker the attachment belongs to. */
@@ -41,6 +44,7 @@ export type IngressRejection =
 	| { code: "control_command"; command: "stop" | "steer" | "followup" }
 	| { code: "desk_not_allowed"; desk: string }
 	| { code: "queue_full" }
+	| { code: "request_capacity" }
 	| { code: "shutting_down" };
 
 export type SteerResult =
@@ -58,6 +62,8 @@ export interface StopOutcome {
 
 export interface Ingress {
 	receive(message: InboundMessage): Promise<IngressResult>;
+	/** Isolated generation: no channel binding, transcript archive, or automatic reflection. */
+	execute?(message: InboundMessage): Promise<IngressResult>;
 	/** Inject `message` into the turn running on `channelId`. */
 	steer(channelId: string, message: InboundMessage): Promise<SteerResult>;
 	/** The same as `/stop`. */

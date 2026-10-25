@@ -7,8 +7,9 @@
  * not have, and a URL would make the server fetch whatever a caller names (SSRF), so both are
  * refused. A base64 payload is measured before it is decoded.
  */
-import { MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES_PER_MESSAGE } from "../channel/attachments.js";
+import { MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES_PER_MESSAGE, sniffImageMimeType } from "../channel/attachments.js";
 import type { InboundAttachment } from "../channel/ingress.js";
+import type { ContextMessage, ContextPart } from "../channel/turn-context.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { badRequest } from "./errors.js";
 import { newId } from "./ids.js";
@@ -16,6 +17,7 @@ import { MAX_INBOUND_FILE_BYTES } from "./limits.js";
 import type { InputItem } from "./response-record.js";
 
 export interface ParsedInput {
+	context: ContextMessage[];
 	/** The text the agent sees, with a marker at each attachment's place. */
 	text: string;
 	attachments: InboundAttachment[];
@@ -23,7 +25,7 @@ export interface ParsedInput {
 	items: InputItem[];
 }
 
-type Part = InputItem["content"][number];
+type Part = import("openai/resources/responses/responses").ResponseInputContent;
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const DATA_URL = /^data:([^,;]*)((?:;[^,;]*)*),(.*)$/s;
@@ -66,6 +68,7 @@ function parseContent(content: unknown, itemParam: string, state: { images: numb
 		const param = `${itemParam}.content[${index}]`;
 		if (!isPlainObject(part)) throw badRequest("invalid_value", "A content part must be an object.", param);
 		switch (part.type) {
+			case "output_text":
 			case "input_text": {
 				if (typeof part.text !== "string")
 					throw badRequest("invalid_value", "`text` must be a string.", `${param}.text`);
@@ -144,53 +147,125 @@ function parseContent(content: unknown, itemParam: string, state: { images: numb
 	return { parts, attachments, text };
 }
 
+/** Normalize replayable output items as historical observations, never tool invocations. */
+function replayMessage(entry: Record<string, unknown>, param: string): Record<string, unknown> {
+	if (entry.type === "reasoning") {
+		if (entry.encrypted_content !== undefined && entry.encrypted_content !== null)
+			throw badRequest(
+				"unsupported_parameter",
+				"Encrypted reasoning cannot be replayed here; send message history or use `previous_response_id`.",
+				`${param}.encrypted_content`,
+			);
+		if (
+			!Array.isArray(entry.summary) ||
+			entry.summary.some((p) => !isPlainObject(p) || p.type !== "summary_text" || typeof p.text !== "string")
+		)
+			throw badRequest("invalid_value", "Send reasoning summaries as summary_text parts.", param);
+		return {
+			role: "assistant",
+			phase: "commentary",
+			content: entry.summary.map((p) => ({ type: "input_text", text: (p as Record<string, unknown>).text })),
+		};
+	}
+	if (entry.type === "mcp_call" && entry.server_label === "pipiclaw") {
+		if (
+			typeof entry.name !== "string" ||
+			typeof entry.arguments !== "string" ||
+			!(entry.output === null || typeof entry.output === "string")
+		)
+			throw badRequest("invalid_value", "Replay the complete mcp_call item returned by Pipiclaw.", param);
+		return {
+			role: "assistant",
+			phase: "commentary",
+			content: JSON.stringify({
+				historical_tool: entry.name,
+				arguments: entry.arguments,
+				output: entry.output,
+				error: entry.error,
+			}),
+		};
+	}
+	return entry;
+}
+
 export function parseInput(input: unknown, param = "input"): ParsedInput {
+	if (typeof input !== "string" && !Array.isArray(input))
+		throw badRequest("invalid_value", "`input` must be a string or an array of messages.", param);
+	const entries: unknown[] = typeof input === "string" ? [{ role: "user", content: input }] : input;
+	if (entries.length === 0) throw badRequest("invalid_value", "`input` must not be empty.", param);
 	const items: InputItem[] = [];
 	const attachments: InboundAttachment[] = [];
+	const context: ContextMessage[] = [];
 	const texts: string[] = [];
 	const state = { images: 0, files: 0 };
-
-	const messages: Array<{ content: unknown; param: string }> =
-		typeof input === "string"
-			? [{ content: input, param }]
-			: Array.isArray(input)
-				? input.map((entry, index) => {
-						const itemParam = `${param}[${index}]`;
-						if (!isPlainObject(entry))
-							throw badRequest("invalid_value", "An input item must be an object.", itemParam);
-						if (entry.type !== undefined && entry.type !== "message") {
-							throw badRequest(
-								"unsupported_value",
-								"Only `message` items are supported: the server keeps the history and runs its own tools.",
-								`${itemParam}.type`,
-							);
-						}
-						if (entry.role !== "user") {
-							throw badRequest(
-								"unsupported_value",
-								"Only `role: \"user\"` messages are supported: put instructions in the desk's AGENTS.md; the history is the server's.",
-								`${itemParam}.role`,
-							);
-						}
-						return { content: entry.content, param: itemParam };
-					})
-				: (() => {
-						throw badRequest("invalid_value", "`input` must be a string or an array of messages.", param);
-					})();
-
-	if (Array.isArray(input) && input.length === 0) {
-		throw badRequest("invalid_value", "`input` must not be empty.", param);
-	}
-	for (const message of messages) {
-		const parsed = parseContent(message.content, message.param, state);
+	for (const [index, value] of entries.entries()) {
+		const itemParam = typeof input === "string" ? param : `${param}[${index}]`;
+		if (!isPlainObject(value)) throw badRequest("invalid_value", "An input item must be an object.", itemParam);
+		const entry = replayMessage(value, itemParam);
+		if (entry.type !== undefined && entry.type !== "message")
+			throw badRequest(
+				"unsupported_value",
+				"Send message items or replay Pipiclaw's response output; client-side tool execution is not supported.",
+				`${itemParam}.type`,
+			);
+		const role = entry.role;
+		if (role !== "user" && role !== "assistant" && role !== "system" && role !== "developer")
+			throw badRequest(
+				"unsupported_value",
+				"`role` must be user, assistant, system, or developer.",
+				`${itemParam}.role`,
+			);
+		if (entry.phase !== undefined && entry.phase !== "commentary" && entry.phase !== "final_answer")
+			throw badRequest("invalid_value", "`phase` must be commentary or final_answer.", `${itemParam}.phase`);
+		if (
+			role !== "user" &&
+			Array.isArray(entry.content) &&
+			entry.content.some((p) => isPlainObject(p) && p.type !== "input_text" && p.type !== "output_text")
+		)
+			throw badRequest(
+				"unsupported_value",
+				"Non-user messages support text content only; attach files and images to a user message.",
+				`${itemParam}.content`,
+			);
+		const parsed = parseContent(entry.content, itemParam, state);
 		attachments.push(...parsed.attachments);
 		texts.push(parsed.text);
-		items.push({ id: newId("msg"), type: "message", role: "user", status: "completed", content: parsed.parts });
+		let attachmentIndex = 0;
+		const parts: ContextPart[] = parsed.parts.flatMap((p): ContextPart[] => {
+			if (p.type === "input_text") return [{ type: "text", text: p.text }];
+			const attachment = parsed.attachments[attachmentIndex++];
+			if (!attachment) return [];
+			if (attachment.kind === "image")
+				return [
+					{
+						type: "image",
+						data: attachment.data.toString("base64"),
+						mimeType: sniffImageMimeType(attachment.data) ?? "image/png",
+					},
+				];
+			return [{ type: "text", text: `[File: ${attachment.fileName}]\n${attachment.data.toString("utf8")}` }];
+		});
+		context.push({
+			role,
+			content: parts,
+			...(entry.phase ? { phase: entry.phase as "commentary" | "final_answer" } : {}),
+		});
+		items.push(
+			role === "assistant"
+				? {
+						id: newId("msg"),
+						type: "message",
+						role,
+						status: "completed",
+						...(entry.phase ? { phase: entry.phase as "commentary" | "final_answer" } : {}),
+						content: parsed.parts.flatMap((p) =>
+							p.type === "input_text" ? [{ type: "output_text" as const, text: p.text, annotations: [] }] : [],
+						),
+					}
+				: { id: newId("msg"), type: "message", role, status: "completed", content: parsed.parts },
+		);
 	}
-
 	const text = texts.join("\n");
-	if (!text.trim() && attachments.length === 0) {
-		throw badRequest("invalid_value", "`input` is empty.", param);
-	}
-	return { text, attachments, items };
+	if (!text.trim() && attachments.length === 0) throw badRequest("invalid_value", "`input` is empty.", param);
+	return { text, attachments, items, context };
 }

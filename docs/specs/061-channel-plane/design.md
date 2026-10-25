@@ -1,5 +1,7 @@
 # 061 渠道层与 Web API：钉钉和 Responses API 并列为两个渠道
 
+> 上下文与保存语义已由 [spec 062](../062-responses-context/design.md) 更新：支持客户端历史重放、store:false、请求级 instructions 与响应分支；以下保留 061 的初始设计/验收记录。
+
 | 字段 | 内容 |
 |---|---|
 | 状态 | 设计已确认，待实施；实施顺序与验收见[实施计划](./plan.md) |

@@ -253,6 +253,8 @@ export type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_star
 export const MAX_USER_MESSAGE_CHARS = 12_000;
 
 export interface RunnerFactoryPaths {
+	/** Request-owned session: no persistent transcript or automatic memory maintenance. */
+	requestScoped?: boolean;
 	jobManager: DeskJobManager;
 	runManager: SubAgentRunManager;
 	appHomeDir: string;

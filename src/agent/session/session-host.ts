@@ -12,7 +12,6 @@ import {
 	AgentSession,
 	AgentSessionRuntime,
 	type AgentSessionServices,
-	convertToLlm,
 	DefaultResourceLoader,
 	type ModelRegistry,
 	type ModelRuntime,
@@ -25,6 +24,7 @@ import { mkdir } from "fs/promises";
 import { dirname, join } from "path";
 import { commitActiveSessionRef, resolveActiveSessionFile } from "../../channel/active-session-store.js";
 import type { SendMedia } from "../../channel/transport.js";
+import type { TurnContext } from "../../channel/turn-context.js";
 import type { PipiclawSettingsManager } from "../../config/settings.js";
 import { loadToolsConfigWithDiagnostics } from "../../config/tools.js";
 import type { DeskConversation } from "../../desk/types.js";
@@ -56,8 +56,10 @@ import type { PromptBuildResult } from "../prompt/types.js";
 import type { RunState } from "../types.js";
 import { createCommandExtension } from "./command-extension.js";
 import { SessionCompaction } from "./compaction.js";
+import { RequestContextInput } from "./context-input.js";
 import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./event-guards.js";
 import type { ModelSelection } from "./model-selection.js";
+import { requestTools } from "./request-tools.js";
 import {
 	asSdkSettingsManager,
 	DEFAULT_MAIN_THINKING_LEVEL,
@@ -87,6 +89,7 @@ function isTaskSessionPath(sessionFile: string | undefined): boolean {
 }
 
 export interface SessionHostDeps {
+	requestScoped?: boolean;
 	conversation: DeskConversation;
 	workspaceDir: string;
 	appHomeDir: string;
@@ -117,6 +120,7 @@ export interface SessionHostDeps {
 }
 
 export class SessionHost {
+	private readonly contextInput = new RequestContextInput();
 	private readonly conversation: DeskConversation;
 	private readonly channelId: string;
 	private readonly deskDir: string;
@@ -230,6 +234,14 @@ export class SessionHost {
 
 	get agent(): Agent {
 		return this.session.agent;
+	}
+
+	importContext(context: TurnContext): void {
+		this.contextInput.import(this.session, context);
+	}
+
+	async promptContext(context: TurnContext): Promise<void> {
+		await this.contextInput.prompt(this.session, context, this.lastPromptBuild?.footer ?? "");
 	}
 
 	get sessionManager(): SessionManager {
@@ -612,7 +624,7 @@ export class SessionHost {
 				tools: [],
 				messages: sessionManager.buildSessionContext().messages,
 			},
-			convertToLlm,
+			convertToLlm: (messages) => this.contextInput.convert(messages),
 			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.models.activeModel),
 			streamFn: streamSimple,
 		});
@@ -710,17 +722,18 @@ export class SessionHost {
 			// one is already credited to the task when it settles.
 			getStepCost: () => ({ usd: this.runState.assistantUsage.cost.total, estimated: !this.runState.costKnown }),
 		});
-		this.currentTools = tools;
+		const active = this.deps.requestScoped ? requestTools(tools) : tools;
+		this.currentTools = active;
 		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.
 		// Warn where the prompt's own budget diagnostics are reported, once per tool rebuild.
-		const schemas = measureToolSchemas(tools);
+		const schemas = measureToolSchemas(active);
 		if (schemas.units > TOOL_SCHEMA_TARGET_UNITS) {
 			log.logWarn("agent.tools.schema_over_budget", "Tool schemas over budget", {
 				channelId: this.channelId,
 				reason: toolSchemaBudgetWarning(schemas),
 			});
 		}
-		return tools;
+		return active;
 	}
 
 	private rebuildSessionTools(): void {

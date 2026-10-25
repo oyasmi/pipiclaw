@@ -18,8 +18,9 @@ describe("create request policy", () => {
 		const rejected: Array<[Record<string, unknown>, string, string]> = [
 			[{ input: "x", tools: [] }, "unsupported_parameter", "tools"],
 			[{ input: "x", temperature: 0.2 }, "unsupported_parameter", "temperature"],
-			[{ input: "x", instructions: "be brief" }, "unsupported_parameter", "instructions"],
-			[{ input: "x", store: false }, "unsupported_value", "store"],
+			[{ input: "x", instructions: {} }, "invalid_value", "instructions"],
+			[{ input: "x", store: "false" }, "invalid_value", "store"],
+			[{ input: "x", store: false, background: true }, "invalid_value", "store"],
 			[{ input: "x", model: "gpt-5" }, "unsupported_value", "model"],
 			[{ input: "x", surprise: 1 }, "unknown_parameter", "surprise"],
 			[{ input: "x", stream_options: { include_obfuscation: true } }, "invalid_value", "stream_options"],
@@ -35,6 +36,13 @@ describe("create request policy", () => {
 				problem(() => validateCreateRequest(body, "http")),
 				JSON.stringify(body),
 			).toEqual({ code, param });
+		}
+		for (const transport of ["http", "websocket"] as const) {
+			for (const store of [true, false])
+				expect(validateCreateRequest({ input: "x", store, instructions: "be brief" }, transport)).toMatchObject({
+					store,
+					instructions: "be brief",
+				});
 		}
 		// null means "not set" to SDKs; hints are accepted and dropped.
 		expect(
@@ -75,11 +83,42 @@ describe("input", () => {
 			["image", 1],
 			["file", 1],
 		]);
+		const replay = parseInput([
+			{ role: "system", content: "system rule" },
+			{ role: "developer", content: "developer rule" },
+			{ role: "user", content: "first" },
+			{
+				role: "assistant",
+				phase: "final_answer",
+				content: [{ type: "output_text", text: "answer", annotations: [] }],
+			},
+			{
+				type: "mcp_call",
+				server_label: "pipiclaw",
+				name: "bash",
+				arguments: '{"command":"false"}',
+				output: "historic result",
+				error: null,
+			},
+			{ type: "reasoning", summary: [{ type: "summary_text", text: "historic reasoning" }] },
+			{ role: "user", content: "next" },
+		]);
+		expect(replay.context.map((m) => m.role)).toEqual([
+			"system",
+			"developer",
+			"user",
+			"assistant",
+			"assistant",
+			"assistant",
+			"user",
+		]);
+		expect(replay.context[3]).toMatchObject({ phase: "final_answer", content: [{ type: "text", text: "answer" }] });
 		expect(JSON.stringify(parsed.items)).not.toContain(Buffer.from("png-bytes").toString("base64"));
 	});
 
 	it("refuses what would make the server fetch or trust something it should not", () => {
 		const rejected: Array<[unknown, string]> = [
+			[[{ type: "reasoning", summary: [], encrypted_content: "opaque" }], "unsupported_parameter"],
 			[
 				[{ role: "user", content: [{ type: "input_image", image_url: "https://example.com/a.png" }] }],
 				"unsupported_value",
@@ -90,7 +129,7 @@ describe("input", () => {
 				[{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,@@@@" }] }],
 				"invalid_value",
 			],
-			[[{ role: "system", content: "x" }], "unsupported_value"],
+			[[{ role: "admin", content: "x" }], "unsupported_value"],
 			[[{ type: "function_call_output", output: "x" }], "unsupported_value"],
 			[[], "invalid_value"],
 			["   ", "invalid_value"],

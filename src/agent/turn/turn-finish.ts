@@ -12,6 +12,7 @@ import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import type { UsageLedger } from "../../usage/ledger.js";
 import { buildPromptManifest } from "../prompt/manifest.js";
+import { snapshotContext } from "../session/context-snapshot.js";
 import { getLastAssistantUsage } from "../session/event-guards.js";
 import type { ModelSelection } from "../session/model-selection.js";
 import type { SessionHost } from "../session/session-host.js";
@@ -26,6 +27,7 @@ function isSilentOutcome(outcome: FinalOutcome): outcome is { kind: "silent" } {
 }
 
 export interface TurnFinisherDeps {
+	requestScoped?: boolean;
 	conversation: DeskConversation;
 	host: SessionHost;
 	models: ModelSelection;
@@ -108,7 +110,7 @@ export class TurnFinisher {
 		// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
 		// string the provider actually received — base sections, pi's tail, and the boundary
 		// footer the prompt extension appends at before_agent_start.
-		if (process.env.PIPICLAW_DEBUG) {
+		if (process.env.PIPICLAW_DEBUG && !this.deps.requestScoped) {
 			const debugContext = {
 				systemPrompt: this.host.lastFinalPrompt ?? this.host.agent.state.systemPrompt,
 				promptManifest: this.host.lastPromptBuild
@@ -140,7 +142,11 @@ export class TurnFinisher {
 		await runQueue.drain();
 		// The transport turns this into its own ending: a closed card, a settled response, a
 		// delivered fallback for an answer that did not get through.
-		await ctx.finish(this.outcomeOf(fallbackAttempted, fallbackTargetRef));
+		await ctx.finish({
+			...this.outcomeOf(fallbackAttempted, fallbackTargetRef),
+			executionDesk: this.desk,
+			...(promptSubmitted ? { continuation: snapshotContext(this.host.session.messages) } : {}),
+		});
 
 		// Log usage summary. Gated on tokens as well as cost: a local (or pricing-less) model
 		// bills nothing, and skipping it here left both the log and the ledger empty.

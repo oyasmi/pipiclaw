@@ -33,6 +33,14 @@ describe("webapi store", () => {
 		await first.saveResponse(record("resp_1", conv, "in_progress"));
 		await first.saveResponse(record("resp_1", conv, "completed"));
 		await first.saveResponse(record("resp_2", conv, "in_progress"));
+		const standalone = {
+			...record("resp_standalone", `conv_${"b".repeat(32)}`, "in_progress"),
+			request_scoped: true,
+			store: true,
+		};
+		await first.saveResponse(standalone);
+		await first.saveResponse({ ...standalone, id: "resp_private", store: false });
+		expect(first.getResponse("resp_private")).toBeUndefined();
 		await first.close();
 		// A crash mid-write leaves a partial last line.
 		appendFileSync(join(dir, "conversations", conv, "responses.jsonl"), '{"id":"resp_3","conv');
@@ -44,6 +52,9 @@ describe("webapi store", () => {
 		]);
 		expect(second.getResponse("resp_2")?.error?.message).toMatch(/重启/);
 		expect(second.latestResponseId(conv)).toBe("resp_2");
+		expect(second.getResponse("resp_standalone")?.status).toBe("failed");
+		expect(second.getConversation(standalone.conversation_id)).toBeUndefined();
+		expect(second.getResponse("resp_private")).toBeUndefined();
 		await second.close();
 
 		// The failure was persisted: a third start neither changes nor re-appends it.

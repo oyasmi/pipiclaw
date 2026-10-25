@@ -44,6 +44,7 @@ interface EventBase {
 }
 
 export interface HumanEvent extends EventBase {
+	context?: import("./turn-context.js").TurnContext;
 	source: "human";
 	user: string;
 	userName: string;

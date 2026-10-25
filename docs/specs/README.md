@@ -39,3 +39,5 @@
 - 同步更新归档索引及引用链接；仍影响当前实现的取舍应保留在对应设计中。
 - Spec 中的完成状态不证明当前代码仍保持该行为，重大版本变更后以测试和当前架构文档复核。
 - 不从 spec 直接链接用户 Quickstart；用户路径必须经过 `README.md` 或 `docs/README.md`。
+
+- [062 — Responses 上下文与响应保存](062-responses-context/design.md)

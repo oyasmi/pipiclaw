@@ -80,6 +80,7 @@ export class WebApiStore {
 			this.conversations.set(conversation.id, conversation);
 			await this.readResponses(conversation.id);
 		}
+		await this.readResponses();
 		let interrupted = 0;
 		for (const record of this.responses.values()) {
 			if (isTerminal(record.status)) continue;
@@ -123,23 +124,30 @@ export class WebApiStore {
 		return undefined;
 	}
 
-	private async readResponses(conversationId: string): Promise<void> {
+	private async readResponses(conversationId?: string): Promise<void> {
+		const path = conversationId
+			? join(this.conversationDir(conversationId), "responses.jsonl")
+			: join(this.dir, "standalone.jsonl");
 		let text: string;
 		try {
-			text = await readFile(join(this.conversationDir(conversationId), "responses.jsonl"), "utf-8");
+			text = await readFile(path, "utf-8");
 		} catch {
 			return;
 		}
 		const ids: string[] = [];
 		// A crash can leave a partial last line; end it, or the next snapshot would be glued onto it and lost.
 		if (text.length > 0 && !text.endsWith("\n")) {
-			await appendFile(join(this.conversationDir(conversationId), "responses.jsonl"), "\n");
+			await appendFile(path, "\n");
 		}
 		for (const line of text.split("\n")) {
 			if (!line.trim()) continue;
 			try {
 				const record = JSON.parse(line) as ResponseRecord;
-				if (!isPlainObject(record) || typeof record.id !== "string" || record.conversation_id !== conversationId) {
+				if (
+					!isPlainObject(record) ||
+					typeof record.id !== "string" ||
+					(conversationId ? record.conversation_id !== conversationId : record.request_scoped !== true)
+				) {
 					throw new Error("not a response snapshot");
 				}
 				if (!this.responses.has(record.id)) ids.push(record.id);
@@ -151,7 +159,7 @@ export class WebApiStore {
 				});
 			}
 		}
-		this.order.set(conversationId, ids);
+		if (conversationId) this.order.set(conversationId, ids);
 	}
 
 	// ---- conversations ---------------------------------------------------------------------
@@ -213,9 +221,10 @@ export class WebApiStore {
 	 * later snapshot overtake it).
 	 */
 	saveResponse(record: ResponseRecord): Promise<void> {
+		if (record.request_scoped && record.store === false) return Promise.resolve();
 		const isNew = !this.responses.has(record.id);
 		this.responses.set(record.id, record);
-		if (isNew) {
+		if (isNew && !record.request_scoped) {
 			const ids = this.order.get(record.conversation_id) ?? [];
 			ids.push(record.id);
 			this.order.set(record.conversation_id, ids);
@@ -236,12 +245,15 @@ export class WebApiStore {
 
 	private appendSnapshot(record: ResponseRecord): Promise<void> {
 		return this.appender.appendStrict({
-			path: join(this.conversationDir(record.conversation_id), "responses.jsonl"),
+			path: record.request_scoped
+				? join(this.dir, "standalone.jsonl")
+				: join(this.conversationDir(record.conversation_id), "responses.jsonl"),
 			record,
 		});
 	}
 
 	async close(): Promise<void> {
+		await this.writes;
 		await this.appender.close();
 	}
 }

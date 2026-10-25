@@ -50,6 +50,7 @@ import { acquireDaemonLock, tryAcquireDaemonLock } from "./daemon-lock.js";
 import { DeskRuntime } from "./desk-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createIngress, type IngressService } from "./ingress.js";
+import { createRequestExecution } from "./request-execution.js";
 import { createShutdown } from "./shutdown.js";
 import { TaskDriver } from "./task-driver.js";
 import { createTaskSpawner } from "./task-spawn.js";
@@ -377,6 +378,26 @@ async function buildRuntimeContext(
 	const getTaskDriver = (): TaskDriverLike => taskDriver;
 
 	const ingress = createIngress({
+		requestExecution: createRequestExecution({
+			workspaceDir,
+			runners: channelRunners,
+			activeTasks,
+			transports,
+			store,
+			isShuttingDown,
+			createRunner: (conversation) =>
+				createRunner(conversation, {
+					requestScoped: true,
+					jobManager: jobs.get(conversation.desk),
+					runManager: runs.get(conversation.desk),
+					appHomeDir,
+					workspaceDir,
+					authConfigPath: options.paths.authConfigPath,
+					modelsConfigPath: options.paths.modelsConfigPath,
+					settingsManager: runtimeSettingsManager,
+					onSessionEvent: options.observer,
+				}),
+		}),
 		options,
 		transports,
 		store,

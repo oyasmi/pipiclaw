@@ -28,6 +28,7 @@ export interface TurnInfo {
 	/** The transport's correlation reference (`InboundMessage.ref`); a wake has none. */
 	ref?: string;
 	ts: string;
+	context?: import("./turn-context.js").TurnContext;
 }
 
 export interface PushMessage {

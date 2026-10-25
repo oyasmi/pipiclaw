@@ -54,7 +54,8 @@ describe("E2E deterministic: Web API", () => {
 	});
 
 	/** The caller's word in each main-turn request (the prompt around it carries runtime context). */
-	const mainTurnWords = () => harness.mainTurnRequests().map((r) => /\[test\]: (\w+)/.exec(r.lastUserText)?.[1]);
+	const mainTurnWords = () =>
+		harness.mainTurnRequests().map((r) => /\[test\]: (\w+)/.exec(r.lastUserText)?.[1] ?? r.lastUserText);
 	const conversation = async () => (await harness.tcp.conversations.create({})).id;
 	const settled = async (id: string) => {
 		for (let attempt = 0; attempt < 400; attempt++) {
@@ -85,9 +86,19 @@ describe("E2E deterministic: Web API", () => {
 		const gate = script.hold({ when: (r) => r.isMainTurn && r.lastUserText.includes("FIRST") });
 		const conv = await conversation();
 
-		const first = await harness.tcp.responses.create({ conversation: conv, input: "FIRST", background: true });
+		const first = await harness.tcp.responses.create({
+			conversation: conv,
+			input: "FIRST",
+			background: true,
+			instructions: "FIRST_ONLY_DIRECTIVE",
+		});
 		await gate.arrived;
-		const second = await harness.tcp.responses.create({ conversation: conv, input: "SECOND", background: true });
+		const second = await harness.tcp.responses.create({
+			conversation: conv,
+			input: "SECOND",
+			background: true,
+			instructions: "SECOND_ONLY_DIRECTIVE",
+		});
 		expect(second.status).toBe("queued");
 		expect(harness.mainTurnRequests()).toHaveLength(1);
 		gate.release();
@@ -95,6 +106,24 @@ describe("E2E deterministic: Web API", () => {
 		const [a, b] = [await settled(first.id), await settled(second.id)];
 		expect([a.output_text, b.output_text]).toEqual(["answer-A", "answer-B"]);
 		expect(mainTurnWords()).toEqual(["FIRST", "SECOND"]);
+		const [firstRequest, secondRequest] = harness.mainTurnRequests();
+		expect(JSON.stringify(firstRequest.raw)).not.toContain("SECOND_ONLY_DIRECTIVE");
+		expect(JSON.stringify(secondRequest.raw)).not.toContain("FIRST_ONLY_DIRECTIVE");
+		harness.model.script.route({
+			name: "third",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("THIRD"),
+			respond: [reply.text("third answer")],
+			repeat: true,
+		});
+		const unstored = await harness.tcp.responses.create({ conversation: conv, input: "THIRD", store: false });
+		expect(unstored.status).toBe("completed");
+		await harness.waitForIdle();
+		await expect(harness.tcp.responses.retrieve(unstored.id)).rejects.toMatchObject({ status: 404 });
+		expect(
+			(await harness.tcp.conversations.items.list(conv)).data.some(
+				(item) => item.type === "message" && item.role === "user" && JSON.stringify(item).includes("THIRD"),
+			),
+		).toBe(true);
 	});
 
 	it("W3: a steer over WebSocket ends the running response as steered and continues in a successor", async () => {
@@ -127,7 +156,7 @@ describe("E2E deterministic: Web API", () => {
 			};
 		}> = [];
 		ws.on("event", (event) => events.push(event as never));
-		ws.send({ type: "response.create", model: "pipiclaw", input: "START" });
+		ws.send({ type: "response.create", model: "pipiclaw", conversation: await conversation(), input: "START" });
 		await gate.arrived;
 		const firstId = events.find((e) => e.type === "response.created")?.response?.id;
 		expect(firstId).toBeDefined();

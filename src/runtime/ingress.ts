@@ -236,6 +236,7 @@ export function createIngress(deps: IngressDeps): IngressService {
 
 	/** Route one authorized, bound, attachment-settled human message (D6 steps 3–6). */
 	async function route(event: HumanEvent, transport: Transport): Promise<IngressResult> {
+		if (event.context) return enqueueMessage(event, transport);
 		const builtIn = parseBuiltInCommand(event.text);
 
 		// `/new` is an emergency boundary as well as a session command. Route it before busy
@@ -296,6 +297,7 @@ export function createIngress(deps: IngressDeps): IngressService {
 			user: message.user,
 			userName: message.userName ?? message.user,
 			text,
+			...(message.context ? { context: message.context } : {}),
 			...(message.channelName ? { channelName: message.channelName } : {}),
 			...(images ? { images } : {}),
 			...(message.ref !== undefined ? { ref: message.ref } : {}),
@@ -304,6 +306,11 @@ export function createIngress(deps: IngressDeps): IngressService {
 	}
 
 	const service: IngressService = {
+		execute: (message) => {
+			if (stopped || !deps.requestExecution)
+				return Promise.resolve({ kind: "rejected", reason: { code: "shutting_down" } });
+			return deps.requestExecution.execute(message);
+		},
 		async receive(message: InboundMessage): Promise<IngressResult> {
 			pendingReceives++;
 			try {
@@ -337,7 +344,8 @@ export function createIngress(deps: IngressDeps): IngressService {
 			}
 		},
 
-		cancel(channelId: string): Promise<StopOutcome> {
+		async cancel(channelId: string): Promise<StopOutcome> {
+			if (await deps.requestExecution?.cancel(channelId)) return {};
 			return busy.handleStop(channelId);
 		},
 
@@ -374,6 +382,7 @@ export function createIngress(deps: IngressDeps): IngressService {
 		},
 
 		isIdle(): boolean {
+			if (deps.requestExecution && !deps.requestExecution.isIdle()) return false;
 			if (pendingReceives > 0) return false;
 			for (const queue of queues.values()) {
 				if (!queue.isIdle()) return false;

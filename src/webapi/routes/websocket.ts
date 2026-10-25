@@ -267,6 +267,14 @@ class Connection {
 			this.steerFailed("response_already_completed", "That response has already ended.", target);
 			return;
 		}
+		if (target.record.request_scoped) {
+			this.steerFailed(
+				"response_not_active",
+				"Steering needs a persistent conversation; create the response with `conversation`.",
+				target,
+			);
+			return;
+		}
 		if (target.status !== "in_progress") {
 			this.steerFailed("response_not_active", "That response is not running yet.", target);
 			return;

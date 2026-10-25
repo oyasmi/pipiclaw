@@ -98,6 +98,7 @@ function turnInfoOf(event: ChannelEvent): TurnInfo {
 		channelId: event.channelId,
 		...senderOf(event),
 		text: event.text,
+		...(event.source === "human" && event.context ? { context: event.context } : {}),
 		...(event.images ? { images: event.images } : {}),
 		...(event.source === "human" && event.ref !== undefined ? { ref: event.ref } : {}),
 		ts: event.ts,
@@ -390,7 +391,8 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		// Computed before archiving so a command's own text can be excluded from
 		// memory-extraction input (review 2026-08-24 §1.2): it is control-plane
 		// traffic, not conversation, and the history stays queryable via session_search.
-		const builtInCommand = parseBuiltInCommand(event.text);
+		const structuredInput = event.source === "human" && event.context !== undefined;
+		const builtInCommand = structuredInput ? undefined : parseBuiltInCommand(event.text);
 		await archiveIncomingMessage(
 			event.channelId,
 			{
@@ -415,7 +417,7 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		// Reject an unknown slash command instead of spending a full LLM turn
 		// letting the model guess what `/modle` meant. Session commands,
 		// skills, and prompt templates are recognized by isKnownSlashCommand.
-		if (event.text.trim().startsWith("/") && !runner.isKnownSlashCommand(event.text)) {
+		if (!structuredInput && event.text.trim().startsWith("/") && !runner.isKnownSlashCommand(event.text)) {
 			const name = slashCommandName(event.text) ?? "";
 			turn.output = trackOutput(transport.openTurn(turnInfoOf(event), { quiet: true }));
 			await replyTo(transport, event, formatUnknownCommandMessage(name));

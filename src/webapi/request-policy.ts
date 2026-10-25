@@ -10,6 +10,8 @@ import { MAX_METADATA_KEY_CHARS, MAX_METADATA_PAIRS, MAX_METADATA_VALUE_CHARS } 
 import { MODEL_NAME } from "./response-record.js";
 
 export interface CreateRequest {
+	store: boolean;
+	instructions?: string;
 	/** The raw `input`; `input.ts` turns it into a message. */
 	input: unknown;
 	conversation?: string;
@@ -146,23 +148,11 @@ export function validateCreateRequest(body: unknown, transport: "http" | "websoc
 			"model",
 		);
 	}
-	if (body.store === false) {
-		throw badRequest(
-			"unsupported_value",
-			"`store: false` is not supported: the server keeps the conversation.",
-			"store",
-		);
-	}
-	if (!absent(body.store) && body.store !== true) {
+	if (!absent(body.store) && typeof body.store !== "boolean") {
 		throw badRequest("invalid_value", "`store` must be a boolean.", "store");
 	}
-	if (!absent(body.instructions)) {
-		throw badRequest(
-			"unsupported_parameter",
-			"`instructions` is not supported: put durable instructions in the desk's AGENTS.md.",
-			"instructions",
-		);
-	}
+	if (!absent(body.instructions) && typeof body.instructions !== "string")
+		throw badRequest("invalid_value", "`instructions` must be a string.", "instructions");
 	if (!absent(body.service_tier) && body.service_tier !== "auto" && body.service_tier !== "default") {
 		throw badRequest("unsupported_value", '`service_tier` must be "auto" or "default".', "service_tier");
 	}
@@ -172,6 +162,12 @@ export function validateCreateRequest(body: unknown, transport: "http" | "websoc
 
 	const stream = optionalBoolean(body, "stream");
 	const background = optionalBoolean(body, "background");
+	if (background && body.store === false)
+		throw badRequest(
+			"invalid_value",
+			"Background responses need `store: true` so their result can be retrieved.",
+			"store",
+		);
 	if (!absent(body.stream_options)) {
 		if (!stream) {
 			throw badRequest("invalid_value", "`stream_options` is only allowed with `stream: true`.", "stream_options");
@@ -205,6 +201,8 @@ export function validateCreateRequest(body: unknown, transport: "http" | "websoc
 	}
 
 	return {
+		store: body.store !== false,
+		...(typeof body.instructions === "string" ? { instructions: body.instructions } : {}),
 		input: body.input,
 		...(conversation !== undefined ? { conversation } : {}),
 		...(previous !== undefined ? { previousResponseId: previous } : {}),

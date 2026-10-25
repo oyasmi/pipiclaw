@@ -44,6 +44,10 @@ export type TurnEvent =
 	| { type: "compaction"; phase: "start" | "end"; ok?: boolean };
 
 export interface TurnOutcome {
+	/** Machine-only continuation snapshot. Transports must never render this as user copy. */
+	continuation?: import("./turn-context.js").ContextMessage[];
+	/** The context's owning desk; not user-visible copy. */
+	executionDesk?: string;
 	/**
 	 * - `completed` — the turn ended normally (it may have no answer);
 	 * - `silent` — the model answered `[SILENT]` or nothing: end without a message;

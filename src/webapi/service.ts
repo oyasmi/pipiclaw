@@ -8,6 +8,7 @@
 import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
 import type { InboundMessage, Ingress, IngressResult } from "../channel/ingress.js";
 import type { PushMessage, TurnInfo } from "../channel/transport.js";
+import type { ContextMessage } from "../channel/turn-context.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
@@ -22,10 +23,10 @@ import {
 	type WebApiError,
 } from "./errors.js";
 import { channelIdOf, isConversationId, newId } from "./ids.js";
-import type { ParsedInput } from "./input.js";
+import { type ParsedInput, parseInput } from "./input.js";
 import { STREAM_REPLAY_TTL_MS } from "./limits.js";
 import type { CreateRequest } from "./request-policy.js";
-import { nowSeconds, type ResponseRecord, toApiUsage } from "./response-record.js";
+import { isTerminal, nowSeconds, type ResponseRecord, toApiUsage } from "./response-record.js";
 import { LiveResponse } from "./response-state.js";
 import type { ConversationRecord, WebApiStore } from "./store.js";
 
@@ -62,6 +63,8 @@ export function rejectionError(result: Extract<IngressResult, { kind: "rejected"
 			);
 		case "desk_not_allowed":
 			return forbidden("desk_not_allowed", `This key may not use desk "${reason.desk}".`);
+		case "request_capacity":
+			return tooManyRequests("Too many request-scoped generations are running; retry after one completes.", 5);
 		case "queue_full":
 			return tooManyRequests("This conversation already has too many requests waiting; retry shortly.", 5);
 		case "shutting_down":
@@ -111,6 +114,7 @@ export class WebApiService {
 
 	recordFor(principal: Principal, id: string): ResponseRecord {
 		const record = this.findRecord(id);
+		if (record?.store === false) throw notFound(`Response ${id}`);
 		if (!record || !canAccess(principal, record.owner)) throw notFound(`Response ${id}`);
 		return record;
 	}
@@ -130,10 +134,13 @@ export class WebApiService {
 	 */
 	async create(principal: Principal, request: CreateRequest, input: ParsedInput): Promise<LiveResponse> {
 		const target = this.resolveTarget(principal, request);
-		// A refused message may leave an empty conversation behind; it holds nothing and is listed nowhere.
-		if (target.isNew) await this.store.createConversation(target.owner, null, target.conversationId);
+		const context = [...target.context, ...input.context];
 		const id = newId("resp");
 		const record: ResponseRecord = {
+			store: request.store,
+			request_scoped: target.requestScoped,
+			context,
+			instructions: request.instructions,
 			id,
 			conversation_id: target.conversationId,
 			owner: target.owner,
@@ -155,14 +162,21 @@ export class WebApiService {
 			user: principal.name,
 			userName: principal.name,
 			text: input.text,
-			...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+			desk: target.desk,
+			...(target.requestScoped || typeof request.input !== "string" || request.instructions !== undefined
+				? { context: { messages: context, instructions: request.instructions } }
+				: {}),
+			...(!target.requestScoped && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 			ref: id,
 			ts: String(Date.now()),
 			...(principal.desks ? { allowedDesks: principal.desks } : {}),
 		};
 		let result: IngressResult;
 		try {
-			result = await this.ingress.receive(message);
+			if (target.requestScoped) {
+				if (!this.ingress.execute) throw new Error("Request execution is unavailable.");
+				result = await this.ingress.execute(message);
+			} else result = await this.ingress.receive(message);
 		} catch (error) {
 			this.live.delete(id);
 			log.logWarn("webapi.ingress.failed", "Ingress refused a message with an error", {
@@ -182,36 +196,70 @@ export class WebApiService {
 	private resolveTarget(
 		principal: Principal,
 		request: CreateRequest,
-	): { conversationId: string; owner: string; previousResponseId: string | null; isNew: boolean } {
+	): {
+		conversationId: string;
+		owner: string;
+		previousResponseId: string | null;
+		requestScoped: boolean;
+		context: ContextMessage[];
+		desk?: string;
+	} {
 		if (request.conversation !== undefined) {
 			const conversation = this.conversationFor(principal, request.conversation);
 			return {
 				conversationId: conversation.id,
 				owner: conversation.owner,
 				previousResponseId: this.store.latestResponseId(conversation.id) ?? null,
-				isNew: false,
+				requestScoped: false,
+				context: [],
 			};
 		}
 		if (request.previousResponseId !== undefined) {
 			const previous = this.findRecord(request.previousResponseId);
-			if (!previous || !canAccess(principal, previous.owner)) {
+			if (!previous || previous.store === false || !canAccess(principal, previous.owner)) {
 				throw notFound(`Response ${request.previousResponseId}`, "previous_response_not_found");
 			}
-			if (this.store.latestResponseId(previous.conversation_id) !== previous.id) {
+			if (!isTerminal(previous.status))
 				throw badRequest(
-					"branching_not_supported",
-					"Only the latest response of a conversation can be continued; branching is not supported.",
+					"invalid_value",
+					"Wait for the previous response to finish before continuing it.",
 					"previous_response_id",
 				);
-			}
+			const context =
+				previous.continuation ??
+				(previous.request_scoped
+					? [...(previous.context ?? []), ...outputContext(previous)]
+					: this.contextThrough(previous));
 			return {
-				conversationId: previous.conversation_id,
-				owner: previous.owner,
+				conversationId: newId("conv"),
+				owner: principal.name,
 				previousResponseId: previous.id,
-				isNew: false,
+				desk: previous.desk,
+				requestScoped: true,
+				context,
 			};
 		}
-		return { conversationId: newId("conv"), owner: principal.name, previousResponseId: null, isNew: true };
+		return {
+			conversationId: newId("conv"),
+			owner: principal.name,
+			previousResponseId: null,
+			requestScoped: true,
+			context: [],
+		};
+	}
+
+	private contextThrough(target: ResponseRecord): ContextMessage[] {
+		const context: ContextMessage[] = [];
+		for (const record of this.responsesOf(target.conversation_id)) {
+			if (isTerminal(record.status)) {
+				context.push(
+					...(record.context ?? (record.input_items.length ? parseInput(record.input_items).context : [])),
+					...outputContext(record),
+				);
+			}
+			if (record.id === target.id) break;
+		}
+		return context;
 	}
 
 	private register(record: ResponseRecord, replayable = false): LiveResponse {
@@ -335,6 +383,8 @@ export class WebApiService {
 			complete: (outcome) => {
 				// A turn that had nothing to say makes no response; one that said something ends it.
 				if (!live) return;
+				if (outcome.continuation) live.record.continuation = outcome.continuation;
+				if (outcome.executionDesk) live.record.desk = outcome.executionDesk;
 				if (outcome.kind === "failed") live.fail(outcome.message ?? "回合异常结束。", toApiUsage(outcome.usage));
 				else if (outcome.kind === "cancelled") live.cancel();
 				else live.complete(toApiUsage(outcome.usage));
@@ -437,6 +487,8 @@ class ResponseTurn implements ChannelContext {
 
 	async finish(outcome: TurnOutcome): Promise<void> {
 		const live = this.current;
+		if (outcome.continuation) live.record.continuation = outcome.continuation;
+		if (outcome.executionDesk) live.record.desk = outcome.executionDesk;
 		const usage = toApiUsage(outcome.usage);
 		switch (outcome.kind) {
 			case "completed":
@@ -470,4 +522,8 @@ class SyntheticTurn implements ChannelContext {
 	async finish(outcome: TurnOutcome): Promise<void> {
 		this.response?.complete(outcome);
 	}
+}
+
+function outputContext(record: ResponseRecord): ContextMessage[] {
+	return record.output.flatMap((item) => parseInput([item]).context);
 }

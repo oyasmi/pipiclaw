@@ -82,6 +82,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly turnFinisher: TurnFinisher;
 	private readonly pipeline: TurnPipeline;
 	private readonly memoryLifecycle: MemoryLifecycle;
+	private readonly requestScoped: boolean;
 	private readonly ledger = getUsageLedger();
 	private readonly memoryActivityRecorder: MemoryActivityRecorder;
 	// --- Mutable across runs ---
@@ -98,6 +99,7 @@ export class ChannelRunner implements AgentRunner {
 	private runState: RunState = createEmptyRunState();
 
 	constructor(conversation: DeskConversation, paths: RunnerFactoryPaths, deps: RunnerDeps) {
+		this.requestScoped = paths.requestScoped === true;
 		const { channelId, conversationDir } = conversation;
 		this.conversation = conversation;
 		this.channelId = channelId;
@@ -122,12 +124,10 @@ export class ChannelRunner implements AgentRunner {
 		// (or the context.jsonl default, for a conversation that has never run a topology op) names
 		// (spec 043, D1). The cwd override is the desk's working directory: `desk.json` can change
 		// its `cwd` after a session was created, so the header's cwd may be stale.
-		const activeSessionFile = resolveActiveSessionFile(conversationDir);
-		const sessionManager = SessionManager.open(
-			join(conversationDir, activeSessionFile),
-			conversationDir,
-			conversation.cwd,
-		);
+		const activeSessionFile = this.requestScoped ? "context.jsonl" : resolveActiveSessionFile(conversationDir);
+		const sessionManager = this.requestScoped
+			? SessionManager.inMemory(conversation.cwd)
+			: SessionManager.open(join(conversationDir, activeSessionFile), conversationDir, conversation.cwd);
 
 		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact
 		// SessionManager instance, before anything else touches it — a second `open()` of the same
@@ -175,6 +175,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
+			enabled: !this.requestScoped,
 			conversation,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
@@ -186,6 +187,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 
 		this.host = new SessionHost({
+			requestScoped: this.requestScoped,
 			conversation,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
@@ -220,6 +222,7 @@ export class ChannelRunner implements AgentRunner {
 			getRunState: () => this.runState,
 		});
 		this.turnFinisher = new TurnFinisher({
+			requestScoped: this.requestScoped,
 			conversation,
 			host: this.host,
 			models: this.models,
@@ -313,10 +316,12 @@ export class ChannelRunner implements AgentRunner {
 			this.host.assertContextHealthy();
 			await this.models.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
-			const input = await this.pipeline.prepareUserInput(info, ctx);
+			const input = info.context
+				? { clippedInput: info.text, userMessage: info.text, preserveRawInput: true }
+				: await this.pipeline.prepareUserInput(info, ctx);
 
 			// Ensure the conversation directory (and with it the desk directory) exists.
-			await mkdir(this.conversationDir, { recursive: true });
+			if (!this.requestScoped) await mkdir(this.conversationDir, { recursive: true });
 
 			const channelCapsule = await this.pipeline.gatherTurnContext(input.preserveRawInput, turn);
 			const assembled = assembleTurnPrompt({
@@ -478,6 +483,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async abort(): Promise<void> {
+		await this.host.ensureSessionReady();
 		await this.session.abort();
 	}
 
@@ -559,6 +565,7 @@ export class ChannelRunner implements AgentRunner {
 	 * point the maintenance gates actually start looking at this state.
 	 */
 	private recordMemoryActivity(event: MemoryActivityEvent): void {
+		if (this.requestScoped) return;
 		const eventTime = parseLocalTime(event.timestamp);
 		const eligibleAfter =
 			eventTime !== undefined
