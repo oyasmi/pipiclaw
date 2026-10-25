@@ -72,6 +72,21 @@ describe("E2E deterministic: Responses context strategies", () => {
 			for (const marker of ["REQUEST_RULE_731", "SYSTEM_RULE_731", "DEVELOPER_RULE_731"])
 				expect(directives).toContain(marker);
 		}
+		// Context carries files inline, so a binary one is refused by name rather than decoded as text.
+		// Mutation checked 2026-10-26: dropping the refusal lets the PDF's bytes reach the provider.
+		await expect(
+			harness.tcp.responses.create({
+				input: [
+					{
+						role: "user",
+						content: [
+							{ type: "input_file", filename: "a.pdf", file_data: Buffer.from("%PDF\0").toString("base64") },
+						],
+					},
+				],
+			}),
+		).rejects.toMatchObject({ status: 400, param: "input[0].content[0].file_data" });
+		expect(harness.mainTurnRequests()).toHaveLength(2);
 		const deskDir = join(harness.workspaceDir, `desk-${WEBAPI_DESK}`);
 		expect(existsSync(join(deskDir, "replay-marker"))).toBe(false);
 		expect(readFileSync(join(deskDir, "live-marker"), "utf8")).toBe("live");

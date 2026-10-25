@@ -68,10 +68,19 @@ export class RequestContextInput {
 		for (const message of contextMessages(context, session.model)) session.sessionManager.appendMessage(message);
 		session.refreshContext();
 	}
-	async prompt(session: AgentSession, context: TurnContext, footer: string): Promise<void> {
+	/**
+	 * `submit` defaults to continuing from the imported context. An ordinary prompt passes its own and
+	 * no footer: the prompt extension already appends that one.
+	 */
+	async prompt(
+		session: AgentSession,
+		context: TurnContext,
+		footer: string,
+		submit: () => Promise<void> = () => session.agent.prompt([]),
+	): Promise<void> {
 		this.active = { instructions: context.instructions, footer };
 		try {
-			await session.agent.prompt([]);
+			await submit();
 		} finally {
 			this.active = undefined;
 		}

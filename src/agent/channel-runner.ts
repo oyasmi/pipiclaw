@@ -316,7 +316,7 @@ export class ChannelRunner implements AgentRunner {
 			this.host.assertContextHealthy();
 			await this.models.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
-			const input = info.context
+			const input = info.context?.messages.length
 				? { clippedInput: info.text, userMessage: info.text, preserveRawInput: true }
 				: await this.pipeline.prepareUserInput(info, ctx);
 

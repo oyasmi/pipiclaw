@@ -135,6 +135,16 @@ export class WebApiService {
 	async create(principal: Principal, request: CreateRequest, input: ParsedInput): Promise<LiveResponse> {
 		const target = this.resolveTarget(principal, request);
 		const context = [...target.context, ...input.context];
+		// A conversation's user messages are an ordinary channel turn (memory bootstrap, desk context,
+		// commands, attachments saved to the desk), as a string input is. Only history with other roles,
+		// and every request-scoped generation, is imported as context.
+		const imported = target.requestScoped || input.context.some((message) => message.role !== "user");
+		if (imported && input.binaryFile)
+			throw badRequest(
+				"unsupported_value",
+				"Binary files (PDF, Office documents…) cannot be read inline. Send them in a `conversation` whose input is user messages only, where they are saved to the desk for the agent's tools; send text files here.",
+				input.binaryFile,
+			);
 		const id = newId("resp");
 		const record: ResponseRecord = {
 			store: request.store,
@@ -163,9 +173,11 @@ export class WebApiService {
 			userName: principal.name,
 			text: input.text,
 			desk: target.desk,
-			...(target.requestScoped || typeof request.input !== "string" || request.instructions !== undefined
+			...(imported
 				? { context: { messages: context, instructions: request.instructions } }
-				: {}),
+				: request.instructions !== undefined
+					? { context: { messages: [], instructions: request.instructions } }
+					: {}),
 			...(!target.requestScoped && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 			ref: id,
 			ts: String(Date.now()),

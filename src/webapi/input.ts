@@ -23,6 +23,21 @@ export interface ParsedInput {
 	attachments: InboundAttachment[];
 	/** What is recorded as the response's `input_items`: the shape of what was sent, without the bytes. */
 	items: InputItem[];
+	/**
+	 * The `file_data` param of the first file that is not UTF-8 text (a PDF, an Office document…).
+	 * Context can only carry such a file as a saved attachment, never inline.
+	 */
+	binaryFile?: string;
+}
+
+/** A file's text when it is UTF-8 text a model can read inline. */
+function readableText(data: Buffer): string | undefined {
+	if (data.includes(0)) return undefined;
+	try {
+		return new TextDecoder("utf-8", { fatal: true }).decode(data);
+	} catch {
+		return undefined;
+	}
 }
 
 type Part = import("openai/resources/responses/responses").ResponseInputContent;
@@ -53,7 +68,11 @@ function decodeBase64(value: string, limit: number, param: string, what: string,
 	return Buffer.from(payload, "base64");
 }
 
-function parseContent(content: unknown, itemParam: string, state: { images: number; files: number }) {
+function parseContent(
+	content: unknown,
+	itemParam: string,
+	state: { images: number; files: number; binaryFile?: string },
+) {
 	const parts: Part[] = [];
 	const attachments: InboundAttachment[] = [];
 	let text = "";
@@ -130,6 +149,7 @@ function parseContent(content: unknown, itemParam: string, state: { images: numb
 					throw badRequest("missing_required_parameter", "`file_data` and `filename` are required.", param);
 				}
 				const data = decodeBase64(part.file_data, MAX_INBOUND_FILE_BYTES, `${param}.file_data`, "The file", true);
+				if (readableText(data) === undefined) state.binaryFile ??= `${param}.file_data`;
 				state.files++;
 				attachments.push({ kind: "file", index: state.files, data, fileName: part.filename });
 				parts.push({ type: "input_file", filename: part.filename });
@@ -197,7 +217,7 @@ export function parseInput(input: unknown, param = "input"): ParsedInput {
 	const attachments: InboundAttachment[] = [];
 	const context: ContextMessage[] = [];
 	const texts: string[] = [];
-	const state = { images: 0, files: 0 };
+	const state: { images: number; files: number; binaryFile?: string } = { images: 0, files: 0 };
 	for (const [index, value] of entries.entries()) {
 		const itemParam = typeof input === "string" ? param : `${param}[${index}]`;
 		if (!isPlainObject(value)) throw badRequest("invalid_value", "An input item must be an object.", itemParam);
@@ -243,7 +263,13 @@ export function parseInput(input: unknown, param = "input"): ParsedInput {
 						mimeType: sniffImageMimeType(attachment.data) ?? "image/png",
 					},
 				];
-			return [{ type: "text", text: `[File: ${attachment.fileName}]\n${attachment.data.toString("utf8")}` }];
+			const fileText = readableText(attachment.data);
+			return [
+				{
+					type: "text",
+					text: `[File: ${attachment.fileName}]\n${fileText ?? `(binary, ${attachment.data.length} bytes)`}`,
+				},
+			];
 		});
 		context.push({
 			role,
@@ -267,5 +293,5 @@ export function parseInput(input: unknown, param = "input"): ParsedInput {
 	}
 	const text = texts.join("\n");
 	if (!text.trim() && attachments.length === 0) throw badRequest("invalid_value", "`input` is empty.", param);
-	return { text, attachments, items, context };
+	return { text, attachments, items, context, ...(state.binaryFile ? { binaryFile: state.binaryFile } : {}) };
 }

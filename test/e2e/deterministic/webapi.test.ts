@@ -93,9 +93,24 @@ describe("E2E deterministic: Web API", () => {
 			instructions: "FIRST_ONLY_DIRECTIVE",
 		});
 		await gate.arrived;
+		// The shape a history-replaying client (SideMind) sends in conversation mode: one user message
+		// as parts, with a binary file. Regression: importing it as context skipped the desk turn
+		// context and memory bootstrap and inlined the PDF's bytes as text.
 		const second = await harness.tcp.responses.create({
 			conversation: conv,
-			input: "SECOND",
+			input: [
+				{
+					role: "user",
+					content: [
+						{ type: "input_text", text: "SECOND" },
+						{
+							type: "input_file",
+							filename: "report.pdf",
+							file_data: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n\0\xff").toString("base64")}`,
+						},
+					],
+				},
+			],
 			background: true,
 			instructions: "SECOND_ONLY_DIRECTIVE",
 		});
@@ -109,6 +124,10 @@ describe("E2E deterministic: Web API", () => {
 		const [firstRequest, secondRequest] = harness.mainTurnRequests();
 		expect(JSON.stringify(firstRequest.raw)).not.toContain("SECOND_ONLY_DIRECTIVE");
 		expect(JSON.stringify(secondRequest.raw)).not.toContain("FIRST_ONLY_DIRECTIVE");
+		// Mutation checked 2026-10-26: importing every structured input as context fails here.
+		expect(JSON.stringify(secondRequest.raw)).toContain("SECOND_ONLY_DIRECTIVE");
+		expect(secondRequest.lastUserText).toContain("<runtime_turn_context>");
+		expect(secondRequest.lastUserText).toMatch(/report\.pdf 已保存到 \S+/);
 		harness.model.script.route({
 			name: "third",
 			when: (r) => r.isMainTurn && r.lastUserText.includes("THIRD"),

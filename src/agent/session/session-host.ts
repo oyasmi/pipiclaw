@@ -240,8 +240,8 @@ export class SessionHost {
 		this.contextInput.import(this.session, context);
 	}
 
-	async promptContext(context: TurnContext): Promise<void> {
-		await this.contextInput.prompt(this.session, context, this.lastPromptBuild?.footer ?? "");
+	async promptContext(context: TurnContext, submit?: () => Promise<void>): Promise<void> {
+		await this.contextInput.prompt(this.session, context, submit ? "" : (this.lastPromptBuild?.footer ?? ""), submit);
 	}
 
 	get sessionManager(): SessionManager {

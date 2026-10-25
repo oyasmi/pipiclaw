@@ -391,7 +391,7 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		// Computed before archiving so a command's own text can be excluded from
 		// memory-extraction input (review 2026-08-24 §1.2): it is control-plane
 		// traffic, not conversation, and the history stays queryable via session_search.
-		const structuredInput = event.source === "human" && event.context !== undefined;
+		const structuredInput = event.source === "human" && Boolean(event.context?.messages.length);
 		const builtInCommand = structuredInput ? undefined : parseBuiltInCommand(event.text);
 		await archiveIncomingMessage(
 			event.channelId,

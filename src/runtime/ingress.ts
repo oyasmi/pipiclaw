@@ -236,7 +236,7 @@ export function createIngress(deps: IngressDeps): IngressService {
 
 	/** Route one authorized, bound, attachment-settled human message (D6 steps 3–6). */
 	async function route(event: HumanEvent, transport: Transport): Promise<IngressResult> {
-		if (event.context) return enqueueMessage(event, transport);
+		if (event.context?.messages.length) return enqueueMessage(event, transport);
 		const builtIn = parseBuiltInCommand(event.text);
 
 		// `/new` is an emergency boundary as well as a session command. Route it before busy

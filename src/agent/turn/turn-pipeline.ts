@@ -183,12 +183,16 @@ export class TurnPipeline {
 			this.turnState.current() === ownTurn &&
 			!ownTurn.stopRequested &&
 			(!attempt || this.host.session === attempt.session);
+		const imported = Boolean(info.context?.messages.length);
 		const submit = async (session: AgentSession, text: string) => {
 			const revision = this.host.compaction.revision;
-			if (info.context) {
+			const prompt = () =>
+				session.prompt(text, turn.images.images.length > 0 ? { images: turn.images.images } : undefined);
+			if (imported && info.context) {
 				this.runState.userMessagesStarted = 1;
 				await this.host.promptContext(info.context);
-			} else await session.prompt(text, turn.images.images.length > 0 ? { images: turn.images.images } : undefined);
+			} else if (info.context) await this.host.promptContext(info.context, prompt);
+			else await prompt();
 			turn.promptSubmitted = true;
 			if (turn.bootstrapPrepared && revision === this.host.compaction.revision)
 				this.host.firstTurnMemoryBootstrapPending = false;
@@ -198,8 +202,8 @@ export class TurnPipeline {
 				try {
 					await this.host.runPrompt(async () => {
 						if (!canRetry()) return;
-						if (info.context) this.host.importContext(info.context);
-						attempt = new SessionRetryAttempt(this.session, Boolean(info.context));
+						if (imported && info.context) this.host.importContext(info.context);
+						attempt = new SessionRetryAttempt(this.session, imported);
 						await submit(attempt.session, text);
 					});
 				} catch (err) {

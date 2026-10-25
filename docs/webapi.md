@@ -200,7 +200,7 @@ response = client.responses.create(model="pipiclaw", conversation=conversation.i
 
 `store` 默认 true，控制响应资源的保存、检索和后续引用；不负责自动关联请求。独立请求的 Response.conversation 为 null。`store=False` 的独立请求不保存聊天会话或响应快照，不自动提炼回放历史，结束后 retrieve/接链返回 404；它仍会执行明确要求的工具操作，审计和用量独立记录。
 
-显式 conversation 即使使用 store:false 也会保存会话 items，响应资源仍不可检索。background:true 要求 store:true。instructions 仅作用于当前生成及工具迭代，接链时不会继承，下一轮需要时再次传入。不要同时发送两种会话标识；显式会话中重复发送完整历史会将它们再次追加。
+显式 conversation 中只含 user 消息的 input（字符串或 message 数组都一样）是一个普通频道回合：带工位上下文和首轮记忆，识别斜杠命令，附件保存到工位，`instructions` 只叠加在本次生成上；含 assistant/system/developer 的 input 才作为上下文导入。显式 conversation 即使使用 store:false 也会保存会话 items，响应资源仍不可检索。background:true 要求 store:true。instructions 仅作用于当前生成及工具迭代，接链时不会继承，下一轮需要时再次传入。不要同时发送两种会话标识；显式会话中重复发送完整历史会将它们再次追加。
 
 新的独立请求使用 key 的第一个授权工位（本机 socket 使用 default）；响应链接续原响应的工位并重新检查授权，保留文件、命令、搜索等工具及守卫；持久任务、事件、委派、后台 shell 和 WebSocket steering 需要显式 conversation。普通前台工具的文件修改不因 store:false 而回滚。无会话标识的字符串按模型输入处理，原生斜杠命令使用显式会话；TUI 已处理这一点。
 
@@ -224,7 +224,7 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 
 `input` 可包含历史 assistant 消息、system/developer 指令，以及 Pipiclaw 自己输出的 reasoning 摘要和 mcp_call。历史工具记录作为观察信息提供给模型，不会执行。客户端工具闭环（function_call_output）、item_reference 和加密 reasoning 等仍未实现，明确返回 400。
 
-**图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤5 MB，最多 9 张），`input_file` 用 `file_data` 加 `filename`（≤5 MB）。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。
+**图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤5 MB，最多 9 张），`input_file` 用 `file_data` 加 `filename`（≤5 MB）。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。作为上下文导入的 input（独立请求、响应链、含其他角色的会话 input）里，文件以 UTF-8 文本内联；PDF、Office 文档等二进制文件返回 400（`param` 指向该 `file_data`），请放在只含 user 消息的 conversation 里发送，文件会保存到工位供工具读取。
 
 ## 回合怎么变成 Response
 
