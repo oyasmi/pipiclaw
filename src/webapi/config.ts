@@ -1,6 +1,6 @@
 /**
  * `channel.json`'s `webapi` section (spec 061, D1/D2): validation and normalization. The rules
- * that keep the defaults safe live here: a listener that is not loopback must be TLS, a key is a
+ * that keep the defaults safe live here: TLS is optional (a reverse proxy or a trusted LAN may carry plain HTTP), a key is a
  * hash and a name and the desks it may use, and there is always something to listen on.
  */
 import { isAbsolute } from "node:path";
@@ -80,11 +80,6 @@ export function parseWebApiConfig(section: unknown): WebApiConfig {
 
 	if (socket === false && !tcp && issues.length === 0) {
 		issues.push("webapi: nothing to listen on — set `socket` to true, or give `tcp` an address.");
-	}
-	if (tcp && !tcp.loopback && !tls) {
-		issues.push(
-			`webapi: \`tcp\` ${tcp.host}:${tcp.port} is not a loopback address, so \`tls\` is required (a bearer key must not cross the network in the clear).`,
-		);
 	}
 
 	const keys: WebApiKey[] = [];

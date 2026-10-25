@@ -27,7 +27,7 @@ Web API 是 Pipiclaw 的第二个渠道（与钉钉并列）。它的形状是 *
 | `enabled` | `false` | 关闭时不加载任何 Web API 代码，也不监听 |
 | `socket` | `true` | 在 `state/webapi/api.sock` 上监听本机 unix socket，权限 `0600`，目录 `0700`。**走 socket 不需要 key**：能打开这个文件的就是运行 daemon 的系统用户 |
 | `tcp` | 不监听 | `"host:port"`（IPv6 写 `"[::1]:8787"`）。TCP 上每个请求都必须带 key |
-| `tls` | 无 | `{ "cert": "/abs/cert.pem", "key": "/abs/key.pem" }`。`tcp` 不是 loopback 地址时**必须**配置，否则拒绝启动（bearer key 不能明文过网络） |
+| `tls` | 无 | `{ "cert": "/abs/cert.pem", "key": "/abs/key.pem" }`。可选。不配置时 TCP 是明文 HTTP（bearer key 明文过网络）：只适合 TLS 由前置反向代理终止、或可信内网 |
 | `keys` | `[]` | `[{ "name", "sha256", "desks" }]`，用命令管理，见下 |
 
 至少要开一个监听（`socket` 或 `tcp`），否则拒绝启动。所有启动问题都会逐项列出并以非 0 退出，不会带着半截配置运行。
@@ -210,7 +210,7 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 ## 安全
 
 - **一把 key 的权限等于宿主机上的 shell 权限**（agent 有 `bash`，受[安全模型](./security.md)的路径和命令守卫约束）。给它的人要和给 shell 的人一样可信。本机 socket 的访问范围等于运行 daemon 的系统用户。
-- 默认只监听本机 socket；TCP 要显式打开，非 loopback 必须 TLS。要对外提供服务，建议把 Pipiclaw 绑在 loopback，由反向代理终止 TLS 并做访问控制。
+- 默认只监听本机 socket；TCP 要显式打开。非 loopback 且不配 `tls` 时是明文 HTTP，key 会明文过网络——只在 TLS 由前置反向代理终止、或可信内网中这样用。
 - 浏览器的跨站请求被挡掉：带 `Origin` 头的请求（包括 WebSocket 升级）一律 403，不提供 CORS；loopback TCP 还校验 `Host`，防 DNS rebinding。
 - 鉴权在读请求体**之前**完成，失败直接 401。key 只存 SHA-256，比较是常量时间的。
 - 限制：请求体 8 MB、单个请求 30 秒内接收完、最多 64 个连接、TCP 上每个来源 IP 每分钟 300 次。

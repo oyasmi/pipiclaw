@@ -407,7 +407,7 @@ pipiclaw tui --desk news --print "总结今天的进展"  # 一次性，prompt �
 | `enabled` | `false` | 是否打开 Web API |
 | `socket` | `true` | 在 `state/webapi/api.sock` 监听（`0600`），不需要 key |
 | `tcp` | 不监听 | `"host:port"`（IPv6 写 `"[::1]:8787"`）；每个请求都要带 key |
-| `tls` | 无 | `{ "cert", "key" }` 绝对路径；`tcp` 不是 loopback 时必须配置 |
+| `tls` | 无 | `{ "cert", "key" }` 绝对路径；可选；非 loopback 不配则是明文 HTTP（适合 TLS 在前置代理终止或可信内网） |
 | `keys` | `[]` | `{ "name", "sha256", "desks" }` 的数组；用 `pipiclaw webapi key add\|list\|remove` 管理 |
 
 key 命令、字段策略、错误与安全说明见 [Web API](./webapi.md)。

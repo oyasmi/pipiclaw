@@ -267,7 +267,7 @@ export PIPICLAW_DEBUG=1
 - **只用钉钉**：`webapi.enabled` 保持 `false`，不加载 Web API 的代码，也不监听任何端口。
 - **钉钉 + 本机 Web API**：`webapi: { "enabled": true, "socket": true }`。daemon 在 `state/webapi/api.sock` 监听（目录 `0700`、socket `0600`），本机脚本和 `pipiclaw tui` 通过它访问，不需要 key。
 - **只用 Web API**：`dingtalk.enabled` 设为 `false`。没有钉钉凭据也能运行，适合只被脚本或其他服务调用的部署。
-- **让别的机器访问**：加 `tcp` 和 `keys`（`pipiclaw webapi key add <名字> --desk <工位>`），key 只显示一次。`tcp` 绑在 loopback 以外的地址时**必须**配 `tls`，否则拒绝启动；更稳妥的做法是 Pipiclaw 只绑 `127.0.0.1`，由 nginx / Caddy 之类的反向代理终止 TLS 并做访问控制。改动 key 后重启 daemon 生效。
+- **让别的机器访问**：加 `tcp` 和 `keys`（`pipiclaw webapi key add <名字> --desk <工位>`），key 只显示一次。`tcp` 绑在 loopback 以外的地址时可以不配 `tls`（明文 HTTP，适合 TLS 在前置 nginx / Caddy 终止、或可信内网）；跨不可信网络请配 `tls` 或走反向代理。改动 key 后重启 daemon 生效。
 
 一个 app home 同时只能有一个运行时进程，由 `state/daemon.lock` 保证：第二个 `pipiclaw` 会拒绝启动并说出持有者的 pid 和主机；`pipiclaw tui` 遇到 daemon 就连接它的 socket，没有 daemon 才在本进程里起运行时。进程被杀留下的锁，下次启动时（同一主机、pid 已不存在）自动回收。
 

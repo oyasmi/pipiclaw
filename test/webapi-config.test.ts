@@ -35,7 +35,7 @@ describe("webapi config", () => {
 
 	it("refuses unsafe or empty setups, and accepts the safe ones", () => {
 		expect(issuesOf({ socket: false })[0]).toMatch(/nothing to listen on/);
-		expect(issuesOf({ tcp: "0.0.0.0:8787" })[0]).toMatch(/tls/);
+		expect(issuesOf({ tcp: "0.0.0.0:8787" })).toEqual([]);
 		expect(issuesOf({ tcp: "0.0.0.0:8787", tls: { cert: "/c.pem", key: "/k.pem" } })).toEqual([]);
 		expect(issuesOf({ tcp: "127.0.0.1:8787", keys: [goodKey] })).toEqual([]);
 		expect(issuesOf({ tls: { cert: "rel.pem", key: "/k.pem" } })[0]).toMatch(/absolute/);
