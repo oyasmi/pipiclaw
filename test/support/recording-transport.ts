@@ -38,6 +38,8 @@ export class RecordingTransport implements Transport {
 		this.ingress = ingress;
 	}
 
+	async stopAccepting(): Promise<void> {}
+
 	async stop(): Promise<void> {}
 
 	openTurn(turn: TurnInfo, opts: { quiet: boolean }): ChannelContext {

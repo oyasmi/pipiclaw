@@ -279,6 +279,30 @@ describe("ingress admission", () => {
 		await transport.receive("/desk bind lab", { allowedDesks: ["news"] });
 		await settle();
 		expect(runtime.desks.boundDesk(CHANNEL)).toBe("news");
+
+		// Admitted under one binding, run under another: refused where it runs, and the turn it
+		// reserved is released — a leaked reservation left the channel looking busy.
+		const bind = transport.receive("/desk bind lab");
+		const queued = transport.receive("hello", { allowedDesks: ["news"] });
+		await Promise.all([bind, queued]);
+		await settle();
+		expect(runtime.desks.boundDesk(CHANNEL)).toBe("lab");
+		expect(transport.turns.at(-1)?.outcome?.kind).toBe("completed");
+		expect(runner.run).not.toHaveBeenCalled();
+		expect(runner.isBusy()).toBe(false);
+	});
+
+	it("ends a turn that threw as failed, so its transport does not report an empty success", async () => {
+		const { transport, settle } = await setup({
+			run: vi.fn(async () => {
+				throw new Error("provider exploded");
+			}),
+		});
+		await transport.receive("do the thing");
+		await settle();
+		const outcome = transport.turns.at(-1)?.outcome;
+		expect(outcome?.kind).toBe("failed");
+		expect(outcome?.message).not.toContain("provider exploded");
 	});
 
 	it("rejects with shutting_down once the runtime has begun to shut down", async () => {
@@ -358,9 +382,17 @@ describe("ingress admission", () => {
 		expect(runtime.ingress.dropQueued(CHANNEL, "r2")).toBe(false);
 		// The running turn left the queue when it started: it can only be cancelled, not dropped.
 		expect(runtime.ingress.dropQueued(CHANNEL, "r1")).toBe(false);
+		// Cancelling names its turn: another message's ref stops nothing, and the running one's
+		// stops only that turn — what another caller queued behind it still runs (unlike /stop).
+		await transport.receive("someone else's", { ref: "r3" });
+		expect(await runtime.ingress.cancelTurn(CHANNEL, "r3")).toBe(false);
+		expect(runner.abort).not.toHaveBeenCalled();
+		expect(await runtime.ingress.cancelTurn(CHANNEL, "r1")).toBe(true);
+		expect(runner.abort).toHaveBeenCalledTimes(1);
 		release();
 		await settle();
-		expect(runner.run).toHaveBeenCalledTimes(1);
+		expect(runner.run).toHaveBeenCalledTimes(2);
+		expect(transport.turns.at(-1)?.turn.ref).toBe("r3");
 	});
 });
 

@@ -100,6 +100,12 @@ export function createLink(client: OpenAI, paths: BootstrapPaths, conversationId
 	return {
 		conversationId,
 		connect: (onEvent, onClose) => openConnection(client, socketPath, onEvent, onClose),
+		// The runtime removes its socket when it shuts down.
+		reachable: () => existsSync(socketPath),
+		async lastItemId() {
+			const page = await client.conversations.items.list(conversationId, { order: "desc", limit: 1 });
+			return page.data[0]?.id;
+		},
 		async listItems(after) {
 			const items: ConversationItem[] = [];
 			let cursor = after;

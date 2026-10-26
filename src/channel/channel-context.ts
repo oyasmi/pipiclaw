@@ -43,9 +43,23 @@ export type TurnEvent =
 	| { type: "steer.applied" }
 	| { type: "compaction"; phase: "start" | "end"; ok?: boolean };
 
+/**
+ * Where a turn's context lives once it has ended: the session file and the entry the turn left it
+ * at. A session file is append-only, so the context at that entry can be rebuilt later, when a
+ * caller asks to continue from this turn, instead of being copied out after every turn.
+ */
+export interface ContextRef {
+	sessionFile: string;
+	leafId: string;
+}
+
 export interface TurnOutcome {
-	/** Machine-only continuation snapshot. Transports must never render this as user copy. */
+	/**
+	 * Machine-only, never user copy. A request-scoped generation (an in-memory session that is gone
+	 * when it ends) hands over its context itself; a channel turn names where its context stays.
+	 */
 	continuation?: import("./turn-context.js").ContextMessage[];
+	contextRef?: ContextRef;
 	/** The context's owning desk; not user-visible copy. */
 	executionDesk?: string;
 	/**

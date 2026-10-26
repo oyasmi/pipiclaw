@@ -44,6 +44,8 @@ export interface IngressDeps {
 	resolveChannel: (channelId: string) => ChannelResolution;
 	/** Bind a channel that has no binding yet to `desk`; a no-op when it already has one. */
 	ensureBinding: (channelId: string, desk: string) => Promise<void>;
+	/** Drop a channel's binding and runner for good (`Ingress.closeChannel`). */
+	unbind: (channelId: string) => Promise<boolean>;
 	/** `/desk` as asked from `channelId` (spec 058, D5). */
 	deskPort: (channelId: string) => DeskCommandPort;
 	/** Names a channel and says whether it is bound to `desk` — the asking channel's desk. */

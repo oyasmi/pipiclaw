@@ -145,5 +145,12 @@ describe("input", () => {
 		expect(
 			problem(() => parseInput([{ role: "user", content: [{ type: "input_image", image_url: big }] }])).code,
 		).toBe("input_too_large");
+
+		// Each file is under its own cap; together they pass what one request may attach.
+		const eightMiB = "A".repeat(Math.floor((8 * 1024 * 1024) / 3) * 4);
+		const file = { type: "input_file", filename: "a.txt", file_data: eightMiB };
+		const total = problem(() => parseInput([{ role: "user", content: [file, file, file] }]));
+		expect(total.code).toBe("input_too_large");
+		expect(total.param).toBe("input[0].content[2].file_data");
 	});
 });

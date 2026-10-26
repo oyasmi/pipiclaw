@@ -320,6 +320,11 @@ class Connection {
 			);
 			return;
 		}
+		if (input.context.some((message) => message.role !== "user")) {
+			// It joins the running turn as the user's words; another role cannot be said that way.
+			this.steerFailed("invalid_input", "A steering input is user messages only.", target);
+			return;
+		}
 		if (this.service.pendingSteersOf(target.id).length >= MAX_PENDING_STEERS) {
 			this.steerFailed("too_many_pending_steers", "Too many steering inputs are waiting for this response.", target);
 			return;

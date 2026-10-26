@@ -33,6 +33,7 @@ export const unauthorized = () =>
 export const forbidden = (code: string, message: string) =>
 	new WebApiError(403, "invalid_request_error", code, message);
 
+export const conflict = (code: string, message: string) => new WebApiError(409, "invalid_request_error", code, message);
 export const notFound = (what: string, code = "not_found") =>
 	new WebApiError(404, "invalid_request_error", code, `${what} was not found.`);
 

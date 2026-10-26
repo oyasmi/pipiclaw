@@ -272,7 +272,16 @@ export class DeskRuntime {
 		await this.bindingWrites.run("bindings", async () => {
 			// Another first message or an explicit bind may have committed while this one waited.
 			if (this.bindings.bindings[channelId]) return;
-			await this.bindNow(channelId, desk);
+			const outcome = await this.bindNow(channelId, desk);
+			// The channel stays unbound and every message gets the no-desk reply. A sender's default
+			// desk that does not exist is an operator's mistake (a Web API key's first desk): say so.
+			if (outcome.kind !== "bound") {
+				log.logWarn("desk.bind.default_failed", "Default desk binding failed", {
+					channelId,
+					reason: outcome.kind,
+					fields: { desk },
+				});
+			}
 		});
 	}
 
@@ -343,6 +352,35 @@ export class DeskRuntime {
 			suspendedTasks: suspended.tasks,
 			suspendedEvents: suspended.events,
 		};
+	}
+
+	/**
+	 * The channel is gone for good (a Web API conversation was deleted): drop its binding, its
+	 * runner, and — when it was the desk's last channel — the desk's activity. Its conversation
+	 * directory stays in the desk as history. Whether there was a binding to drop.
+	 */
+	unbind(channelId: string): Promise<boolean> {
+		return this.bindingWrites.run("bindings", async () => {
+			const previous = this.bindings.bindings[channelId]?.desk;
+			if (previous === undefined) return false;
+			const { [channelId]: _dropped, ...rest } = this.bindings.bindings;
+			const next: BindingsFile = { ...this.bindings, bindings: rest };
+			await writeBindings(this.options.workspaceDir, next);
+			this.bindings = next;
+			log.logInfoEvent("desk.unbound", "Channel unbound from desk", { channelId, fields: { desk: previous } });
+			this.options.onBindingChanged?.(channelId);
+			try {
+				await this.options.releaseRunner(channelId);
+			} catch (error) {
+				log.logWarn("desk.unbind.release_failed", "Releasing the runner of an unbound channel failed", {
+					channelId,
+					reason: errorMessage(error),
+					fields: { desk: previous },
+				});
+			}
+			if (this.boundChannelsOf(previous).length === 0) await this.deactivate(previous);
+			return true;
+		});
 	}
 
 	/** Start the event watchers of every active desk; later activations start theirs directly. */

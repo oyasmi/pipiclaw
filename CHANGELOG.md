@@ -21,11 +21,26 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - **Web API** ([docs/webapi.md](docs/webapi.md)): an OpenAI Responses-shaped HTTP and WebSocket server that the official `openai` SDK connects to — synchronous, streaming, `background` (with resume and cancel), conversations and items, WebSocket steering and named streams; tool calls appear as `mcp_call` items. It listens on the local socket only by default; TCP needs a key (`pipiclaw webapi key add|list|remove`) and non-loopback addresses require TLS; Origin and Host checks, authentication before the body is read, request and connection limits, and an audit log.
 - `desk.json` may set an absolute `cwd`: the agent's working directory (shell, relative paths, default delegation directory) for that desk, while memory, tasks and events stay in the desk directory.
 - `task_list` reports each task's delivery channel, and the per-turn task agenda marks tasks that report to another channel.
+- `DELETE /v1/conversations/{id}` ends a Web API conversation: its desk binding goes (no more memory passes, recovery scans or task delivery for it) along with its response records; `409 conversation_busy` while a response runs or waits.
 
 ### Changed
 
+- Cancelling a Web API response (the cancel endpoint, or a caller disconnecting) stops only that response's turn. It used to act like `/stop` on the whole conversation, dropping what other callers had queued — including another terminal's messages.
+- Shutdown closes admission first and keeps the transports delivering while running turns finish, so a Web API response completing inside the grace window is delivered instead of failed; new requests get 503 meanwhile.
+- A conversation response no longer stores a copy of the whole session; it records where its turn left the session file, and a `previous_response_id` chain rebuilds the context from there. A response chain stores each request's own input and output once instead of the full history in every link. DingTalk turns no longer snapshot their session at all.
+- A Web API request's attachments total at most 20 MiB decoded (each image or file is still capped at 10 MiB), and the body limit is derived from that; previously ten 10 MiB images were advertised but could not fit in a request.
+- Request-scoped generations get an explicit allowlist of tools; `task_update`, `task_close` and `task_log` are no longer offered there.
+- A plaintext non-loopback Web API listener logs a warning on every start; a sender whose default desk does not exist is logged instead of silently left unbound.
 - Any channel of a desk can update or delete any of the desk's events through `event_manage`; an update keeps the event's original delivery channel. Previously events delivering to another channel were read-only there.
 - Runtime playbooks and the system prompt now describe a desk as shared by its channels: attribute remembered facts to a person, and a job or delegation started in another channel wakes that channel, not this one. `/desk` replies and the TUI help call the default desk what it is rather than a "default assistant".
+
+### Fixed
+
+- A queued message refused when it ran (its sender may not use the desk the channel had been rebound to) left the channel looking busy until the next turn.
+- A turn that threw ended its output as completed: a Web API response showed an empty success. It now ends as failed with a user-facing reason.
+- `previous_response_id` from a conversation command reply in a conversation that had an image or file failed with a 400 about a field the caller never sent.
+- The terminal: a slash command typed mid-turn no longer turns the next message from a steer into a follow-up; startup reads only the newest item instead of the whole conversation; a terminal using another terminal's embedded runtime says so when that runtime exits.
+- A WebSocket `response.steer` with a non-user role is refused (`invalid_input`) instead of being folded into user text.
 
 ### Removed
 

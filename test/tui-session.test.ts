@@ -33,7 +33,7 @@ class FakeFrontend implements Frontend {
 
 function fakeLink(items: () => ConversationItem[] = () => []) {
 	const sent: Array<Record<string, unknown>> = [];
-	const state = { closed: 0, onEvent: (_event: never) => {}, onClose: () => {} };
+	const state = { closed: 0, reachable: true, onEvent: (_event: never) => {}, onClose: () => {} };
 	const link: SessionLink = {
 		conversationId: "conv_1",
 		connect(onEvent, onClose) {
@@ -50,6 +50,8 @@ function fakeLink(items: () => ConversationItem[] = () => []) {
 			const index = after ? all.findIndex((item) => item.id === after) : -1;
 			return all.slice(index + 1);
 		},
+		lastItemId: async () => items().at(-1)?.id,
+		reachable: () => state.reachable,
 	};
 	return { link, sent, state, emit: (event: Record<string, unknown>) => state.onEvent(event as never) };
 }
@@ -133,14 +135,29 @@ describe("TuiSession", () => {
 		// The closed connection's late events must not touch the new one's state.
 		staleClose();
 		expect(session.busy).toBe(true);
+
+		// The runtime went away under the live connection (another terminal embedded it and exited):
+		// the user is told once how to recover, not left with a terminal that silently does nothing.
+		state.reachable = false;
+		state.onClose();
+		session.submit("还在吗");
+		state.onClose();
+		const recover = frontend.calls.filter(([kind, text]) => kind === "notice" && text?.includes("pipiclaw tui"));
+		expect(recover).toHaveLength(1);
+		expect(session.busy).toBe(false);
 	});
 
 	it("follows a steered response into its successor and does not call itself idle in between", async () => {
-		const { link, emit } = fakeLink();
+		const { link, sent, emit } = fakeLink();
 		const { session } = await open(link);
 		session.submit("干活");
 		emit(created("resp_1"));
+		// A command answered on its own stream mid-turn must not become the steering target.
+		session.submit("/status");
+		emit({ ...created("resp_cmd"), stream_id: "control" });
+		emit({ ...completed("resp_cmd"), stream_id: "control" });
 		session.submit("改一下");
+		expect(sent.at(-1)).toMatchObject({ type: "response.steer", previous_response_id: "resp_1" });
 		emit({ type: "response.steer.accepted" });
 		emit({
 			type: "response.incomplete",

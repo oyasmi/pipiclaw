@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import OpenAI from "openai";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -116,6 +117,8 @@ describe("E2E deterministic: Web API", () => {
 		});
 		expect(second.status).toBe("queued");
 		expect(harness.mainTurnRequests()).toHaveLength(1);
+		// A conversation with work running or waiting cannot be deleted under it.
+		await expect(harness.tcp.conversations.delete(conv)).rejects.toMatchObject({ status: 409 });
 		// A cursor taken while A runs and B waits must still reach A's answer afterwards (the queued
 		// input stays hidden until A settles, so nothing is ever inserted before a held cursor).
 		const early = await harness.tcp.conversations.items.list(conv, { order: "asc" });
@@ -154,6 +157,20 @@ describe("E2E deterministic: Web API", () => {
 				(item) => item.type === "message" && item.role === "user" && JSON.stringify(item).includes("THIRD"),
 			),
 		).toBe(true);
+
+		// Deleting the idle conversation releases its channel for good: the binding goes (so no
+		// memory pass, recovery scan or task delivery keeps visiting it) and so does its history.
+		// Mutation checked 2026-10-26: skipping `closeChannel` leaves the binding and fails here.
+		const bindingsPath = join(harness.workspaceDir, "desk-bindings.json");
+		expect(readFileSync(bindingsPath, "utf8")).toContain(conv);
+		expect(await harness.tcp.conversations.delete(conv)).toMatchObject({ id: conv, deleted: true });
+		expect(readFileSync(bindingsPath, "utf8")).not.toContain(conv);
+		expect(existsSync(join(harness.stateDir, "conversations", conv))).toBe(false);
+		await expect(harness.tcp.conversations.retrieve(conv)).rejects.toMatchObject({ status: 404 });
+		await expect(harness.tcp.responses.retrieve(first.id)).rejects.toMatchObject({ status: 404 });
+		await expect(harness.tcp.responses.create({ conversation: conv, input: "AGAIN" })).rejects.toMatchObject({
+			status: 404,
+		});
 	});
 
 	it("W3: a steer over WebSocket ends the running response as steered and continues in a successor", async () => {
@@ -242,6 +259,31 @@ describe("E2E deterministic: Web API", () => {
 		// A synchronous request cannot be cancelled by id: the caller closes the connection instead.
 		const sync = await harness.tcp.responses.create({ conversation: conv, input: "AFTER" });
 		await expect(harness.tcp.responses.cancel(sync.id)).rejects.toMatchObject({ status: 400 });
+
+		// A graceful restart lets a running response finish inside the grace window instead of
+		// failing it the moment shutdown begins (transports used to close before turns drained).
+		// Mutation check 2026-10-26: moving `transports.stopAll()` back before the wait makes this
+		// response end `failed` ("服务关闭").
+		const drain = script.hold({ when: (r) => r.isMainTurn && r.lastUserText.includes("DRAIN") });
+		const draining = await harness.tcp.responses.create({ conversation: conv, input: "DRAIN", background: true });
+		await drain.arrived;
+		const restarted = harness.restart();
+		// Admission closes first: a new request is refused with 503 while the held turn still runs
+		// and its response can still be read. (A `/status` probe answers without a turn of its own.)
+		for (;;) {
+			const status = await harness.tcp.responses.create({ conversation: conv, input: "/status" }).then(
+				() => 200,
+				(error: { status?: number }) => {
+					if (error.status === undefined) throw error;
+					return error.status;
+				},
+			);
+			if (status === 503) break;
+		}
+		expect((await harness.tcp.responses.retrieve(draining.id)).status).toBe("in_progress");
+		drain.release();
+		await restarted;
+		expect((await settled(draining.id)).status).toBe("completed");
 	});
 
 	it("W5: a finished background job surfaces as a new response with no input", async () => {

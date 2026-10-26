@@ -26,6 +26,8 @@ export interface TransportRegistry {
 	/** How a channel is named to a user; an unreachable channel falls back to its id. */
 	describeChannel(channelId: string, knownName?: string): string;
 	startAll(ingress: Ingress): Promise<void>;
+	/** Every transport stops taking messages and keeps delivering (see `Transport.stopAccepting`). */
+	stopAcceptingAll(): Promise<void>;
 	stopAll(): Promise<void>;
 }
 
@@ -47,20 +49,26 @@ export function createTransportRegistry(transports: readonly Transport[]): Trans
 				await transport.start(ingress);
 			}
 		},
-		async stopAll() {
-			// Every transport gets its stop even when an earlier one fails: shutdown must not strand a listener.
-			await Promise.all(
-				transports.map((transport) =>
-					transport.stop().catch((error: unknown) => {
-						log.logWarn("runtime.transport.stop_failed", "Transport stop failed", {
-							reason: errorMessage(error),
-							fields: { transport: transport.name },
-						});
-					}),
-				),
-			);
-		},
+		stopAcceptingAll: () => eachTransport(transports, (transport) => transport.stopAccepting()),
+		stopAll: () => eachTransport(transports, (transport) => transport.stop()),
 	};
+}
+
+/** Every transport gets the call even when an earlier one fails: shutdown must not strand a listener. */
+async function eachTransport(
+	transports: readonly Transport[],
+	call: (transport: Transport) => Promise<void>,
+): Promise<void> {
+	await Promise.all(
+		transports.map((transport) =>
+			call(transport).catch((error: unknown) => {
+				log.logWarn("runtime.transport.stop_failed", "Transport stop failed", {
+					reason: errorMessage(error),
+					fields: { transport: transport.name },
+				});
+			}),
+		),
+	);
 }
 
 /**

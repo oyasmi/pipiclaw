@@ -32,6 +32,7 @@ export class DingTalkTransport implements Transport {
 	readonly policy: TransportPolicy;
 	readonly bot: DingTalkBot;
 	private ingress: Ingress | undefined;
+	private stopping: Promise<void> | undefined;
 
 	constructor(private readonly deps: DingTalkTransportDeps) {
 		const ingress = {
@@ -55,8 +56,17 @@ export class DingTalkTransport implements Transport {
 		void this.bot.start();
 	}
 
-	async stop(): Promise<void> {
-		await this.bot.stop();
+	/**
+	 * Inbound stops with the Stream connection. Cards and plain sends go over HTTP and keep working,
+	 * so there is nothing left for `stop` to close.
+	 */
+	stopAccepting(): Promise<void> {
+		this.stopping ??= this.bot.stop();
+		return this.stopping;
+	}
+
+	stop(): Promise<void> {
+		return this.stopAccepting();
 	}
 
 	openTurn(turn: TurnInfo, opts: { quiet: boolean }): ChannelContext {

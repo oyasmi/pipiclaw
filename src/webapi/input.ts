@@ -13,7 +13,7 @@ import type { ContextMessage, ContextPart } from "../channel/turn-context.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { badRequest } from "./errors.js";
 import { newId } from "./ids.js";
-import { MAX_INBOUND_FILE_BYTES } from "./limits.js";
+import { MAX_ATTACHMENT_BYTES_PER_REQUEST, MAX_INBOUND_FILE_BYTES } from "./limits.js";
 import type { InputItem } from "./response-record.js";
 
 export interface ParsedInput {
@@ -45,8 +45,20 @@ type Part = import("openai/resources/responses/responses").ResponseInputContent;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const DATA_URL = /^data:([^,;]*)((?:;[^,;]*)*),(.*)$/s;
 
-/** The bytes of a base64 payload (a `data:` URL, or bare base64 when `bare` allows it), measured before decoding. */
-function decodeBase64(value: string, limit: number, param: string, what: string, bare: boolean): Buffer {
+type DecodeState = { images: number; files: number; bytes: number; binaryFile?: string };
+
+/**
+ * The bytes of a base64 payload (a `data:` URL, or bare base64 when `bare` allows it), measured
+ * before decoding, against its own `limit` and the request's attachment total kept in `state`.
+ */
+function decodeBase64(
+	value: string,
+	limit: number,
+	param: string,
+	what: string,
+	bare: boolean,
+	state: DecodeState,
+): Buffer {
 	let payload = value;
 	const match = DATA_URL.exec(value);
 	if (match) {
@@ -62,17 +74,22 @@ function decodeBase64(value: string, limit: number, param: string, what: string,
 		throw badRequest("invalid_value", `${what} is not valid base64.`, param);
 	}
 	const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
-	if (Math.floor((payload.length * 3) / 4) - padding > limit) {
+	const size = Math.floor((payload.length * 3) / 4) - padding;
+	if (size > limit) {
 		throw badRequest("input_too_large", `${what} is larger than ${limit / (1024 * 1024)} MB.`, param);
 	}
+	if (state.bytes + size > MAX_ATTACHMENT_BYTES_PER_REQUEST) {
+		throw badRequest(
+			"input_too_large",
+			`The attachments of one request total at most ${MAX_ATTACHMENT_BYTES_PER_REQUEST / (1024 * 1024)} MB; send the rest in a following message.`,
+			param,
+		);
+	}
+	state.bytes += size;
 	return Buffer.from(payload, "base64");
 }
 
-function parseContent(
-	content: unknown,
-	itemParam: string,
-	state: { images: number; files: number; binaryFile?: string },
-) {
+function parseContent(content: unknown, itemParam: string, state: DecodeState) {
 	const parts: Part[] = [];
 	const attachments: InboundAttachment[] = [];
 	let text = "";
@@ -130,6 +147,7 @@ function parseContent(
 					`${param}.image_url`,
 					"The image",
 					false,
+					state,
 				);
 				state.images++;
 				attachments.push({ kind: "image", index: state.images, data });
@@ -148,7 +166,14 @@ function parseContent(
 				if (typeof part.file_data !== "string" || typeof part.filename !== "string" || !part.filename.trim()) {
 					throw badRequest("missing_required_parameter", "`file_data` and `filename` are required.", param);
 				}
-				const data = decodeBase64(part.file_data, MAX_INBOUND_FILE_BYTES, `${param}.file_data`, "The file", true);
+				const data = decodeBase64(
+					part.file_data,
+					MAX_INBOUND_FILE_BYTES,
+					`${param}.file_data`,
+					"The file",
+					true,
+					state,
+				);
 				if (readableText(data) === undefined) state.binaryFile ??= `${param}.file_data`;
 				state.files++;
 				attachments.push({ kind: "file", index: state.files, data, fileName: part.filename });
@@ -217,7 +242,7 @@ export function parseInput(input: unknown, param = "input"): ParsedInput {
 	const attachments: InboundAttachment[] = [];
 	const context: ContextMessage[] = [];
 	const texts: string[] = [];
-	const state: { images: number; files: number; binaryFile?: string } = { images: 0, files: 0 };
+	const state: DecodeState = { images: 0, files: 0, bytes: 0 };
 	for (const [index, value] of entries.entries()) {
 		const itemParam = typeof input === "string" ? param : `${param}[${index}]`;
 		if (!isPlainObject(value)) throw badRequest("invalid_value", "An input item must be an object.", itemParam);

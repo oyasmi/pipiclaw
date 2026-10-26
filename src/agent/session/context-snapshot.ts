@@ -1,5 +1,13 @@
+import { readFile } from "node:fs/promises";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import {
+	buildSessionContext,
+	convertToLlm,
+	migrateSessionEntries,
+	parseSessionEntries,
+	type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
+import type { ContextRef } from "../../channel/channel-context.js";
 import type { ContextMessage, ContextPart } from "../../channel/turn-context.js";
 
 /** Snapshot actual context, including full tool observations, without copying runtime policy. */
@@ -50,4 +58,23 @@ export function snapshotContext(messages: AgentMessage[]): ContextMessage[] {
 		const phase = explicit ?? (message.stopReason === "toolUse" ? "commentary" : "final_answer");
 		return content.length ? [{ role: "assistant", content, phase }] : [];
 	});
+}
+
+/**
+ * The context a channel turn ended with, rebuilt from its session file (see `ContextRef`): the
+ * same snapshot `snapshotContext` takes of a live session. Read-only — the file is parsed, never
+ * opened as a session. `undefined` when the file or the entry is gone.
+ */
+export async function loadContextAt(ref: ContextRef): Promise<ContextMessage[] | undefined> {
+	let content: string;
+	try {
+		content = await readFile(ref.sessionFile, "utf8");
+	} catch {
+		return undefined;
+	}
+	const entries = parseSessionEntries(content);
+	migrateSessionEntries(entries);
+	const sessionEntries = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
+	if (!sessionEntries.some((entry) => entry.id === ref.leafId)) return undefined;
+	return snapshotContext(buildSessionContext(sessionEntries, ref.leafId).messages);
 }

@@ -5,16 +5,19 @@
  * the WebSocket handler go through here; nothing outside this file creates a Response.
  */
 
+import { loadContextAt } from "../agent/session/context-snapshot.js";
 import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
 import type { InboundMessage, Ingress, IngressResult } from "../channel/ingress.js";
 import type { PushMessage, TurnInfo } from "../channel/transport.js";
 import type { ContextMessage } from "../channel/turn-context.js";
+import { slashCommandName } from "../commands/catalog.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
 import type { Principal } from "./auth.js";
 import {
 	badRequest,
+	conflict,
 	forbidden,
 	notFound,
 	serverError,
@@ -78,6 +81,7 @@ export class WebApiService {
 	private readonly live = new Map<string, LiveResponse>();
 	private readonly pendingSteers = new Map<string, PendingSteer>();
 	private readonly replayTtlMs: number;
+	private accepting = true;
 	readonly store: WebApiStore;
 
 	constructor(options: ServiceOptions) {
@@ -105,11 +109,36 @@ export class WebApiService {
 		return this.live.get(id)?.record ?? this.store.getResponse(id);
 	}
 
-	/** A conversation the caller may use; a stranger's is as good as absent. */
+	/** A conversation the caller may use; a stranger's is as good as absent, and so is one being deleted. */
 	conversationFor(principal: Principal, id: string): ConversationRecord {
 		const conversation = isConversationId(id) ? this.store.getConversation(id) : undefined;
-		if (!conversation || !canAccess(principal, conversation.owner)) throw notFound(`Conversation ${id}`);
+		if (!conversation || this.closing.has(id) || !canAccess(principal, conversation.owner))
+			throw notFound(`Conversation ${id}`);
 		return conversation;
+	}
+
+	/** Conversations whose delete is under way: no new message may bind them again meanwhile. */
+	private readonly closing = new Set<string>();
+
+	/**
+	 * `DELETE /v1/conversations/{id}`: the conversation's channel is released by the runtime (its
+	 * binding, runner and background scans) and its history removed. Refused while something runs.
+	 */
+	async deleteConversation(principal: Principal, id: string): Promise<void> {
+		const conversation = this.conversationFor(principal, id);
+		this.closing.add(conversation.id);
+		try {
+			if ((await this.ingress.closeChannel(channelIdOf(conversation.id))) === "busy") {
+				throw conflict(
+					"conversation_busy",
+					"The conversation has a response running or queued; cancel it or wait for it to end, then delete again.",
+				);
+			}
+			for (const record of this.store.listResponses(conversation.id)) this.live.delete(record.id);
+			await this.store.deleteConversation(conversation.id);
+		} finally {
+			this.closing.delete(conversation.id);
+		}
 	}
 
 	recordFor(principal: Principal, id: string): ResponseRecord {
@@ -133,7 +162,8 @@ export class WebApiService {
 	 * the response to be announced.
 	 */
 	async create(principal: Principal, request: CreateRequest, input: ParsedInput): Promise<LiveResponse> {
-		const target = this.resolveTarget(principal, request);
+		if (!this.accepting) throw unavailable("The server is shutting down; retry shortly.");
+		const target = await this.resolveTarget(principal, request);
 		const context = [...target.context, ...input.context];
 		// A conversation's user messages are an ordinary channel turn (memory bootstrap, desk context,
 		// commands, attachments saved to the desk), as a string input is. Only history with other roles,
@@ -149,7 +179,10 @@ export class WebApiService {
 		const record: ResponseRecord = {
 			store: request.store,
 			request_scoped: target.requestScoped,
-			context,
+			// Only a request-scoped generation is continued from its own input; what came before it is
+			// its parent's, kept there. A conversation's context is its session (`context_ref`).
+			...(target.requestScoped ? { context: input.context } : {}),
+			...(target.previousResponseId && target.requestScoped ? { context_parent: target.previousResponseId } : {}),
 			instructions: request.instructions,
 			id,
 			conversation_id: target.conversationId,
@@ -167,6 +200,7 @@ export class WebApiService {
 			incomplete_details: null,
 		};
 		const live = this.register(record, request.background && request.stream);
+		if (target.requestScoped) this.generationInputs.set(id, context);
 		const message: InboundMessage = {
 			channelId: channelIdOf(target.conversationId),
 			user: principal.name,
@@ -191,6 +225,7 @@ export class WebApiService {
 			} else result = await this.ingress.receive(message);
 		} catch (error) {
 			this.live.delete(id);
+			this.generationInputs.delete(id);
 			log.logWarn("webapi.ingress.failed", "Ingress refused a message with an error", {
 				reason: errorMessage(error),
 			});
@@ -198,6 +233,7 @@ export class WebApiService {
 		}
 		if (result.kind === "rejected") {
 			this.live.delete(id);
+			this.generationInputs.delete(id);
 			throw rejectionError(result);
 		}
 		live.announce(result.kind === "queued" ? "queued" : "in_progress");
@@ -205,17 +241,17 @@ export class WebApiService {
 		return live;
 	}
 
-	private resolveTarget(
+	private async resolveTarget(
 		principal: Principal,
 		request: CreateRequest,
-	): {
+	): Promise<{
 		conversationId: string;
 		owner: string;
 		previousResponseId: string | null;
 		requestScoped: boolean;
 		context: ContextMessage[];
 		desk?: string;
-	} {
+	}> {
 		if (request.conversation !== undefined) {
 			const conversation = this.conversationFor(principal, request.conversation);
 			return {
@@ -237,11 +273,13 @@ export class WebApiService {
 					"Wait for the previous response to finish before continuing it.",
 					"previous_response_id",
 				);
-			const context =
-				previous.continuation ??
-				(previous.request_scoped
-					? [...(previous.context ?? []), ...outputContext(previous)]
-					: this.contextThrough(previous));
+			const context = await this.contextAfter(previous);
+			if (!context)
+				throw badRequest(
+					"invalid_value",
+					"The context of that response is no longer on the server. Continue with its `conversation`, or send the history in `input`.",
+					"previous_response_id",
+				);
 			return {
 				conversationId: newId("conv"),
 				owner: principal.name,
@@ -260,18 +298,69 @@ export class WebApiService {
 		};
 	}
 
-	private contextThrough(target: ResponseRecord): ContextMessage[] {
-		const context: ContextMessage[] = [];
-		for (const record of this.responsesOf(target.conversation_id)) {
-			if (isTerminal(record.status)) {
-				context.push(
-					...(record.context ?? (record.input_items.length ? parseInput(record.input_items).context : [])),
-					...outputContext(record),
-				);
+	/**
+	 * The context a request continuing from `target` starts with: everything `target`'s generation
+	 * saw and said. Request-scoped responses are followed back through their parents to one whose
+	 * context stands on its own, then rebuilt forward; `undefined` when a piece is gone.
+	 */
+	private async contextAfter(target: ResponseRecord): Promise<ContextMessage[] | undefined> {
+		const links: ResponseRecord[] = [];
+		let record: ResponseRecord | undefined = target;
+		let context: ContextMessage[] | undefined;
+		while (record) {
+			if (!record.request_scoped) {
+				context = await this.conversationContextAt(record);
+				break;
 			}
-			if (record.id === target.id) break;
+			if (record.continuation) {
+				context = record.continuation;
+				break;
+			}
+			links.push(record);
+			if (!record.context_parent) {
+				context = [];
+				break;
+			}
+			record = this.store.getResponse(record.context_parent);
+		}
+		if (!context) return undefined;
+		for (const link of links.reverse()) {
+			const input: ContextMessage[] = [...context, ...(link.context ?? [])];
+			// No tail: the generation never finished (a restart failed it), so what it said is its output.
+			context = link.continuation_tail ? [...input, ...link.continuation_tail] : [...input, ...outputContext(link)];
 		}
 		return context;
+	}
+
+	/**
+	 * A conversation's model context as of `target`: the session where the last turn up to it left
+	 * off. A command's reply never entered the session, so it shares the turn before it; `/new`
+	 * started an empty one.
+	 */
+	private async conversationContextAt(target: ResponseRecord): Promise<ContextMessage[] | undefined> {
+		const records = this.responsesOf(target.conversation_id);
+		const end = records.findIndex((record) => record.id === target.id);
+		for (let index = end; index >= 0; index--) {
+			const record = records[index];
+			if (record.context_ref) return loadContextAt(record.context_ref);
+			if (record.continuation) return record.continuation;
+			if (slashCommandName(inputTextOf(record)) === "new") return [];
+		}
+		return [];
+	}
+
+	/** Each request-scoped generation's full input, until it ends and its tail is cut against it. */
+	private readonly generationInputs = new Map<string, ContextMessage[]>();
+
+	/** Record how a later request continues from `live` (see `ResponseRecord`). */
+	recordContinuation(live: LiveResponse, outcome: TurnOutcome): void {
+		const input = this.generationInputs.get(live.id);
+		this.generationInputs.delete(live.id);
+		if (outcome.contextRef) live.record.context_ref = outcome.contextRef;
+		const full = outcome.continuation;
+		if (!full) return;
+		if (input && startsWith(full, input)) live.record.continuation_tail = full.slice(input.length);
+		else live.record.continuation = full;
 	}
 
 	private register(record: ResponseRecord, replayable = false): LiveResponse {
@@ -294,18 +383,28 @@ export class WebApiService {
 
 	/**
 	 * Cancel a response the caller no longer wants (`cancel`, a dropped connection): what has not
-	 * started is taken out of the queue, what is running is stopped like `/stop`.
+	 * started is taken out of the queue, and only the turn that answers it is stopped — not `/stop`,
+	 * which would also drop what every other caller has queued on the conversation.
 	 */
 	async cancel(live: LiveResponse): Promise<void> {
 		if (live.terminal) return;
 		const channelId = channelIdOf(live.record.conversation_id);
 		const wasWaiting = live.status === "queued";
+		const root = this.rootOf(live.id);
 		live.cancel();
 		this.pendingSteers.forEach((steer, ref) => {
-			if (steer.targetId === this.rootOf(live.id)) this.pendingSteers.delete(ref);
+			if (steer.targetId === root) this.pendingSteers.delete(ref);
 		});
-		const dropped = wasWaiting && this.ingress.dropQueued(channelId, live.id);
-		if (!dropped) await this.ingress.cancel(channelId);
+		if (wasWaiting && this.ingress.dropQueued(channelId, live.id)) return;
+		// A steered successor answers its turn under the response that began it; a steer that missed
+		// its turn runs as a turn of its own, under its own id.
+		if (await this.ingress.cancelTurn(channelId, live.id)) return;
+		if (root !== live.id) await this.ingress.cancelTurn(channelId, root);
+	}
+
+	/** Shutdown has begun: refuse new messages, keep delivering what runs (see `Transport.stopAccepting`). */
+	stopAccepting(): void {
+		this.accepting = false;
 	}
 
 	/** Fail whatever is still running: the process is going away. */
@@ -395,7 +494,7 @@ export class WebApiService {
 			complete: (outcome) => {
 				// A turn that had nothing to say makes no response; one that said something ends it.
 				if (!live) return;
-				if (outcome.continuation) live.record.continuation = outcome.continuation;
+				this.recordContinuation(live, outcome);
 				if (outcome.executionDesk) live.record.desk = outcome.executionDesk;
 				if (outcome.kind === "failed") live.fail(outcome.message ?? "回合异常结束。", toApiUsage(outcome.usage));
 				else if (outcome.kind === "cancelled") live.cancel();
@@ -512,7 +611,7 @@ class ResponseTurn implements ChannelContext {
 
 	async finish(outcome: TurnOutcome): Promise<void> {
 		const live = this.current;
-		if (outcome.continuation) live.record.continuation = outcome.continuation;
+		this.service.recordContinuation(live, outcome);
 		if (outcome.executionDesk) live.record.desk = outcome.executionDesk;
 		const usage = toApiUsage(outcome.usage);
 		switch (outcome.kind) {
@@ -551,4 +650,22 @@ class SyntheticTurn implements ChannelContext {
 
 function outputContext(record: ResponseRecord): ContextMessage[] {
 	return record.output.flatMap((item) => parseInput([item]).context);
+}
+
+/** What the caller typed, as one string (for recognising a command). */
+function inputTextOf(record: ResponseRecord): string {
+	return record.input_items
+		.flatMap((item) =>
+			item.type === "message" && Array.isArray(item.content)
+				? item.content.flatMap((part) => (part.type === "input_text" ? [part.text] : []))
+				: [],
+		)
+		.join("\n");
+}
+
+/** Whether `full` begins with exactly the messages of `prefix` (field by field: key order differs). */
+function startsWith(full: readonly ContextMessage[], prefix: readonly ContextMessage[]): boolean {
+	const same = (a: ContextMessage, b: ContextMessage) =>
+		a.role === b.role && a.phase === b.phase && JSON.stringify(a.content) === JSON.stringify(b.content);
+	return prefix.length <= full.length && prefix.every((message, index) => same(message, full[index]));
 }

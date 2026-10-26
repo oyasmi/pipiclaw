@@ -21,11 +21,26 @@
 - **Web API**（[docs/webapi.md](docs/webapi.md)）：OpenAI Responses 形状的 HTTP 与 WebSocket 服务，官方 `openai` SDK 可直接连接——同步、流式、`background`（含续流与取消）、会话与 items、WebSocket 的 steering 与多通道；工具调用以 `mcp_call` item 呈现。默认只监听本机 socket；TCP 需要 key（`pipiclaw webapi key add|list|remove`），非 loopback 必须 TLS；Origin / Host 校验、鉴权先于读请求体、请求与连接限额、审计日志。
 - `desk.json` 可设置绝对路径 `cwd`：作为该工位里 agent 的工作目录（shell、相对路径、委派默认目录）；记忆、任务和事件仍留在工位目录。
 - `task_list` 返回每个任务的投递频道；每回合的任务清单会标出汇报到其他频道的任务。
+- `DELETE /v1/conversations/{id}` 结束一个 Web API 会话：解除它的工位绑定（工位不再为它做记忆维护、中断修复和任务投递），并删除它的 Response 记录；有 Response 正在执行或排队时返回 `409 conversation_busy`。
 
 ### 变更
 
+- 取消 Web API 的 Response（cancel 端点，或调用方断开连接）只停止这个 Response 自己的回合。此前它等同于对整个会话执行 `/stop`，会丢掉其他调用方排队的消息，包括另一个终端的消息。
+- 关机先关闭准入，渠道在运行中的回合收尾期间继续投递，所以在宽限期内完成的 Web API Response 会正常送达而不是被标为失败；其间新请求返回 503。
+- 会话里的 Response 不再保存整段会话的副本，只记录那一轮结束时会话文件的位置，`previous_response_id` 接续时从那里重建上下文；响应链里每个请求只保存自己的输入和输出，不再在每一环重复保存全部历史。钉钉回合不再生成会话快照。
+- Web API 一个请求的附件解码后合计不超过 20 MiB（单张图片或单个文件仍不超过 10 MiB），请求体上限由此推导；此前宣称的 10 张 10 MiB 图片实际放不进一个请求。
+- 独立请求的工具改为明确的白名单；`task_update`、`task_close`、`task_log` 不再提供。
+- 非 loopback 的明文 Web API 监听每次启动都会记录警告；发送者的默认工位不存在时会记录日志，不再静默地保持未绑定。
 - 同一工位的任何频道都可以通过 `event_manage` 修改和删除该工位的事件，修改会保留事件原来的投递频道；此前投递到其他频道的事件在这里是只读的。
 - 运行时手册和系统提示改为按“工位由其频道共享”来说明：记住的事实要标明是谁的；在别的频道发起的作业或委派，完成时唤醒那个频道，不会唤醒当前频道。`/desk` 的回复和 TUI 帮助不再把默认工位称作“默认助手”。
+
+### 修复
+
+- 排队的消息在执行时被拒绝（频道已被改绑到发送者无权使用的工位）后，频道会一直显示忙碌，直到下一个回合。
+- 回合抛出异常时，输出以“完成”结束，Web API 上表现为一个空的成功 Response；现在以失败结束并给出面向用户的原因。
+- 在出现过图片或文件的会话里，从命令回复接续 `previous_response_id` 会因一个调用方从未发送过的字段报 400。
+- 终端：回合中输入斜杠命令后，下一条消息不再从 steer 退化为 followup；启动时只读取最新的一条 item，而不是整个会话；使用另一个终端内嵌运行时的终端，会在那个运行时退出时明确提示。
+- WebSocket 的 `response.steer` 带非 user 角色时返回 `invalid_input`，不再被并入用户文本。
 
 ### 删除
 

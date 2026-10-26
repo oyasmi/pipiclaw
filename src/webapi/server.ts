@@ -170,7 +170,7 @@ async function buildApp(
 			request.headers["access-control-request-method"] !== undefined
 		) {
 			// Preflight carries no bearer key; only the subsequent API request is authenticated.
-			reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
+			reply.header("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
 			reply.header("vary", "Access-Control-Request-Headers");
 			const headers = request.headers["access-control-request-headers"];
 			if (headers) reply.header("access-control-allow-headers", headers);
@@ -262,6 +262,13 @@ export class WebApiServer {
 			log.logInfoEvent("webapi.listening", "Web API listening on TCP", {
 				fields: { host: config.tcp.host, port: config.tcp.port, tls: Boolean(https) },
 			});
+			if (!https && !config.tcp.loopback) {
+				// Allowed for a TLS-terminating proxy or a trusted LAN, but a key is shell access and
+				// crosses this network in the clear: the operator should see that every start.
+				log.logWarn("webapi.tcp.plaintext", "Web API serves a non-loopback address without TLS", {
+					fields: { host: config.tcp.host, port: config.tcp.port },
+				});
+			}
 		}
 	}
 

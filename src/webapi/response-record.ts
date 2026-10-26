@@ -11,6 +11,7 @@ import type {
 	ResponseStatus,
 	ResponseUsage,
 } from "openai/resources/responses/responses";
+import type { ContextRef } from "../channel/channel-context.js";
 import type { ContextMessage } from "../channel/turn-context.js";
 import type { UsageTotals } from "../usage/totals.js";
 
@@ -19,7 +20,18 @@ export type OutputItem = ResponseOutputItem;
 export type InputItem = ResponseInputMessageItem | ResponseOutputMessage;
 
 export interface ResponseRecord {
+	/**
+	 * How a later request continues from this one — never shown to a caller. A request-scoped
+	 * response keeps its own input (`context`), the response it continued (`context_parent`, whose
+	 * context comes first), and what its generation added (`continuation_tail`); a full
+	 * `continuation` is kept only when the generation did not start with that input. A conversation
+	 * response keeps only where its turn left the session (`context_ref`). Each piece of history is
+	 * thus stored once, not again in every response that follows it.
+	 */
 	continuation?: ContextMessage[];
+	continuation_tail?: ContextMessage[];
+	context_parent?: string;
+	context_ref?: ContextRef;
 	desk?: string;
 	store?: boolean;
 	request_scoped?: boolean;

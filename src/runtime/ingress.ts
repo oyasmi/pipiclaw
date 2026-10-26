@@ -55,6 +55,8 @@ export function createIngress(deps: IngressDeps): IngressService {
 	const { transports, channelRunners, activeTasks, getRunner, resolveChannel, isShuttingDown, channelIndex } = deps;
 
 	const queues = new Map<string, ChannelQueue>();
+	/** The `ref` of the message each channel's queue is running now, so a cancel can name its turn. */
+	const runningRefs = new Map<string, string>();
 	let stopped = false;
 	let pendingReceives = 0;
 	const reservedTurns = new WeakSet<ChannelEvent>();
@@ -130,13 +132,16 @@ export function createIngress(deps: IngressDeps): IngressService {
 			onFull();
 			return { kind: "rejected", reason: { code: "queue_full" } };
 		}
-		queue.enqueue(
-			async () => {
+		const ref = event.source === "human" ? event.ref : undefined;
+		queue.enqueue(async () => {
+			if (ref !== undefined) runningRefs.set(event.channelId, ref);
+			try {
 				service.reserveEvent(event);
 				await service.handleEvent(event);
-			},
-			event.source === "human" ? event.ref : undefined,
-		);
+			} finally {
+				if (runningRefs.get(event.channelId) === ref) runningRefs.delete(event.channelId);
+			}
+		}, ref);
 		return { kind: waiting ? "queued" : "started" };
 	}
 
@@ -350,8 +355,22 @@ export function createIngress(deps: IngressDeps): IngressService {
 			return busy.handleStop(channelId);
 		},
 
+		async cancelTurn(channelId: string, ref: string): Promise<boolean> {
+			if (await deps.requestExecution?.cancel(channelId)) return true;
+			if (runningRefs.get(channelId) !== ref) return false;
+			return busy.cancelRunningTurn(channelId);
+		},
+
 		dropQueued(channelId: string, ref: string): boolean {
 			return queues.get(channelId)?.removeByRef(ref) ?? false;
+		},
+
+		async closeChannel(channelId: string): Promise<"closed" | "busy"> {
+			const queue = queues.get(channelId);
+			if (isRunning(channelId) || (queue && !queue.isIdle())) return "busy";
+			resetChannelQueue(channelId);
+			await deps.unbind(channelId);
+			return "closed";
 		},
 
 		enqueueEvent(event: WakeEvent): boolean {

@@ -164,9 +164,10 @@ ws.send({ type: "response.create", model: "pipiclaw", input: "你好" });
 | `GET /v1/responses`（WebSocket 升级） | `response.create`、`response.steer`，支持 `stream_id` |
 | `POST /v1/conversations`、`GET/POST /v1/conversations/{id}` | 创建（仅 `metadata`）、读取、改 `metadata` |
 | `GET /v1/conversations/{id}/items` | `after`、`limit`、`order` |
+| `DELETE /v1/conversations/{id}` | 结束这个会话：解除它的工位绑定（工位不再为它做记忆维护、中断修复和任务投递），删除它的 Response 记录；工位里的会话目录作为历史保留。会话有排队或进行中的 Response 时返回 409（`conversation_busy`），先取消或等它结束。之后它的 id 和 Response id 都返回 404 |
 | `GET /v1/models`、`GET /v1/models/{id}` | 只有 `pipiclaw` |
 
-其他路径和方法（`DELETE`、会话 item 的增删改、`/files` 等）返回 404。
+其他路径和方法（删除 Response、会话 item 的增删改、`/files` 等）返回 404。不再使用的会话请用 `DELETE` 结束：每个会话都是一个绑定到工位的频道，不删除就会一直留在绑定表里。
 
 ## 上下文管理
 
@@ -213,7 +214,7 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 | `model` | 必须是 `"pipiclaw"` |
 | `input` | 字符串，或 user/assistant/system/developer 的 message 数组；用户支持 input_text/input_image/input_file，其余角色支持文本，assistant 可回放 output_text 和 phase |
 | `conversation` | 会话 id 或 `{ "id" }` |
-| `previous_response_id` | 不能和 `conversation` 同用；指向调用方可访问、已保存并结束的 Response，支持分支 |
+| `previous_response_id` | 不能和 `conversation` 同用；指向调用方可访问、已保存并结束的 Response，支持分支。指向会话里的 Response 时，上下文按那一轮结束时的会话重建（会话里命令的回复接续它之前的那一轮）；那段会话已不在服务端时返回 400，改用 `conversation` 或在 `input` 里重放历史 |
 | 都没传 | 以本次 input 独立生成，不创建持久会话；Response.conversation 为 null |
 | `stream`、`background`、`stream_options` | 支持；WebSocket 上不能出现 |
 | `metadata`、`store` | 支持；store 默认 true，false 不保存可检索的响应资源；显式会话仍保存 items |
@@ -224,7 +225,7 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 
 `input` 可包含历史 assistant 消息、system/developer 指令，以及 Pipiclaw 自己输出的 reasoning 摘要和 mcp_call。历史工具记录作为观察信息提供给模型，不会执行。客户端工具闭环（function_call_output）、item_reference 和加密 reasoning 等仍未实现，明确返回 400。
 
-**图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤10 MiB，最多 10 张），`input_file` 用 `file_data` 加 `filename`（≤10 MiB）。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。作为上下文导入的 input（独立请求、响应链、含其他角色的会话 input）里，文件以 UTF-8 文本内联；PDF、Office 文档等二进制文件返回 400（`param` 指向该 `file_data`），请放在只含 user 消息的 conversation 里发送，文件会保存到工位供工具读取。
+**图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤10 MiB，最多 10 张），`input_file` 用 `file_data` 加 `filename`（≤10 MiB）；一个请求里所有附件解码后合计不超过 20 MiB，超出返回 400（`input_too_large`），其余的放到下一条消息里。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。作为上下文导入的 input（独立请求、响应链、含其他角色的会话 input）里，文件以 UTF-8 文本内联；PDF、Office 文档等二进制文件返回 400（`param` 指向该 `file_data`），请放在只含 user 消息的 conversation 里发送，文件会保存到工位供工具读取。
 
 ## 回合怎么变成 Response
 
@@ -234,7 +235,7 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 - **message 在完整后一次给出**（先 `output_text.delta` 再 `done`），不逐 token 流式。
 - **usage**：`input_tokens` 含缓存读写，`cached_tokens` 是缓存命中；`reasoning_tokens` 恒为 0。
 - **没有请求方的 Response**：任务汇报、定时事件、委派或后台作业完成的唤醒，会在所属会话里出现一个 `input_items` 为空的 Response。后台唤醒回合若整个回合都静默（`[SILENT]`）则不产生 Response。客户端用 `GET /v1/conversations/{id}/items?order=asc&after=<最后看到的 item id>` 拉取。会话 items 对游标客户端是追加序列：存在排队或进行中的 Response 时，排在它之后的 Response 的 items 要等它结束才出现，所以已读到的游标之前不会再插入新 item。
-- **取消**：`background: true` 的 Response 用 `POST …/cancel`（等同于 `/stop`）；同步或流式请求，**断开连接就是取消**。对 background + stream 的 Response 取消时，流在已发出的事件之后直接结束，不发终态事件——结果看 cancel 的返回值或再 `GET` 一次。WebSocket 连接关闭时，它上面排队和进行中的 Response 都被取消。
+- **取消**：`background: true` 的 Response 用 `POST …/cancel`；同步或流式请求，**断开连接就是取消**。取消只作用于这一个 Response：排队中的直接移出队列，正在执行的只停止它自己的回合；同一会话里其他请求排队的 Response 照常执行（这一点与文本 `/stop` 不同，`/stop` 会清空整个会话的队列并暂停正在执行的任务步骤）。对 background + stream 的 Response 取消时，流在已发出的事件之后直接结束，不发终态事件——结果看 cancel 的返回值或再 `GET` 一次。WebSocket 连接关闭时，它上面排队和进行中的 Response 都被取消。
 - **steering 只在 WebSocket 上**（规范如此）。目标必须是本连接上创建、正在 `in_progress` 的 Response，失败时回 `response.steer.failed`，`error.code` 是 `response_not_found`、`response_not_active`、`response_already_completed`、`invalid_input` 或 `too_many_pending_steers`（每个 Response 最多 4 个未生效的 steer）。这是对规范的扩展：官方 OpenAI 对会话绑定的 Response 不支持 steering，Pipiclaw 支持。
 - **重启**：进行中的 Response 在重启后标为 `failed`（"服务重启，回合被中断"），**不会自动重跑**，因为它的工具可能已经产生了副作用。
 
@@ -256,19 +257,21 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 | 401 | 缺少或无效的 key（`invalid_api_key`） |
 | 403 | `Host` 不对，或工位不在 key 的 `desks` 内 |
 | 404 | 资源不存在或不属于这把 key |
-| 413 | 请求体超过 30 MiB |
+| 409 | 删除仍有排队或进行中 Response 的会话（`conversation_busy`） |
+| 413 | 请求体超过约 30.7 MiB（20 MiB 附件的 base64 加 4 MiB 余量） |
 | 429 | 限流或队列满，带 `Retry-After` |
-| 500 / 503 | 内部错误 / 正在关机 |
+| 500 / 503 | 内部错误 / 正在关机（关机时先拒绝新请求，已在执行的 Response 在宽限期内照常完成并送达，之后才断开连接） |
 
 `message` 是英文，并说明下一步该怎么做。
 
 ## 安全
 
 - **一把 key 的权限等于宿主机上的 shell 权限**（agent 有 `bash`，受[安全模型](./security.md)的路径和命令守卫约束）。给它的人要和给 shell 的人一样可信。本机 socket 的访问范围等于运行 daemon 的系统用户。
+- 因此 key 的 `desks` 是**作用范围，不是隔离边界**：它决定这把 key 的会话绑到哪些工位、`/desk bind` 能去哪里，但 agent 的 `bash` 和文件工具仍能读写宿主机上运行账号可达的一切，包括其他工位。需要真正隔离的调用方，应运行在单独的系统账号和 app home 下。非 loopback 地址不配 TLS 时，daemon 每次启动都会在日志里给出警告。
 - 默认只监听本机 socket；TCP 要显式打开。非 loopback 且不配 `tls` 时是明文 HTTP，key 会明文过网络——只在 TLS 由前置反向代理终止、或可信内网中这样用。
 - 允许带 `Origin` 头的请求（包括 WebSocket 升级）；HTTP 支持任意来源的 CORS，允许浏览器前端直接调用。loopback TCP 仍校验 `Host`，防 DNS rebinding。
 - `OPTIONS` 预检无需 key，不访问业务数据；实际请求在读请求体**之前**鉴权，失败直接 401。key 只存 SHA-256，比较是常量时间的。
-- 限制：请求体 30 MiB、单个请求 30 秒内接收完、最多 64 个连接、TCP 上每把 key 每分钟 300 次。
+- 限制：附件合计 20 MiB、请求体约 30.7 MiB、单个请求 30 秒内接收完、最多 64 个连接、TCP 上每把 key 每分钟 300 次。
 - 限流按 key 计数，在鉴权之后、读请求体之前生效；不按来源 IP，因为在反向代理后面所有请求都来自代理的地址。没带有效 key 的请求直接 401，不计入限流，所以暴露到公网时请在反向代理上按来源 IP 限流（例如 nginx `limit_req`）。
 - 审计：每个请求（主体、方法、路径、会话、状态码）和每次鉴权失败（来源、原因）都写进安全审计日志；日志里没有 key、请求体或输出。
 

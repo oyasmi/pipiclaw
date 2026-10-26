@@ -1,6 +1,7 @@
 /**
- * Ordered daemon shutdown: stop the schedulers, stop admission, wait for active turns (aborting
- * them past a grace window), dispose idle runners, then flush storage and logs. Idempotent: every
+ * Ordered daemon shutdown: stop the schedulers, stop admission (the transports still deliver), wait
+ * for active turns (aborting them past a grace window), dispose idle runners, close the transports,
+ * then flush storage and logs. Idempotent: every
  * call after the first returns the first call's promise.
  */
 import type { AgentRunner } from "../agent/types.js";
@@ -38,7 +39,7 @@ export interface ShutdownDeps {
 	deskRuntime: { stop(): void; flush?(): Promise<void> };
 	runs: { stop(): void };
 	jobs: { stop(): void };
-	transports: { stopAll(): Promise<void> };
+	transports: { stopAcceptingAll(): Promise<void>; stopAll(): Promise<void> };
 	/** The inbound pipeline: stops taking work. */
 	ingress: { stop(): void };
 	store: ChannelStore;
@@ -82,7 +83,9 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			deskRuntime.stop();
 			runs.stop();
 			jobs.stop();
-			await transports.stopAll();
+			// Admission closes first; the transports keep delivering, so a turn that finishes inside
+			// the grace window below still reaches its channel (its card, its Web API response).
+			await transports.stopAcceptingAll();
 			ingress.stop();
 
 			const runningTasks = Array.from(activeTasks);
@@ -153,6 +156,8 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 				}
 			}
 			channelRunners.clear();
+			// Only now do connections close: what is still unfinished ends as interrupted.
+			await transports.stopAll();
 
 			const storageFlushes = [
 				store.close(),

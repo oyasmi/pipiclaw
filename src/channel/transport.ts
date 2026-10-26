@@ -68,7 +68,13 @@ export interface Transport {
 	readonly policy: TransportPolicy;
 	/** Start receiving. `ingress` is the one place inbound messages go. */
 	start(ingress: Ingress): Promise<void>;
-	/** Stop receiving, finish what is being delivered; `ingress` is not called afterwards. */
+	/**
+	 * Shutdown, first half: take no new messages (`ingress` is not called afterwards), but keep
+	 * delivering — turns already running still finish through `openTurn`/`push` while the runtime
+	 * waits for them.
+	 */
+	stopAccepting(): Promise<void>;
+	/** Shutdown, second half, once the turns are done: close every connection and release state. */
 	stop(): Promise<void>;
 	/**
 	 * One turn's output port. A `quiet` turn shows no progress; only its answer is delivered.

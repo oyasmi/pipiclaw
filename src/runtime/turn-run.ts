@@ -57,6 +57,9 @@ export function isSyntheticEvent(event: ChannelEvent): event is WakeEvent {
 	return event.source === "wake";
 }
 
+/** What a person sees when a turn ends in an error the runner did not report itself. */
+const TURN_FAILED_MESSAGE = "这一轮处理异常中断，没有完成。请重发消息；反复出现时请部署者查看服务日志。";
+
 /** One message or wake, written to the message archive (see `ChannelStore.logMessage`). */
 export interface ArchivedMessage {
 	date: string;
@@ -229,6 +232,8 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		absorbedDispatchIds: string[];
 		/** Only an agent run that returns without aborting or erroring can acknowledge merged notifications. */
 		mergedWakesHandled: boolean;
+		/** The turn threw instead of ending through the runner: its output must end as a failure. */
+		threw: boolean;
 	}
 
 	/**
@@ -276,7 +281,14 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 				});
 			}
 		}
-		return { event, output: undefined, structuredWakeFinalized, absorbedDispatchIds, mergedWakesHandled: false };
+		return {
+			event,
+			output: undefined,
+			structuredWakeFinalized,
+			absorbedDispatchIds,
+			mergedWakesHandled: false,
+			threw: false,
+		};
 	};
 
 	/** Say something to the channel in answer to `event`, carrying its reference back to the transport. */
@@ -464,13 +476,21 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 	const finishTurn = async (turn: TurnState, runner: AgentRunner): Promise<void> => {
 		const { event } = turn;
 		// The runner finishes the output when it runs; a command, or a turn that failed before the
-		// runner took over, finishes here so the transport never keeps one open.
+		// runner took over, finishes here so the transport never keeps one open. A human message that
+		// threw before any output was opened still gets one, so its transport sees it end.
+		if (!turn.output && turn.threw && event.source === "human") {
+			const transport = transports.forChannel(event.channelId);
+			if (transport) turn.output = trackOutput(transport.openTurn(turnInfoOf(event), { quiet: true }));
+		}
 		if (turn.output && !turn.output.finished) {
-			const outcome: TurnOutcome = {
-				kind: "completed",
-				usage: createEmptyUsageTotals(),
-				executionDesk: runner.conversation.desk,
-			};
+			const outcome: TurnOutcome = turn.threw
+				? {
+						kind: "failed",
+						message: TURN_FAILED_MESSAGE,
+						usage: createEmptyUsageTotals(),
+						executionDesk: runner.conversation.desk,
+					}
+				: { kind: "completed", usage: createEmptyUsageTotals(), executionDesk: runner.conversation.desk };
 			await turn.output.ctx.finish(outcome).catch((error: unknown) => {
 				log.logWarn("delivery.close.failed", "Delivery close failed", {
 					channelId: event.channelId,
@@ -633,6 +653,7 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 				!inboundEvent.allowedDesks.includes(boundDesk) &&
 				command?.name !== "desk"
 			) {
+				releaseReservation(inboundEvent);
 				await answerOnly(transport, inboundEvent, () =>
 					replyTo(transport, inboundEvent, `当前身份无权使用工位 \`${boundDesk}\`。`).then(() => undefined),
 				);
@@ -661,6 +682,7 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			try {
 				await executeTurn(turn, runner, transport, isSyntheticEvent(inboundEvent));
 			} catch (err) {
+				turn.threw = true;
 				log.logEvent("error", "agent.turn.failed", "Turn failed", {
 					ctx: { channelId: turn.event.channelId, userName: senderOf(turn.event).userName },
 					fields: { error: errorMessage(err) },

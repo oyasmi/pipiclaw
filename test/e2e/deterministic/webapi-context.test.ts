@@ -1,7 +1,13 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { createWebApiHarness, reply, WEBAPI_DESK, type WebApiHarness } from "../../support/webapi-harness.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	createWebApiHarness,
+	readJsonl,
+	reply,
+	WEBAPI_DESK,
+	type WebApiHarness,
+} from "../../support/webapi-harness.js";
 
 const allFiles = (root: string): string[] =>
 	readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -197,6 +203,21 @@ describe("E2E deterministic: Responses context strategies", () => {
 		expect(bodyText(b)).not.toContain("INSTRUCTIONS_");
 		expect(branchA.previous_response_id).toBe(root.id);
 		expect(branchB.previous_response_id).toBe(root.id);
+		// Each piece of history is stored once: a branch keeps its own input and what its generation
+		// added, and reaches the root's context through its parent instead of copying it.
+		// Mutation checked 2026-10-26: storing the full `continuation` again makes this fail.
+		const lastSnapshot = (id: string) =>
+			(readJsonl(join(harness.stateDir, "standalone.jsonl")) as Array<Record<string, unknown>>)
+				.filter((line) => line.id === id)
+				.at(-1)!;
+		const storedBranch = lastSnapshot(branchA.id);
+		expect(storedBranch.context_parent).toBe(root.id);
+		expect(storedBranch.continuation).toBeUndefined();
+		expect(JSON.stringify(storedBranch)).not.toContain("ROOT_932");
+		expect(JSON.stringify(storedBranch.context)).toContain("BRANCH_A_932");
+		expect(storedBranch.continuation_tail).toEqual(
+			expect.arrayContaining([expect.objectContaining({ role: "assistant" })]),
+		);
 		const independent = await harness.tcp.responses.create({ input: "INDEPENDENT_932" });
 		await harness.waitForIdle();
 		expect(independent.status).toBe("completed");
@@ -221,6 +242,19 @@ describe("E2E deterministic: Responses context strategies", () => {
 			when: (r) => r.isMainTurn && r.lastUserText === "DESK_CONTEXT_CHILD_932",
 			respond: [reply.toolCall("write", { path: "desk-child-marker", content: "child" }), reply.text("done")],
 		});
+		// A conversation turn records where its session stands, not a copy of the session.
+		const rootSnapshots = () =>
+			(
+				readJsonl(join(harness.stateDir, "conversations", native.id, "responses.jsonl")) as Array<
+					Record<string, unknown>
+				>
+			).filter((line) => line.id === deskRoot.id);
+		// The final snapshot is written after the caller has its answer: wait for it to land.
+		await vi.waitFor(() => expect(rootSnapshots().at(-1)?.status).toBe("completed"));
+		const storedRoot = rootSnapshots().at(-1)!;
+		expect(storedRoot.context_ref).toBeDefined();
+		expect(storedRoot.continuation).toBeUndefined();
+		expect(storedRoot.context).toBeUndefined();
 		const deskChild = await harness.socket.responses.create({
 			previous_response_id: deskRoot.id,
 			input: "DESK_CONTEXT_CHILD_932",
@@ -231,6 +265,10 @@ describe("E2E deterministic: Responses context strategies", () => {
 			"child",
 		);
 		expect(existsSync(join(harness.workspaceDir, "desk-default", "desk-child-marker"))).toBe(false);
+		// The child sees the conversation as that turn left it, rebuilt from the session file.
+		// Mutation checked 2026-10-26: making `loadContextAt` return [] fails here.
+		const childRequest = harness.mainTurnRequests().find((r) => r.lastUserText === "DESK_CONTEXT_CHILD_932")!;
+		expect(bodyText(childRequest)).toContain("DESK_CONTEXT_ROOT_932");
 
 		// A report command's response carries the desk too: continuing from it must not fall back to default.
 		const report = await harness.socket.responses.create({ conversation: native.id, input: "/status" });
@@ -243,5 +281,8 @@ describe("E2E deterministic: Responses context strategies", () => {
 		await harness.waitForIdle();
 		expect(existsSync(join(harness.workspaceDir, `desk-${WEBAPI_DESK}`, "report-child-marker"))).toBe(true);
 		expect(existsSync(join(harness.workspaceDir, "desk-default", "report-child-marker"))).toBe(false);
+		// A command's reply never entered the session: continuing from it continues the turn before it.
+		const reportChild = harness.mainTurnRequests().find((r) => r.lastUserText === "REPORT_CHILD_932")!;
+		expect(bodyText(reportChild)).toContain("DESK_CONTEXT_ROOT_932");
 	});
 });

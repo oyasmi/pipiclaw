@@ -12,7 +12,7 @@
  * died mid-turn) is marked failed then, once — it is never re-run, because its tools may already
  * have had effects.
  */
-import { appendFile, chmod, mkdir, readdir, readFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -194,6 +194,19 @@ export class WebApiStore {
 		return updated;
 	}
 
+	/**
+	 * Forget a conversation and its responses, and remove its directory. The index line in
+	 * `responses.jsonl` stays: it is the operator's record, and it names an id that no longer resolves.
+	 */
+	async deleteConversation(id: string): Promise<void> {
+		for (const responseId of this.order.get(id) ?? []) this.responses.delete(responseId);
+		this.order.delete(id);
+		this.conversations.delete(id);
+		// Snapshots queued before the delete must not recreate the directory afterwards.
+		await this.writes;
+		await rm(this.conversationDir(id), { recursive: true, force: true });
+	}
+
 	private async writeConversation(record: ConversationRecord): Promise<void> {
 		await writeFileAtomically(
 			join(this.conversationDir(record.id), "conversation.json"),
@@ -227,6 +240,8 @@ export class WebApiStore {
 	 */
 	saveResponse(record: ResponseRecord): Promise<void> {
 		if (record.request_scoped && record.store === false) return Promise.resolve();
+		// A late snapshot of a deleted conversation's response (one that was settling) is dropped.
+		if (!record.request_scoped && !this.conversations.has(record.conversation_id)) return Promise.resolve();
 		const isNew = !this.responses.has(record.id);
 		this.responses.set(record.id, record);
 		if (isNew && !record.request_scoped) {

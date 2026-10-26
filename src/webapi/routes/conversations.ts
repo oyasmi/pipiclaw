@@ -79,6 +79,12 @@ export function registerConversationRoutes(app: FastifyInstance, { service }: Ro
 		);
 	});
 
+	app.delete<{ Params: { id: string } }>("/v1/conversations/:id", async (request) => {
+		await service.deleteConversation(request.principal, request.params.id);
+		request.auditConversationId = request.params.id;
+		return { id: request.params.id, object: "conversation.deleted" as const, deleted: true };
+	});
+
 	app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: number; order?: "asc" | "desc" } }>(
 		"/v1/conversations/:id/items",
 		{ schema: { querystring: ITEMS_QUERY } },

@@ -41,6 +41,13 @@ export interface SessionLink {
 	connect(onEvent: (event: StreamEvent & Record<string, unknown>) => void, onClose: () => void): Connection;
 	/** Items after `after` (all of them when absent), oldest first. */
 	listItems(after: string | undefined): Promise<ConversationItem[]>;
+	/** The conversation's newest item, without reading the rest. */
+	lastItemId(): Promise<string | undefined>;
+	/**
+	 * Whether the runtime is still there to connect to. A terminal may be using a runtime another
+	 * terminal embedded (no daemon); that one exiting takes the runtime with it.
+	 */
+	reachable(): boolean;
 }
 
 export interface SessionOptions {
@@ -75,6 +82,7 @@ export class TuiSession {
 	private polling = false;
 	private generation = 0;
 	private exitArmed = false;
+	private runtimeGoneReported = false;
 	private exiting = false;
 	private timer: NodeJS.Timeout | undefined;
 	private exitResolve!: () => void;
@@ -216,13 +224,16 @@ export class TuiSession {
 	private onEvent(event: StreamEvent & Record<string, unknown>): void {
 		this.renderer.handle(event);
 		if (event.type === "response.output_item.done" && event.item?.id) this.shown.add(event.item.id);
+		// A command typed mid-turn runs on its own stream: it is neither a steering successor nor a
+		// response a later message could steer.
+		const control = event.stream_id === CONTROL_STREAM;
 		switch (event.type) {
 			case "response.created": {
 				const id = (event.response as { id?: string } | undefined)?.id;
-				if (this.awaitingSuccessors > 0) this.awaitingSuccessors--;
+				if (!control && this.awaitingSuccessors > 0) this.awaitingSuccessors--;
 				else if (this.unacked > 0) this.unacked--;
 				this.active++;
-				this.lastSteerTarget = id;
+				if (!control) this.lastSteerTarget = id;
 				break;
 			}
 			case "response.steer.accepted":
@@ -243,8 +254,9 @@ export class TuiSession {
 				}
 				break;
 			case "error":
-				// A create the server refused was never announced.
-				if (this.unacked > 0) this.unacked--;
+				// A create the server refused was never announced. An `error` inside a response's stream
+				// (it carries a sequence number) is followed by that response's own `response.failed`.
+				if (event.sequence_number === undefined && this.unacked > 0) this.unacked--;
 				break;
 		}
 		this.afterStateChange();
@@ -253,9 +265,21 @@ export class TuiSession {
 	private onClose(): void {
 		// The server ended the connection (or it dropped): whatever was running is over.
 		this.connection = undefined;
-		if (this.busy) this.options.frontend.showNotice("连接已断开。");
+		if (!this.reportIfRuntimeGone() && this.busy) this.options.frontend.showNotice("连接已断开。");
 		this.resetCounters();
 		this.afterStateChange();
+	}
+
+	/** Say once that the runtime is gone, with what to do; whether it is. */
+	private reportIfRuntimeGone(): boolean {
+		if (this.options.link.reachable()) return false;
+		if (!this.runtimeGoneReported) {
+			this.runtimeGoneReported = true;
+			this.options.frontend.showNotice(
+				"⚠️ 运行时已关闭（没有 daemon 时，它随启动它的那个终端一起退出）。按两次 Ctrl-C 退出，再重新运行 `pipiclaw tui`。",
+			);
+		}
+		return true;
 	}
 
 	private afterStateChange(): void {
@@ -276,7 +300,7 @@ export class TuiSession {
 
 	private async lastItemId(): Promise<string | undefined> {
 		try {
-			return (await this.options.link.listItems(undefined)).at(-1)?.id;
+			return await this.options.link.lastItemId();
 		} catch (error) {
 			log.logWarn("tui.items.failed", "Could not read the conversation's items", { reason: errorMessage(error) });
 			return undefined;
@@ -301,6 +325,7 @@ export class TuiSession {
 				}
 			}
 		} catch (error) {
+			if (this.reportIfRuntimeGone()) return;
 			log.logWarn("tui.poll.failed", "Polling the conversation failed", { reason: errorMessage(error) });
 		} finally {
 			this.polling = false;

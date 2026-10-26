@@ -3,8 +3,19 @@
  * settings: `channel.json` carries intent (what is on, who may use it), not tuning.
  */
 
-/** Largest request body, and the largest WebSocket message, in bytes. */
-export const MAX_BODY_BYTES = 30 * 1024 * 1024;
+const MiB = 1024 * 1024;
+
+/**
+ * Everything one request may attach, decoded. Each image or file has its own cap
+ * (`MAX_INBOUND_IMAGE_BYTES`, `MAX_INBOUND_FILE_BYTES`); this bounds their sum, which a full set of
+ * images would otherwise push past any body size worth holding in memory.
+ */
+export const MAX_ATTACHMENT_BYTES_PER_REQUEST = 20 * MiB;
+/**
+ * Largest request body, and the largest WebSocket message, in bytes: the attachment total once
+ * base64-encoded, plus room for the text and the JSON around it.
+ */
+export const MAX_BODY_BYTES = Math.ceil((MAX_ATTACHMENT_BYTES_PER_REQUEST * 4) / 3) + 4 * MiB;
 /** How long the server waits for a request to arrive in full; it does not limit how long a turn runs. */
 export const REQUEST_TIMEOUT_MS = 30_000;
 /** Open connections across both listeners. */
@@ -37,7 +48,7 @@ export const MAX_METADATA_KEY_CHARS = 64;
 export const MAX_METADATA_VALUE_CHARS = 512;
 
 /** Largest `input_file` once decoded. */
-export const MAX_INBOUND_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_INBOUND_FILE_BYTES = 10 * MiB;
 
 /** Page sizes for list endpoints. */
 export const DEFAULT_PAGE_LIMIT = 20;

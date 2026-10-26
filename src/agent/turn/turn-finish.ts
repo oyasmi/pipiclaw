@@ -65,6 +65,19 @@ export class TurnFinisher {
 	}
 
 	/** How the turn ended, in the channel's terms. An error that came after an answer is still a completed turn. */
+
+	/**
+	 * How a later request continues from this turn. A request-scoped session lives in memory and
+	 * ends with the request, so its context is copied out; a channel turn's session file keeps it,
+	 * so only the place is recorded — copying a whole session after every turn grew each stored
+	 * response with the length of the conversation.
+	 */
+	private continuationOf(): Pick<TurnOutcome, "continuation" | "contextRef"> {
+		if (this.deps.requestScoped) return { continuation: snapshotContext(this.host.session.messages) };
+		const sessionFile = this.host.sessionManager.getSessionFile();
+		const leafId = this.host.sessionManager.getLeafId();
+		return sessionFile && leafId ? { contextRef: { sessionFile, leafId } } : {};
+	}
 	private outcomeOf(fallbackAttempted: boolean, fallbackTargetRef: string | undefined): TurnOutcome {
 		const { runState } = this;
 		const usage = { ...runState.totalUsage, cost: { ...runState.totalUsage.cost } };
@@ -145,7 +158,7 @@ export class TurnFinisher {
 		await ctx.finish({
 			...this.outcomeOf(fallbackAttempted, fallbackTargetRef),
 			executionDesk: this.desk,
-			...(promptSubmitted ? { continuation: snapshotContext(this.host.session.messages) } : {}),
+			...(promptSubmitted ? this.continuationOf() : {}),
 		});
 
 		// Log usage summary. Gated on tokens as well as cost: a local (or pricing-less) model

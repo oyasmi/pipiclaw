@@ -4,6 +4,7 @@
  * the branches of `ingress.ts`'s routing that touch the live runner.
  */
 import { forceEndStuckTurnAfterStop } from "../agent/stop-watchdog.js";
+import type { AgentRunner } from "../agent/types.js";
 import type { HumanEvent } from "../channel/channel-event.js";
 import type { StopOutcome } from "../channel/ingress.js";
 import { formatMissingQueueMessage, formatSteerQueued } from "../commands/catalog.js";
@@ -158,12 +159,60 @@ export function createBusyHandlers(
 		}
 	}
 
+	/**
+	 * Abort `runner`'s turn, with the watchdog that isolates it if the abort never lands. The turn's
+	 * output is ended at once (the card is closed, late events dropped).
+	 */
+	function abortTurn(channelId: string, runner: AgentRunner): void {
+		runner.requestStop();
+		void runner.abort().catch((err) => {
+			log.logWarn("agent.turn.abort_failed", "Turn abort failed", {
+				channelId: channelId,
+				reason: errorMessage(err),
+			});
+		});
+		if (stopWatchdogs.has(channelId)) return;
+		stopWatchdogs.add(channelId);
+		void forceEndStuckTurnAfterStop({
+			channelId,
+			runner,
+			graceMs: options.stopForceEndGraceMs,
+			isCurrent: () => channelRunners.get(channelId) === runner,
+			recover: () => {
+				runner.retireForRecovery();
+				channelRunners.delete(channelId);
+				queues.reset(channelId);
+				getDurableDispatch()?.discardQueuedClaims(channelId);
+			},
+			notify: (text) => deps.pushTo(channelId, { text }),
+		})
+			.catch((err) => {
+				log.logWarn("agent.turn.stop_watchdog_failed", "Stop watchdog failed", {
+					channelId: channelId,
+					reason: errorMessage(err),
+				});
+			})
+			.finally(() => {
+				stopWatchdogs.delete(channelId);
+			});
+	}
+
+	/** One message's turn is no longer wanted (its caller cancelled or left): abort only that turn. */
+	function cancelRunningTurn(channelId: string): boolean {
+		const runner = channelRunners.get(channelId);
+		if (!runner?.isBusy()) return false;
+		abortTurn(channelId, runner);
+		log.logInfoEvent("agent.turn.cancel_requested", "Turn cancel requested", { channelId: channelId });
+		return true;
+	}
+
 	/** `/stop`: abort the running turn, drop what was queued behind it, and pause the task it was a step of. */
 	async function handleStop(channelId: string): Promise<StopOutcome> {
 		const runner = channelRunners.get(channelId);
 		let pausedTaskId: string | undefined;
 		if (runner?.isBusy()) {
-			// The runner ends the turn's output at once (the card is closed, late events dropped).
+			// The runner ends the turn's output at once (the card is closed, late events dropped),
+			// before the task is paused below.
 			runner.requestStop();
 			// Stopping a task step stops the task: otherwise the driver would queue the next step
 			// straight away. The step may not be bound to its session yet, so fall back to the text.
@@ -190,12 +239,7 @@ export function createBusyHandlers(
 					fields: { count: dropped },
 				});
 			}
-			void runner.abort().catch((err) => {
-				log.logWarn("agent.turn.abort_failed", "Turn abort failed", {
-					channelId: channelId,
-					reason: errorMessage(err),
-				});
-			});
+			abortTurn(channelId, runner);
 			void getDurableDispatch()
 				?.cancelChannel(channelId)
 				.then((canceled) => {
@@ -212,34 +256,9 @@ export function createBusyHandlers(
 					});
 				});
 			log.logInfoEvent("agent.turn.stop_requested", "Stop requested", { channelId: channelId });
-			if (!stopWatchdogs.has(channelId)) {
-				stopWatchdogs.add(channelId);
-				void forceEndStuckTurnAfterStop({
-					channelId,
-					runner,
-					graceMs: options.stopForceEndGraceMs,
-					isCurrent: () => channelRunners.get(channelId) === runner,
-					recover: () => {
-						runner.retireForRecovery();
-						channelRunners.delete(channelId);
-						queues.reset(channelId);
-						getDurableDispatch()?.discardQueuedClaims(channelId);
-					},
-					notify: (text) => deps.pushTo(channelId, { text }),
-				})
-					.catch((err) => {
-						log.logWarn("agent.turn.stop_watchdog_failed", "Stop watchdog failed", {
-							channelId: channelId,
-							reason: errorMessage(err),
-						});
-					})
-					.finally(() => {
-						stopWatchdogs.delete(channelId);
-					});
-			}
 		}
 		return { pausedTaskId };
 	}
 
-	return { handleBusyMessage, handleStop };
+	return { handleBusyMessage, handleStop, cancelRunningTurn };
 }

@@ -66,8 +66,18 @@ export interface Ingress {
 	execute?(message: InboundMessage): Promise<IngressResult>;
 	/** Inject `message` into the turn running on `channelId`. */
 	steer(channelId: string, message: InboundMessage): Promise<SteerResult>;
-	/** The same as `/stop`. */
+	/** The same as `/stop`: the running turn ends and everything queued behind it is dropped. */
 	cancel(channelId: string): Promise<StopOutcome>;
+	/**
+	 * Stop the turn running on `channelId` only if it answers the message that carried `ref`;
+	 * whether it did. What is queued behind it, and anything another sender is waiting for, stays.
+	 */
+	cancelTurn(channelId: string, ref: string): Promise<boolean>;
 	/** Drop a message that has not started; whether one with this `ref` was found. */
 	dropQueued(channelId: string, ref: string): boolean;
+	/**
+	 * The transport ended this channel for good (a deleted Web API conversation): nothing more is
+	 * kept for it — no binding, no runner, no background scans. `busy` while a turn runs or waits.
+	 */
+	closeChannel(channelId: string): Promise<"closed" | "busy">;
 }

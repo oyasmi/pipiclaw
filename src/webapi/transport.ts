@@ -78,6 +78,14 @@ export class WebApiTransport implements Transport {
 		this.server = server;
 	}
 
+	/**
+	 * New requests are refused from now on (503), while connections stay open: a running response
+	 * keeps streaming to its caller until the runtime has let the turn finish.
+	 */
+	async stopAccepting(): Promise<void> {
+		this.service?.stopAccepting();
+	}
+
 	async stop(): Promise<void> {
 		const server = this.server;
 		const service = this.service;

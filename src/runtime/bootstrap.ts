@@ -414,6 +414,7 @@ async function buildRuntimeContext(
 		getRunner,
 		resolveChannel: (channelId) => deskRuntime.resolve(channelId),
 		ensureBinding: (channelId, desk) => deskRuntime.ensureDefaultBinding(channelId, desk),
+		unbind: (channelId) => deskRuntime.unbind(channelId),
 		deskPort: (channelId) => ({
 			list: async () =>
 				buildDeskList(
