@@ -30,6 +30,8 @@ export interface WebApiConfig {
 }
 
 export const KEY_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+/** `local` is the owner name of the local socket's principal; a TCP key must not share it. */
+export const RESERVED_KEY_NAME = "local";
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /** `127.0.0.0/8`, `::1` and `localhost` — the addresses only this machine can reach. */
@@ -96,6 +98,8 @@ export function parseWebApiConfig(section: unknown): WebApiConfig {
 		const { name, sha256, desks } = entry;
 		if (typeof name !== "string" || !KEY_NAME_PATTERN.test(name)) {
 			issues.push(`${where}.name must match ${KEY_NAME_PATTERN}.`);
+		} else if (name === RESERVED_KEY_NAME) {
+			issues.push(`${where}.name \`${name}\` is reserved for the local socket.`);
 		} else if (seen.has(name)) {
 			issues.push(`${where}.name \`${name}\` is used twice.`);
 		}

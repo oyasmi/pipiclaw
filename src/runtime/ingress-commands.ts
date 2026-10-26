@@ -40,6 +40,19 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 			...(event.source === "human" && event.ref !== undefined ? { ref: event.ref } : {}),
 		});
 
+	/** The desk port a command runs with: a sender limited to some desks may bind only to those. */
+	const deskPortFor = (event: ChannelEvent) => {
+		const port = deskPort(event.channelId);
+		const allowed = event.source === "human" ? event.allowedDesks : undefined;
+		const bind = port.bind;
+		if (!allowed || !bind) return port;
+		return {
+			...port,
+			bind: async (name: string) =>
+				allowed.includes(name) ? bind(name) : { kind: "forbidden" as const, desk: name },
+		};
+	};
+
 	/** `/new` bypasses the old per-channel queue and live SDK session. */
 	async function handleNewSession(event: HumanEvent): Promise<void> {
 		if (isShuttingDown()) return;
@@ -54,6 +67,10 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 						return;
 					}
 					const { conversation } = resolution;
+					if (event.allowedDesks && !event.allowedDesks.includes(conversation.desk)) {
+						await say(event, `当前身份无权使用工位 \`${conversation.desk}\`。`);
+						return;
+					}
 
 					// The empty session file and active pointer are committed before the old
 					// generation is touched. A filesystem failure therefore leaves the live
@@ -127,7 +144,7 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 			return runReportCommand(
 				{
 					kind: "no-desk",
-					deskPort: deskPort(channelId),
+					deskPort: deskPortFor(event),
 					refusal: formatNoDeskReply(resolution),
 				},
 				name,
@@ -140,7 +157,7 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 			{
 				kind: "bound",
 				conversation,
-				deskPort: deskPort(channelId),
+				deskPort: deskPortFor(event),
 				paths: options.paths,
 				describeChannel: (target) => describeChannel(desk, target),
 				version: cliVersion,

@@ -25,6 +25,7 @@ export function traitsOf(mode: TuiResponseMode): DeliveryTraits {
 export interface StreamEvent {
 	type: string;
 	item?: {
+		id?: string;
 		type?: string;
 		name?: string;
 		arguments?: string;
@@ -33,6 +34,9 @@ export interface StreamEvent {
 		summary?: Array<{ text?: string }>;
 		content?: Array<{ type?: string; text?: string }>;
 		error?: { content?: string } | null;
+		/** Pipiclaw's extensions: a tool failure worded for the user; the level of runtime commentary. */
+		pipiclaw_failure?: string;
+		pipiclaw_level?: "error" | "warning" | "notice";
 	};
 	response?: {
 		status?: string;
@@ -115,14 +119,16 @@ export class EventRenderer {
 
 	private itemDone(item: StreamEvent["item"]): void {
 		if (!item) return;
-		if (item.type === "mcp_call" && item.status === "failed") {
-			this.progress("error", item.error?.content?.split("\n")[0] ?? "");
+		if (item.type === "mcp_call") {
+			// A failed call the model is expected to correct stays out of sight; only a failure worded
+			// for the user (a guard refusal) is shown, as on every other channel.
+			if (item.status === "failed" && item.pipiclaw_failure) this.progress("error", item.pipiclaw_failure);
 		} else if (item.type === "reasoning") {
 			this.progress("thinking", textOf(item.summary));
 		} else if (item.type === "message") {
 			const text = textOf(item.content);
 			if (item.phase === "commentary") {
-				this.progress("assistant", text);
+				this.commentary(text, item.pipiclaw_level);
 			} else if (text.trim()) {
 				this.lastAnswer = text;
 				if (this.traits.finalDelivery === "plain") {
@@ -130,6 +136,24 @@ export class EventRenderer {
 					this.answered = true;
 				}
 			}
+		}
+	}
+
+	private commentary(text: string, level: "error" | "warning" | "notice" | undefined): void {
+		switch (level) {
+			case undefined:
+				this.progress("assistant", text);
+				return;
+			case "error":
+				this.progress("error", text);
+				return;
+			case "warning":
+				if (this.traits.progressStyle !== "none") this.progress("error", text);
+				else this.out.showNotice(`⚠️ ${text}`);
+				return;
+			case "notice":
+				this.out.showNotice(text);
+				return;
 		}
 	}
 

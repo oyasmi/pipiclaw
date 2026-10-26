@@ -31,7 +31,9 @@ describe("webapi store", () => {
 		const first = await WebApiStore.open(dir);
 		await first.createConversation("ci", null, conv);
 		await first.saveResponse(record("resp_1", conv, "in_progress"));
-		await first.saveResponse(record("resp_1", conv, "completed"));
+		// A snapshot holding a few attached images is well past the appender's default 8 MiB bound.
+		const large = "x".repeat(12 * 1024 * 1024);
+		await first.saveResponse({ ...record("resp_1", conv, "completed"), instructions: large });
 		await first.saveResponse(record("resp_2", conv, "in_progress"));
 		const standalone = {
 			...record("resp_standalone", `conv_${"b".repeat(32)}`, "in_progress"),
@@ -51,6 +53,7 @@ describe("webapi store", () => {
 			["resp_2", "failed"],
 		]);
 		expect(second.getResponse("resp_2")?.error?.message).toMatch(/重启/);
+		expect(second.getResponse("resp_1")?.instructions).toHaveLength(large.length);
 		expect(second.latestResponseId(conv)).toBe("resp_2");
 		expect(second.getResponse("resp_standalone")?.status).toBe("failed");
 		expect(second.getConversation(standalone.conversation_id)).toBeUndefined();

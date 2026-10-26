@@ -10,7 +10,7 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { generateKey, hashKey } from "./auth.js";
-import { KEY_NAME_PATTERN } from "./config.js";
+import { KEY_NAME_PATTERN, RESERVED_KEY_NAME } from "./config.js";
 
 const USAGE = [
 	"Usage:",
@@ -82,6 +82,9 @@ export async function runWebApiCommand(
 	}
 
 	if (action === "add") {
+		if (name === RESERVED_KEY_NAME) {
+			fail(io, `The name '${RESERVED_KEY_NAME}' is reserved for the local socket.`);
+		}
 		if (!name || !KEY_NAME_PATTERN.test(name)) {
 			fail(
 				io,

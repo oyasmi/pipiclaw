@@ -66,7 +66,14 @@ export class WebApiTransport implements Transport {
 			audit: this.deps.audit,
 			...(this.deps.maxWebSocketMs ? { maxWebSocketMs: this.deps.maxWebSocketMs } : {}),
 		});
-		await server.start();
+		try {
+			await server.start();
+		} catch (error) {
+			// Nothing is kept on `this`, so `stop()` could not reach these: release them here.
+			await service.shutdown().catch(() => undefined);
+			await store.close().catch(() => undefined);
+			throw error;
+		}
 		this.service = service;
 		this.server = server;
 	}
@@ -92,6 +99,9 @@ export class WebApiTransport implements Transport {
 	dropped(_channelId: string, refs: string[]): void {
 		this.service?.dropped(refs);
 	}
+
+	/** No download endpoint exists for a produced file, so `send_media` is not offered here. */
+	readonly sendsMedia = false;
 
 	async sendMedia(): Promise<MediaSendResult> {
 		return {

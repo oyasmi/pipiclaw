@@ -41,7 +41,8 @@ export type BindOutcome =
 	| { kind: "busy"; desk: string }
 	| { kind: "unknown"; desk: string }
 	| { kind: "unavailable"; desk: string }
-	| { kind: "invalid"; desk: string };
+	| { kind: "invalid"; desk: string }
+	| { kind: "forbidden"; desk: string };
 
 /**
  * `/desk list`'s rows: every desk on disk, plus every desk a binding names that is no longer there
@@ -150,6 +151,8 @@ function renderBind(outcome: BindOutcome): string {
 	switch (outcome.kind) {
 		case "invalid":
 			return `工位名不合法：\`${outcome.desk}\`。${NAME_RULE}。`;
+		case "forbidden":
+			return `当前身份无权使用工位 \`${outcome.desk}\`。`;
 		case "unknown":
 			return `没有名为 \`${outcome.desk}\` 的工位。用 \`/desk\` 查看已有的工位，或先 \`/desk new ${outcome.desk}\` 创建。`;
 		case "unavailable":

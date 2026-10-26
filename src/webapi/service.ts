@@ -302,7 +302,7 @@ export class WebApiService {
 		const wasWaiting = live.status === "queued";
 		live.cancel();
 		this.pendingSteers.forEach((steer, ref) => {
-			if (steer.targetId === live.id) this.pendingSteers.delete(ref);
+			if (steer.targetId === this.rootOf(live.id)) this.pendingSteers.delete(ref);
 		});
 		const dropped = wasWaiting && this.ingress.dropQueued(channelId, live.id);
 		if (!dropped) await this.ingress.cancel(channelId);
@@ -406,12 +406,24 @@ export class WebApiService {
 
 	// ---- steering --------------------------------------------------------------------------
 
-	registerSteer(steer: PendingSteer): void {
-		this.pendingSteers.set(steer.successorId, steer);
+	/**
+	 * A turn can be steered several times and each steer ends the response it split, so one turn is a
+	 * chain of responses. Pending steers belong to the turn, keyed by the response that began it.
+	 */
+	private readonly turnRoots = new Map<string, string>();
+
+	private rootOf(responseId: string): string {
+		return this.turnRoots.get(responseId) ?? responseId;
 	}
 
-	pendingSteersOf(targetId: string): PendingSteer[] {
-		return [...this.pendingSteers.values()].filter((steer) => steer.targetId === targetId);
+	registerSteer(steer: PendingSteer): void {
+		this.pendingSteers.set(steer.successorId, { ...steer, targetId: this.rootOf(steer.targetId) });
+	}
+
+	/** The steers still waiting to be applied to the turn `responseId` belongs to, oldest first. */
+	pendingSteersOf(responseId: string): PendingSteer[] {
+		const root = this.rootOf(responseId);
+		return [...this.pendingSteers.values()].filter((steer) => steer.targetId === root);
 	}
 
 	forgetSteer(successorId: string): void {
@@ -427,11 +439,12 @@ export class WebApiService {
 		const steer = this.pendingSteersOf(current.id)[0];
 		if (!steer) return undefined;
 		current.incomplete("steered");
-		return this.createSuccessor(steer, "in_progress");
+		return this.createSuccessor(steer, "in_progress", current.id);
 	}
 
-	private createSuccessor(steer: PendingSteer, initial: "queued" | "in_progress"): LiveResponse {
+	private createSuccessor(steer: PendingSteer, initial: "queued" | "in_progress", followsId?: string): LiveResponse {
 		this.pendingSteers.delete(steer.successorId);
+		this.turnRoots.set(steer.successorId, steer.targetId);
 		const target = this.findRecord(steer.targetId);
 		const conversation = this.store.getConversation(steer.conversationId);
 		const live = this.register({
@@ -441,7 +454,7 @@ export class WebApiService {
 			status: "in_progress",
 			created_at: nowSeconds(),
 			completed_at: null,
-			previous_response_id: steer.targetId,
+			previous_response_id: followsId ?? steer.targetId,
 			background: false,
 			metadata: target?.metadata ?? null,
 			input_items: steer.input.items,
@@ -475,13 +488,13 @@ class ResponseTurn implements ChannelContext {
 				if (!this.quiet) live.beginToolCall(event.callId, event.tool, event.args);
 				return;
 			case "tool.end":
-				if (!this.quiet) live.endToolCall(event.callId, event.ok, event.output);
+				if (!this.quiet) live.endToolCall(event.callId, event.ok, event.output, event.failure);
 				return;
 			case "reasoning":
 				if (!this.quiet) live.addReasoning(event.text);
 				return;
 			case "commentary":
-				if (!this.quiet) live.addMessage("commentary", event.text);
+				if (!this.quiet) live.addMessage("commentary", event.text, event.level);
 				return;
 			case "answer":
 				live.addMessage("final_answer", event.text);

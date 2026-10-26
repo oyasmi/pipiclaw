@@ -224,17 +224,27 @@ export class WebApiServer {
 		return buildApp(listener, deps, undefined);
 	}
 
+	/** Opens every listener or none: a failure after the first one closes what was already open. */
 	async start(): Promise<void> {
+		try {
+			await this.listen();
+		} catch (error) {
+			await this.stop().catch(() => undefined);
+			throw error;
+		}
+	}
+
+	private async listen(): Promise<void> {
 		const { config, socketPath } = this.deps;
 		if (config.socket) {
 			const app = await buildApp("socket", this.deps, undefined);
+			this.apps.push(app);
 			await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
 			await chmod(dirname(socketPath), 0o700);
 			// A stale socket file is safe to remove: the daemon lock says no other runtime owns this home.
 			await rm(socketPath, { force: true });
 			await app.listen({ path: socketPath });
 			await chmod(socketPath, 0o600);
-			this.apps.push(app);
 			log.logInfoEvent("webapi.listening", "Web API listening on the local socket", {
 				fields: { socket: socketPath },
 			});
@@ -244,8 +254,8 @@ export class WebApiServer {
 				? { cert: await readFile(config.tls.cert), key: await readFile(config.tls.key) }
 				: undefined;
 			const app = await buildApp("tcp", this.deps, https);
-			await app.listen({ host: config.tcp.host, port: config.tcp.port });
 			this.apps.push(app);
+			await app.listen({ host: config.tcp.host, port: config.tcp.port });
 			log.logInfoEvent("webapi.listening", "Web API listening on TCP", {
 				fields: { host: config.tcp.host, port: config.tcp.port, tls: Boolean(https) },
 			});

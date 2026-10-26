@@ -36,6 +36,8 @@ interface Line {
 
 const RESTART_MESSAGE = "服务重启，回合被中断。";
 
+const MAX_SNAPSHOT_PENDING_BYTES = 128 * 1024 * 1024;
+
 export class WebApiStore {
 	private readonly conversations = new Map<string, ConversationRecord>();
 	private readonly responses = new Map<string, ResponseRecord>();
@@ -49,6 +51,9 @@ export class WebApiStore {
 		this.appender = createJsonlAppender({
 			pathFor: (_now, record) => (record as Line).path,
 			recordForWrite: (record) => (record as Line).record,
+			// A snapshot carries its input and its continuation, each able to hold the full set of
+			// base64 images a request may attach; the default 8 MiB would refuse a legitimate one.
+			maxPendingBytes: MAX_SNAPSHOT_PENDING_BYTES,
 		});
 	}
 

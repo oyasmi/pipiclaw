@@ -1,6 +1,10 @@
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sniffImageMimeType } from "../src/channel/attachments.js";
 import { parseInboundMessage } from "../src/dingtalk/inbound-media.js";
+import { resolveInboundAttachments } from "../src/runtime/inbound-images.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
  * spec 049: the 2026-08-30 incident's root cause lived entirely in the message-shape branching
@@ -91,5 +95,25 @@ describe("short image signatures", () => {
 	it("does not misidentify a short buffer as a match", () => {
 		expect(sniffImageMimeType(Buffer.from([0xff, 0xd8]))).toBeNull();
 		expect(sniffImageMimeType(Buffer.from("GIF8"))).toBeNull();
+	});
+});
+
+describe("resolveInboundAttachments", () => {
+	const tempDir = useTempDirs();
+
+	// Failure mode: files persisted in one batch shared a millisecond-stamped name and overwrote one
+	// another while the model was told every one of them had been saved.
+	it("keeps every same-named file of one message under its own path", async () => {
+		const deskDir = tempDir();
+		const attachments = Array.from({ length: 24 }, (_, i) => ({
+			kind: "file" as const,
+			index: i + 1,
+			fileName: "report.txt",
+			data: Buffer.from(`content ${i}`),
+		}));
+		const text = attachments.map((a) => `[文件${a.index}]`).join(" ");
+		const { text: settled } = await resolveInboundAttachments({ deskDir, channelId: "c", text, attachments });
+		expect(readdirSync(join(deskDir, "inbox"))).toHaveLength(24);
+		expect(new Set(settled.match(/已保存到 \S+/g)).size).toBe(24);
 	});
 });

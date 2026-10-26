@@ -103,7 +103,7 @@ describe("TuiSession", () => {
 		expect(sent[1]).toMatchObject({ type: "response.steer", previous_response_id: "resp_1", input: "补充一点" });
 		// A command is the server's to judge, not steered into the running turn as text.
 		session.submit("/model fast");
-		expect(sent[2]).toMatchObject({ type: "response.create", input: "/model fast" });
+		expect(sent[2]).toMatchObject({ type: "response.create", input: "/model fast", stream_id: "control" });
 		session.submit("/followup 稍后");
 		expect(sent).toHaveLength(3);
 
@@ -123,12 +123,16 @@ describe("TuiSession", () => {
 		session.submit("又一件事");
 		emit(created("resp_4"));
 		session.submit("/followup 不会发送");
+		const staleClose = state.onClose;
 		session.submit("/stop");
 		expect(state.closed).toBe(1);
 		expect(session.busy).toBe(false);
 		expect(frontend.calls).toContainEqual(["notice", "已停止。"]);
 		session.submit("再来");
 		expect(sent.at(-1)).toMatchObject({ input: "再来" });
+		// The closed connection's late events must not touch the new one's state.
+		staleClose();
+		expect(session.busy).toBe(true);
 	});
 
 	it("follows a steered response into its successor and does not call itself idle in between", async () => {
@@ -181,11 +185,25 @@ describe("TuiSession", () => {
 		});
 		emit({
 			type: "response.output_item.done",
-			item: { type: "message", phase: "final_answer", content: [{ type: "output_text", text: "我的回答" }] },
+			item: {
+				id: "mine",
+				type: "message",
+				phase: "final_answer",
+				content: [{ type: "output_text", text: "我的回答" }],
+			},
+		});
+		// A report that landed in the same window was not drawn by the stream: it must still show.
+		items.push({
+			id: "report",
+			type: "message",
+			role: "assistant",
+			phase: "final_answer",
+			content: [{ text: "委派完成" }],
 		});
 		emit(completed("resp_1"));
+		await vi.waitFor(() => expect(finals()).toEqual(["后台作业完成", "我的回答", "委派完成"]));
 		await new Promise((resolve) => setTimeout(resolve, 100));
-		expect(finals()).toEqual(["后台作业完成", "我的回答"]);
+		expect(finals()).toEqual(["后台作业完成", "我的回答", "委派完成"]);
 	});
 });
 
@@ -201,7 +219,7 @@ describe("EventRenderer", () => {
 			});
 			renderer.handle({
 				type: "response.output_item.done",
-				item: { type: "mcp_call", status: "failed", error: { content: "boom\nmore" } },
+				item: { type: "mcp_call", status: "failed", error: { content: "boom\nmore" }, pipiclaw_failure: "boom" },
 			});
 			renderer.handle({
 				type: "response.output_item.done",

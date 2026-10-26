@@ -16,6 +16,9 @@ export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 
 /** In-flight responses on one WebSocket connection; the rest wait their turn. */
 export const MAX_WS_INFLIGHT_RESPONSES = 16;
+/** Requests one WebSocket connection may have accepted but not yet started, and their size in bytes. */
+export const MAX_WS_PENDING_REQUESTS = 32;
+export const MAX_WS_PENDING_BYTES = 64 * 1024 * 1024;
 /** Named `stream_id` lanes on one WebSocket connection. */
 export const MAX_WS_STREAMS = 32;
 /** A WebSocket connection is closed once it has been open this long (the OpenAI limit). */

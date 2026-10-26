@@ -157,7 +157,7 @@ describe("E2E deterministic: Responses context strategies", () => {
 		harness = await createWebApiHarness();
 		harness.model.script.route({
 			name: "turn",
-			when: (r) => r.isMainTurn && r.lastUserText !== "DESK_CONTEXT_CHILD_932",
+			when: (r) => r.isMainTurn && !r.lastUserText.endsWith("_CHILD_932"),
 			respond: [reply.toolCall("read", { path: "tool-source.txt" }), reply.text("root answer")],
 			repeat: true,
 		});
@@ -231,5 +231,17 @@ describe("E2E deterministic: Responses context strategies", () => {
 			"child",
 		);
 		expect(existsSync(join(harness.workspaceDir, "desk-default", "desk-child-marker"))).toBe(false);
+
+		// A report command's response carries the desk too: continuing from it must not fall back to default.
+		const report = await harness.socket.responses.create({ conversation: native.id, input: "/status" });
+		harness.model.script.route({
+			name: "report-child",
+			when: (r) => r.isMainTurn && r.lastUserText === "REPORT_CHILD_932",
+			respond: [reply.toolCall("write", { path: "report-child-marker", content: "child" }), reply.text("done")],
+		});
+		await harness.socket.responses.create({ previous_response_id: report.id, input: "REPORT_CHILD_932" });
+		await harness.waitForIdle();
+		expect(existsSync(join(harness.workspaceDir, `desk-${WEBAPI_DESK}`, "report-child-marker"))).toBe(true);
+		expect(existsSync(join(harness.workspaceDir, "desk-default", "report-child-marker"))).toBe(false);
 	});
 });

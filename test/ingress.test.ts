@@ -268,11 +268,17 @@ describe("ingress admission", () => {
 	});
 
 	it("refuses a sender whose allowed desks exclude the channel's desk, before anything runs", async () => {
-		const { runner, transport, settle } = await setup();
+		const { runtime, runner, transport, paths, settle } = await setup();
 		const result = await transport.receive("hello", { allowedDesks: ["lab"] });
 		await settle();
 		expect(result).toEqual({ kind: "rejected", reason: { code: "desk_not_allowed", desk: "news" } });
 		expect(runner.run).not.toHaveBeenCalled();
+
+		// Nor may such a sender move the channel to a desk outside its list.
+		await bindTestChannel(paths.workspaceDir, "dingtalk:dm:other", "lab");
+		await transport.receive("/desk bind lab", { allowedDesks: ["news"] });
+		await settle();
+		expect(runtime.desks.boundDesk(CHANNEL)).toBe("news");
 	});
 
 	it("rejects with shutting_down once the runtime has begun to shut down", async () => {

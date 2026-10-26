@@ -1,3 +1,7 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { generateKey, hashKey } from "../src/webapi/auth.js";
 import type { WebApiConfig } from "../src/webapi/config.js";
@@ -136,5 +140,28 @@ describe("webapi door guards", () => {
 			headers: { ...bearer, "content-type": "text/plain" },
 		});
 		expect(text.statusCode).toBe(415);
+	});
+
+	// Failure mode: a TCP bind failure after the socket was already listening left the socket
+	// serving, with nothing holding a reference that `stop()` could close.
+	it("opens every listener or none when one fails to start", async () => {
+		const busy = createServer();
+		await new Promise<void>((resolve) => busy.listen(0, "127.0.0.1", resolve));
+		const port = (busy.address() as { port: number }).port;
+		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-ws-"));
+		const socketPath = join(dir, "api.sock");
+		try {
+			const server = new WebApiServer({
+				config: { ...config, tcp: { host: "127.0.0.1", port, loopback: true } },
+				service: {} as WebApiService,
+				socketPath,
+				audit: () => undefined,
+			});
+			await expect(server.start()).rejects.toMatchObject({ code: "EADDRINUSE" });
+			expect(existsSync(socketPath)).toBe(false);
+		} finally {
+			busy.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

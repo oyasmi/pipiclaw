@@ -23,7 +23,7 @@ import { prepareAppServices } from "../app/services.js";
 import type { WakeEvent } from "../channel/channel-event.js";
 import { CHANNELS_INDEX_FILENAME, type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ChannelStore } from "../channel/store.js";
-import type { PushMessage, Transport } from "../channel/transport.js";
+import type { OutboundMedia, PushMessage, Transport } from "../channel/transport.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
 import { buildDeskList } from "../desk/commands.js";
@@ -359,11 +359,15 @@ async function buildRuntimeContext(
 				return owner ? labelOf(owner) : undefined;
 			},
 			// Enables `send_media`: the file goes out through the transport that owns this channel.
-			sendMedia: async (id, media) =>
-				(await transports.forChannel(id)?.sendMedia(id, media)) ?? {
-					ok: false,
-					error: "This channel cannot receive attachments. Tell the user the file's path on the server instead.",
-				},
+			...(transports.forChannel(channelId)?.sendsMedia === false
+				? {}
+				: {
+						sendMedia: async (id: string, media: OutboundMedia) =>
+							(await transports.forChannel(id)?.sendMedia(id, media)) ?? {
+								ok: false,
+								error: "This channel cannot receive attachments. Tell the user the file's path on the server instead.",
+							},
+					}),
 		});
 		channelRunners.set(channelId, runner);
 		void evictIdleRunnersOverCap(channelRunners);

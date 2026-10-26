@@ -19,6 +19,8 @@ import { type DeliveryTraits, EventRenderer, type StreamEvent } from "./render.j
 /** How often an idle terminal asks the server for items it did not start. */
 export const TUI_POLL_INTERVAL_MS = 3000;
 
+const CONTROL_STREAM = "control";
+
 export interface Connection {
 	send(event: Record<string, unknown>): void;
 	close(): void;
@@ -55,6 +57,13 @@ export interface SessionOptions {
 export class TuiSession {
 	private readonly renderer: EventRenderer;
 	private connection: Connection | undefined;
+	/**
+	 * Which connection the callbacks belong to. Closing a connection is asynchronous, so a stale
+	 * connection's last events and its `close` can arrive after a new one is already running.
+	 */
+	private connectionId = 0;
+	/** Items the stream already showed, so the items poll does not show them a second time. */
+	private readonly shown = new Set<string>();
 	/** Creates sent but not yet announced by the server. */
 	private unacked = 0;
 	/** Responses running now. */
@@ -142,10 +151,17 @@ export class TuiSession {
 	// ---- sending ---------------------------------------------------------------------------
 
 	private ensureConnection(): Connection {
-		this.connection ??= this.options.link.connect(
-			(event) => this.onEvent(event),
-			() => this.onClose(),
-		);
+		if (!this.connection) {
+			const id = ++this.connectionId;
+			this.connection = this.options.link.connect(
+				(event) => {
+					if (id === this.connectionId) this.onEvent(event);
+				},
+				() => {
+					if (id === this.connectionId) this.onClose();
+				},
+			);
+		}
 		return this.connection;
 	}
 
@@ -157,6 +173,9 @@ export class TuiSession {
 			model: "pipiclaw",
 			conversation: this.options.link.conversationId,
 			input: text,
+			// The connection runs the requests of one stream in order, so a command typed while a turn
+			// runs gets its own stream: the server decides whether it may run now, without waiting.
+			...(slashCommandName(text) !== null ? { stream_id: CONTROL_STREAM } : {}),
 		});
 		this.afterStateChange();
 	}
@@ -177,6 +196,7 @@ export class TuiSession {
 	private stop(): void {
 		const connection = this.connection;
 		this.connection = undefined;
+		this.connectionId++;
 		this.resetCounters();
 		this.followups.length = 0;
 		connection?.close();
@@ -195,6 +215,7 @@ export class TuiSession {
 
 	private onEvent(event: StreamEvent & Record<string, unknown>): void {
 		this.renderer.handle(event);
+		if (event.type === "response.output_item.done" && event.item?.id) this.shown.add(event.item.id);
 		switch (event.type) {
 			case "response.created": {
 				const id = (event.response as { id?: string } | undefined)?.id;
@@ -247,7 +268,7 @@ export class TuiSession {
 				this.create(next);
 				return;
 			}
-			void this.fastForward();
+			void this.pollItems();
 		}
 	}
 
@@ -262,17 +283,6 @@ export class TuiSession {
 		}
 	}
 
-	/** After our own response ends, step the cursor over its items without showing them again. */
-	private async fastForward(): Promise<void> {
-		const generation = this.generation;
-		try {
-			const items = await this.options.link.listItems(this.cursor);
-			if (generation === this.generation && !this.busy) this.cursor = items.at(-1)?.id ?? this.cursor;
-		} catch {
-			// The next poll tries again.
-		}
-	}
-
 	private async pollItems(): Promise<void> {
 		if (this.polling || this.busy || this.exiting) return;
 		this.polling = true;
@@ -283,6 +293,8 @@ export class TuiSession {
 			if (generation !== this.generation || this.busy) return;
 			for (const item of items) {
 				this.cursor = item.id;
+				// What this terminal's own responses said was drawn by their streams.
+				if (this.shown.delete(item.id)) continue;
 				if (item.type === "message" && item.role === "assistant" && item.phase !== "commentary") {
 					const text = (item.content ?? []).map((part) => part.text ?? "").join("");
 					if (text.trim()) this.options.frontend.showFinal(text);
@@ -318,6 +330,7 @@ export class TuiSession {
 		if (this.timer) clearInterval(this.timer);
 		const connection = this.connection;
 		this.connection = undefined;
+		this.connectionId++;
 		connection?.close();
 		this.options.frontend.stop();
 		this.exitResolve();

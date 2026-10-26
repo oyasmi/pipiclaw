@@ -466,7 +466,11 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		// The runner finishes the output when it runs; a command, or a turn that failed before the
 		// runner took over, finishes here so the transport never keeps one open.
 		if (turn.output && !turn.output.finished) {
-			const outcome: TurnOutcome = { kind: "completed", usage: createEmptyUsageTotals() };
+			const outcome: TurnOutcome = {
+				kind: "completed",
+				usage: createEmptyUsageTotals(),
+				executionDesk: runner.conversation.desk,
+			};
 			await turn.output.ctx.finish(outcome).catch((error: unknown) => {
 				log.logWarn("delivery.close.failed", "Delivery close failed", {
 					channelId: event.channelId,
@@ -549,12 +553,19 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		try {
 			await work();
 		} finally {
-			await output.ctx.finish({ kind: "completed", usage: createEmptyUsageTotals() }).catch((error: unknown) => {
-				log.logWarn("delivery.close.failed", "Delivery close failed", {
-					channelId: event.channelId,
-					reason: errorMessage(error),
+			const executionDesk = resolvedDesk(deps.resolveChannel(event.channelId));
+			await output.ctx
+				.finish({
+					kind: "completed",
+					usage: createEmptyUsageTotals(),
+					...(executionDesk !== undefined ? { executionDesk } : {}),
+				})
+				.catch((error: unknown) => {
+					log.logWarn("delivery.close.failed", "Delivery close failed", {
+						channelId: event.channelId,
+						reason: errorMessage(error),
+					});
 				});
-			});
 		}
 	};
 
@@ -613,6 +624,20 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			// so `/desk bind` sees this channel idle and the next queued message already resolves
 			// against the new binding (D5).
 			const command = parseBuiltInCommand(inboundEvent.text);
+			// Authorization is checked where the work runs, not only where it was admitted: a queued
+			// message outlives the binding it arrived under (an earlier `/desk bind` may have moved it).
+			const boundDesk = resolvedDesk(resolution);
+			if (
+				inboundEvent.allowedDesks &&
+				boundDesk !== undefined &&
+				!inboundEvent.allowedDesks.includes(boundDesk) &&
+				command?.name !== "desk"
+			) {
+				await answerOnly(transport, inboundEvent, () =>
+					replyTo(transport, inboundEvent, `当前身份无权使用工位 \`${boundDesk}\`。`).then(() => undefined),
+				);
+				return;
+			}
 			if (command?.name === "desk") {
 				releaseReservation(inboundEvent);
 				await answerOnly(transport, inboundEvent, () => runDeskCommand(inboundEvent, command.args, transport));

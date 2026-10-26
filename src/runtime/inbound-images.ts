@@ -3,6 +3,7 @@
  * desk's `inbox/`, settle the `[图片N]` / `[文件N]` markers in the message text, and map absolute
  * image paths back to desk-relative ones for the message archive.
  */
+import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "fs/promises";
 import { basename, join, relative } from "path";
 import { extensionForMimeType, sniffImageMimeType } from "../channel/attachments.js";
@@ -40,7 +41,7 @@ export async function persistInboundImage(
 		await mkdir(dir, { recursive: true });
 		const extension = extensionForMimeType(image.mimeType);
 		const path = join(dir, `image-${localStampForFilename()}-${Math.random().toString(36).slice(2, 8)}.${extension}`);
-		await writeFile(path, image.data, { mode: 0o600 });
+		await writeFile(path, image.data, { mode: 0o600, flag: "wx" });
 		return {
 			path,
 			mimeType: image.mimeType ?? "application/octet-stream",
@@ -74,8 +75,9 @@ export async function persistInboundFile(
 	try {
 		const dir = getDeskInboxDir(deskDir);
 		await mkdir(dir, { recursive: true });
-		const path = join(dir, `file-${localStampForFilename()}-${safeInboundFileName(file.fileName)}`);
-		await writeFile(path, file.data, { mode: 0o600 });
+		const unique = `${localStampForFilename()}-${randomBytes(4).toString("hex")}`;
+		const path = join(dir, `file-${unique}-${safeInboundFileName(file.fileName)}`);
+		await writeFile(path, file.data, { mode: 0o600, flag: "wx" });
 		return path;
 	} catch (err) {
 		log.logWarn("runtime.inbound_file.persist_failed", "Inbound file persist failed", {

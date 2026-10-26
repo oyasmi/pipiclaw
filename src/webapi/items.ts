@@ -9,9 +9,20 @@ import type { InputItem, OutputItem, ResponseRecord } from "./response-record.js
 /** Every item Pipiclaw produces has an id (a message, an `mcp_call`, a reasoning item). */
 export type ConversationItem = (InputItem | OutputItem) & { id: string };
 
-/** A conversation's items in the order they happened: each response's input, then its output. */
+/**
+ * A conversation's items in the order they happened: each response's input, then its output.
+ *
+ * A cursor client must never see an item inserted before the one it holds, but a response's output
+ * keeps growing until it ends. So the list stops at the first response still queued or running:
+ * its own items are shown (they only ever append), the responses behind it wait until it settles.
+ */
 export function conversationItems(responses: readonly ResponseRecord[]): ConversationItem[] {
-	return responses.flatMap((record) => [...record.input_items, ...record.output]) as ConversationItem[];
+	const items: ConversationItem[] = [];
+	for (const record of responses) {
+		items.push(...(record.input_items as ConversationItem[]), ...(record.output as ConversationItem[]));
+		if (record.status === "queued" || record.status === "in_progress") break;
+	}
+	return items;
 }
 
 export interface PageRequest {

@@ -17,7 +17,13 @@ import { newId } from "./ids.js";
 import { MAX_TOOL_OUTPUT_CHARS } from "./limits.js";
 import { isTerminal, nowSeconds, type ResponseRecord, toApiResponse } from "./response-record.js";
 
-type McpCallItem = Extract<ResponseOutputItem, { type: "mcp_call" }>;
+/**
+ * Pipiclaw's additions to the Responses items, for a client that shows what the user is meant to
+ * see: `pipiclaw_failure` is a tool failure worded for the user (a failed call without it is
+ * something the model corrects on its own), `pipiclaw_level` marks runtime-authored commentary.
+ */
+type McpCallItem = Extract<ResponseOutputItem, { type: "mcp_call" }> & { pipiclaw_failure?: string };
+export type CommentaryLevel = "error" | "warning" | "notice";
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 /** An event before it is given its place in the log. */
 type PendingEvent = DistributiveOmit<ResponseStreamEvent, "sequence_number">;
@@ -189,7 +195,7 @@ export class LiveResponse {
 		this.emit({ type: "response.mcp_call.in_progress", output_index: index, item_id: item.id });
 	}
 
-	endToolCall(callId: string, ok: boolean, output: string): void {
+	endToolCall(callId: string, ok: boolean, output: string, failure?: string): void {
 		const index = this.toolItems.get(callId);
 		if (index === undefined || this.terminal) return;
 		this.toolItems.delete(callId);
@@ -198,6 +204,7 @@ export class LiveResponse {
 		item.output = text;
 		item.status = ok ? "completed" : "failed";
 		item.error = ok ? null : { type: "mcp_tool_execution_error", content: text };
+		if (!ok && failure) item.pipiclaw_failure = failure;
 		this.emit({
 			type: ok ? "response.mcp_call.completed" : "response.mcp_call.failed",
 			output_index: index,
@@ -247,16 +254,17 @@ export class LiveResponse {
 	}
 
 	/** A finished assistant message: commentary between tool calls, or the final answer. */
-	addMessage(phase: "commentary" | "final_answer", text: string): void {
+	addMessage(phase: "commentary" | "final_answer", text: string, level?: CommentaryLevel): void {
 		if (this.terminal || !text.trim()) return;
 		const id = newId("msg");
-		const empty: ResponseOutputMessage = {
+		const empty: ResponseOutputMessage & { pipiclaw_level?: CommentaryLevel } = {
 			id,
 			type: "message",
 			role: "assistant",
 			status: "in_progress",
 			phase,
 			content: [],
+			...(level ? { pipiclaw_level: level } : {}),
 		};
 		const index = this.record.output.push(empty) - 1;
 		this.emit({ type: "response.output_item.added", output_index: index, item: structuredClone(empty) });

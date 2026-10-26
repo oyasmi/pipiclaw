@@ -13,7 +13,13 @@ import { badRequest, serverError, WebApiError, wsErrorEnvelope } from "../errors
 import type { RouteContext } from "../http.js";
 import { channelIdOf, isStreamId, newId } from "../ids.js";
 import { parseInput } from "../input.js";
-import { MAX_PENDING_STEERS, MAX_WS_INFLIGHT_RESPONSES, MAX_WS_STREAMS } from "../limits.js";
+import {
+	MAX_PENDING_STEERS,
+	MAX_WS_INFLIGHT_RESPONSES,
+	MAX_WS_PENDING_BYTES,
+	MAX_WS_PENDING_REQUESTS,
+	MAX_WS_STREAMS,
+} from "../limits.js";
 import { validateCreateRequest } from "../request-policy.js";
 import type { LiveResponse } from "../response-state.js";
 import type { PendingSteer, WebApiService } from "../service.js";
@@ -35,6 +41,9 @@ class Connection {
 	/** Each lane runs its responses one after another. */
 	private readonly lanes = new Map<string, Promise<void>>();
 	private inflight = 0;
+	/** Requests accepted but not yet started, and the bytes they hold. */
+	private pendingRequests = 0;
+	private pendingBytes = 0;
 	private readonly waiting: Array<() => void> = [];
 	private closed = false;
 	private readonly timer: NodeJS.Timeout;
@@ -115,7 +124,7 @@ class Connection {
 		try {
 			switch (event.type) {
 				case "response.create":
-					await this.create(event);
+					await this.create(event, Buffer.byteLength(data.toString()));
 					return;
 				case "response.steer":
 					await this.steer(event);
@@ -162,18 +171,39 @@ class Connection {
 		return streamId;
 	}
 
-	private async create(event: Record<string, unknown>): Promise<void> {
+	private async create(event: Record<string, unknown>, rawBytes: number): Promise<void> {
 		const lane = this.laneFor(event);
 		const { type: _type, stream_id: _streamId, ...fields } = event;
 		const request = validateCreateRequest(fields, "websocket");
 		const input = parseInput(request.input);
 		const streamId = lane === DEFAULT_LANE ? undefined : lane;
 
+		// A request waiting for its lane holds its whole input; without a bound a client could queue
+		// any amount behind one slow response.
+		if (this.pendingRequests >= MAX_WS_PENDING_REQUESTS || this.pendingBytes + rawBytes > MAX_WS_PENDING_BYTES) {
+			throw new WebApiError(
+				429,
+				"rate_limit_error",
+				"websocket_backlog_full",
+				"Too many requests are waiting on this connection; wait for some to finish.",
+			);
+		}
+		this.pendingRequests++;
+		this.pendingBytes += rawBytes;
+		let started = false;
+		const start = (): void => {
+			if (started) return;
+			started = true;
+			this.pendingRequests--;
+			this.pendingBytes -= rawBytes;
+		};
+
 		// Each lane is a chain: a response starts when the one before it on the lane has ended.
 		const previous = this.lanes.get(lane) ?? Promise.resolve();
 		const run = previous.then(async () => {
-			if (this.closed) return;
+			if (this.closed) return start();
 			await this.acquire();
+			start();
 			try {
 				if (this.closed) return;
 				const live = await this.service.create(this.principal, request, input);
@@ -302,7 +332,10 @@ class Connection {
 			conversationId: target.record.conversation_id,
 			principal: this.principal,
 			input,
-			onSuccessor: (successor) => this.adopt(target, successor),
+			onSuccessor: (successor) => {
+				const follows = successor.record.previous_response_id;
+				this.adopt((follows !== null ? this.responses.get(follows) : undefined) ?? target, successor);
+			},
 		};
 		this.service.registerSteer(steer);
 		let result: Awaited<ReturnType<WebApiService["ingress"]["steer"]>>;

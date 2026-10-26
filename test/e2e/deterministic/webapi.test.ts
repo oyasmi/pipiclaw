@@ -116,10 +116,21 @@ describe("E2E deterministic: Web API", () => {
 		});
 		expect(second.status).toBe("queued");
 		expect(harness.mainTurnRequests()).toHaveLength(1);
+		// A cursor taken while A runs and B waits must still reach A's answer afterwards (the queued
+		// input stays hidden until A settles, so nothing is ever inserted before a held cursor).
+		const early = await harness.tcp.conversations.items.list(conv, { order: "asc" });
+		const cursor = early.data.at(-1)?.id;
+		expect(JSON.stringify(early.data)).not.toContain("SECOND");
 		gate.release();
 
 		const [a, b] = [await settled(first.id), await settled(second.id)];
 		expect([a.output_text, b.output_text]).toEqual(["answer-A", "answer-B"]);
+		const rest = await harness.tcp.conversations.items.list(conv, {
+			order: "asc",
+			...(cursor ? { after: cursor } : {}),
+		});
+		expect(JSON.stringify(rest.data)).toContain("answer-A");
+		expect(JSON.stringify(rest.data)).toContain("answer-B");
 		expect(mainTurnWords()).toEqual(["FIRST", "SECOND"]);
 		const [firstRequest, secondRequest] = harness.mainTurnRequests();
 		expect(JSON.stringify(firstRequest.raw)).not.toContain("SECOND_ONLY_DIRECTIVE");
@@ -182,19 +193,26 @@ describe("E2E deterministic: Web API", () => {
 		await vi.waitFor(() => expect(events.some((e) => e.type === "response.in_progress")).toBe(true));
 		ws.send({ type: "response.steer", previous_response_id: firstId, input: "STEER_TEXT" } as never);
 		await vi.waitFor(() => expect(events.some((e) => e.type === "response.steer.accepted")).toBe(true));
+		// A second steer accepted in the same window must also get its own successor.
+		ws.send({ type: "response.steer", previous_response_id: firstId, input: "STEER_TEXT_B" } as never);
+		await vi.waitFor(() => expect(events.filter((e) => e.type === "response.steer.accepted")).toHaveLength(2));
 		gate.release();
 		await vi.waitFor(() => expect(events.filter((e) => e.type === "response.completed")).toHaveLength(1), {
 			timeout: 15_000,
 		});
 		ws.close();
 
-		const incomplete = events.find((e) => e.type === "response.incomplete");
-		expect(incomplete?.response).toMatchObject({ id: firstId, incomplete_details: { reason: "steered" } });
+		const incompletes = events.filter((e) => e.type === "response.incomplete");
+		expect(incompletes[0]?.response).toMatchObject({ id: firstId, incomplete_details: { reason: "steered" } });
+		expect(incompletes).toHaveLength(2);
+		const middle = incompletes[1]?.response;
+		expect(middle?.previous_response_id).toBe(firstId);
 		const successor = events.find((e) => e.type === "response.completed")?.response;
-		expect(successor?.previous_response_id).toBe(firstId);
+		expect(successor?.previous_response_id).toBe(middle?.id);
 		expect(successor?.id).not.toBe(firstId);
 		const items = await harness.tcp.responses.inputItems.list(successor?.id as string);
-		expect(JSON.stringify(items.data)).toContain("STEER_TEXT");
+		expect(JSON.stringify(items.data)).toContain("STEER_TEXT_B");
+		expect(JSON.stringify(harness.mainTurnRequests().at(-1)?.messages)).toContain("STEER_TEXT_B");
 		expect(JSON.stringify(harness.mainTurnRequests().at(-1)?.messages)).toContain("STEER_TEXT");
 		await harness.waitForIdle();
 	});

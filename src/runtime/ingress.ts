@@ -301,6 +301,7 @@ export function createIngress(deps: IngressDeps): IngressService {
 			...(message.channelName ? { channelName: message.channelName } : {}),
 			...(images ? { images } : {}),
 			...(message.ref !== undefined ? { ref: message.ref } : {}),
+			...(message.allowedDesks ? { allowedDesks: message.allowedDesks } : {}),
 		};
 		return { event, transport };
 	}

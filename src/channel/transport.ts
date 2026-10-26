@@ -85,6 +85,11 @@ export interface Transport {
 	 * (the Web API's responses) closes them here; one that does not simply omits this.
 	 */
 	dropped?(channelId: string, refs: string[]): void;
+	/**
+	 * Whether the channel can receive files from `send_media`. Absent means it can; `false` keeps the
+	 * tool (and its guidance) away from the model, rather than offering one that always fails.
+	 */
+	readonly sendsMedia?: boolean;
 	/** The `send_media` tool's exit. */
 	sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult>;
 	/** How a user sees this channel in `/desk`, `/tasks`, `/events` and CHANNELS.md. */

@@ -42,7 +42,7 @@ pipiclaw webapi key remove ci
 
 - key 形如 `pk_…`（256 位随机），请求头 `Authorization: Bearer pk_…`。
 - `desks` 限定这把 key 能使用哪些工位：新会话默认用第一个；`/desk bind` 到不在列表里的工位会被拒绝（`desk_not_allowed`）。
-- 一把 key 创建的会话和 Response，别的 key 看不到（返回 404）；本机 socket 视为 `local`，能看到全部。
+- 一把 key 创建的会话和 Response，别的 key 看不到（返回 404）；本机 socket 视为 `local`，能看到全部；因此 TCP key 不能取名 `local`。
 - 改动在 daemon **下次启动**时生效。
 
 ## 连接
@@ -230,10 +230,10 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 
 - **忙碌时**同一会话的新请求状态是 `queued`，按到达顺序作为**独立回合**执行，开始时变为 `in_progress`；流式请求依次收到 `response.created`（queued）、`response.queued`、`response.in_progress`。队列满返回 429。
 - **斜杠命令**（`/status`、`/tasks`、`/desk …`、`/new`、`/model`…）与钉钉的规则相同，回复是该 Response 的一条 `final_answer` 消息。文本形式的 `/stop`、`/steer`、`/followup` 返回 400：改用取消、`response.steer`，或直接再发一条消息。
-- **工具调用**是 `mcp_call` item（`server_label: "pipiclaw"`，`arguments` 为 JSON 字符串，`output` 截断到 4000 字符）。选 `mcp_call` 是因为 `function_call` 表示"客户端执行"，语义不对；代价是这些工具并不是真的 MCP 工具。模型的推理是 `reasoning` item，回合中的说明是 `phase: "commentary"` 的消息，最终答案是 `phase: "final_answer"` 的消息，`output_text` 是所有最终答案的拼接。
+- **工具调用**是 `mcp_call` item（`server_label: "pipiclaw"`，`arguments` 为 JSON 字符串，`output` 截断到 4000 字符）。选 `mcp_call` 是因为 `function_call` 表示"客户端执行"，语义不对；代价是这些工具并不是真的 MCP 工具。模型的推理是 `reasoning` item，回合中的说明是 `phase: "commentary"` 的消息，最终答案是 `phase: "final_answer"` 的消息，`output_text` 是所有最终答案的拼接。Pipiclaw 的扩展字段：`mcp_call` 失败时若有面向用户的措辞（守卫拒绝等）带 `pipiclaw_failure`——没有它的失败是模型自己会修正的观察，不必展示；运行时写的说明消息带 `pipiclaw_level`（`error` / `warning` / `notice`）。
 - **message 在完整后一次给出**（先 `output_text.delta` 再 `done`），不逐 token 流式。
 - **usage**：`input_tokens` 含缓存读写，`cached_tokens` 是缓存命中；`reasoning_tokens` 恒为 0。
-- **没有请求方的 Response**：任务汇报、定时事件、委派或后台作业完成的唤醒，会在所属会话里出现一个 `input_items` 为空的 Response。后台唤醒回合若整个回合都静默（`[SILENT]`）则不产生 Response。客户端用 `GET /v1/conversations/{id}/items?order=asc&after=<最后看到的 item id>` 拉取。
+- **没有请求方的 Response**：任务汇报、定时事件、委派或后台作业完成的唤醒，会在所属会话里出现一个 `input_items` 为空的 Response。后台唤醒回合若整个回合都静默（`[SILENT]`）则不产生 Response。客户端用 `GET /v1/conversations/{id}/items?order=asc&after=<最后看到的 item id>` 拉取。会话 items 对游标客户端是追加序列：存在排队或进行中的 Response 时，排在它之后的 Response 的 items 要等它结束才出现，所以已读到的游标之前不会再插入新 item。
 - **取消**：`background: true` 的 Response 用 `POST …/cancel`（等同于 `/stop`）；同步或流式请求，**断开连接就是取消**。对 background + stream 的 Response 取消时，流在已发出的事件之后直接结束，不发终态事件——结果看 cancel 的返回值或再 `GET` 一次。WebSocket 连接关闭时，它上面排队和进行中的 Response 都被取消。
 - **steering 只在 WebSocket 上**（规范如此）。目标必须是本连接上创建、正在 `in_progress` 的 Response，失败时回 `response.steer.failed`，`error.code` 是 `response_not_found`、`response_not_active`、`response_already_completed`、`invalid_input` 或 `too_many_pending_steers`（每个 Response 最多 4 个未生效的 steer）。这是对规范的扩展：官方 OpenAI 对会话绑定的 Response 不支持 steering，Pipiclaw 支持。
 - **重启**：进行中的 Response 在重启后标为 `failed`（"服务重启，回合被中断"），**不会自动重跑**，因为它的工具可能已经产生了副作用。
@@ -243,7 +243,7 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 `GET /v1/responses` 升级为 WebSocket，客户端事件是 `response.create`（字段同 HTTP，但不能带 `stream`、`stream_options`、`background`）和 `response.steer`。
 
 - `stream_id`（1–64 个字母数字、`-`、`_`）把一条连接分成多个通道：同一通道内的 Response 先进先出，不同通道并行；服务端事件带同样的 `stream_id`。
-- 每条连接最多 16 个进行中的 Response（多的排队）、32 条命名通道、60 分钟（到点发 `websocket_connection_limit_reached` 后关闭，客户端重连即可）。
+- 每条连接最多 16 个进行中的 Response（多的排队）、32 个已受理未开始的请求且合计不超过 64 MiB（超出返回 `websocket_backlog_full`）、32 条命名通道、60 分钟（到点发 `websocket_connection_limit_reached` 后关闭，客户端重连即可）。
 - 错误用规范的包络：`{ "type": "error", "status", "error": { "type", "code", "message", "param" }, "stream_id"? }`。
 
 ## 错误

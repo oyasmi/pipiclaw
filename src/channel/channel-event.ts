@@ -55,6 +55,11 @@ export interface HumanEvent extends EventBase {
 	channelName?: string;
 	/** The transport's own correlation reference for this message (`InboundMessage.ref`). */
 	ref?: string;
+	/**
+	 * The desks the sender may use (`InboundMessage.allowedDesks`); absent means any. Carried to
+	 * execution because a queued message can outlive the binding it was admitted under.
+	 */
+	allowedDesks?: readonly string[];
 }
 
 export interface WakeEvent extends EventBase {
