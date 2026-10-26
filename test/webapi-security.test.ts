@@ -5,14 +5,19 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { generateKey, hashKey } from "../src/webapi/auth.js";
 import type { WebApiConfig } from "../src/webapi/config.js";
+import { RATE_LIMIT_PER_MINUTE } from "../src/webapi/limits.js";
 import { WebApiServer } from "../src/webapi/server.js";
 import type { WebApiService } from "../src/webapi/service.js";
 
 const key = generateKey();
+const otherKey = generateKey();
 const config: WebApiConfig = {
 	socket: true,
 	tcp: { host: "127.0.0.1", port: 8787, loopback: true },
-	keys: [{ name: "ci", sha256: hashKey(key), desks: ["default"] }],
+	keys: [
+		{ name: "ci", sha256: hashKey(key), desks: ["default"] },
+		{ name: "other", sha256: hashKey(otherKey), desks: ["default"] },
+	],
 };
 const HOST = "127.0.0.1:8787";
 
@@ -140,6 +145,24 @@ describe("webapi door guards", () => {
 			headers: { ...bearer, "content-type": "text/plain" },
 		});
 		expect(text.statusCode).toBe(415);
+	});
+
+	// Failure mode: the limit was keyed by address and ran after the key check only by accident of
+	// hook order, so behind a reverse proxy (every caller is 127.0.0.1) one busy key locked out all others.
+	it("rate-limits each key on its own, even when every caller shares the proxy's address", async () => {
+		const tcp = await app("tcp");
+		const viaProxy = (bearerKey: string) =>
+			tcp.inject({
+				url: "/v1/models",
+				remoteAddress: "127.0.0.1",
+				headers: { host: HOST, authorization: `Bearer ${bearerKey}` },
+			});
+		for (let i = 0; i < RATE_LIMIT_PER_MINUTE; i++) expect((await viaProxy(key)).statusCode).toBe(200);
+		const limited = await viaProxy(key);
+		expect(limited.statusCode).toBe(429);
+		expect(limited.json().error.code).toBe("rate_limit_exceeded");
+		expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+		expect((await viaProxy(otherKey)).statusCode).toBe(200);
 	});
 
 	// Failure mode: a TCP bind failure after the socket was already listening left the socket

@@ -122,13 +122,16 @@ async function buildApp(
 	});
 
 	if (listener === "tcp") {
-		// First, so a flood is turned away before it reaches the key check.
+		// Counted per key, after the key check and before the body is read. Not per address: behind a
+		// reverse proxy every caller has the proxy's address, so one busy key would lock out the rest.
+		// A request without a valid key is refused before it gets here; flooding is the proxy's to limit.
 		await app.register(rateLimit, {
 			max: RATE_LIMIT_PER_MINUTE,
 			timeWindow: "1 minute",
-			keyGenerator: (request) => request.ip,
+			hook: "preParsing",
+			keyGenerator: (request) => request.principal.name,
 			errorResponseBuilder: (_request, context) =>
-				tooManyRequests("Too many requests from this address.", Math.ceil(context.ttl / 1000)),
+				tooManyRequests("Too many requests with this key.", Math.ceil(context.ttl / 1000)),
 		});
 	}
 

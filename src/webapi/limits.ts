@@ -9,7 +9,7 @@ export const MAX_BODY_BYTES = 30 * 1024 * 1024;
 export const REQUEST_TIMEOUT_MS = 30_000;
 /** Open connections across both listeners. */
 export const MAX_CONNECTIONS = 64;
-/** Requests per minute per source address on the TCP listener (the local socket is not limited). */
+/** Requests per minute per key on the TCP listener (the local socket is not limited). */
 export const RATE_LIMIT_PER_MINUTE = 300;
 /** Longest an idle keep-alive connection is held open. */
 export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
