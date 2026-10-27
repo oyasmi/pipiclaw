@@ -24,7 +24,7 @@ describe("E2E deterministic: Web API", () => {
 		harness = undefined as unknown as WebApiHarness;
 	});
 
-	it("W1: a streamed request over the socket and a synchronous one over TCP run real turns", async () => {
+	it("W1: socket and TCP run real turns, and a disconnected background stream resumes after its cursor", async () => {
 		// Mutation check: drop the item-done event in ResponseTurn and the streamed message never completes.
 		harness = await createWebApiHarness();
 		harness.model.script.route({ name: "t", when: (r) => r.isMainTurn, respond: [reply.text("pong")], repeat: true });
@@ -52,6 +52,42 @@ describe("E2E deterministic: Web API", () => {
 		const done = await harness.tcp.responses.create({ model: "pipiclaw", input: "again" });
 		expect(done.status).toBe("completed");
 		expect(done.output_text).toBe("pong");
+
+		// A dropped background SSE connection must leave its turn running; HTTP replay must
+		// resume strictly after the caller's cursor, without losing or repeating output events.
+		// Mutation checked 2026-10-27: replaying starting_after itself repeats an event and fails
+		// the sequence assertion; cancelling background work on disconnect loses completion.
+		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn && r.lastUserText === "RESUME" });
+		const background = await harness.tcp.responses.create({ input: "RESUME", background: true, stream: true });
+		let id = "";
+		let cursor = -1;
+		try {
+			for await (const event of background) {
+				if (event.type !== "response.created") continue;
+				id = event.response.id;
+				cursor = event.sequence_number;
+				await gate.arrived; // Close only after the turn has actually reached the provider.
+				break; // The SDK aborts the HTTP stream when its iterator is closed.
+			}
+			expect(id).not.toBe("");
+			const { data: resumed } = await harness.tcp.responses
+				.retrieve(id, { stream: true, starting_after: cursor })
+				.withResponse();
+			gate.release();
+			const received = [];
+			for await (const event of resumed) received.push(event);
+			expect(received.at(-1)?.type).toBe("response.completed");
+			expect(received.map((event) => event.sequence_number)).toEqual(received.map((_, index) => cursor + index + 1));
+			expect(received.some((event) => event.type === "response.output_text.delta")).toBe(true);
+			const replay = await harness.tcp.responses.retrieve(id, { stream: true });
+			const all = [];
+			for await (const event of replay) all.push(event);
+			expect(received).toEqual(all.filter((event) => event.sequence_number > cursor));
+			expect((await harness.tcp.responses.retrieve(id)).status).toBe("completed");
+			expect(harness.mainTurnRequests().filter((request) => request.lastUserText === "RESUME")).toHaveLength(1);
+		} finally {
+			gate.release();
+		}
 	});
 
 	/** The caller's word in each main-turn request (the prompt around it carries runtime context). */
