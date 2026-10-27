@@ -117,7 +117,7 @@ const TOOLS_CONFIG_TEMPLATE = {
 			enable: false,
 			proxy: null,
 			search: {
-				provider: "brave",
+				provider: "duckduckgo",
 				apiKey: "",
 				maxResults: 5,
 			},
@@ -128,11 +128,10 @@ const TOOLS_CONFIG_TEMPLATE = {
 	},
 	_examples: {
 		proxy: "http://127.0.0.1:7890",
-		apiKey: "BSA...",
 	},
 	_notes: [
 		"Set tools.web.enable to true to register web_search and web_fetch.",
-		"Replace tools.web.search.apiKey with your Brave API key before enabling web tools.",
+		"Choose a search provider and configure its credentials if needed.",
 		"If needed, copy _examples.proxy to tools.web.proxy.",
 		"tools.tasks.enabled is the master switch for autonomous long-running tasks (task_* tools + task driver + task digest).",
 	],
@@ -214,7 +213,7 @@ function writeJsonFileIfMissing(
 }
 
 // App-level config files that may hold secrets (DingTalk client secret, provider
-// API keys, Brave key). They are created owner-only, and any pre-existing file with
+// API keys). They are created owner-only, and any pre-existing file with
 // looser bits is tightened on startup.
 const SECRET_FILE_MODE = 0o600;
 

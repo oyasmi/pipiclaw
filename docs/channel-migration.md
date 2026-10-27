@@ -47,6 +47,12 @@
 
 `tui` 会话处理的几点：每个有 `tui` 键的工位各生成一个 webapi 会话；它在 `desk-bindings.json` 里绑定到同一个工位，所以工位的任务和事件继续按原样解析。原来投递到终端的任务和事件现在投递到这个 webapi 会话——有 daemon（或内嵌运行时）在运行时它们会被驱动，而不是像以前那样被拒绝。
 
+### 调整网页搜索配置
+
+目标版本移除了内置 Brave 搜索。检查 app home 的 `tools.json`；如果 `tools.web.search.provider` 是 `brave`，按部署需要改为 `duckduckgo`、`tavily`、`jina` 或 `searxng`。默认的 `duckduckgo` 不需要 API key；选择 `tavily` 或 `jina` 时填入对应服务的 `apiKey`，选择 `searxng` 时填入 `baseUrl`。删除不再使用的 Brave key（包括 `_examples` 中的占位示例），保留其他配置和文件的 `0600` 权限，且不要在报告中输出凭据。`tools.web.enable` 保持原值；若搜索已启用，确认所选服务在部署网络中可访问。
+
+若未调整，旧的 `brave` 值会按未知 provider 记录配置警告，并在内存中使用默认的 `duckduckgo`；运行时不会改写旧文件。完整字段见 [配置参考](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
+
 ## 4. 校验
 
 在副本上（`dingtalk.enabled` 为 `false`）逐项确认：

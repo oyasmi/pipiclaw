@@ -40,44 +40,6 @@ function isProviderConfigStatus(status: number): boolean {
 	return status === 400 || status === 401 || status === 403 || status === 422 || status === 429;
 }
 
-class BraveSearchProvider implements SearchProvider {
-	constructor(private readonly context: SearchProviderContext) {}
-
-	async search(query: string, count: number, signal?: AbortSignal): Promise<WebSearchResultItem[]> {
-		if (!this.context.config.apiKey) {
-			throw new WebSearchProviderError("config", "Brave search requires tools.web.search.apiKey");
-		}
-		const { response, data } = await this.context.client.requestJson<{
-			web?: { results?: Array<{ title?: string; url?: string; description?: string }> };
-		}>({
-			url: "https://api.search.brave.com/res/v1/web/search",
-			params: { q: query, count },
-			headers: {
-				"X-Subscription-Token": this.context.config.apiKey,
-				Accept: "application/json",
-			},
-			timeoutMs: this.context.config.timeoutMs,
-			signal,
-		});
-		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError(
-				isProviderConfigStatus(response.status) ? "config" : "provider",
-				`Brave search failed with HTTP ${response.status}`,
-			);
-		}
-		return (data.web?.results ?? [])
-			.map((item) =>
-				normalizeResult({
-					title: item.title,
-					url: item.url,
-					snippet: item.description,
-				}),
-			)
-			.filter((item): item is WebSearchResultItem => item !== null)
-			.slice(0, count);
-	}
-}
-
 class TavilySearchProvider implements SearchProvider {
 	constructor(private readonly context: SearchProviderContext) {}
 
@@ -227,8 +189,6 @@ class DuckDuckGoSearchProvider implements SearchProvider {
 
 export function createSearchProvider(provider: WebSearchProviderName, context: SearchProviderContext): SearchProvider {
 	switch (provider) {
-		case "brave":
-			return new BraveSearchProvider(context);
 		case "tavily":
 			return new TavilySearchProvider(context);
 		case "jina":

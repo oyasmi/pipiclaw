@@ -201,7 +201,7 @@ Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 Web
       "enable": false,
       "proxy": null,
       "search": {
-        "provider": "brave",
+        "provider": "duckduckgo",
         "apiKey": "",
         "maxResults": 5
       }
@@ -211,8 +211,7 @@ Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 Web
     }
   },
   "_examples": {
-    "proxy": "http://127.0.0.1:7890",
-    "apiKey": "BSA..."
+    "proxy": "http://127.0.0.1:7890"
   }
 }
 ```
@@ -229,8 +228,7 @@ Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 Web
     "web": {
       "enable": true,
       "search": {
-        "provider": "brave",
-        "apiKey": "BSA..."
+        "provider": "duckduckgo"
       }
     }
   }

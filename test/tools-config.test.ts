@@ -66,7 +66,7 @@ describe("tools config", () => {
 					web: {
 						proxy: 42,
 						search: {
-							provider: "invalid",
+							provider: "brave",
 							maxResults: 99,
 						},
 					},
@@ -77,10 +77,11 @@ describe("tools config", () => {
 
 		const loaded = loadToolsConfigWithDiagnostics(appHomeDir);
 		expect(loaded.config).toEqual(DEFAULT_TOOLS_CONFIG);
+		expect(loaded.config.tools.web.search.provider).toBe("duckduckgo");
 		expect(loaded.diagnostics.map((item) => item.message)).toEqual(
 			expect.arrayContaining([
 				expect.stringContaining("tools.web.proxy: expected a string or null"),
-				expect.stringContaining('tools.web.search.provider: unknown provider "invalid"'),
+				expect.stringContaining('tools.web.search.provider: unknown provider "brave"'),
 				expect.stringContaining("tools.web.search.maxResults: expected an integer between 1 and 10"),
 			]),
 		);

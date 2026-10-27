@@ -6,6 +6,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Breaking
 
+- **Brave search removed.** The default search provider is now DuckDuckGo; update `tools.json` during upgrades as described in the [migration guide](docs/channel-migration.md#调整网页搜索配置).
 - **Channel plane and Web API (spec 061).** `channel.json` is now two sections, `dingtalk` and `webapi`, each with an `enabled` switch (at least one must be on); the old root-level DingTalk fields are no longer read. Channel ids are `<transport>:<native>` (`dingtalk:dm:<staffId>`, `dingtalk:group:<conversationId>`, `webapi:conv_<id>`). The names exported from `src/index.ts` are unchanged, but `ChannelContext` is now a structured turn output (`emit(TurnEvent)` / `finish(TurnOutcome)`), `DingTalkEvent` / `DingTalkHandler` alias `ChannelEvent` / `Ingress`, `DingTalkBot` takes different constructor arguments, and `BootstrapOptions` no longer has `dingtalkConfig` / `createBot`.
 - **The terminal is a Web API client.** `pipiclaw tui` connects to the daemon's local socket; with no daemon it starts a runtime inside the process with only that socket on (tasks and events run while the terminal is open, and stop when it exits). The terminal no longer writes a desk itself: the `tui` channel and `conversations/tui-N/` are gone, and so is the one-terminal-per-desk limit; the same `--desk` resumes its last conversation and `--new` starts another. The terminal no longer refuses `task_create` and `event_manage create`.
 - **One runtime process per app home** (`state/daemon.lock`).

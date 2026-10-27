@@ -186,7 +186,7 @@ Long-running external delegations should run in the long-lived daemon; without o
 
 ### 5. Optional: enable web tools
 
-`web_search` / `web_fetch` are off by default. Edit `~/.pipiclaw/tools.json`, set `tools.web.enable: true`, and configure a search provider. DuckDuckGo, Brave, Tavily, Jina, and SearXNG are supported; see [Configuration reference](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md) for the full fields.
+`web_search` / `web_fetch` are off by default. Edit `~/.pipiclaw/tools.json`, set `tools.web.enable: true`, and configure a search provider. DuckDuckGo, Tavily, Jina, and SearXNG are supported; DuckDuckGo is the default. See [Configuration reference](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md) for the full fields.
 
 <details>
 <summary>Let your favorite AI agent install it for you</summary>

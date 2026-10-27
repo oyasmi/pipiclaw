@@ -9,7 +9,7 @@ import type { AssertNoMissingKeys } from "../shared/exact-keys.js";
 import { clampInteger } from "../shared/format.js";
 import { isRecord } from "../shared/type-guards.js";
 
-export type WebSearchProvider = "brave" | "tavily" | "jina" | "searxng" | "duckduckgo";
+export type WebSearchProvider = "tavily" | "jina" | "searxng" | "duckduckgo";
 
 export interface PipiclawWebSearchConfig {
 	provider: WebSearchProvider;
@@ -83,7 +83,7 @@ const _toolsConfigKeysComplete: AssertNoMissingKeys<PipiclawToolsConfig["tools"]
 	true;
 void _toolsConfigKeysComplete;
 
-const WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ["brave", "tavily", "jina", "searxng", "duckduckgo"];
+const WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ["tavily", "jina", "searxng", "duckduckgo"];
 
 export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 	tools: {
@@ -91,7 +91,7 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 			enable: false,
 			proxy: null,
 			search: {
-				provider: "brave",
+				provider: "duckduckgo",
 				apiKey: "",
 				baseUrl: "",
 				maxResults: 5,

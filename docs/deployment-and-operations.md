@@ -273,7 +273,7 @@ export PIPICLAW_DEBUG=1
 
 某个频道所属的渠道没有启用时（例如暂时关了钉钉），该频道的任务和定时事件被跳过，待投递记录保留，渠道重新启用后恢复。Web API 的说明、安全默认值与审计见 [Web API](./webapi.md)。
 
-从旧版本升级到带渠道层的版本时，`channel.json` 的结构、频道 id 和终端会话需要一次离线迁移，见[渠道层迁移说明](./channel-migration.md)。
+从旧版本升级到带渠道层的版本时，`channel.json` 的结构、频道 id 和终端会话需要一次离线迁移，见[渠道层迁移说明](./channel-migration.md)。该版本还移除了 Brave 搜索，升级时按其中的[网页搜索配置步骤](./channel-migration.md#调整网页搜索配置)检查 `tools.json`。
 
 ## 升级流程（Upgrade Procedure）
 

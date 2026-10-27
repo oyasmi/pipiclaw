@@ -308,7 +308,7 @@ spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每�
 | 工具 | 子代理可用 | 配置门 (`tools.json`) |
 |---|---|---|
 | `read` / `bash` / `edit` / `write` / `grep` / `glob` | ✅ | 恒开，无开关 |
-| `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；支持五种搜索 provider 与 Readability/Jina 抓取，支持代理） |
+| `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；支持四种搜索 provider 与 Readability/Jina 抓取，支持代理） |
 | `session_search` / `memory_save` / `memory_search` / `memory_forget` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
 | `send_media` | ❌ | 无配置开关；由传输能力决定——仅当驱动的 transport 提供了 `MediaSender`（目前只有钉钉）时才构建并进入工具索引 |
 | `task_list`/`task_create`/`task_update`/`task_close`/`task_log`/`task_step_end` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要；`task_step_end` 另外只在任务会话里注册 |

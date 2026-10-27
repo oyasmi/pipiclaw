@@ -6,6 +6,7 @@
 
 ### 不兼容变更
 
+- **移除 Brave 搜索。** 默认搜索后端改为 DuckDuckGo；升级时按[迁移说明](docs/channel-migration.md#调整网页搜索配置)调整 `tools.json`。
 - **渠道层与 Web API（spec 061）。** `channel.json` 改为 `dingtalk` / `webapi` 两段，各有 `enabled` 开关，至少打开一个；根级的钉钉字段不再被读取。频道 id 变为 `<渠道>:<渠道内地址>`（`dingtalk:dm:<staffId>`、`dingtalk:group:<会话 id>`、`webapi:conv_<id>`）。`src/index.ts` 的导出名不变，但 `ChannelContext` 变为结构化的回合输出（`emit(TurnEvent)` / `finish(TurnOutcome)`），`DingTalkEvent` / `DingTalkHandler` 是 `ChannelEvent` / `Ingress` 的别名，`DingTalkBot` 的构造参数改变，`BootstrapOptions` 不再有 `dingtalkConfig` / `createBot`。
 - **终端成为 Web API 的客户端。** `pipiclaw tui` 通过本机 socket 连接 daemon；没有 daemon 时在本进程里启动一个只开 socket 的运行时（打开期间任务和事件也会运行，退出即关闭）。终端不再自己写工位，`tui` 频道和 `conversations/tui-N/` 取消，单工位只能开一个终端的限制随之取消；同一个 `--desk` 退出重进续上次的对话，`--new` 另开一个。终端不再拒绝 `task_create` 和 `event_manage create`。
 - **一个 app home 同时只能有一个运行时进程**（`state/daemon.lock`）。

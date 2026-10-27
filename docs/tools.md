@@ -65,7 +65,7 @@
 
 ## 网页工具（`web_search` / `web_fetch`）
 
-默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（brave / tavily / jina / searxng / duckduckgo）。抓取有字符数、响应体积、超时等上限。`web_fetch` 把一次抓取缓存为快照，`offset` 在同一快照内分页续读（快照过期后 `offset>0` 会要求从 0 重取而不是跨版本拼接），`refresh: true` 绕过缓存重抓；返回文本会分别标注"本页没显示完"和"源站没取全"，并给出重定向后的最终 URL。PDF 等二进制下载会被拒绝并提示先下载再 `read`。完整字段见 [configuration-reference.md](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
+默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（tavily / jina / searxng / duckduckgo，默认 duckduckgo）。抓取有字符数、响应体积、超时等上限。`web_fetch` 把一次抓取缓存为快照，`offset` 在同一快照内分页续读（快照过期后 `offset>0` 会要求从 0 重取而不是跨版本拼接），`refresh: true` 绕过缓存重抓；返回文本会分别标注"本页没显示完"和"源站没取全"，并给出重定向后的最终 URL。PDF 等二进制下载会被拒绝并提示先下载再 `read`。完整字段见 [configuration-reference.md](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
 
 出站网络同样受 `security.json` 的网络守卫约束。首次初始化生成的 `security.json` 模板里 `networkGuard.enabled` 为 `false`；若删除该字段或自行从内置默认开始，则 network guard 默认开启。
 

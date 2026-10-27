@@ -191,7 +191,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 当前最主要的是 `tools.web` 配置空间，用于控制：
 
 1. 是否启用 `web_search` / `web_fetch`
-2. 搜索 provider，例如 `duckduckgo`、`brave`、`tavily`、`jina`、`searxng`
+2. 搜索 provider，例如 `duckduckgo`、`tavily`、`jina`、`searxng`
 3. web 请求代理
 4. fetch 的默认超时、截断和 Jina fallback 行为
 
@@ -982,7 +982,7 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
       "enable": false,
       "proxy": null,
       "search": {
-        "provider": "brave",
+        "provider": "duckduckgo",
         "apiKey": "",
         "maxResults": 5
       }
@@ -990,12 +990,11 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
     "tasks": { "enabled": true }
   },
   "_examples": {
-    "proxy": "http://127.0.0.1:7890",
-    "apiKey": "BSA..."
+    "proxy": "http://127.0.0.1:7890"
   },
   "_notes": [
     "Set tools.web.enable to true to register web_search and web_fetch.",
-    "Replace tools.web.search.apiKey with your Brave API key before enabling web tools.",
+    "Choose a search provider and configure its credentials if needed.",
     "If needed, copy _examples.proxy to tools.web.proxy.",
     "tools.tasks.enabled is the master switch for autonomous long-running tasks (task_* tools + task driver + task digest)."
   ]
@@ -1007,13 +1006,13 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
 1. 默认不注册 `web_search` / `web_fetch`
 2. 默认开启自主长程任务机制
 3. 记忆、技能、事件、结构化搜索和后台作业工具作为核心能力直接注册
-4. 给出一个可直接改造的 Brave 示例
+4. 使用无需 API key 的 DuckDuckGo 搜索
 5. 给出可选代理示例，但默认不强行启用代理
 
 如果你要启用它，通常只需要：
 
 1. 把 `tools.web.enable` 改成 `true`
-2. 把 `tools.web.search.apiKey` 填成真实 Brave key
+2. 如需其他搜索后端，配置相应的 provider 和凭据
 3. 如需代理，再把 `_examples.proxy` 复制到 `tools.web.proxy`
 
 ### 字段说明（Field Reference）
@@ -1029,8 +1028,8 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `provider` | `"brave"` | 搜索后端：`duckduckgo`、`brave`、`tavily`、`jina`、`searxng` |
-| `apiKey` | `""` | `brave`、`tavily`、`jina` 的 API key |
+| `provider` | `"duckduckgo"` | 搜索后端：`duckduckgo`、`tavily`、`jina`、`searxng` |
+| `apiKey` | `""` | `tavily`、`jina` 的 API key |
 | `baseUrl` | `""` | `searxng` 的 base URL |
 | `maxResults` | `5` | 每次搜索返回结果数，范围 `1-10` |
 | `timeoutMs` | `30000` | 搜索请求超时 |
@@ -1069,7 +1068,7 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
 }
 ```
 
-#### 2. 使用 Brave
+#### 2. 使用 DuckDuckGo
 
 ```json
 {
@@ -1077,8 +1076,7 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
     "web": {
       "enable": true,
       "search": {
-        "provider": "brave",
-        "apiKey": "BSA..."
+        "provider": "duckduckgo"
       }
     }
   }

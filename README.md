@@ -186,7 +186,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.m
 
 ### 5. 可选：启用 Web 工具
 
-`web_search` / `web_fetch` 默认关闭。编辑 `~/.pipiclaw/tools.json`，设置 `tools.web.enable: true` 并配置搜索 provider。支持 DuckDuckGo、Brave、Tavily、Jina 和 SearXNG；完整字段见[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
+`web_search` / `web_fetch` 默认关闭。编辑 `~/.pipiclaw/tools.json`，设置 `tools.web.enable: true` 并配置搜索 provider。支持 DuckDuckGo、Tavily、Jina 和 SearXNG，默认使用 DuckDuckGo；完整字段见[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
 
 <details>
 <summary>让你常用的 AI Agent 帮忙安装</summary>

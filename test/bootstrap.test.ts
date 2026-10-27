@@ -98,6 +98,9 @@ describe("bootstrap", () => {
 		expect(first.channelTemplateCreated).toBe(true);
 		expect(existsSync(paths.channelConfigPath)).toBe(true);
 		expect(existsSync(paths.toolsConfigPath)).toBe(true);
+		expect(JSON.parse(readFileSync(paths.toolsConfigPath, "utf8"))).toMatchObject({
+			tools: { web: { enable: false, search: { provider: "duckduckgo" } } },
+		});
 		expect(existsSync(paths.securityConfigPath)).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "SOUL.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "AGENTS.md"))).toBe(true);
