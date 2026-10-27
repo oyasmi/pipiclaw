@@ -53,7 +53,7 @@ POSIX 环境；Windows 请使用 WSL2。
 
 `compaction.enabled: false` 关闭后台准备及自动会话压缩，手动 `/compact` 仍可用。后台摘要期间仍可继续对话，完成后仅在请求或工具批次边界采用；接近硬预算才等待。压缩采用独立的低延迟摘要设置，不沿用主会话的 thinking 档位；总期限、无输出期限和摘要输出上限属于内部常量。`memoryMaintenance.enabled: false` 只关闭空闲定时反思；压缩前已落盘的记忆工作仍会异步完成或在重启后恢复。
 
-workspace 下的文件是另一类：它们是给模型读的**内容**（身份、规则、记忆、角色、技能），不是运行时配置，改完下一轮就生效，见下表。
+workspace 下的文件是另一类：它们是给模型读的**内容**（身份、规则、记忆、角色、技能），不是运行时配置，身份与规则按现有资源加载流程生效；技能的刷新方式见下表及技能配置手册。
 
 ## 先改哪一个
 
@@ -69,7 +69,7 @@ workspace 下的文件是另一类：它们是给模型读的**内容**（身份
 | 改助手风格 | `workspace/SOUL.md` | 身份、语气、默认语言 |
 | 改工作规则 | `workspace/AGENTS.md` | 团队规则、安全边界、项目工作流 |
 | 加可复用角色 | `workspace/sub-agents/*.md` | `runtime: internal` 或 `external`、用途描述、权限声明与 system prompt |
-| 加可复用流程 | `workspace/skills/` | 通过 `write`/`edit` 创建/维护 workspace skill，`skill` 工具只读列出/加载 |
+| 加可复用流程 | `workspace/skills/` 或 `~/.agents/skills/` | 有效工作区同名技能优先；默认在工作区创建，外部修改后发送 `/reload` |
 | 让 LLM 请求走代理 | 环境变量 `PIPICLAW_PROXY` | 见下方「LLM 请求走代理」 |
 
 ## 渠道最小配置

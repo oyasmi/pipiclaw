@@ -279,10 +279,10 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "skills",
 		argumentHint: "[list|show <name>]",
-		description: "列出工作区 skills（含未加载及原因），或查看单个 skill 的完整正文",
+		description: "列出工作区与用户共享技能（含来源及加载提醒），或查看单个技能",
 		availableWhileBusy: true,
 		subcommands: [
-			{ name: "list", description: "列出工作区 skills（默认动作，可省略）", example: "/skills" },
+			{ name: "list", description: "列出技能及来源（默认动作，可省略）", example: "/skills" },
 			{
 				name: "show",
 				args: "<name>",
@@ -357,6 +357,11 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 		description: "开启新会话",
 		examples: ["/new"],
 		availableWhileBusy: true,
+	},
+	{
+		name: "reload",
+		description: "重新加载当前会话的技能、工具及其他资源，保留对话历史",
+		examples: ["/reload"],
 	},
 	{
 		name: "compact",

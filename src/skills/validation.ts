@@ -1,16 +1,9 @@
-/**
- * Validation of workspace skills: names, frontmatter, content scanning, and confinement of a skill's
- * path to `workspace/skills/`.
- */
-import { resolve } from "node:path";
-
+/** Content scan shared by both skill sources. This is catalog policy, not a sandbox. */
 export interface SkillValidationResult {
 	ok: boolean;
 	error?: string;
 }
 
-const SKILL_NAME_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
 const BLOCKED_CONTENT_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
 	{ pattern: /ignore\s+(all\s+)?(previous|prior)\s+instructions/i, message: "contains prompt-injection wording" },
 	{
@@ -33,74 +26,11 @@ const BLOCKED_CONTENT_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
 	{ pattern: /[\u200B-\u200D\uFEFF]/u, message: "contains invisible unicode characters" },
 ];
 
-function ok(): SkillValidationResult {
-	return { ok: true };
-}
-
-function fail(error: string): SkillValidationResult {
-	return { ok: false, error };
-}
-
-function parseFrontmatter(content: string): { data: Record<string, string>; body: string } | null {
-	const match = content.replace(/\r\n/g, "\n").match(FRONTMATTER_REGEX);
-	if (!match) {
-		return null;
-	}
-
-	const data: Record<string, string> = {};
-	for (const line of (match[1] ?? "").split("\n")) {
-		const fieldMatch = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-		if (!fieldMatch) {
-			continue;
-		}
-		data[fieldMatch[1]!] = fieldMatch[2]!.replace(/^["']|["']$/g, "").trim();
-	}
-
-	return { data, body: match[2] ?? "" };
-}
-
-export function validateSkillName(name: string): SkillValidationResult {
-	if (!SKILL_NAME_REGEX.test(name)) {
-		return fail("Skill name must match [a-z0-9]+(-[a-z0-9]+)*.");
-	}
-	return ok();
-}
-
-export function validateSkillFrontmatter(content: string, expectedName: string): SkillValidationResult {
-	const parsed = parseFrontmatter(content);
-	if (!parsed) {
-		return fail("SKILL.md must start with YAML frontmatter.");
-	}
-	if (parsed.data.name !== expectedName) {
-		return fail(`Skill frontmatter name must be "${expectedName}".`);
-	}
-	if (!parsed.data.description) {
-		return fail("Skill frontmatter must include a non-empty description.");
-	}
-	if (!parsed.body.trim()) {
-		return fail("Skill body must be non-empty.");
-	}
-	return ok();
-}
-
-export function resolveSkillPath(workspaceDir: string, name: string): string {
-	const result = validateSkillName(name);
-	if (!result.ok) {
-		throw new Error(result.error);
-	}
-	const skillsDir = resolve(workspaceDir, "skills");
-	const skillDir = resolve(skillsDir, name);
-	if (!skillDir.startsWith(`${skillsDir}/`)) {
-		throw new Error("Resolved skill path escaped workspace skills directory.");
-	}
-	return skillDir;
-}
-
 export function scanSkillContent(content: string): SkillValidationResult {
 	for (const { pattern, message } of BLOCKED_CONTENT_PATTERNS) {
 		if (pattern.test(content)) {
-			return fail(message);
+			return { ok: false, error: message };
 		}
 	}
-	return ok();
+	return { ok: true };
 }

@@ -84,7 +84,8 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `~/.pipiclaw/workspace/desk-<name>/` | 工作区 | 默认工位位于 `desk-default/`；`desk-bindings.json` 记录频道 id → 工位的绑定。其他工位通过 `/desk new`、`pipiclaw tui --desk <名字> --create` 创建 | 自动创建 `default`；新频道自动绑定 |
 | `~/.pipiclaw/workspace/desk-<name>/events/` | 工位 | 该工位的定时事件目录 | 首次写入事件时 |
 | `~/.pipiclaw/workspace/sub-agents/` | 工作区 | 工作区配置子代理目录 | 是 |
-| `~/.pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
+| `~/.pipiclaw/workspace/skills/` | 工作区 | 工作区技能目录，同名有效版本优先 | 是 |
+| `~/.agents/skills/` | 服务器用户 | 跨工具共享技能目录，与 `PIPICLAW_HOME` 独立 | 否 |
 
 ### 环境变量（Environment Variables）
 
@@ -1168,16 +1169,20 @@ Pipiclaw 只有一套人格。所有工位共同使用 workspace 根目录的 `S
 
 事件调度层的审计记录会写入 `${PIPICLAW_HOME:-~/.pipiclaw}/state/events/history.jsonl`。该文件由 Pipiclaw 自动创建，用 JSON Lines 记录事件加载、调度、触发、`preAction` 结果和入队结果；其中 `ts` 使用本地时区时间。
 
-## 技能目录 `workspace/skills/`（`workspace/skills/`）
+## 技能目录
 
-放工作区级技能资源。Pipiclaw 只支持 workspace 级技能，所有工位共享，不支持工位级或频道级 skills。
+Pipiclaw 显式加载 `$PIPICLAW_HOME/workspace/skills/` 和运行服务的服务器账号的 `~/.agents/skills/`，所有工位共用。后者独立于 app home 与工位 cwd；使用容器或服务账号部署时，需要将技能放在该账号可见的位置。不存在的共享目录视为空，不自动创建。
 
-相关工具：
+同名的有效技能优先使用工作区版本。工作区版本无法解析、读取或未通过内容扫描时，使用有效的共享版本，并保留失败诊断。两处都失败时不提供该技能。格式提醒不一定代表加载失败，列表会区分两者。
 
-- `skill list`：列出 workspace skills（含加载失败的原因）
-- `skill read`：读取一个 skill 的 `SKILL.md` 全文，带路径解析框架
+- `/skills`：查看合并后的技能、来源和加载提醒；`/skills show <name>`：查看当前有效版本的路径和正文，无有效版本时可查看可读的失败文件用于排错。
+- 模型的 `skill list/read`：按相同规则列出和读取有效技能，返回的 `diagnostics` 包含失败、格式提醒和覆盖原因。技能引用按实际技能根目录解析。
+- `/skill:<name>`：显式调用同一个有效版本。系统提示按 SDK 规则仅列出可自动调用的技能元数据，正文与引用文件按需读取。
+- `/reload`：刷新当前会话的技能、工具及其他资源，保留对话历史。通过文件工具修改任一技能目录后自动刷新当前会话；外部工具、shell 或其他会话修改后，当前会话需发送 `/reload`。
 
-创建或修改直接用 `write`/`edit` 在 `workspace/skills/<name>/SKILL.md` 上操作，frontmatter 需要非空的 `name`（与目录名一致）和 `description`；支持文件放在 `references/`、`templates/`、`scripts/`、`assets/` 下，按需用 `read` 加载。skill 内容在加载进系统提示前会跑一次安全扫描，未通过的 skill 不会出现在目录里，原因体现在 `skill list` 的 warning 字段中。
+新建、修改默认放在 `workspace/skills/<name>/SKILL.md`。推荐使用 Agent Skills 格式，frontmatter 包含 `name` 和 `description`，支持多行描述；支持文件可放在 `references/`、`scripts/`、`assets/` 等目录。两来源均沿用现有 SDK 递归发现及忽略规则，并保留根级 Markdown 技能的加载能力。
+
+两个来源均受内容扫描与 `security.json` 路径规则约束，技能文件不会授予额外工具权限，脚本和引用继续经过普通工具的守卫。本版本明确限定这两个来源：不再保留 SDK 隐式发现的 app 根级 `skills/`、项目 `.pi/skills/` 或项目 `.agents/skills/`；已有这类技能请放到上述正式来源之一。不支持工位级或频道级技能目录。
 
 ## 工位级与会话区级运行时文件（Desk- and Conversation-Level Runtime Files）
 

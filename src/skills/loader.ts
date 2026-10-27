@@ -1,88 +1,126 @@
-/**
- * Workspace skills.
- *
- * SOUL.md and AGENTS.md are loaded by the prompt pipeline itself
- * (`agent/prompt/resources.ts`), which owns their budgets and framing.
- */
-
-import { readFileSync } from "node:fs";
-import { loadSkillsFromDir, type ResourceDiagnostic, type Skill } from "@earendil-works/pi-coding-agent";
-import { join } from "path";
+/** The sole skill discovery and name-resolution policy for Pipiclaw (spec 063). */
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname } from "node:path";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+import { guardPath } from "../security/path-guard.js";
+import { isNodeError } from "../shared/os.js";
+import { errorMessage } from "../shared/text-utils.js";
+import { getSkillRoots, skillSecurity } from "./roots.js";
+import type { PipiclawSkill, PipiclawSkillsResult, SkillDiagnostic, SkillOptions } from "./types.js";
 import { scanSkillContent } from "./validation.js";
 
-export interface PipiclawSkillsResult {
-	skills: Skill[];
-	diagnostics: ResourceDiagnostic[];
+/** SDK diagnostics may lack a name when parsing failed. Keep an actionable file identifier. */
+function diagnosticName(path: string): string {
+	return basename(path) === "SKILL.md" ? basename(dirname(path)) : basename(path, ".md");
 }
 
-/**
- * Content scanning moved here from the old `skill_manage` write path (spec 045): `skill` is now
- * read-only and workspace skills are authored through the generic `write`/`edit` tools, which have
- * no reason to know about skill-specific content rules. `Skill` (from pi's resource loader) carries
- * only catalog metadata, not the file body, so this reads each candidate's `SKILL.md` itself --
- * that read is also what keeps a scan-failing skill out of the `<available_skills>` catalog
- * entirely, not just out of the (optional) `skill read` tool: the catalog is what tells the model
- * the skill exists in the first place. An unreadable file is treated as "keep it" here -- a race or
- * permission glitch should not itself become a silent content-policy rejection.
- */
-function filterScannedSkills(skills: Skill[]): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
-	const kept: Skill[] = [];
-	const diagnostics: ResourceDiagnostic[] = [];
-	for (const skill of skills) {
-		let content: string;
+export function loadPipiclawSkills(options: SkillOptions): PipiclawSkillsResult {
+	const { securityConfig, securityContext } = skillSecurity(options);
+	const guardContext = {
+		...securityContext,
+		config: { ...securityConfig.pathGuard, enabled: securityConfig.enabled && securityConfig.pathGuard.enabled },
+	};
+	const skills = new Map<string, PipiclawSkill>();
+	const fileIdentities = new Map<string, string>();
+	const diagnostics: SkillDiagnostic[] = [];
+	for (const { dir, source } of getSkillRoots(options.workspaceDir, options.sharedSkillsDir)) {
+		// The SDK swallows directory enumeration errors. Surface a failed source instead of
+		// silently making it look empty. Missing optional roots are normal.
 		try {
-			content = readFileSync(skill.filePath, "utf-8");
-		} catch {
-			kept.push(skill);
+			readdirSync(dir);
+		} catch (error) {
+			if ((!isNodeError(error) || error.code !== "ENOENT") && guardPath(dir, "read", guardContext).allowed) {
+				diagnostics.push({
+					type: "warning",
+					source,
+					path: dir,
+					rejected: true,
+					message: `Skill directory could not be read: ${errorMessage(error)}. Check its permissions and reload.`,
+				});
+			}
 			continue;
 		}
-		const scan = scanSkillContent(content);
-		if (scan.ok) {
-			kept.push(skill);
-			continue;
+		const loaded = loadSkillsFromDir({ dir, source });
+		const candidates = new Map(loaded.skills.map((skill) => [skill.filePath, skill]));
+		for (const diagnostic of loaded.diagnostics) {
+			if (diagnostic.path && !guardPath(diagnostic.path, "read", guardContext).allowed) continue;
+			const candidate = diagnostic.path ? candidates.get(diagnostic.path) : undefined;
+			diagnostics.push({
+				...diagnostic,
+				source,
+				name: candidate?.name ?? (diagnostic.path ? diagnosticName(diagnostic.path) : undefined),
+				rejected: !candidate,
+			});
 		}
-		diagnostics.push({
-			type: "warning",
-			message: `Skill "${skill.name}" was not loaded: ${scan.error}.`,
-			path: skill.filePath,
-		});
+		// Workspace roots come first; within one root, prefer the first usable path in a
+		// stable lexical order. Filtering precedes merging, so a broken override can fall back.
+		for (const skill of loaded.skills.sort((a, b) =>
+			a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : 0,
+		)) {
+			const guarded = guardPath(skill.filePath, "read", guardContext);
+			if (!guarded.allowed || !guarded.resolvedPath) continue;
+			let content: string;
+			let fileIdentity: string;
+			try {
+				content = readFileSync(guarded.resolvedPath, "utf-8");
+				fileIdentity = realpathSync(guarded.resolvedPath);
+			} catch (error) {
+				diagnostics.push({
+					type: "warning",
+					source,
+					name: skill.name,
+					path: skill.filePath,
+					rejected: true,
+					message: `Skill could not be read: ${errorMessage(error)}. Check the file and reload.`,
+				});
+				continue;
+			}
+			const scan = scanSkillContent(content);
+			if (!scan.ok) {
+				diagnostics.push({
+					type: "warning",
+					source,
+					name: skill.name,
+					path: skill.filePath,
+					rejected: true,
+					message: `Skill was not loaded: ${scan.error}. Revise the skill and reload.`,
+				});
+				continue;
+			}
+			const winner = skills.get(skill.name);
+			if (winner) {
+				if (fileIdentities.get(skill.name) !== fileIdentity) {
+					diagnostics.push({
+						type: "collision",
+						source,
+						name: skill.name,
+						path: skill.filePath,
+						message: `Skill "${skill.name}" is shadowed by ${winner.filePath}. Edit the winning file or choose another name.`,
+						collision: {
+							resourceType: "skill",
+							name: skill.name,
+							winnerPath: winner.filePath,
+							loserPath: skill.filePath,
+							winnerSource: winner.source,
+							loserSource: source,
+						},
+					});
+				}
+				continue;
+			}
+			skills.set(skill.name, {
+				...skill,
+				source,
+				filePath: guarded.resolvedPath,
+				baseDir: dirname(guarded.resolvedPath),
+			});
+			fileIdentities.set(skill.name, fileIdentity);
+		}
 	}
-	return { skills: kept, diagnostics };
-}
-
-/**
- * Load skills from the workspace-level skill directory.
- *
- * Diagnostics (an unreadable SKILL.md, bad frontmatter, a duplicate name, content that failed the
- * scan above) were previously dropped on the floor, so a broken workspace skill silently vanished
- * from the prompt. They are returned now and surfaced by the runner.
- */
-export function loadPipiclawSkills(workspaceDir: string): PipiclawSkillsResult {
-	const workspaceSkillsDir = join(workspaceDir, "skills");
-	const loaded = loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" });
-	const scanned = filterScannedSkills(loaded.skills);
-	return { skills: scanned.skills, diagnostics: [...loaded.diagnostics, ...scanned.diagnostics] };
-}
-
-/**
- * Merge pi's auto-discovered skills with the workspace ones. Workspace wins on a
- * name collision (it is the layer the user actually edits), and the collision is
- * reported rather than resolved in silence.
- */
-export function resolvePipiclawSkills(
-	base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] },
-	workspace: PipiclawSkillsResult,
-): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
-	const workspaceNames = new Set(workspace.skills.map((skill) => skill.name));
-	const collisions = base.skills.filter((skill) => workspaceNames.has(skill.name));
-	const diagnostics: ResourceDiagnostic[] = [...base.diagnostics, ...workspace.diagnostics];
-	for (const skill of collisions) {
-		diagnostics.push({
-			type: "collision",
-			message: `Skill "${skill.name}" is shadowed by the workspace skill of the same name.`,
-			path: skill.filePath,
-		});
-	}
-	const kept = base.skills.filter((skill) => !workspaceNames.has(skill.name));
-	return { skills: [...kept, ...workspace.skills], diagnostics };
+	return {
+		skills: [...skills.values()].sort((a, b) => a.name.localeCompare(b.name)),
+		diagnostics: diagnostics.sort((a, b) =>
+			a.source === b.source ? (a.path ?? "").localeCompare(b.path ?? "") : a.source === "workspace" ? -1 : 1,
+		),
+	};
 }

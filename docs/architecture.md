@@ -43,7 +43,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 4 | `src/config/` | `settings.json`、`tools.json` 的加载与校验 | `settings.ts`、`tools.ts` |
 | 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
 | 5 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts`、`client.ts` |
-| 5 | `src/skills/` | 工作区 skill 的加载、校验、读取，以及 `/skills` | `loader.ts`、`validation.ts`、`workspace.ts`、`commands.ts` |
+| 5 | `src/skills/` | 工作区与用户共享技能的发现、过滤、名称合并及 `/skills`（spec 063） | `loader.ts`、`catalog.ts`、`roots.ts`、`types.ts`、`validation.ts`、`commands.ts` |
 | 6 | `src/memory/` | 一条事实一文件的工位记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
 | 6 | `src/events/` | 定时/传感器事件：定义、校验、文件监视器、`/events` | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
 | 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`record.ts` |

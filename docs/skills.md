@@ -1,15 +1,17 @@
-# Workspace Skills
+# Skills：工作区与用户共享
 
 > **适合谁**：希望把团队中反复出现的操作流程交给 Pipiclaw 复用的使用者和管理员。
 > **读完你能**：判断什么时候该写 skill，知道它与规则、记忆、智能体角色和 runtime playbook 的区别，并能创建、检查和调用一个 skill。
 
 ## Skill 是什么
 
-Workspace skill 是保存在 `~/.pipiclaw/workspace/skills/` 下的一套可复用流程说明。它适合描述“遇到某类任务时，按什么步骤、使用哪些工具、遵守哪些组织约束完成”。
+Skill 是一套可复用流程说明，可以放在 `$PIPICLAW_HOME/workspace/skills/` 或运行服务的服务器账号的 `~/.agents/skills/`。它适合描述“遇到某类任务时，按什么步骤、使用哪些工具、遵守哪些组织约束完成”。
 
 Skill 不会默认把全文塞进每一轮上下文。系统只常驻它的名称和触发描述，在用户明确调用或当前任务匹配时才读取正文，因此可以沉淀详细流程而不持续占用上下文。
 
-Pipiclaw 只支持工作区级 skills，不存在工位级或频道级 skill 目录。同一实例中的所有工位都能发现它们。
+同一实例中的所有工位共用这两个技能来源，不存在工位级或频道级目录。用户共享目录独立于 `PIPICLAW_HOME` 和工位 cwd，不存在时视为空。
+
+**同名选择**：有效工作区版本优先。工作区版本解析、读取或内容扫描失败时，使用有效共享版本，并报告失败和实际来源；失败候选不占名。Pipiclaw 不再合并 SDK 隐式发现的 app 根级 `skills/`、项目 `.pi/skills/` 或项目 `.agents/skills/`，已有这类技能请放入上述两个正式来源之一。
 
 ## 什么时候使用 Skill
 
@@ -47,9 +49,13 @@ Pipiclaw 只支持工作区级 skills，不存在工位级或频道级 skill 目
 把我们刚才确认的发布流程整理成一个 workspace skill。触发场景是“准备发布 npm 版本”，必须包含版本一致性、测试、tag 和回滚检查。
 ```
 
-`SKILL.md` 的 frontmatter 必须包含非空的 `name`（需与目录名一致，`[a-z0-9]+(-[a-z0-9]+)*`）和 `description`。创建后可以用 `skill list` 列出或检查已有 skills，也可以直接查看 `workspace/skills/`。钉钉或 TUI 里用 `/skills`（或 `/skills show <name>`）查看同样的目录，无需开启一个模型回合；它按磁盘现状扫描，能看到被内容扫描拒绝、因此没有进入 `<available_skills>` 目录的 skill 及原因。Skill 目录属于用户工作区，升级 Pipiclaw 不会覆盖。
+推荐按 [Agent Skills 格式](https://agentskills.io/specification) 编写 `SKILL.md`，frontmatter 包含非空的 `name`（与目录名一致，`[a-z0-9]+(-[a-z0-9]+)*`）和 `description`，支持 YAML 多行描述。两来源使用相同的递归发现和忽略规则，保留现有根级 Markdown 技能的支持。SDK 的部分格式提醒仍允许加载，列表将其与真正失败分开显示。
 
-Skill 正文在进入系统提示前会经过一次内容安全扫描（prompt-injection 措辞、外泄/破坏性命令等启发式规则）；没通过的 skill 不会出现在 `<available_skills>` 目录或 `skill list` 里，原因体现在 `skill list` 的 warning 字段中。这是一层防御层，不是权限边界——真实权限仍由工具 schema、`security.json` 和运行账号决定。
+模型可用 `skill list` 列出技能；钉钉或 TUI 用户发送 `/skills` 或 `/skills show <name>` 查看来源、有效版本和加载提醒，无需调用模型。没有有效版本时，详情可查看可读的失败文件用于排错。
+
+文件工具写入两个技能目录后，当前会话自动刷新。外部编辑、shell 操作或其他会话的修改，需要当前会话发送 `/reload`，保留已有对话历史。列表按需读盘，当前会话提示词使用上一次加载的快照。升级 Pipiclaw 不会覆盖用户技能。
+
+Skill 正文在进入系统提示前会经过一次内容安全扫描（prompt-injection 措辞、外泄/破坏性命令等启发式规则）；没通过的 skill 不会成为有效目录项，原因保留在 `skill list` 的 `diagnostics` 中。两来源均受相同扫描和路径规则约束，`allowed-tools` 等元数据不会增加权限。这是一层防御层，不是权限边界——真实权限仍由工具 schema、`security.json` 和运行账号决定。
 
 维护时遵循三条原则：
 
@@ -74,7 +80,7 @@ Skill 的错误或截断结果会提供下一步，例如缩小读取范围或�
 - Skill 正文是给模型的流程知识，不是安全沙箱。真实权限仍由工具 schema、`security.json`、外部 CLI sandbox 和运行账号决定。
 - 不把密钥值写进 skill；只记录凭据从哪个环境变量或安全系统获取。
 - 不复制 `src/playbooks/` 的内容。Pipiclaw 升级会更新内置 playbook，workspace 副本不会同步。
-- 建议把 `workspace/skills/` 纳入备份或版本管理，尤其是多人共同维护的实例。
+- 建议把工作区技能纳入备份或版本管理；使用用户共享技能时，另行备份 `~/.agents/skills/`。默认在工作区维护技能，避免无意修改其他工具共用的版本。
 
 ## 相关文档
 

@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		environment: "node",
+		setupFiles: ["test/skills-isolation.ts"],
 		// Some tests exercise real child processes, Git repositories, fsync-backed writes, and
 		// network-shaped timers; keep enough headroom for those operations without disabling
 		// timeout protection.

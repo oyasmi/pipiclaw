@@ -20,7 +20,7 @@
 | 了解它能读写什么、能调用哪些能力 | [工具总览](./tools.md) |
 | 让它记住约定、找回历史或忘掉旧信息 | [记忆](./memory.md) |
 | 建立提醒、周期检查或跨会话长期任务 | [事件与任务](./events-and-tasks.md) |
-| 把团队流程沉淀成可复用 skill | [Workspace Skills](./skills.md) |
+| 把团队流程沉淀成可复用 skill | [Skills：工作区与用户共享](./skills.md) |
 | 想让它持续产出、而不是每次等你动一下 | [使用杠杆](./leverage/README.md) |
 
 ## 我要长期运行和治理它

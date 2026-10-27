@@ -247,6 +247,18 @@ ${available}`,
 			},
 		});
 
+		pi.registerCommand("reload", {
+			description: sessionCommandDescription("reload"),
+			handler: async (args) => {
+				if (args.trim()) {
+					sendCommandResult(pi, "参数无效。请发送 `/reload`，无需附加参数。");
+					return;
+				}
+				await options.refreshSessionResources();
+				sendCommandResult(pi, "已请求重新加载会话资源，下一条消息起生效。");
+			},
+		});
+
 		pi.registerCommand("compact", {
 			description: sessionCommandDescription("compact"),
 			handler: async (args, ctx) => {

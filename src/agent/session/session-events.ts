@@ -3,6 +3,7 @@
  * accounting and memory activity for the current turn. Nothing here decides how an event looks:
  * the channel's transport renders it.
  */
+import { realpathSync } from "node:fs";
 import type { ChannelStore } from "../../channel/store.js";
 import * as log from "../../log.js";
 import type { MemoryLifecycle } from "../../memory/lifecycle.js";
@@ -53,20 +54,20 @@ export interface SessionEventHandlerContext {
 	ledger: UsageLedger;
 	isModelCostKnown?: (modelReference: string) => boolean;
 	refreshSessionResources?: () => Promise<void>;
-	/** Absolute path to `<workspaceDir>/skills` — see `isWorkspaceSkillWrite`. */
-	skillsDir?: string;
+	/** Both absolute skill roots; resolve them again after writes (they may have been created). */
+	skillsDirs?: string[];
 }
 
 /**
- * A `write`/`edit` result whose resolved target landed inside the workspace `skills/` tree. The
+ * A `write`/`edit` result whose resolved target landed inside either skill tree. The
  * `skill` tool is read-only (spec 045); authoring a workspace skill goes through the generic file
  * tools, so this is the only way the runtime learns "the skill catalog may have changed" — no
  * per-tool `requiresResourceRefresh` flag to keep in sync any more.
  */
-function isWorkspaceSkillWrite(
+function isSkillWrite(
 	toolName: string,
 	details: unknown,
-	skillsDir: string,
+	skillsDirs: string[],
 ): details is ToolDetails & { path: string } {
 	if (toolName !== "write" && toolName !== "edit") {
 		return false;
@@ -74,7 +75,17 @@ function isWorkspaceSkillWrite(
 	if (!isRecord(details) || typeof details.path !== "string") {
 		return false;
 	}
-	return details.path === skillsDir || details.path.startsWith(`${skillsDir}/`);
+	const path = details.path;
+	return skillsDirs.some((root) => {
+		if (path === root || path.startsWith(`${root}/`)) return true;
+		let resolvedRoot: string;
+		try {
+			resolvedRoot = realpathSync(root);
+		} catch {
+			return false;
+		}
+		return path === resolvedRoot || path.startsWith(`${resolvedRoot}/`);
+	});
 }
 
 /** How much of a tool's result a `tool.end` event carries; the full text stays in the log and the session. */
@@ -154,13 +165,14 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 		const details = toolResultDetails(event.result);
 		if (
-			context.skillsDir &&
+			!event.isError &&
+			context.skillsDirs &&
 			context.refreshSessionResources &&
-			isWorkspaceSkillWrite(event.toolName, details, context.skillsDir)
+			isSkillWrite(event.toolName, details, context.skillsDirs)
 		) {
 			queue.enqueue(() => context.refreshSessionResources?.() ?? Promise.resolve(), "refresh skills");
 			queue.enqueue(async () => {
-				ctx.emit({ type: "commentary", text: "已更新 workspace skill，下一条消息起生效。", level: "notice" });
+				ctx.emit({ type: "commentary", text: "已更新技能，下一条消息起生效。", level: "notice" });
 			}, "skill notice");
 		}
 

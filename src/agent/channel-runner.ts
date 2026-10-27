@@ -118,7 +118,11 @@ export class ChannelRunner implements AgentRunner {
 		this.workspaceDir = paths.workspaceDir;
 
 		// Initial skill summaries
-		const initialSkills = loadPipiclawSkills(this.workspaceDir);
+		const initialSkills = loadPipiclawSkills({
+			workspaceDir: this.workspaceDir,
+			securityConfig: this.loadSecurityConfig().config,
+			securityContext: { agentWorkspaceDir: this.workspaceDir, cwd: conversation.cwd },
+		});
 
 		// Create session manager, opening whichever session this conversation's active-session ref
 		// (or the context.jsonl default, for a conversation that has never run a topology op) names

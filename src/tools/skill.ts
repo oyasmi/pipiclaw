@@ -2,7 +2,9 @@ import { dirname } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { listWorkspaceSkills, loadWorkspaceSkillFile, type WorkspaceSkillOptions } from "../skills/workspace.js";
+import { loadSkillFile } from "../skills/catalog.js";
+import { loadPipiclawSkills } from "../skills/loader.js";
+import type { SkillOptions } from "../skills/types.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 /**
@@ -14,13 +16,13 @@ import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
  */
 const skillSchema = Type.Object({
 	action: Type.Union([Type.Literal("list"), Type.Literal("read")], {
-		description: '"list" workspace skills, or "read" one skill\'s full SKILL.md content.',
+		description: '"list" available skills, or "read" one skill\'s full SKILL.md content.',
 	}),
-	name: Type.Optional(Type.String({ description: "Exact workspace skill name from the list (required for read)." })),
+	name: Type.Optional(Type.String({ description: "Exact skill name from the list (required for read)." })),
 });
 
-async function readWorkspaceSkill(options: WorkspaceSkillOptions, name: string) {
-	const file = await loadWorkspaceSkillFile(options, name);
+async function readSkill(options: SkillOptions, name: string) {
+	const file = await loadSkillFile(options, name);
 	const truncation = truncateHead(file.content);
 	let body = truncation.content;
 	if (truncation.truncated) {
@@ -38,24 +40,37 @@ async function readWorkspaceSkill(options: WorkspaceSkillOptions, name: string) 
 
 	return {
 		content: [{ type: "text" as const, text: envelope }],
-		details: { action: "read", name: file.name, path: file.path, truncated: truncation.truncated },
+		details: {
+			action: "read",
+			name: file.name,
+			path: file.path,
+			source: file.source,
+			truncated: truncation.truncated,
+		},
 	};
 }
 
-export function createSkillTool(options: WorkspaceSkillOptions): AgentTool<typeof skillSchema> {
+export function createSkillTool(options: SkillOptions): AgentTool<typeof skillSchema> {
 	return {
 		name: "skill",
 		label: "skill",
 		description:
-			"List or read workspace-level Pipiclaw skills (procedural memory) under workspace/skills/. Read-only: " +
+			"List or read Pipiclaw skills from ~/.agents/skills/ and workspace/skills/. Valid workspace skills override shared names. Read-only: " +
 			"to author or update a skill, write workspace/skills/<name>/SKILL.md directly with the write/edit tools " +
 			'(frontmatter needs "name" and "description" fields).',
 		parameters: skillSchema,
 		execute: async (_toolCallId: string, args: { action: string; name?: string }) => {
 			if (args.action === "list") {
-				const skills = await listWorkspaceSkills(options);
+				const catalog = loadPipiclawSkills(options);
+				const skills = catalog.skills.map((skill) => ({
+					name: skill.name,
+					description: skill.description,
+					path: skill.filePath,
+					source: skill.source,
+					disableModelInvocation: skill.disableModelInvocation,
+				}));
 				return {
-					content: [{ type: "text" as const, text: JSON.stringify({ skills }) }],
+					content: [{ type: "text" as const, text: JSON.stringify({ skills, diagnostics: catalog.diagnostics }) }],
 					details: { action: "list", count: skills.length },
 				};
 			}
@@ -65,7 +80,7 @@ export function createSkillTool(options: WorkspaceSkillOptions): AgentTool<typeo
 			if (!args.name) {
 				throw new RecoverableToolError('Action "read" requires a skill name.');
 			}
-			return readWorkspaceSkill(options, args.name);
+			return readSkill(options, args.name);
 		},
 	};
 }

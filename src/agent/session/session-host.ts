@@ -42,7 +42,9 @@ import type { LoadedSecurityConfig } from "../../security/config.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { isRecord } from "../../shared/type-guards.js";
 import { withTimeout } from "../../shared/with-timeout.js";
-import { loadPipiclawSkills, type PipiclawSkillsResult, resolvePipiclawSkills } from "../../skills/loader.js";
+import { loadPipiclawSkills } from "../../skills/loader.js";
+import { getSkillRoots } from "../../skills/roots.js";
+import type { PipiclawSkillsResult } from "../../skills/types.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../../subagents/discovery.js";
 import type { SubAgentRunManager } from "../../subagents/runs.js";
 import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../../tasks/session-path.js";
@@ -383,8 +385,11 @@ export class SessionHost {
 		if (this.retired) return;
 		this.settingsManager.reload();
 		reportSettingsDiagnostics(this.settingsManager, this.channelId, this.appHomeDir);
-		const skills = loadPipiclawSkills(this.workspaceDir);
-		this.currentSkills = skills;
+		this.currentSkills = loadPipiclawSkills({
+			workspaceDir: this.workspaceDir,
+			securityConfig: this.loadSecurityConfig().config,
+			securityContext: { agentWorkspaceDir: this.workspaceDir, cwd: this.cwd },
+		});
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 		if (this.retired) return;
 		this.rebuildSessionTools();
@@ -533,9 +538,7 @@ export class SessionHost {
 						// Manual /model switch redefines the preferred model and clears fallback state.
 						this.models.clearFallbackState();
 					},
-					refreshSessionResources: async () => {
-						await this.refreshSessionResources();
-					},
+					refreshSessionResources: () => this.refreshSessionResources(),
 					runMemoryCommand: async (args) =>
 						handleMemoryCommand({
 							conversation: this.conversation,
@@ -551,18 +554,17 @@ export class SessionHost {
 			// APPEND_SYSTEM.md, not a base append. SOUL/AGENTS are rendered as sections.
 			appendSystemPromptOverride: () => [],
 			agentsFilesOverride: () => ({ agentsFiles: [] }),
-			// Skills stay in the ResourceLoader: they drive `/skill:name` and pi's
-			// `<available_skills>` index together. Only the merge policy is ours.
-			skillsOverride: (base) => {
-				const merged = resolvePipiclawSkills(base, this.currentSkills);
-				for (const diagnostic of merged.diagnostics) {
-					log.logWarn("agent.skills.diagnostic", "Skill diagnostic", {
+			// SDK renders/expands skills; only our two-source catalog may enter the session.
+			noSkills: true,
+			skillsOverride: () => {
+				for (const diagnostic of this.currentSkills.diagnostics) {
+					log.logWarn("agent.skills.load", "Skill loading failed", {
 						channelId: this.channelId,
 						reason: diagnostic.message,
 						fields: { type: diagnostic.type, path: diagnostic.path },
 					});
 				}
-				return merged;
+				return this.currentSkills;
 			},
 		});
 	}
@@ -785,10 +787,8 @@ export class SessionHost {
 					const model = findExactModelReferenceMatch(reference, this.modelRegistry.getAvailable()).match;
 					return model ? hasKnownModelPricing(model) : false;
 				},
-				refreshSessionResources: async () => {
-					await this.refreshSessionResources();
-				},
-				skillsDir: join(this.workspaceDir, "skills"),
+				refreshSessionResources: () => this.refreshSessionResources(),
+				skillsDirs: getSkillRoots(this.workspaceDir).map(({ dir }) => dir),
 			}).catch((err) => {
 				log.logWarn("agent.session.handler_failed", "Session event handler failed", {
 					channelId: this.channelId,

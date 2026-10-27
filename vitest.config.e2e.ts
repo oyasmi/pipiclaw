@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		environment: "node",
+		setupFiles: ["test/skills-isolation.ts"],
 		// paths.ts freezes PIPICLAW_HOME at import time, before a harness can set it; without this
 		// default, module-level state (the usage ledger, logs) lands in the developer's real home.
 		env: { TZ: "Asia/Shanghai", PIPICLAW_HOME: join(tmpdir(), "pipiclaw-vitest-home") },

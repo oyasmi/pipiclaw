@@ -24,7 +24,7 @@
 | `job` | 查看/等待/取消 `bash async` 后台作业 | 恒开 | — | 否 |
 | `session_search` | 检索本工位所有频道的冷存储历史对话 | 恒开 | — | 否 |
 | `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
-| `skill` | 只读列出/加载 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
+| `skill` | 只读列出/加载工作区与 `~/.agents/skills/` 的可复用流程，有效工作区同名版本优先 | 恒开 | — | 否 |
 | `event_manage` | 列出/查看/创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_list` | 列出台账里的活跃任务 | 开 | `tools.tasks.enabled` | 否 |
 | `task_create` | 创建你负责的一次性项目（目标、DoD、工作项、预算） | 开 | `tools.tasks.enabled` | 否 |
@@ -85,7 +85,7 @@
 | 工具 | 写到哪 | 什么时候用 |
 |---|---|---|
 | `memory_save` / `memory_forget` | 工位的 `memory/<name>.md`，并重建 `MEMORY.md` 索引 | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
-| `skill` (只读) + `write`/`edit` | `workspace/skills/` | 某个流程跨任务可复用时沉淀 |
+| `skill` (只读) + `write`/`edit` | `workspace/skills/`，也可加载 `~/.agents/skills/` | 某个流程跨任务可复用时沉淀 |
 | `session_search` | 只读 `log.jsonl` / `context.jsonl` | 用户引用较早的对话、而工作记忆里没有时 |
 
 `session_search` 的匹配跑在整条消息上（展示窗口按命中位置开窗，不再只取头部），只有有真实文本命中的结果才返回——近期但完全不相关的消息不会因为"新"就被算成命中；被扫描上限截断的消息数会在响应里公开。`memory_save` 的回执如实反映落盘结果（成功/疑似凭据/此前被明确遗忘/未知），用户显式重新保存一条被 `memory_forget` 过的事实会放行并撤销 tombstone。

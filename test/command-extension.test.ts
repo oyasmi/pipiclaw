@@ -108,21 +108,25 @@ describe("command-extension", () => {
 		expect(options.switchModel).toHaveBeenCalledTimes(3);
 	});
 
-	it("creates and cancels new sessions correctly", async () => {
+	it("reloads resources and creates or cancels new sessions correctly", async () => {
 		const api = new FakeExtensionAPI();
 		const { options } = createOptions();
 		createCommandExtension(options)(api as never);
 		const ctx = createCommandContext();
 		ctx.sessionManager.getSessionId.mockReturnValueOnce("sess_first").mockReturnValueOnce("sess_second");
+		await api.registeredCommands.get("reload")?.handler("", ctx as never);
+		expect(options.refreshSessionResources).toHaveBeenCalledTimes(1);
+		await api.registeredCommands.get("reload")?.handler("unexpected", ctx as never);
+		expect(options.refreshSessionResources).toHaveBeenCalledTimes(1);
 
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
 
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
-		expect(options.refreshSessionResources).toHaveBeenCalledTimes(2);
+		expect(options.refreshSessionResources).toHaveBeenCalledTimes(3);
 
 		ctx.newSession.mockResolvedValueOnce({ cancelled: true });
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
-		expect(options.refreshSessionResources).toHaveBeenCalledTimes(2);
+		expect(options.refreshSessionResources).toHaveBeenCalledTimes(3);
 	});
 
 	it("runs manual compaction and forwards custom instructions", async () => {

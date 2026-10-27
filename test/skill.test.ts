@@ -3,9 +3,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
+import { loadSkillFile } from "../src/skills/catalog.js";
+import { handleSkillsCommand } from "../src/skills/commands.js";
 import { loadPipiclawSkills } from "../src/skills/loader.js";
 import { scanSkillContent } from "../src/skills/validation.js";
-import { listWorkspaceSkills } from "../src/skills/workspace.js";
 import { createSkillTool } from "../src/tools/skill.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -46,26 +47,40 @@ describe("skill tool", () => {
 		mkdirSync(brokenDir);
 		writeFileSync(join(brokenDir, "SKILL.md"), "---\nname: [broken\ndescription: invalid\n---\n");
 
-		const result = loadPipiclawSkills(workspaceDir);
+		const result = loadPipiclawSkills({ workspaceDir });
 		expect(result.skills.map((skill) => skill.name)).toEqual(["release-notes"]);
 		expect(result.diagnostics.some((diagnostic) => diagnostic.path?.endsWith("broken/SKILL.md"))).toBe(true);
+		await expect(loadSkillFile({ workspaceDir }, "broken")).rejects.toThrow(/list/);
+		expect(await loadSkillFile({ workspaceDir }, "broken", true)).toMatchObject({ loaded: false });
 	});
 
-	it("lists workspace skills", async () => {
+	it("lists both sources and inspects the same file through tools and commands", async () => {
 		const workspaceDir = createWorkspace();
 		await writeSkill(workspaceDir, "release-checklist");
 
-		const summaries = await listWorkspaceSkills({ workspaceDir });
-		expect(summaries.map((s) => s.name)).toEqual(["release-checklist"]);
+		const sharedSkillsDir = createWorkspace();
+		const sharedFile = await writeSkill(sharedSkillsDir, "shared");
+		const sharedRoot = join(sharedSkillsDir, "skills");
+		const options = { workspaceDir, sharedSkillsDir: sharedRoot };
+		const summaries = loadPipiclawSkills(options).skills;
+		expect(summaries.map((s) => s.name)).toEqual(["release-checklist", "shared"]);
 
-		const tool = makeTool(workspaceDir);
+		const tool = createSkillTool(options);
 		const listed = await tool.execute("call", { action: "list" });
-		expect(listed.details).toMatchObject({ action: "list", count: 1 });
+		expect(listed.details).toMatchObject({ action: "list", count: 2 });
+		const read = await tool.execute("read", { action: "read", name: "shared" });
+		expect(read.details).toMatchObject({ path: sharedFile, source: "user" });
+		const appHomeDir = createWorkspace();
+		expect(await handleSkillsCommand({ ...options, appHomeDir, args: "show shared" })).toContain(sharedFile);
+		writeFileSync(join(appHomeDir, "security.json"), JSON.stringify({ pathGuard: { readDeny: [sharedRoot] } }));
+		const guarded = await handleSkillsCommand({ ...options, appHomeDir, args: "list" });
+		expect(guarded).toContain("release-checklist");
+		expect(guarded).not.toContain("shared");
 	});
 
 	it("reads a skill wrapped in the skill envelope", async () => {
 		const workspaceDir = createWorkspace();
-		await writeSkill(workspaceDir, "release-checklist");
+		await writeSkill(workspaceDir, "collection/release-checklist", skillMarkdown("release-checklist"));
 
 		const tool = makeTool(workspaceDir);
 		const result = await tool.execute("call", { action: "read", name: "release-checklist" });
@@ -87,7 +102,7 @@ describe("skill tool", () => {
 		const workspaceDir = createWorkspace();
 		const secretsDir = createWorkspace();
 		const secretPath = join(secretsDir, "id_rsa");
-		await writeFile(secretPath, "-----BEGIN PRIVATE KEY-----", "utf-8");
+		await writeFile(secretPath, skillMarkdown("leaky", "-----BEGIN PRIVATE KEY-----"), "utf-8");
 
 		const skillDir = join(workspaceDir, "skills", "leaky");
 		await mkdir(skillDir, { recursive: true });
@@ -104,13 +119,12 @@ describe("skill tool", () => {
 	});
 
 	it("omits a symlink-escaping skill from the list too, not just from read (batch 1.4)", async () => {
-		// `read` already ran the guard; `list` used to advertise the skill and then `read` would
-		// refuse it. Mutation check: drop the `readGuardAllows` check in listWorkspaceSkills and
-		// `leaky` reappears in the list.
+		// Both discovery and reads must apply the guard. Removing loader filtering advertises
+		// the denied target to the model even though a later read would refuse it.
 		const workspaceDir = createWorkspace();
 		const secretsDir = createWorkspace();
 		const secretPath = join(secretsDir, "id_rsa");
-		await writeFile(secretPath, "-----BEGIN PRIVATE KEY-----", "utf-8");
+		await writeFile(secretPath, skillMarkdown("leaky", "-----BEGIN PRIVATE KEY-----"), "utf-8");
 
 		await writeSkill(workspaceDir, "legit");
 		const leakyDir = join(workspaceDir, "skills", "leaky");
@@ -118,11 +132,11 @@ describe("skill tool", () => {
 		symlinkSync(secretPath, join(leakyDir, "SKILL.md"));
 
 		const securityContext = { agentWorkspaceDir: workspaceDir, cwd: workspaceDir };
-		const summaries = await listWorkspaceSkills({
+		const summaries = loadPipiclawSkills({
 			workspaceDir,
 			securityConfig: DEFAULT_SECURITY_CONFIG,
 			securityContext,
-		});
+		}).skills;
 		expect(summaries.map((s) => s.name)).toEqual(["legit"]);
 
 		const tool = createSkillTool({ workspaceDir, securityConfig: DEFAULT_SECURITY_CONFIG, securityContext });

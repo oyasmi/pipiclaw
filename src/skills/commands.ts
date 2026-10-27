@@ -4,21 +4,13 @@ import { GuardBlockedError, renderGuardBlockForUser } from "../security/block-me
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { listWorkspaceSkills, loadWorkspaceSkillFile } from "./workspace.js";
+import { loadSkillFile, skillSourceLabel } from "./catalog.js";
+import { loadPipiclawSkills } from "./loader.js";
+import type { SkillDiagnostic, SkillOptions } from "./types.js";
 
-/**
- * `/skills` — the human control path for a workspace's skill catalog (spec 045's read-only
- * `skill` tool has no channel-command counterpart until now). Mirrors `channel/commands.ts`'s
- * shape: pure-ish functions returning markdown, no bot/event coupling.
- *
- * Deliberately a disk scan via `listWorkspaceSkills`, not the live `ChannelRunner`'s already-
- * loaded catalog: that keeps `/skills` usable while a turn is streaming and for a channel with no
- * active runner, and — the whole reason this exists rather than reusing `/help`'s discovery tail
- * — it is the only place that shows a skill that failed the content scan and was silently dropped
- * from the prompt's skill list (`src/skills/loader.ts`).
- */
+/** Stateless disk inspection remains usable without an active session. */
 
-export interface HandleSkillsCommandOptions {
+export interface HandleSkillsCommandOptions extends Pick<SkillOptions, "sharedSkillsDir"> {
 	args: string;
 	workspaceDir: string;
 	appHomeDir: string;
@@ -43,49 +35,64 @@ export function parseSkillsCommand(args: string): SkillsCommand {
 	throw new Error(`未知子命令 \`${parts[0]}\`。`);
 }
 
-async function listSkills(workspaceDir: string): Promise<string> {
-	const skills = await listWorkspaceSkills({ workspaceDir });
-	if (skills.length === 0) {
+function diagnosticForUser(
+	diagnostic: SkillDiagnostic,
+	skills: ReturnType<typeof loadPipiclawSkills>["skills"],
+): string {
+	const label = diagnostic.name ? `\`${diagnostic.name}\`` : "技能目录";
+	const source = skillSourceLabel(diagnostic.source);
+	if (diagnostic.type === "collision") {
+		return `- ${label}（${source}）：同名版本已被覆盖；使用${skillSourceLabel(skills.find((skill) => skill.name === diagnostic.name)!.source)}版本。`;
+	}
+	const active = skills.find((skill) => skill.name === diagnostic.name);
+	const status = diagnostic.rejected
+		? `该版本未加载${active ? `；当前使用${skillSourceLabel(active.source)}版本` : ""}`
+		: "格式提醒，仍可使用";
+	return `- ${label}（${source}）：${status}。请检查${diagnostic.path ? ` \`${diagnostic.path}\`` : "目录权限或文件内容"}，修改后发送 \`/reload\`。`;
+}
+
+function listSkills(options: SkillOptions): string {
+	const { skills, diagnostics } = loadPipiclawSkills(options);
+	if (skills.length === 0 && diagnostics.length === 0) {
 		return (
-			"暂无工作区 skill。\n" +
-			`让我帮你创建，或手动放到 \`${workspaceDir}/skills/<name>/SKILL.md\`（文件头需要非空的 \`name\`，与目录名一致，以及 \`description\`）。`
+			"暂无技能。\n" +
+			`让我帮你创建，或放到 \`${options.workspaceDir}/skills/<name>/SKILL.md\`；也支持 \`~/.agents/skills/\`。`
 		);
 	}
-
-	const loaded = skills.filter((skill) => !skill.warning);
-	const rejected = skills.filter((skill) => skill.warning);
-
-	const lines = [`**工作区 skills**（${loaded.length} 个）· 用 \`/skill:<名称>\` 调用`, ""];
-	if (loaded.length > 0) {
-		lines.push(...loaded.map((skill) => `- \`${skill.name}\` — ${skill.description || "（无 description）"}`));
-	} else {
-		lines.push("（全部未通过加载，见下）");
+	const lines = [`**技能**（${skills.length} 个）· 用 \`/skill:<名称>\` 调用`, ""];
+	for (const skill of skills) {
+		lines.push(
+			`- \`${skill.name}\`（${skillSourceLabel(skill.source)}${skill.disableModelInvocation ? "，仅显式调用" : ""}）— ${skill.description.replace(/\s+/g, " ")}`,
+		);
 	}
-	if (rejected.length > 0) {
-		lines.push("", "⚠️ 未加载（助手看不到，也无法用 `/skill:名称` 调用）", "");
-		lines.push(...rejected.map((skill) => `- \`${skill.name}\` — ${skill.warning}`));
+	if (diagnostics.length > 0) {
+		lines.push("", "加载提醒", "", ...diagnostics.map((item) => diagnosticForUser(item, skills)));
 	}
-	return capReply(lines.join("\n"), { nextStepHint: "用 `/skills show <name>` 查看单个 skill 的完整正文" }).text;
+	return capReply(lines.join("\n"), {
+		nextStepHint: "用 `/skills show <name>` 查看单个技能；外部修改后发送 `/reload` 更新当前会话",
+	}).text;
 }
 
 async function showSkill(options: HandleSkillsCommandOptions, name: string): Promise<string> {
 	try {
 		const securityConfig = loadSecurityConfigWithDiagnostics(options.appHomeDir).config;
-		const file = await loadWorkspaceSkillFile(
+		const file = await loadSkillFile(
 			{
 				workspaceDir: options.workspaceDir,
+				sharedSkillsDir: options.sharedSkillsDir,
 				securityConfig,
 				channelId: options.channelId,
 			},
 			name,
+			true,
 		);
-		const body = `**Skill \`${file.name}\`**\n\n路径：\`${file.path}\`\n\n${flattenMarkdownForChat(file.content)}`;
+		const body = `**Skill \`${file.name}\`**\n\n来源：${skillSourceLabel(file.source)}${file.loaded ? "" : "（未加载，仅供排错）"}\n\n路径：\`${file.path}\`\n\n${flattenMarkdownForChat(file.content)}`;
 		return capReply(body, { nextStepHint: `完整内容在 \`${file.path}\`` }).text;
 	} catch (error) {
 		// The loader's errors are written for the model (`Use action "list"…`); say it in the user's terms.
 		if (error instanceof RecoverableToolError) return `未找到 skill \`${name}\`。用 \`/skills\` 查看可用的 skill。`;
 		if (error instanceof GuardBlockedError) return renderGuardBlockForUser(error.blocked);
-		return `无法读取 skill \`${name}\`：${errorMessage(error)}`;
+		return `无法读取 skill \`${name}\`。请检查文件权限和内容后重试。`;
 	}
 }
 
@@ -99,7 +106,11 @@ export async function handleSkillsCommand(options: HandleSkillsCommandOptions): 
 
 	switch (command.action) {
 		case "list":
-			return listSkills(options.workspaceDir);
+			return listSkills({
+				workspaceDir: options.workspaceDir,
+				sharedSkillsDir: options.sharedSkillsDir,
+				securityConfig: loadSecurityConfigWithDiagnostics(options.appHomeDir).config,
+			});
 		case "show":
 			return showSkill(options, command.name);
 	}

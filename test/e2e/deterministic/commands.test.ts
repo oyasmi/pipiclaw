@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { getSkillRoots } from "../../../src/skills/roots.js";
 import {
 	createDeterministicHarness,
 	type DeterministicHarness,
@@ -18,7 +19,13 @@ describe("E2E deterministic: command plane", () => {
 
 	beforeAll(async () => {
 		harness = await createDeterministicHarness();
-		writeWorkspaceSkill(harness, "echoskill");
+		writeWorkspaceSkill(harness, "echoskill", "WORKSPACE_COMMAND_063");
+		const dir = join(getSkillRoots(harness.workspaceDir)[1].dir, "echoskill");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, "SKILL.md"),
+			"---\nname: echoskill\ndescription: shared duplicate\n---\n\nSHARED_COMMAND_063",
+		);
 	});
 	afterEach(() => harness.assertNoUnmatchedRequests());
 	afterAll(() => harness.shutdown());
@@ -63,7 +70,8 @@ describe("E2E deterministic: command plane", () => {
 
 	it("A3: an unknown /command is rejected zero-LLM; a known skill command enters a turn", async () => {
 		// Mutation check: make isKnownSlashCommand return true unconditionally and the
-		// first assertion flips — the typo becomes a full model turn.
+		// first assertion flips — the typo becomes a full model turn. Spec 063 mutation check
+		// (2026-10-27): reversing source precedence substitutes SHARED_COMMAND_063; this case fails.
 		const beforeUnknown = harness.deliveries.length;
 		await harness.sendUserMessage("/modle");
 		// discardCard is the turn-close bookkeeping every turn now emits, not a reply.
@@ -79,5 +87,8 @@ describe("E2E deterministic: command plane", () => {
 		await harness.sendUserMessage("/skill:echoskill");
 		expect(harness.modelRequestCount()).toBeGreaterThan(0);
 		expect(harness.model.requests.some((r) => r.matchedRoute === "skill-turn")).toBe(true);
+		const input = JSON.stringify(harness.lastMainTurnRequest()!.messages);
+		expect(input).toContain("WORKSPACE_COMMAND_063");
+		expect(input).not.toContain("SHARED_COMMAND_063");
 	});
 });
