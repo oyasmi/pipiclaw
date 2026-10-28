@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.9.5-beta.3] - 2026-10-28
+
 ### 不兼容变更
 
 - **移除 Brave 搜索。** 默认搜索后端改为 DuckDuckGo；升级时按[迁移说明](docs/channel-migration.md#调整网页搜索配置)调整 `tools.json`。
@@ -19,7 +21,9 @@
 
 ### 新增
 
-- **Web API**（[docs/webapi.md](docs/webapi.md)）：OpenAI Responses 形状的 HTTP 与 WebSocket 服务，官方 `openai` SDK 可直接连接——同步、流式、`background`（含续流与取消）、会话与 items、WebSocket 的 steering 与多通道；工具调用以 `mcp_call` item 呈现。默认只监听本机 socket；TCP 需要 key（`pipiclaw webapi key add|list|remove`），非 loopback 必须 TLS；Origin / Host 校验、鉴权先于读请求体、请求与连接限额、审计日志。
+- 技能从 `workspace/skills/` 和 `~/.agents/skills/` 加载，同名时有效的 workspace 技能优先；外部修改后需在每个活动会话中执行 `/reload`。技能内容不再因关键词被拒绝。
+- Web API 在鉴权后按 key 限流，并支持浏览器通过 CORS 访问。
+- **Web API**（[docs/webapi.md](docs/webapi.md)）：OpenAI Responses 形状的 HTTP 与 WebSocket 服务，官方 `openai` SDK 可直接连接——同步、流式、`background`（含续流与取消）、会话与 items、WebSocket 的 steering 与多通道；工具调用以 `mcp_call` item 呈现。默认只监听本机 socket；TCP 需要 key（`pipiclaw webapi key add|list|remove`），非 loopback 可使用 TLS 或明文（启动时会警告）；Origin / Host 校验、鉴权先于读请求体、请求与连接限额、审计日志。
 - `desk.json` 可设置绝对路径 `cwd`：作为该工位里 agent 的工作目录（shell、相对路径、委派默认目录）；记忆、任务和事件仍留在工位目录。
 - `task_list` 返回每个任务的投递频道；每回合的任务清单会标出汇报到其他频道的任务。
 - `DELETE /v1/conversations/{id}` 结束一个 Web API 会话：解除它的工位绑定（工位不再为它做记忆维护、中断修复和任务投递），并删除它的 Response 记录；有 Response 正在执行或排队时返回 `409 conversation_busy`。

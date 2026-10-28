@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.5-beta.3] - 2026-10-28
+
 ### Breaking
 
 - **Brave search removed.** The default search provider is now DuckDuckGo; update `tools.json` during upgrades as described in the [migration guide](docs/channel-migration.md#调整网页搜索配置).
@@ -19,7 +21,9 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Added
 
-- **Web API** ([docs/webapi.md](docs/webapi.md)): an OpenAI Responses-shaped HTTP and WebSocket server that the official `openai` SDK connects to — synchronous, streaming, `background` (with resume and cancel), conversations and items, WebSocket steering and named streams; tool calls appear as `mcp_call` items. It listens on the local socket only by default; TCP needs a key (`pipiclaw webapi key add|list|remove`) and non-loopback addresses require TLS; Origin and Host checks, authentication before the body is read, request and connection limits, and an audit log.
+- Skills load from `workspace/skills/` and `~/.agents/skills/`, with valid workspace skills taking precedence; use `/reload` in each active session after external changes. Skill content is no longer rejected based on keywords.
+- Web API requests are rate-limited per key after authentication, and browser clients can use CORS.
+- **Web API** ([docs/webapi.md](docs/webapi.md)): an OpenAI Responses-shaped HTTP and WebSocket server that the official `openai` SDK connects to — synchronous, streaming, `background` (with resume and cancel), conversations and items, WebSocket steering and named streams; tool calls appear as `mcp_call` items. It listens on the local socket only by default; TCP needs a key (`pipiclaw webapi key add|list|remove`) and non-loopback addresses can use TLS or plaintext (with a startup warning); Origin and Host checks, authentication before the body is read, request and connection limits, and an audit log.
 - `desk.json` may set an absolute `cwd`: the agent's working directory (shell, relative paths, default delegation directory) for that desk, while memory, tasks and events stay in the desk directory.
 - `task_list` reports each task's delivery channel, and the per-turn task agenda marks tasks that report to another channel.
 - `DELETE /v1/conversations/{id}` ends a Web API conversation: its desk binding goes (no more memory passes, recovery scans or task delivery for it) along with its response records; `409 conversation_busy` while a response runs or waits.
