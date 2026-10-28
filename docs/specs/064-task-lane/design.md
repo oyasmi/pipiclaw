@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | 设计已确认，待实施（[实施计划](./plan.md)） |
+| 状态 | 已实施，真实部署上线（R4）待用户在场执行（[实施计划](./plan.md)、[验收记录](./acceptance.md)） |
 | 日期 | 2026-10-28 |
 | 承接 | [051 长程任务循环](../051-long-horizon-task-loop/design.md)、[052 任务 v5：负责人模式](../052-task-lead/design.md)、[060 Desk](../060-desk/design.md) |
 | 取代 | 052 的等待票（`ticket`）、`task_step_end`、`task_update`、`/tasks steer` 与 `/tasks reply`；任务步骤借用频道回合与频道队列的执行方式；任务唤醒经频道与 durable dispatch 的整条路径（`internalWake`、唤醒认领、`task-wake.ts`）；`TaskDriver` |
@@ -576,7 +576,46 @@ playbook 是模型执行的机制参考，与运行时同一变更落地（spec 
 
 ## 20. 实施记录
 
-（实施时按阶段填写：步骤、偏差、理由；每阶段的单测与 e2e 用例数 before → after。）
+实施在分支 `feat/task-lane` 上完成。下表按阶段记录步骤、偏差与理由；用例数 before → after 取自实施前后同一口径（vitest 实际用例数：单测 975 → 974，deterministic e2e 以文件内 `it` 计 69 → 64）。
+
+### 偏差（需要用户知悉或确认）
+
+| # | 偏差 | 理由 |
+|---|---|---|
+| 1 | `TaskSettleRecord` 增加可选字段 `inline`（D3 的字段表之外）。同一工具调用内已经作为结果返回的委派 / 作业（`announce:false`）写 `settle` 时带 `inline: true`：它留在看板上，但不计入「新输入」 | 不加会出现真实错误：步骤内同步完成的委派，其 `settle` 排在本步 `step` 记录之后，被当成新输入；一个「派了异步作业就结束回合」的步骤会因此被立刻叫醒，空转守护也会被拖累。属于日志字段的增加，请确认 |
+| 2 | `TaskControl` 增加 `created(desk, id)`；`cancel` 的入参增加 `channel`（发起命令的频道） | `task_create` 之后必须让车道尽快看到（旧实现靠回合结束后的 `nudge`）；D29「从其他频道取消才另行推送」需要知道发起频道 |
+| 3 | 聊天里的 `task_close complete` 不经 `TaskControl`：任务正在执行步骤时直接拒绝（提示用 `task_message` / `task_pause`），否则由工具走 `store.closeTask` | 保持设计里端口只有 5 个方法的核心形状；`cancel` 仍经端口（要中止步骤并级联取消） |
+| 4 | `<task_agenda>` 只读文件（状态、等你回复的问题、工作项、用量），不含执行中的步骤与当前工具（P2.3 提到） | 聊天要看实时活动时用 `task_list`（经 `TaskControl.snapshot`）；agenda 保持零 I/O 之外的开销 |
+| 5 | 任务 runner 没有接 `agent/stop-watchdog.ts` 的强制结束 | `pause`、步骤超时与关停靠 `requestStop` + `abort`；若 `abort` 不生效，步骤会占着槽直到回合返回。风险记在此处，未单独加看门狗（需要时作为后续改动） |
+| 6 | task + delegation 的 playbook 合计 5,079 units（基线 4,379，设计的审查目标 4,500）；`task-lead.md` 2,689 units 按附录 A 原样落地，`agent-delegation.md` 因加入卡顿与取消两段而增长 | 附录 A 本身就比旧稿长约 590 units；没有靠删规则来压缩。请决定是否接受或另行精简 |
+| 7 | P4.3 的「独立进程崩溃」e2e 未新增 | 对账逻辑由 `task-store`（`reconcileTaskState`）与 `task-lane`（重启、关停）单测覆盖；独立进程夹具需要扩展 `daemon-worker.mjs`，留作后续 |
+| 8 | 评测代码按新机制改写，但步骤种类名（`runTaskDriver`、`syntheticTaskTurn`）和部分 grader id（`*-ticket-recorded`）保留；车道没有可注入的时钟，`at` 不再生效；`evals/baselines/` 未动 | 避免牵动封存的历史证据与 case 目录；**真实模型评测未运行**（见 P6） |
+| 9 | `test/e2e/live/tasks-lifecycle.test.ts` 按新机制改写（`startServices: true`，等车道归档），**未执行**（需要真实模型） | 手动 / nightly 用例 |
+| 10 | 删除 `M1b`（任务步骤后聊天会话不重复注入 bootstrap）与 `A14`（任务步骤保持聊天会话命令）两个 e2e | 它们防的是 `bindTaskSession` / `bindChatSession` 在同一 runner 上切换会话的故障，该机制已不存在 |
+
+### 核实结论（§19，P0）
+
+1. **中途注入**：`runner.queueSteer` 在无回合运行时抛 `No task is currently running.`；`LaneControl.message` 对任何抛错都回退为普通输入（不写 `injected`）。注入的消息在当前工具批结束后、下一次供应商请求之前送达（T-lane-3：同一步的第二次请求包含该消息，下一步 brief 不重复）。
+2. **规范上下文检查**：`contextIncludes` 读 `SessionManager.buildSessionContext()` 的 user 消息文本，与记忆 bootstrap 的判断同源，压缩后契约块随原消息一起被摘要替换时自然判为不含。**未用真实压缩单独验证**。
+3. **会话打开方式**：`SessionManager.open(tasks/.sessions/<id>.jsonl, 其目录, cwd)`，同样经过 `recoverInterruptedTurn`；`conversation` 用汇报频道的 `DeskConversation`，`commitActiveSessionRef` 与 `conversationDir` 的创建只对 chat profile 发生，不污染频道会话区。
+4. **`ChannelStore`**：`run()` 收到的 store 仅用于子代理归档写入；任务步骤不写频道的 `context.jsonl`（T-lane-1 断言）。经 `deliver` 发出的汇报与回执会记入 `log.jsonl`（有意：聊天侧能看到用户已被告知什么）。
+5. **记忆生命周期**：非 chat profile 的 `MemoryLifecycle.enabled = false`，不产生 `.memory-work`；首轮仍注入只读 bootstrap。
+6. **abort 传播**：见偏差 5；暂停与超时路径由 T-lane-3 与车道单测覆盖。
+7. **`/stop` 空闲路径**：回复来自 `ChannelRunner.handleBuiltinCommand`（`formatNoRunningTurn`），任务提示在 `runtime/turn-run.ts` 的 `runBuiltinCommand` 里追加。
+
+### 阶段记录
+
+| 阶段 | 做了什么 | 用例 before → after |
+|---|---|---|
+| P1 任务领域 | `frontmatter.ts`（四态 + `waiting` / `paused`）、`loop-log.ts`（十二种记录与 `newInputs` / `stepEndsSinceResume`）、`state.ts`（纯函数：D8 推导、D9 唤醒、D10 对账、D16 守护、`parseWaitUntil`）、`store.ts`（`beginStep` / `endStep` / `pauseTask` / `resumeTask` / `closeTask` / `reconcileTaskState`）、`brief.ts`（全量 / 增量）、`control.ts`、`receipts.ts`、`commands.ts`；删除 `ticket.ts`、`steer.ts` | `task-ticket` 6、`task-budget` 2 → `task-state` 12；`task-frontmatter` 6 → 6；`task-log` 5 → 6（+1：`newInputs` 排除已注入 / inline，防 INV-6）；`task-store` 6 → 8（+2：步骤两次写入的原子性与拒绝、对账写入各防一类故障）；`task-brief` 6 → 7；`task-commands` 8 → 6；`task-ledger` 6 → 6；`task-digest` 3 → 3 |
+| P2 agent 与工具 | `RunnerProfile`（chat / request / task）取代 `requestScoped` 与会话切换；`getActivity` / `contextIncludes`；工具改为聊天与任务会话两套，删除 `taskId` 参数 | `task-manage` 16 → 12 |
+| P3 运行时 | `TaskLane`（`task-lane.ts`、`task-step.ts`、`task-control.ts`、`task-pending.ts`）；结算直达任务（`onTaskInput`）；删除 `task-driver.ts`、`task-wake.ts`、`shared/wake-claim.ts`、`internalWake`、`turn-run` / `ingress-busy` 的任务分支；`/stop` 与 `/status` 按 D27 / D28 | `task-driver` 10 → `task-lane` 18（+8：新子系统——槽位、守护、冻结、控制、重启各自独立的故障面）；`bootstrap-structured-wake` 7 → 0；`subagent-runs` 24 → 25；`job-manager` 41 → 41；`durable-dispatch` 18 → 18；`ingress` 14 → 13 |
+| P4 e2e | 重写 `tasks.test.ts` 为 T-lane-1…4（均做了变异检查，见用例注释）；删除 `wake-auth`；`desks` 改写断言；删除 `M1b` | 69 → 64 |
+| P5 playbook | `task-lead.md` 按附录 A 落地，其余六份与系统提示词按 D32 修改 | — |
+| P6 评测 | worker、graders、controls、cases 按新机制改写，`test:evals` 69 个用例通过 | — |
+| R1 / R2 | 文档按 D33 重写；`docs/task-migration.md` | — |
+
+用例净变化：单测 975 → 974。`task-lane` 的 +8 是新子系统自身的故障面（取代 `task-driver` 的 10 个，且不再有 `bootstrap-structured-wake`、`task-ticket`）。
 
 ---
 

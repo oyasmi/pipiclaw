@@ -70,7 +70,7 @@ Pipiclaw 是同一个助手，**工位（desk）**划分不同工作的状态：
 
 - `/steer <消息>`：在当前工具调用结束后调整方向。
 - `/followup <消息>`：把新请求排到当前回合之后。
-- `/stop`：停止当前回合；如果它由任务 driver 唤醒，还会暂停对应任务。
+- `/stop`：停止当前聊天回合；后台任务不受影响，要暂停用 `/tasks pause <id>`。
 
 忙碌时发送普通消息，默认按 `channel.json.busyMessageDefault: "steer"` 处理（这条说明也在 `/help steer` 里）；设置成 `"followUp"` 或 `"followup"` 后改为排队。正在跑的是后台任务的一步时，普通消息和 `/steer` 都不会进入任务会话，而是排到这一步之后作为普通聊天处理；要给任务补充指示，用 `/tasks steer <id> <内容>`。
 
@@ -102,10 +102,10 @@ Pipiclaw 是同一个助手，**工位（desk）**划分不同工作的状态：
 ```text
 /tasks
 /tasks show <id>
+/tasks msg <id> <内容>
 /tasks pause <id>
 /tasks resume <id> [+steps N|+usd X]
-/tasks steer <id> <内容>
-/tasks reply <id> <内容>
+/tasks cancel <id>
 /tasks log <id>
 /tasks doctor
 ```
@@ -145,13 +145,12 @@ Pipiclaw 是同一个助手，**工位（desk）**划分不同工作的状态：
 | 界面用语 | 设计文档中的词 |
 |---|---|
 | 回合 | turn |
-| 等待条件 | 等待票（ticket） |
-| 最晚检查时间 | 兜底时限（ticket `by`） |
+| 等结果 / 等你回复 / 等到 HH:mm | 等待状态 `waiting`（`work` / `user` / `time`） |
 | 任务说明 | 契约（contract） |
 | 工作项 | 团队看板（team board） |
 | 任务记录 | 循环日志（loop log） |
 | 开始 / 结束（委派、后台作业） | 派发 / 结算（dispatch / settle） |
-| 进行中 / 等待中 / 已结束 | `open` / `parked` / `done` |
+| 排队中 / 执行中 / 等待中 / 已暂停 | `queued` / `running` / `waiting` / `paused` |
 | 步 | 任务步（只指任务的一步） |
 | 工具调用 | 卡片上的工具调用次数 |
 | 观察期 | probation（`expires`） |

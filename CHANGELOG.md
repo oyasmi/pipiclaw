@@ -4,6 +4,17 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Tasks run in a background task lane (spec 064).** A task step no longer borrows a channel's turn or queue: chat answers while a task works, and the task never waits for chat. Each executing task has its own runner and session; at most 3 tasks per desk and 5 overall execute at once, a step is capped at 20 minutes, and a stalled external delegation wakes the leader instead of waiting out its wall time.
+- **Task state is written by the runtime from facts.** The waiting ticket, `task_step_end`, `task_update`, `/tasks steer` and `/tasks reply` are gone. Task files use `state: queued | running | waiting | paused` with `waiting` / `paused` describing why; the step ends when the turn ends. New chat tools `task_message`, `task_pause`, `task_resume` and task-session tools `task_report`, `task_ask`, `task_wait`; new commands `/tasks msg` and `/tasks cancel`. Waiting for the user has no timeout. The `taskId` parameter of `subagent`, `subagent_inline` and `bash` is removed: work started in a task step binds to that task, work started in chat binds to none.
+- **Bound results go straight to the task.** Delegations and jobs bound to a task write their result into the task's log and notify the lane; they no longer wake a channel.
+- **Upgrades are offline operator work.** Task files, logs, `tasks/.steer/` and the related dispatch records change format and the runtime reads only the new one; follow the [task migration guide](docs/task-migration.md) before starting a home that has active tasks.
+
+### Changed
+
+- `/stop` stops only the chat turn; pause a task with `/tasks pause`. `/status` shows a one-line summary of the desk's background tasks.
+
 ## [0.9.5-beta.3] - 2026-10-28
 
 ### Breaking

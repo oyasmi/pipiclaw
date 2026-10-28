@@ -228,14 +228,14 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 事件自调度工具（`event_manage`，恒开）
 
-`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据等待票驱动；event 用于独立提醒、外部条件传感器，以及带 `task` 模板的周期/定时工作（每次触发生成一个任务实例）。核心能力，无开关、始终注册。
+`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的继续与等待由内建任务车道根据事实驱动；event 用于独立提醒、外部条件传感器，以及带 `task` 模板的周期/定时工作（每次触发生成一个任务实例）。核心能力，无开关、始终注册。
 
 - 该工具只发给主 agent，不进子代理工具集。
 - 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [events-and-tasks.md](./events-and-tasks.md)。
 
 ### 自主长程任务总开关（`tools.tasks`）
 
-`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：全部 task_* 工具（agent 维护[长程任务](./events-and-tasks.md)：`task_list`/`task_create`/`task_update`/`task_close`/`task_log`，以及任务会话里的 `task_step_end`）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
+`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：全部 task_* 工具（聊天侧 `task_list`/`task_create`/`task_log`/`task_close`/`task_message`/`task_pause`/`task_resume` 创建与管理[长程任务](./events-and-tasks.md)，任务会话里 `task_log`/`task_close`/`task_report`/`task_ask`/`task_wait`）、内建任务车道（后台开新步骤；总开关关闭时维护照常，但不再开新步骤），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
 
 ```jsonc
 {
@@ -246,7 +246,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 ```
 
 - 关掉后 task 文件仍保留在磁盘，但没有受控的 task 工具、后台唤醒或摘要注入；需要继续托管时应重新开启。
-- 这些工具只发给主 agent，不进子代理工具集。每任务 `budget`（`steps`/`usd`）在 `task_create`/`task_update` 上设置。进度记录属于 `task_step_end` 的 `note`（进循环日志），Goal/DoD 等大段正文仍用 write/edit。
+- 这些工具只发给主 agent，不进子代理工具集。每任务 `budget`（`steps`/`usd`）在 `task_create` 上设置，之后由用户用 `/tasks resume <id> +steps N` 追加。每步的进度记录是负责人最后一段回复（进任务记录），Goal/DoD 勾选等正文维护用 edit。
 - Task 创建即持续委托；外部动作由能力配置、任务 Goal、scope、真实状态查询和幂等 request id 约束，结果必须写入任务证据。
 
 ### 结构化搜索工具（`grep`，恒开）
@@ -310,18 +310,19 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。是否注入完全由总开关 `tools.tasks.enabled`（tools.json）决定，没有单独的配置项。
 
-摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要包含活动目录中的所有未关闭任务，每行显示 state、暂停状态、等待票摘要与兜底时间、工作项进度和用量。
+摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要包含活动目录中的所有未关闭任务，每行显示状态、"等你回复"的问题、工作项进度和用量。
 
-### 内建任务驱动器（Task Driver，恒随任务开关）
+### 内建任务车道（Task Lane，恒随任务开关）
 
-DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身不调用模型：兑现到期的 `time` 票、给过期的票兜底、停下超预算或空转的任务，然后排一个可跑任务的下一步。`work`/`ask` 票从不轮询——它们由各自的所有者推过来。暂停和已归档任务零 dispatch。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；预算与节奏是内置常量（每任务可在 frontmatter 的 `budget` 里覆盖）。
+DingTalk daemon 的任务车道扫描各激活工位的任务。维护本身不调用模型：到时的等待转回排队、有新输入的等待被叫醒、超预算或空转的任务被暂停并通知；然后按执行槽接纳排队中的任务，为每个执行中的任务建一个 runner，在任务自己的会话里跑步骤。暂停和已归档任务不会被执行。是否开新步骤完全由总开关 `tools.tasks.enabled`（tools.json）决定；预算与节奏是内置常量（每任务可在 frontmatter 的 `budget` 里覆盖 `steps`/`usd`）。
 
 行为（供理解，非配置项）：
 
-- driver 睡到最近的票据时刻或内置 15 分钟上限；步骤 `continue` 后会立即 nudge，连续两步没有工具调用则暂停任务并通知用户。
-- 单次扫描全局最多派发 4 个 channel；同一 channel 每 tick 最多唤醒一个任务，并按 channel 和任务轮转保证公平。
-- `work`、`ask` 票由各自所有者推送兑现（任一绑定委派/作业结算即兑现 `work`）；过了 runtime 派生的兜底时限会重开一次，连续第二次过期则暂停并通知用户。
-- 内嵌运行时（没有 daemon 时的 `pipiclaw tui`）在终端打开期间驱动任务；终端退出后，没有 daemon 的任务不会继续，需要自动恢复的长期任务应运行在 daemon 下。
+- 车道最长每 15 分钟扫描一次，最近的约定时刻或出错重试时刻到来、或收到通知（结果结算、用户消息、新任务）就提前醒。
+- 执行槽：每个工位最多 3 个执行中的任务、整个运行时最多 5 个（"执行中"与"等结果"占槽）；单步最长 20 分钟。
+- 守护规则：预算耗尽、连续两步没有工具调用、连续两次单步超时、连续三次出错都会暂停任务并通知；出错的步骤前两次分别等 1 分钟、5 分钟再重试。
+- 汇报频道没有绑定在本工位上（或其渠道未开启）的任务冻结：不开步骤、不占槽，输入照常记入任务记录。
+- 内嵌运行时（没有 daemon 时的 `pipiclaw tui`）在终端打开期间运行车道；终端退出后，没有 daemon 的任务不会继续，需要自动恢复的长期任务应运行在 daemon 下。
 
 ## 终端 TUI（Terminal TUI）
 
@@ -872,7 +873,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 - `logging.file.maxSizeBytes`、`logging.file.maxFiles`
 - `taskDigest` 与 `taskDriver` 两段整体
 
-行为上的关键常量仍然写在对应章节里（后台维护间隔见 `docs/memory.md`，任务驱动节奏见本文"内建任务驱动器"一节），只是不再作为可调项。
+行为上的关键常量仍然写在对应章节里（后台维护间隔见 `docs/memory.md`，任务车道节奏见本文"内建任务车道"一节），只是不再作为可调项。
 
 `security.json` 的 `projectAccess` 也已退役（spec 058）：项目边界与 `/project` 命令整体删除。留在文件里不会导致启动失败，启动时会打印一条 warning：
 
@@ -997,7 +998,7 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
     "Set tools.web.enable to true to register web_search and web_fetch.",
     "Choose a search provider and configure its credentials if needed.",
     "If needed, copy _examples.proxy to tools.web.proxy.",
-    "tools.tasks.enabled is the master switch for autonomous long-running tasks (task_* tools + task driver + task digest)."
+    "tools.tasks.enabled is the master switch for autonomous long-running tasks (task_* tools + task lane + task digest)."
   ]
 }
 ```
@@ -1051,7 +1052,7 @@ security.json: projectAccess: retired key ignored: project scope was removed; th
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `enabled` | `true` | 自主长程任务总开关：同时门控全部 task_* 工具、内建 TaskDriver 与每回合任务摘要注入 |
+| `enabled` | `true` | 自主长程任务总开关：同时门控全部 task_* 工具、任务车道开新步骤与每回合任务摘要注入 |
 
 > 记忆/技能/事件/搜索/后台作业工具（`memory_save`/`memory_search`/`memory_forget`、`session_search`、`skill`、`event_manage`、`grep`、`glob`、`job`）为核心能力，恒开、无配置项。
 

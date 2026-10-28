@@ -26,12 +26,13 @@
 | `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
 | `skill` | 只读列出/加载工作区与 `~/.agents/skills/` 的可复用流程，有效工作区同名版本优先 | 恒开 | — | 否 |
 | `event_manage` | 列出/查看/创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
-| `task_list` | 列出台账里的活跃任务 | 开 | `tools.tasks.enabled` | 否 |
+| `task_list` | 列出本工位的活跃任务，含状态、等待条件、正在执行的步骤和在途委派（聊天） | 开 | `tools.tasks.enabled` | 否 |
 | `task_create` | 创建你负责的一次性项目（目标、DoD、工作项、预算） | 开 | `tools.tasks.enabled` | 否 |
-| `task_update` | 更新工作项与预算；步骤进度由 `task_step_end` 记录 | 开 | `tools.tasks.enabled` | 否 |
-| `task_close` | 完成（DoD 全勾选且没有在途委派/作业）或取消任务 | 开 | `tools.tasks.enabled` | 否 |
-| `task_log` | 读任务的循环日志（步骤、派发与结算、票据过期、收尾） | 开 | `tools.tasks.enabled` | 否 |
-| `task_step_end` | 结束任务循环的一步：continue / park（time / work / ask 票）/ done；`report` 是发给用户的唯一文本 | 开 | `tools.tasks.enabled`，且只在任务会话里注册 | 否 |
+| `task_message` | 把用户的话转给任务：执行中的步骤直接收到，否则排给下一步（聊天） | 开 | `tools.tasks.enabled` | 否 |
+| `task_pause` / `task_resume` | 暂停任务（中止当前步骤，在途委派继续）/ 恢复并可追加预算（聊天） | 开 | `tools.tasks.enabled` | 否 |
+| `task_close` | 完成（DoD 全勾选且没有在途委派/作业）或取消任务；聊天里取消会连带取消在途工作，任务会话里登记后在本步结束时关闭 | 开 | `tools.tasks.enabled` | 否 |
+| `task_log` | 读任务记录（步骤、派发与结算、卡顿、用户消息、汇报、暂停与收尾） | 开 | `tools.tasks.enabled` | 否 |
+| `task_report` / `task_ask` / `task_wait` | 任务会话专用：立刻向用户汇报（每步至多 3 条）/ 向用户提问并等回答 / 约定一个时刻再继续；后两者结束本步 | 开 | `tools.tasks.enabled`，且只在任务会话里注册 | 否 |
 | `subagent` | 把工作委派给已配置的角色 | 开 | — | 否（不可嵌套） |
 | `subagent_inline` | 没有合适角色时定义一次性内联执行者 | 开 | `tools.subagentInline.enabled` | 否（不可嵌套） |
 | `subagent_list` / `subagent_run` | 查看委派 run；对单个 run show/cancel/follow_up | 开 | — | 否 |
@@ -94,9 +95,9 @@
 
 ## 调度与长程类
 
-`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个工位，同工位的任何频道都能修改和删除其中的事件，修改保留原投递频道；`action: "show"` 读回完整定义以便安全更新。`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——成功收尾直接结束本轮，不再多一次模型请求；`task_log` 会在活动日志缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
+`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个工位，同工位的任何频道都能修改和删除其中的事件，修改保留原投递频道；`action: "show"` 读回完整定义以便安全更新。长程任务有两套工具面：聊天里 `task_create`/`task_list`/`task_log`/`task_close`/`task_message`/`task_pause`/`task_resume` 创建、查看与管理；任务会话里 `task_log`/`task_close`/`task_report`/`task_ask`/`task_wait`——回合结束就是一步结束，`task_ask`/`task_wait`/`task_close` 成功后直接结束本轮，不再多一次模型请求。模型的任何工具参数都不能写任务的状态；`task_log` 会在活动记录缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
 
-`tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、内建 task driver 和每回合的任务摘要注入。
+`tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、任务车道开新步骤和每回合的任务摘要注入。
 
 ## 智能体委派（`subagent` / `subagent_list` / `subagent_run`）
 

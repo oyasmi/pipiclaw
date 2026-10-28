@@ -36,7 +36,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 1 | `src/`（根目录 7 个文件） | 进程级基础设施：日志、路径，以及 `Executor`/`FileStore` 两个宿主 I/O 端口（spec 044） | `log.ts`、`paths.ts`、`executor.ts`、`file-store.ts` |
 | 2 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
 | 2 | `src/usage/` | 用量/成本账本（JSONL）与渲染 | `ledger.ts`、`render.ts`、`totals.ts` |
-| 2 | `src/tasks/` | 持久任务：任务说明、等待票、循环日志、预算、`/tasks`。调度与唤醒的衔接代码在 `runtime/task-*.ts`，这样本目录保持叶子 | `contract.ts`、`ticket.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`commands.ts` |
+| 2 | `src/tasks/` | 持久任务：任务说明、状态推导、任务记录、预算、`/tasks`，以及聊天侧控制端口 `TaskControl`。调度与执行在 `runtime/task-lane*.ts`，这样本目录保持叶子 | `contract.ts`、`state.ts`、`control.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`commands.ts` |
 | 2 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
 | 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-id.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts` |
 | 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、工具名单 | `details.ts`、`presentation.ts`、`names.ts` |
@@ -55,7 +55,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `transport.ts`（`Transport` 实现）、`bot.ts`（门面）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（回合输出口） |
 | 11 | `src/webapi/` | Web API 渠道：OpenAI Responses 形状的 HTTP / WebSocket 服务（本机 socket + 可选 TCP）、key、会话与 Response 的存储（`state/webapi/`）、`pipiclaw webapi key` 命令 | `transport.ts`、`server.ts`、`service.ts`、`response-state.ts`、`store.ts`、`routes/` |
 | 11 | `src/tui/` | 终端：Web API 本地 socket 的客户端（官方 SDK）、前端与渲染 | `cli.ts`、`client.ts`、`session.ts`、`render.ts`、`frontend.ts` |
-| 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`ingress.ts`、`transports.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-driver.ts` |
+| 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`ingress.ts`、`transports.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-lane.ts` |
 | — | `src/main.ts`、`src/index.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理；公共库出口（spec 035） | — |
 
 ## 3. 运行时拓扑
@@ -79,7 +79,7 @@ flowchart TB
 
         subgraph bg [后台定时服务]
             EW["EventsWatcher ×每个激活的工位<br/>desk-&lt;name&gt;/events/*.json"]
-            TD["TaskDriver<br/>tasks/*.md 台账扫描"]
+            TL["TaskLane<br/>tasks/*.md 台账 + 任务 runner"]
             MMS["MemoryMaintenanceScheduler<br/>门控记忆维护"]
             DD["DurableDispatchService<br/>文件外发箱 at-least-once"]
         end
@@ -94,7 +94,7 @@ flowchart TB
     SESSION <--> LLM
     RUNNER -->|会话事件| DELIVERY -->|AI Card / plain| DT
     EW -->|合成事件| DD
-    TD -->|任务唤醒| DD
+    TL -->|汇报/回执| DELIVERY
     DD -->|enqueueEvent| BOT
     MMS -.->|读 runner 上下文| RUNNER
     MMS --> FS
@@ -104,8 +104,8 @@ flowchart TB
 要点：
 
 - **`DingTalkBot`**（`dingtalk/bot.ts` 只是门面，下面这些职责由 `connection.ts`、`inbound.ts`、`cards.ts`、`media.ts`、`access-token.ts` 各自承担）负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
-- **合成事件不直接进内存队列**：EventsWatcher 和 TaskDriver 产生的事件先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
-- **先解析绑定，再建 runner**（spec 058）：`DeskRuntime` 是 daemon 里唯一回答"这个频道绑在哪个工位上、哪些工位处于激活状态"的地方。安装时初始化 `default`，获准的真实入站消息先为缺少绑定的频道分配会话并持久化到 `default`，再下载附件和路由命令；已有绑定及其故障保持原样。只读解析和合成事件不会创建绑定；合成事件只有在它的频道仍绑定在事件所属的工位（`event.desk`）上时才被接受。没有任何绑定的工位处于休眠：它的事件 watcher 停止，task driver 和记忆调度器不再扫描它，正在跑的 run 和 job 照常结算但不投递唤醒。
+- **合成事件不直接进内存队列**：EventsWatcher 和委派/作业的聊天级完成唤醒先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
+- **先解析绑定，再建 runner**（spec 058）：`DeskRuntime` 是 daemon 里唯一回答"这个频道绑在哪个工位上、哪些工位处于激活状态"的地方。安装时初始化 `default`，获准的真实入站消息先为缺少绑定的频道分配会话并持久化到 `default`，再下载附件和路由命令；已有绑定及其故障保持原样。只读解析和合成事件不会创建绑定；合成事件只有在它的频道仍绑定在事件所属的工位（`event.desk`）上时才被接受。没有任何绑定的工位处于休眠：它的事件 watcher 停止，任务车道和记忆调度器不再扫描它，正在跑的 run 和 job 照常结算但不投递唤醒。
 - **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
 - **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到工位目录；完成后同样先经过 durable dispatch，再唤醒发起委派的那个频道（仍绑定在该工位上时）。
 
@@ -283,23 +283,25 @@ flowchart LR
 
 ## 7. 持久任务与定时事件
 
-两套互补机制，都以文件为事实源、经 durable-dispatch 唤醒频道：
+两套互补机制，都以文件为事实源；事件经 durable-dispatch 唤醒频道，任务由车道在频道之外执行：
 
 | | 定时事件 Events | 持久任务 Tasks |
 |---|---|---|
 | 事实源 | `desk-<name>/events/<name>.json`（`channelId` 是投递频道） | `desk-<name>/tasks/<id>.md`（frontmatter 契约，`channel` 是投递频道） |
-| 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库）；交付一段聊天 `text`，或一份**任务模板** `task` | 一次性项目：`open / parked / done` 三态 + 正交的 `paused`；`parked` 必带一张等待票；归档记录 `completed / cancelled` |
-| 驱动者 | 每个激活的工位一个 `EventsWatcher`：fs.watch + 防抖，cron 到点触发；投递频道未绑定在本工位上时跳过（`channel_not_bound`） | `TaskDriver`：自适应 timer + nudge 扫描各激活工位的台账，每个工位每 tick 至多唤醒 1 个可行动任务；投递频道未绑定在本工位上的任务整体挂起 |
-| 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `time / work / ask` 等待票 |
-| 治理 | 事件历史 `state/events/history.jsonl`；模板事件上一实例未结束时跳过并回执 | 两维预算（steps/usd，含绑定委派成本）、空转检测和等待票兜底；触发边界后写 `paused` 并直接通知 |
-| Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_list`/`task_log`，任务会话里另有 `task_step_end`；配合 `task-lead` playbook |
-| 用户命令 | `/events` | `/tasks`（pause/resume/steer/reply/doctor 等零 LLM 成本控制） |
+| 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库）；交付一段聊天 `text`，或一份**任务模板** `task` | 一次性项目：`queued / running / waiting / paused` 四态，`waiting` 带 `work / user / time` 描述，均由运行时按事实写；归档记录 `completed / cancelled` |
+| 驱动者 | 每个激活的工位一个 `EventsWatcher`：fs.watch + 防抖，cron 到点触发；投递频道未绑定在本工位上时跳过（`channel_not_bound`） | `TaskLane`：自适应 timer + 通知扫描各激活工位的台账，按执行槽（每工位 3、全局 5）接纳任务，每个执行中的任务一个 runner；汇报频道未绑定在本工位上的任务冻结 |
+| 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | 无；等待由运行时按在途委派/作业、问题和约定时刻推导 |
+| 治理 | 事件历史 `state/events/history.jsonl`；模板事件上一实例未结束时跳过并回执 | 两维预算（steps/usd，含绑定委派成本）、空转/单步超时/连续出错守护；触发后写 `paused` 并直接通知 |
+| Agent 侧工具 | `event_manage` | 聊天：`task_create`/`task_list`/`task_log`/`task_close`/`task_message`/`task_pause`/`task_resume`；任务会话：`task_log`/`task_close`/`task_report`/`task_ask`/`task_wait`；配合 `task-lead` playbook |
+| 用户命令 | `/events` | `/tasks`（msg/pause/resume/cancel/doctor 等零 LLM 成本控制） |
 
-TaskDriver 派发 `[TASK_STEP:<id>]` 合成消息（带任务 brief），走与用户消息相同的串行轮次管道；任务步骤在这个任务自己的会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
+**任务不进频道队列**（spec 064）。`TaskLane`（`runtime/task-lane.ts`）是任务执行的唯一入口：扫描各激活工位的任务文件，按事实维护状态（到时的等待、有新输入的等待、超预算的暂停），把排队中的任务接纳进执行槽，并为每个执行中的任务建一个 `task` profile 的 runner，使用 `tasks/.sessions/<id>.jsonl` 这个固定会话。一步（`task-step.ts`）就是该会话里的一次回合：写 `step` 记录、构建 brief（会话里已有当前契约则只带增量）、运行、写 `step_end` 并按事实推导下一状态。聊天回合从不等任务步骤，任务步骤也不等聊天。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
-spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不再读写任务文件。委派和后台作业在任务会话里自动绑定到任务，派发与结算由 `SubAgentRunManager` / `DeskJobManager` 写进任务的循环日志（结算记录带上与完成唤醒相同的输出尾部），每一步的 brief 渲染成 `<task_board>`，上一步之后回来的结果另渲染成 `<task_results>`——brief 替换了唤醒文本，所以由它补上唤醒原本携带的内容。
+绑定任务的委派与作业结算时，run / job 管理器在同一个结算锁内把 `settle` 记录写进任务记录并通知车道（`onTaskInput`），不再构造完成唤醒；任务已不存在时才退回聊天唤醒。聊天通过 `TaskControl` 端口（`tasks/control.ts`，车道实现，`task-control.ts`）查看实时活动、对任务说话（步骤进行中直接 `queueSteer` 注入）、暂停、恢复与取消。
 
-spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每一步完整注入）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（`work` 票要求本任务当前有在途的委派或作业），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，连续第二次就停下并通知用户。验收不再是运行时门禁：`purpose: verify` 的结论（`VERDICT`）记录在看板上供负责人权衡，关闭任务只要求 DoD 全部勾选且没有在途的委派/作业。
+spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不读写任务文件，只通过注入的回调生成实例。
+
+任务由三样东西构成：**契约**（`tasks/<id>.md`，首步及契约改动后完整注入）、**任务记录**（`tasks/<id>.jsonl`，append-only，"新输入"的唯一定义——最后一条 `step` 记录之后的结算、卡顿、用户消息和恢复）和**文件头里运行时写的状态**。等待是运行时看得见的事实，不由模型声明：本任务在途的委派和作业各有硬截止时间，你的提问就是在等你，约定的时刻就是在等那个时刻。
 
 ## 8. 工具层与子代理
 
@@ -311,11 +313,11 @@ spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每�
 | `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；支持四种搜索 provider 与 Readability/Jina 抓取，支持代理） |
 | `session_search` / `memory_save` / `memory_search` / `memory_forget` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
 | `send_media` | ❌ | 无配置开关；由传输能力决定——仅当驱动的 transport 提供了 `MediaSender`（目前只有钉钉）时才构建并进入工具索引 |
-| `task_list`/`task_create`/`task_update`/`task_close`/`task_log`/`task_step_end` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要；`task_step_end` 另外只在任务会话里注册 |
+| `task_list`/`task_create`/`task_close`/`task_log`/`task_message`/`task_pause`/`task_resume`/`task_report`/`task_ask`/`task_wait` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控任务车道开新步骤与每回合任务摘要；聊天与任务会话各注册其中一套 |
 | `subagent` / `subagent_list` / `subagent_run` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
 | `subagent_inline` | ❌（防递归） | 注册表之外追加，`tools.subagentInline.enabled`（默认开） |
 
-工具的调用面按 payload 形状切分：**形状不同就拆，形状相同就合**（spec 046/047）。`op` 枚举的路由散文把每条分支各讲一遍，是真正的 token 成本——所以任务族是五个工具而非一个 `action` 分发工具，记忆是 `memory_save` / `memory_search` / `memory_forget`，委派控制是 `subagent_list` + `subagent_run`；而 `event_manage` 的 `create` / `update` 参数集完全相同，合在一个工具里。
+工具的调用面按 payload 形状切分：**形状不同就拆，形状相同就合**（spec 046/047）。`op` 枚举的路由散文把每条分支各讲一遍，是真正的 token 成本——所以任务族是十个单一形状的工具而非一个 `action` 分发工具，记忆是 `memory_save` / `memory_search` / `memory_forget`，委派控制是 `subagent_list` + `subagent_run`；而 `event_manage` 的 `create` / `update` 参数集完全相同，合在一个工具里。
 
 增强类开关：`tools.rtk`（token 优化改写，默认关）、`tools.bashInterceptor`（把裸 `cat`/递归 grep/`sed -i` 导向专用工具，默认开）。
 
@@ -415,7 +417,7 @@ system prompt 由 Pipiclaw 自己拥有：`agent/session/session-host.ts` 通过
 组装顺序：
 
 ```text
-runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(需 task_create/task_update/task_close)
+runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(需 task_create/task_close)
 → playbooks(按工具过滤) → subagents(需 subagent 且有条目) → SOUL.md → AGENTS.md
 → [pi 追加] <available_skills> + 当前日期 + cwd
 → [before_agent_start 追加] runtime.boundary footer
@@ -428,7 +430,7 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 - **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`agent/turn/turn-context.ts`）。
 - **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 目录由 Pipiclaw 管理，渲染与展开交给 pi（spec 063）**：`skillsOverride` 只提供两个正式来源中可解析、可读取且路径允许的技能，有效工作区版本优先；`<available_skills>` 索引与 `/skill:name` 命令同源。技能正文不做关键词准入扫描，加载不代表安全认证或额外授权。Pipiclaw 不设 skills 预算、不产生超限 warning；`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
-- **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/parse.ts`/`events/watcher.ts`），普通对话不再长期携带。TASK_STEP 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。
+- **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/parse.ts`/`events/watcher.ts`），普通对话不再长期携带。TASK_STEP 的准确 task 文件与 playbook 路径由 `tasks/brief.ts` 构建的步骤 brief 给出。
 - **自动 turn context 单位上限（spec 026 §5.3）**：task agenda（600 units）、workspace 共享背景（500 units）、channel 记忆索引（1,400 units）、当天 journal 尾部（400 units）各有独立 unit 上限，与内置 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`agent/turn/task-digest.ts`、`memory/index-budget.ts`、`memory/render.ts`）。
 - **可观测**：`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地列出各 section 的 units/chars、runtime-authored 合计、SOUL/AGENTS 独立预算、skills 归属和上一轮自动上下文 units；`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录**实际发出的** system prompt 与 manifest。注意 `fingerprint` 只覆盖 Pipiclaw 自有 section（日志据此去重），provider 真正缓存的是含 pi tail 的整串，即 `finalPromptSha256`——date 每日一变会让整块 system prompt 重算。缓存效果结合用量账本里的 cacheRead/cacheWrite 观察。
 

@@ -11,7 +11,7 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 | System prompt | 每回合不能忘的安全边界、资源所有权、最小恢复纪律 | Pipiclaw | 每回合常驻 |
 | Runtime playbooks | 当前版本的 memory/event/task/subagent 机制、跨工具流程、故障恢复 | Pipiclaw 包 | metadata 常驻，正文按需 read |
 | Workspace `AGENTS.md` / `skills/` | 用户偏好、团队策略、环境专属 SOP、第三方工具用法 | 用户与 agent | 指令注入或按 skill 触发 |
-| Task 契约与日志 | Goal、DoD、Work Items；等待票、委派看板和循环日志 | agent 写契约；runtime 管状态与日志 | 每步注入契约、看板、状态与最近日志 |
+| Task 契约与记录 | Goal、DoD、Work Items；等待状态、委派看板和任务记录 | agent 写契约正文；runtime 管文件头状态与记录 | 首步注入契约，之后每步注入新输入、看板与状态 |
 
 边界原则：
 
@@ -30,7 +30,7 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 ---
 name: task-lead
 description: 当负责人（leader）：立项（task）、拆工作项、派发委派、等待、检查结果、返工与汇报，或处理事件生成的任务实例。
-requires-tools: task_create, task_step_end
+requires-tools: task_create, task_report
 order: 70
 ---
 ```
@@ -62,7 +62,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | `event-scheduling.md` | 40 | `event_manage` | 提醒、one-shot、periodic、任务模板事件、preAction 传感器、跨回合回访 |
 | `background-jobs.md` | 50 | `job` | 同步/async、超时与通知、结果恢复及任务等待 |
 | `agent-delegation.md` | 60 | 恒在 | 委派成本判断、选角色、上下文、隔离、等待与续接 |
-| `task-lead.md` | 70 | `task_create`, `task_step_end` | 立项、拆工作项、派发与富化上下文、等待、检查结果、返工、汇报与周期实例 |
+| `task-lead.md` | 70 | `task_create`, `task_report` | 立项、拆工作项、派发与富化上下文、等待、检查结果、返工、汇报与周期实例 |
 
 普通聊天负责建档和管理，task 步骤使用任务自己的独立会话，且不提供 `task_create`、`memory_save`、`event_manage`。工具缺失是执行边界，不能通过文件写入绕过。每份手册先说明适用环境，再给合法操作和恢复分支。
 
@@ -91,7 +91,7 @@ Pipiclaw 可以通过 bash、subagent、event preAction 与用户安装的工具
 
 ## 面向 workspace 的迁移
 
-已有 `AGENTS.md` 如果包含 Pipiclaw 文件语义、task/event SOP、旧 driver cooldown、已删除命令或 verifier 细节，应删除这些镜像内容，改为引用对应 playbook。workspace `sub-agents/` 中的角色定义则属于用户可修改配置，不是 Pipiclaw 随包注入的默认内容。保留的应是：
+已有 `AGENTS.md` 如果包含 Pipiclaw 文件语义、task/event SOP、旧任务 driver 的 cooldown / 等待票用法、已删除命令或 verifier 细节，应删除这些镜像内容，改为引用对应 playbook。workspace `sub-agents/` 中的角色定义则属于用户可修改配置，不是 Pipiclaw 随包注入的默认内容。保留的应是：
 
 - 称呼、沟通风格和默认工作环；
 - 团队安全政策和外部影响边界；

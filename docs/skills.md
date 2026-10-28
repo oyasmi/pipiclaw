@@ -39,7 +39,7 @@ Skill 不会默认把全文塞进每一轮上下文。系统只常驻它的名�
 | `skills/` | 遇到某类工作具体怎么做？ | 发布、巡检、报告、第三方工具 SOP |
 | `sub-agents/` | 这一步该由谁在独立上下文里完成？ | claude-main、codex-high、glm-flash、explorer |
 | runtime playbooks | 当前版本的 Pipiclaw 机制怎样工作？ | task、event、memory、delegation 的内置协议 |
-| task 文件 | 这一项工作现在做到哪里？ | Goal、DoD、Work Items、证据、预算、等待票 |
+| task 文件 | 这一项工作现在做到哪里？ | Goal、DoD、Work Items、证据、预算、等待状态 |
 
 ## 创建和维护
 

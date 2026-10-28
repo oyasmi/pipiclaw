@@ -50,12 +50,12 @@ Pipiclaw 区分两样东西：**频道（channel）**是消息的地址，**工�
 | 其他会话命令（`/model` `/compact` `/session`） | 提示空闲后再用 |
 | 未知 `/` 命令 | 直接拒绝并提示 `/help`，不发给模型 |
 
-`/tasks` 命令虽然不占用运行队列，但同一 task 的命令、agent 工具调用和 driver 治理都经过进程内 keyed queue，再持有跨进程锁 `desk-<name>/.locks/task-<id>.lock` 串行修改，避免 read-modify-write 相互覆盖；`desk.json` 的读改写同样持锁。所以 daemon 和 TUI 可以同时使用同一个工位（包括已绑定、正在被 daemon 服务的工位）；同一个工位同时只能开一个 TUI，第二个会被会话区锁拒绝。**不要让两个 daemon 共享同一个 workspace**：绑定表、durable dispatch 和后台状态只由一个 daemon 写，需要拆实例时必须使用彼此独立的 app home。
+`/tasks` 命令虽然不占用运行队列，但同一 task 的命令、agent 工具调用和任务车道的写入都经过进程内 keyed queue，再持有跨进程锁 `desk-<name>/.locks/task-<id>.lock` 串行修改，避免 read-modify-write 相互覆盖；`desk.json` 的读改写同样持锁。所以 daemon 和 TUI 可以同时使用同一个工位（包括已绑定、正在被 daemon 服务的工位）；同一个工位同时只能开一个 TUI，第二个会被会话区锁拒绝。**不要让两个 daemon 共享同一个 workspace**：绑定表、durable dispatch 和后台状态只由一个 daemon 写，需要拆实例时必须使用彼此独立的 app home。
 
 **后台负载也在同一进程里。** 除用户回合外，还有几类受控的后台工作会消耗 LLM API：
 
 - 记忆维护调度器：本地闸门通过后才做 LLM 整理，每 tick 最多处理 1 个会话区（只看激活工位中已绑定频道的会话区）（内置常量；整体可用 `memoryMaintenance.enabled` 关闭）；
-- 内建 task driver：扫描本身零 token，根据等待票、周期和预算推进任务，每个激活的工位每 tick 最多派发 1 个任务步骤；投递频道未绑定在本工位上的任务不推进；连续空转或超预算会暂停并通知（整体由 `tools.tasks.enabled` 控制）；
+- 任务车道：维护本身零 token；执行中的任务（"执行中"与"等结果"）每个工位最多 3 个、整个运行时最多 5 个，各有自己的 runner，最多 5 个任务步骤与聊天回合同时调用模型，单步最长 20 分钟；汇报频道未绑定在本工位上的任务冻结；连续空转、超时、出错或超预算会暂停并通知（整体由 `tools.tasks.enabled` 控制）；
 - 后台作业（`bash async`）：每个工位最多 5 个并发子进程，不占运行队列。
 - 委派 run：内置子智能体超过 120 秒后可跨回合存活，外部智能体从派发开始即独立于主回合；每个工位最多 6 个、单个 Pipiclaw 实例最多 20 个运行中 run。
 

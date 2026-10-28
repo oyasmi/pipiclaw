@@ -29,8 +29,8 @@
 |---|---|
 | 决定文件、命令、网络和外部智能体能碰什么 | [安全指南](./security.md) |
 | 部署常驻进程、看日志、升级、备份或排障 | [部署与运维](./deployment-and-operations.md) |
-| 让 AI agent 按具体数据完成一次性存储迁移 | [工位迁移说明](./desk-migration.md)、[渠道层迁移说明](./channel-migration.md)，执行前核对目标版本 |
-| 理解 fallback、记忆维护、后台作业、委派和任务 driver | [运行机制](./runtime-mechanisms.md) |
+| 让 AI agent 按具体数据完成一次性存储迁移 | [工位迁移说明](./desk-migration.md)、[渠道层迁移说明](./channel-migration.md)、[任务迁移说明](./task-migration.md)，执行前核对目标版本 |
+| 理解 fallback、记忆维护、后台作业、委派和任务车道 | [运行机制](./runtime-mechanisms.md) |
 | 评估并发、资源占用和拆分实例的时机 | [并发与容量](./scaling-and-concurrency.md) |
 
 ## 我要理解或修改源码

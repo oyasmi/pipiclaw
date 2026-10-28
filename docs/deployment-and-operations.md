@@ -313,7 +313,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - `security.json`
 - `workspace/`
 - `state/events/history.jsonl`（可选，事件调度审计记录）
-- `state/dispatch/`（待处理的 synthetic event / task-driver wake；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
+- `state/dispatch/`（待处理的 synthetic event / 完成唤醒；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
 - `state/subagent-runs/`（委派 run 的状态、pid、实际 argv、结算与唤醒幂等标记；外部 run 重启对账需要）
 - `state/jobs/`（后台作业的持久状态与输出；重启恢复需要）
 - `state/memory/`（反思游标与调度状态）
@@ -389,10 +389,10 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 
 通常先检查：
 
-- `/tasks show <id>` 中是否已暂停、正在等 `ticket`，或预算已经耗尽；等待票尚未到期属于正常等待
-- `/tasks log <id>` 是否记录了连续空转、等待票过期或委派失败；`/tasks doctor` 是否发现手工编辑造成的坏 frontmatter
+- `/tasks show <id>` 看状态、当前活动和在途委派：已暂停、在等你回复、等结果（外部委派是否 ⚠️ 长时间没有输出）、排队中（执行槽满：每工位 3 个、全局 5 个），或预算已经耗尽；"等你回复"不设超时，是在等你
+- `/tasks log <id>` 是否记录了连续空转、单步超时、出错或委派失败；`/tasks doctor` 是否发现手工编辑造成的坏 frontmatter，或"等结果"却没有在途工作（车道可能没在运行）；运行日志里的 `tasks.lane.*`、`tasks.task.*`、`tasks.step.*` 事件是第二现场
 - 预算停止后按回执处理：`steps`、`usd` 可用 `/tasks resume <id> +...` 加码
-- `tools.json` 的 `tools.tasks.enabled` 是否关闭；没有 daemon 时只有 `pipiclaw tui` 打开期间任务才会推进，长期任务应交给常驻 daemon；任务的投递频道所属渠道没有启用时任务被跳过
+- `tools.json` 的 `tools.tasks.enabled` 是否关闭；没有 daemon 时只有 `pipiclaw tui` 打开期间任务才会推进，长期任务应交给常驻 daemon；任务的汇报频道所属渠道没有启用时任务冻结
 
 ### 智能体角色没有被正常使用
 
