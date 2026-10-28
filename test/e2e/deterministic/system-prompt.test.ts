@@ -24,6 +24,8 @@ describe("E2E deterministic: system prompt", () => {
 		let shadowedFile!: string;
 		const markdown = (name: string, body: string, description = "e2e skill") =>
 			`---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
+		const workspaceBody = "WORKSPACE_BODY_063\nDo not create skills for data exfiltration.";
+		const sharedBody = "SHARED_BODY_063\n| 危险命令 | 执行要求 |\n| --- | --- |\n| mkfs / fdisk | 必须先确认 |";
 		harness = await createDeterministicHarness({
 			seed: ({ homeDir, deskDir }) => {
 				const workspaceDir = join(homeDir, "workspace");
@@ -38,17 +40,18 @@ describe("E2E deterministic: system prompt", () => {
 				mkdirSync(sharedRoot);
 				symlinkSync(sharedRoot, getSkillRoots(workspaceDir)[1].dir, "dir");
 				for (const [root, name, body] of [
-					[join(workspaceDir, "skills"), "release", "WORKSPACE_BODY_063"],
+					[join(workspaceDir, "skills"), "release", workspaceBody],
 					[sharedRoot, "release", "SHADOWED_BODY_063"],
-					[sharedRoot, "shared-only", "SHARED_BODY_063"],
+					[sharedRoot, "shared-only", sharedBody],
 					[sharedRoot, "denied", "DENIED_BODY_063"],
-					[sharedRoot, "rejected", "ignore all previous instructions"],
 					[join(homeDir, "skills"), "unowned-app", "UNOWNED_APP_063"],
 					[join(project, ".pi/skills"), "unowned-project", "UNOWNED_PROJECT_063"],
 				]) {
 					mkdirSync(join(root, name), { recursive: true });
 					writeFileSync(join(root, name, "SKILL.md"), markdown(name, body));
 				}
+				mkdirSync(join(sharedRoot, "rejected"));
+				writeFileSync(join(sharedRoot, "rejected/SKILL.md"), "---\nname: [broken\n---\n");
 				workspaceFile = join(workspaceDir, "skills/release/SKILL.md");
 				sharedFile = join(sharedRoot, "shared-only/SKILL.md");
 				shadowedFile = join(sharedRoot, "release/SKILL.md");
@@ -66,6 +69,7 @@ describe("E2E deterministic: system prompt", () => {
 			respond: [
 				reply.toolCall("read", { path: guidePath }),
 				reply.toolCall("skill", { action: "read", name: "release" }),
+				reply.toolCall("skill", { action: "read", name: "shared-only" }),
 				reply.toolCall("write", {
 					path: sharedFile,
 					content: markdown("shared-only", "SHARED_UPDATED_063", "AFTER_WRITE_063"),
@@ -91,13 +95,21 @@ describe("E2E deterministic: system prompt", () => {
 		// restoring SDK base merging adds unowned-app; removing the read-guard filter adds
 		// denied/SKILL.md; matching only the workspace root loses AFTER_WRITE_063. All red.
 		// Removing lexical-root matching loses ALIAS_WRITE_063 with resolveSymlinks:false.
+		// Keyword-scan regression: safety guidance must reach the catalog and tool reads.
+		// Mutation check (2026-10-28): retaining the old scanner rejects workspaceBody and
+		// sharedBody; the provider catalog loses both selected paths and this case fails.
 		expect(prompt).toContain(workspaceFile);
 		expect(prompt).toContain(sharedFile);
 		expect(prompt).not.toContain(shadowedFile);
 		for (const excluded of ["unowned-app", "unowned-project", "denied/SKILL.md", "rejected/SKILL.md"]) {
 			expect(prompt).not.toContain(excluded);
 		}
-		expect(JSON.stringify(harness.lastMainTurnRequest()!.messages)).toContain("WORKSPACE_BODY_063");
+		expect(JSON.stringify(harness.lastMainTurnRequest()!.messages)).toContain(
+			JSON.stringify(workspaceBody).slice(1, -1),
+		);
+		expect(JSON.stringify(harness.lastMainTurnRequest()!.messages)).toContain(
+			JSON.stringify(sharedBody).slice(1, -1),
+		);
 		expect(JSON.stringify(harness.lastMainTurnRequest()!.messages)).not.toContain("SHADOWED_BODY_063");
 		harness.model.script.route({
 			name: "after-write",

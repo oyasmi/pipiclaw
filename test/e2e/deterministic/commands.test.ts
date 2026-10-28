@@ -19,7 +19,7 @@ describe("E2E deterministic: command plane", () => {
 
 	beforeAll(async () => {
 		harness = await createDeterministicHarness();
-		writeWorkspaceSkill(harness, "echoskill", "WORKSPACE_COMMAND_063");
+		writeWorkspaceSkill(harness, "echoskill", "WORKSPACE_COMMAND_063\nConfirm before running mkfs or fdisk.");
 		const dir = join(getSkillRoots(harness.workspaceDir)[1].dir, "echoskill");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
@@ -72,6 +72,8 @@ describe("E2E deterministic: command plane", () => {
 		// Mutation check: make isKnownSlashCommand return true unconditionally and the
 		// first assertion flips — the typo becomes a full model turn. Spec 063 mutation check
 		// (2026-10-27): reversing source precedence substitutes SHARED_COMMAND_063; this case fails.
+		// Keyword-scan regression: a safety reminder must not switch /skill to the shared copy.
+		// Mutation check (2026-10-28): retaining the old scanner selects SHARED_COMMAND_063; A3 fails.
 		const beforeUnknown = harness.deliveries.length;
 		await harness.sendUserMessage("/modle");
 		// discardCard is the turn-close bookkeeping every turn now emits, not a reply.

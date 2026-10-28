@@ -7,7 +7,6 @@ import { isNodeError } from "../shared/os.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { getSkillRoots, skillSecurity } from "./roots.js";
 import type { PipiclawSkill, PipiclawSkillsResult, SkillDiagnostic, SkillOptions } from "./types.js";
-import { scanSkillContent } from "./validation.js";
 
 /** SDK diagnostics may lack a name when parsing failed. Keep an actionable file identifier. */
 function diagnosticName(path: string): string {
@@ -59,10 +58,10 @@ export function loadPipiclawSkills(options: SkillOptions): PipiclawSkillsResult 
 		)) {
 			const guarded = guardPath(skill.filePath, "read", guardContext);
 			if (!guarded.allowed || !guarded.resolvedPath) continue;
-			let content: string;
 			let fileIdentity: string;
 			try {
-				content = readFileSync(guarded.resolvedPath, "utf-8");
+				// Verify the guarded target is readable; body wording does not gate loading.
+				readFileSync(guarded.resolvedPath, "utf-8");
 				fileIdentity = realpathSync(guarded.resolvedPath);
 			} catch (error) {
 				diagnostics.push({
@@ -72,18 +71,6 @@ export function loadPipiclawSkills(options: SkillOptions): PipiclawSkillsResult 
 					path: skill.filePath,
 					rejected: true,
 					message: `Skill could not be read: ${errorMessage(error)}. Check the file and reload.`,
-				});
-				continue;
-			}
-			const scan = scanSkillContent(content);
-			if (!scan.ok) {
-				diagnostics.push({
-					type: "warning",
-					source,
-					name: skill.name,
-					path: skill.filePath,
-					rejected: true,
-					message: `Skill was not loaded: ${scan.error}. Revise the skill and reload.`,
 				});
 				continue;
 			}

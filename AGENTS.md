@@ -23,7 +23,7 @@ A module is a path under `src/`. Dependencies run strictly downward through the 
 | 4 | `config` | `src/config/` | `settings.json` and `tools.json` loading and validation | layers 0–1, channel (types only) | `settings.ts`, `tools.ts` |
 | 5 | `models` | `src/models/` | model references, the model runtime, API keys, backup-model fallback | layers 0–1, config | `reference.ts`, `runtime.ts`, `fallback.ts` |
 | 5 | `web` | `src/web/` | search and fetch clients, extraction | layers 0–1, security, config | `client.ts`, `search.ts`, `fetch.ts` |
-| 5 | `skills` | `src/skills/` | workspace and user-shared skill loading, validation, reading, `/skills` | layers 0–1, security | `loader.ts`, `catalog.ts`, `roots.ts`, `validation.ts`, `commands.ts` |
+| 5 | `skills` | `src/skills/` | workspace and user-shared skill loading, reading, `/skills` | layers 0–1, security | `loader.ts`, `catalog.ts`, `roots.ts`, `types.ts`, `commands.ts` |
 | 6 | `memory` | `src/memory/` | desk memory (queued per desk), daily journal, the reflect pass, session search, `/memory` | layers 0–1, desk, channel, config, models, usage | `store.ts`, `reflect.ts`, `scheduler.ts`, `commands.ts` |
 | 6 | `events` | `src/events/` | scheduled and sensor events: definitions, validation, the file watcher, `/events`. Never touches task files (spec 052, INV-8) | layers 0–1, desk, channel, security, tasks | `types.ts`, `parse.ts`, `watcher.ts`, `validation.ts`, `commands.ts` |
 | 7 | `jobs` | `src/jobs/` | background shell jobs | layers 0–1, desk, channel, tasks | `manager.ts`, `launch.ts`, `record.ts` |
