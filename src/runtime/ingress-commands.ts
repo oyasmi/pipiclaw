@@ -3,18 +3,36 @@
  * stateless report commands (`/status`, `/tasks`, …), shared by the busy and the idle path of
  * `ingress.ts`.
  */
-import { join } from "path";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
-import type { ChannelEvent, HumanEvent } from "../channel/channel-event.js";
+import { type ChannelEvent, type HumanEvent, senderOf } from "../channel/channel-event.js";
 import { formatNewSessionReply, type RuntimeCommandName } from "../commands/catalog.js";
 import { runReportCommand } from "../commands/router.js";
 import { formatNoDeskReply } from "../desk/commands.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { readActiveTasks } from "../tasks/contract.js";
+import type { TaskControl } from "../tasks/control.js";
 import { relativeImagePaths } from "./inbound-images.js";
 import type { IngressDeps } from "./ingress-deps.js";
-import { createTaskDriverEvent } from "./task-driver.js";
+
+/**
+ * The lane is built after the ingress, so a command resolves it when it runs. A command that lands
+ * before the lane exists is refused with a retry hint rather than guessed at.
+ */
+function lazyTaskControl(get: () => TaskControl | undefined): TaskControl {
+	const control = (): TaskControl => {
+		const current = get();
+		if (!current) throw new Error("任务服务尚未就绪，请稍后重试。");
+		return current;
+	};
+	return {
+		created: (...args) => control().created(...args),
+		snapshot: (...args) => control().snapshot(...args),
+		message: (...args) => control().message(...args),
+		pause: (...args) => control().pause(...args),
+		resume: (...args) => control().resume(...args),
+		cancel: (...args) => control().cancel(...args),
+	};
+}
 
 export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (channelId: string) => number) {
 	const {
@@ -30,7 +48,6 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 		cliVersion,
 		startedAt,
 		isShuttingDown,
-		getDurableDispatch,
 		getRuns,
 	} = deps;
 
@@ -152,7 +169,7 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 			);
 		}
 		const { conversation } = resolution;
-		const { desk, deskDir } = conversation;
+		const { desk } = conversation;
 		return runReportCommand(
 			{
 				kind: "bound",
@@ -169,22 +186,8 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 					return runner;
 				},
 				runManager: getRuns().get(desk),
-				dispatchTask: async (id) => {
-					const entry = (await readActiveTasks(join(deskDir, "tasks"))).find((candidate) => candidate.id === id);
-					// The step runs in the task's delivery channel, wherever `/tasks` was typed (D13);
-					// a suspended task is not woken at all.
-					const target = entry?.fields.channel;
-					if (!entry || !target || !describeChannel(desk, target).boundHere) return false;
-					// A human asking to run a task twice means twice, so this key is deliberately
-					// unique per invocation rather than sharing the driver's occurrence key (D1).
-					const now = Date.now();
-					return (
-						(await getDurableDispatch()?.dispatch({
-							...createTaskDriverEvent(desk, target, entry, now),
-							dispatchId: `task:${desk}:${entry.id}:manual:${new Date(now).toISOString()}`,
-						})) ?? false
-					);
-				},
+				taskControl: lazyTaskControl(deps.getTaskControl),
+				senderName: senderOf(event).userName,
 			},
 			name,
 			args,

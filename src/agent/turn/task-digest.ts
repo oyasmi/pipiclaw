@@ -1,8 +1,8 @@
 import { join } from "node:path";
-import { parseLocalTime } from "../../shared/local-time.js";
 import { countPromptUnits } from "../../shared/prompt-units.js";
+import { truncate } from "../../shared/text-utils.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../../tasks/contract.js";
-import { describeTicket } from "../../tasks/ticket.js";
+import type { TaskFrontmatter } from "../../tasks/frontmatter.js";
 
 /** Automatic-context share for the in-flight task agenda (spec 026 §5.3). */
 export const TASK_AGENDA_MAX_UNITS = 600;
@@ -26,32 +26,34 @@ export interface TaskDigestOptions {
 	maxChars: number;
 	/** Runtime hard cap in prompt units (spec 026 §5.3); whichever of chars/units is hit first clips. */
 	maxUnits?: number;
-	now?: number;
 }
 
-/** Relative time to a ticket's due/backstop moment, for a compact agenda line. */
-function relativeTime(atMs: number | undefined, now: number): string | undefined {
-	if (atMs === undefined || !Number.isFinite(atMs)) return undefined;
-	const diffMs = atMs - now;
-	if (diffMs <= 0) return "due";
-	const minutes = Math.round(diffMs / 60000);
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.round(hours / 24)}d`;
+/** Model-facing state words; the question a task waits on is shown so chat can pass the user's answer along (spec 064, D31). */
+function describeState(fields: TaskFrontmatter): string {
+	switch (fields.state) {
+		case "queued":
+			return "queued";
+		case "running":
+			return "running a step";
+		case "paused":
+			return `paused(${fields.paused?.by ?? "user"})`;
+		case "waiting": {
+			const waiting = fields.waiting;
+			if (waiting?.kind === "user")
+				return `waiting for the user: "${truncate(waiting.question.replace(/\s+/g, " "), 100)}"`;
+			if (waiting?.kind === "time") return `waiting until ${waiting.until}`;
+			return "waiting for delegated work";
+		}
+	}
 }
 
-function renderLine(entry: TaskLedgerEntry, now: number, channelId: string | undefined): string {
-	const parts = [`${entry.id} — ${entry.title}`, entry.readable ? entry.fields.state : "⚠ unreadable frontmatter"];
-	if (entry.fields.paused) parts.push(`paused(${entry.fields.paused.by})`);
+function renderLine(entry: TaskLedgerEntry, channelId: string | undefined): string {
+	const parts = [
+		`${entry.id} — ${entry.title}`,
+		entry.readable ? describeState(entry.fields) : "⚠ unreadable frontmatter",
+	];
 	if (channelId && entry.fields.channel !== channelId) {
 		parts.push(entry.fields.channel ? `reports to ${entry.fields.channel}` : "no delivery channel (suspended)");
-	}
-	const ticket = entry.fields.ticket;
-	if (ticket) {
-		const due = relativeTime(entry.dueMs, now);
-		const by = relativeTime(parseLocalTime(ticket.by), now);
-		parts.push(`${describeTicket(ticket)}${due ? ` · due ${due}` : ""}${by ? ` · 兜底 ${by}` : ""}`);
 	}
 	// The agenda shows Work Items progress and the current item, not the full list — the complete
 	// section is read from the task file by the loop itself, staying well inside the 600-unit
@@ -69,13 +71,12 @@ function renderLine(entry: TaskLedgerEntry, now: number, channelId: string | und
 
 /**
  * Render the in-flight task agenda, or `""` when there are no live tasks to show.
- * Parked and paused tasks stay visible so the model can distinguish dormant work from lost work
+ * Waiting and paused tasks stay visible so the model can distinguish dormant work from lost work
  * and tell the user what each one is waiting for.
  */
 export async function buildTaskDigest(options: TaskDigestOptions): Promise<string> {
-	const now = options.now ?? Date.now();
 	const tasksDir = join(options.deskDir, "tasks");
-	const all = await readActiveTasks(tasksDir, now);
+	const all = await readActiveTasks(tasksDir);
 	// A closed task that has not been archived yet is non-actionable and must not enter prompt context.
 	const agenda = all.filter((entry) => !entry.fields.outcome);
 	if (agenda.length === 0) return "";
@@ -90,7 +91,7 @@ export async function buildTaskDigest(options: TaskDigestOptions): Promise<strin
 		"do this turn. Full detail lives in the matching tasks/<id>.md file.",
 		"",
 	];
-	const lines = shown.map((entry) => renderLine(entry, now, options.channelId));
+	const lines = shown.map((entry) => renderLine(entry, options.channelId));
 	if (omitted > 0) lines.push(`- (+${omitted} more)`);
 	const footer = ["</task_agenda>"];
 

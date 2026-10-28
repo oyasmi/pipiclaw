@@ -131,15 +131,18 @@ describe("bash tool", () => {
 			startedAt: 0,
 			durationMs: 0,
 		});
-		const tool = createBashTool(executor, { jobManager: manager, channelId: "dingtalk:dm:1" });
-		await tool.execute("default", { command: "npm test", async: true });
+		const chat = createBashTool(executor, { jobManager: manager, channelId: "dingtalk:dm:1" });
+		await chat.execute("default", { command: "npm test", async: true });
 		expect(start.mock.calls[0]?.[2]).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
-		await tool.execute("long", { command: "npm test", async: true, timeout: 1800, taskId: "T" });
+		// A job started in chat binds to no task, and there is no parameter that could say otherwise (INV-8).
+		expect(start.mock.calls[0]?.[3]).not.toHaveProperty("taskId");
+		const inTask = createBashTool(executor, { jobManager: manager, channelId: "dingtalk:dm:1", boundTaskId: "T" });
+		await inTask.execute("long", { command: "npm test", async: true, timeout: 1800 });
 		expect(start.mock.calls[1]?.[2]).toBe(1800);
 		expect(start.mock.calls[1]?.[3]).toMatchObject({ taskId: "T", notify: true });
-		await expect(
-			tool.execute("silent", { command: "npm test", async: true, taskId: "T", notify: false }),
-		).rejects.toThrow(/notify=true/);
+		await expect(inTask.execute("silent", { command: "npm test", async: true, notify: false })).rejects.toThrow(
+			/notify=true/,
+		);
 		expect(start).toHaveBeenCalledTimes(2);
 	});
 

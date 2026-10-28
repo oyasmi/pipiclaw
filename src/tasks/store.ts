@@ -11,12 +11,23 @@ import {
 	normalizeTaskFrontmatter,
 	parseTaskFrontmatter,
 	type TaskArchiveOutcome,
+	type TaskBudget,
 	type TaskFrontmatter,
 	type TaskPaused,
 } from "./frontmatter.js";
-import { appendTaskLog, taskLogPath } from "./loop-log.js";
+import {
+	appendTaskLog,
+	lastStep,
+	newInputs,
+	readTaskLog,
+	type TaskInputRecord,
+	type TaskLogRecord,
+	type TaskStepReason,
+	type TaskStepResult,
+	taskLogPath,
+} from "./loop-log.js";
 import { withTaskMutation } from "./mutation-lock.js";
-import { describeTicket, type Ticket, ticketExpired } from "./ticket.js";
+import { deriveAfterStep, deriveStepReason, reconcileOnBoot, type StepDerivation, type StepFacts } from "./state.js";
 
 export interface StoredTaskDocument {
 	id: string;
@@ -90,114 +101,242 @@ export async function updateStoredTask(
 	});
 }
 
-/**
- * Park a task on a ticket. The ticket must already have been through `resolveTicket` — this
- * function persists a decision, it does not make one.
- */
-export async function parkTask(deskDir: string, id: string, ticket: Ticket): Promise<StoredTaskDocument | undefined> {
-	return updateStoredTask(deskDir, id, (task) => {
-		task.fields.state = "parked";
-		task.fields.ticket = ticket;
-	});
+export interface BeginStepInput {
+	brief: "full" | "delta";
+}
+
+export interface BegunStep {
+	document: StoredTaskDocument;
+	seq: number;
+	reason: TaskStepReason;
+	/** The log as it stood before this step's own record. */
+	records: TaskLogRecord[];
+	/** What arrived since the previous step began — read in the same lock hold that writes the `step` record, so nothing can slip between (INV-6). */
+	inputs: TaskInputRecord[];
+}
+
+/** The states a step may start from. A paused task, or one waiting for the user or a moment, is not the lane's to run. */
+function mayBeginStep(fields: TaskFrontmatter): boolean {
+	return (
+		fields.state === "queued" ||
+		fields.state === "running" ||
+		(fields.state === "waiting" && fields.waiting?.kind === "work")
+	);
 }
 
 /**
- * Redeem a ticket: the single, idempotent transition from `parked` back to `open`.
- *
- * Idempotent by construction — a task that is no longer parked, or is parked on a *different*
- * ticket, is a no-op. That is what lets every producer (run settlement, job settlement, the
- * events watcher, `/tasks reply`, the driver's timer) push at-least-once without any of them
- * needing its own claim bookkeeping: the outermost wake-claim in `wake-claim.ts` still guards
- * duplicate delivery, and this guards duplicate application.
+ * The step began: `running`, no waiting description, and the `step` record — in one lock hold.
+ * `undefined` when the task is gone or was paused (or put in a wait the lane does not run from)
+ * since the lane decided to run it.
  */
-export async function redeemTicket(
+export async function beginStep(deskDir: string, id: string, input: BeginStepInput): Promise<BegunStep | undefined> {
+	return withTaskMutation(deskDir, id, async () => {
+		const document = await readStoredTask(deskDir, id);
+		if (!document || document.fields.outcome || !mayBeginStep(document.fields)) return undefined;
+		const records = await readTaskLog(deskDir, id);
+		const inputs = newInputs(records);
+		const seq = (lastStep(records)?.step.seq ?? 0) + 1;
+		const reason = deriveStepReason(records, inputs);
+		document.fields.state = "running";
+		document.fields.waiting = undefined;
+		await appendTaskLog(deskDir, id, { kind: "step", seq, reason, brief: input.brief });
+		await writeStoredTask(document);
+		return { document, seq, reason, records, inputs };
+	});
+}
+
+export interface EndStepInput {
+	seq: number;
+	result: TaskStepResult;
+	note: string;
+	tools: string[];
+	usd?: number;
+	usdEstimated?: boolean;
+	error?: string;
+	facts: StepFacts;
+}
+
+export interface EndedStep {
+	document: StoredTaskDocument;
+	derivation: StepDerivation;
+}
+
+/**
+ * The step ended: its `step_end` record, the usage it spent, and the state D8 derives, written
+ * together. A task the user paused mid-step stays paused (the pause already wrote its own state);
+ * a closed task is left for the caller to archive. `undefined` when the task no longer exists —
+ * the user cancelled it while the step ran.
+ */
+export async function endStep(
 	deskDir: string,
 	id: string,
-	matches: (ticket: Ticket) => boolean,
-): Promise<{ document: StoredTaskDocument; ticket: Ticket } | undefined> {
-	let redeemed: Ticket | undefined;
-	const document = await updateStoredTask(deskDir, id, (task) => {
-		if (task.fields.state !== "parked" || !task.fields.ticket || task.fields.paused) return;
-		if (!matches(task.fields.ticket)) return;
-		redeemed = task.fields.ticket;
-		task.fields.state = "open";
-		task.fields.ticket = undefined;
-		// The wait ended normally, so the "consecutive expiries" count starts over (spec 052, D3).
-		if (task.fields.usage) task.fields.usage = { ...task.fields.usage, expired: 0 };
+	input: EndStepInput,
+	now = new Date(),
+): Promise<EndedStep | undefined> {
+	return withTaskMutation(deskDir, id, async () => {
+		const document = await readStoredTask(deskDir, id);
+		if (!document || document.fields.outcome) return undefined;
+		const fields = document.fields;
+		const facts: StepFacts = { ...input.facts, pausedByUser: input.facts.pausedByUser || fields.state === "paused" };
+		const derivation = deriveAfterStep(facts, now);
+		await appendTaskLog(deskDir, id, {
+			kind: "step_end",
+			seq: input.seq,
+			result: input.result,
+			next: derivation.next,
+			note: input.note,
+			tools: input.tools,
+			...(input.usd && input.usd > 0 ? { usd: input.usd } : {}),
+			...(input.usdEstimated ? { usdEstimated: true } : {}),
+			...(input.error ? { error: input.error } : {}),
+		});
+		const usage = fields.usage ?? createUsage(now);
+		fields.usage = {
+			...usage,
+			steps: usage.steps + 1,
+			usd: usage.usd + Math.max(0, input.usd ?? 0),
+			usdEstimated: usage.usdEstimated || input.usdEstimated === true,
+		};
+		if (derivation.next !== "closed" && derivation.next !== "paused") {
+			fields.state = derivation.state;
+			fields.waiting = derivation.waiting;
+		}
+		await writeStoredTask(document);
+		return { document, derivation };
 	});
-	return document && redeemed ? { document, ticket: redeemed } : undefined;
 }
 
-/** Disable a task without losing its stage. `paused` present *is* the disabled state (D1). */
+/**
+ * D10 for one task: whatever state a previous process left, make it true to the facts. A step that
+ * began but never ended gets its `step_end{interrupted}`; a work wait with nothing in flight goes
+ * back in line. Writes state and log only — no model call. Returns whether anything changed.
+ */
+export async function reconcileTaskState(
+	deskDir: string,
+	id: string,
+	pendingWork: number,
+	now = new Date(),
+): Promise<boolean> {
+	return withTaskMutation(deskDir, id, async () => {
+		const document = await readStoredTask(deskDir, id);
+		if (!document || document.fields.outcome) return false;
+		const records = await readTaskLog(deskDir, id);
+		const reconciled = reconcileOnBoot(document.fields, records, pendingWork, now);
+		if (!reconciled) return false;
+		if (reconciled.appendStepEnd) {
+			await appendTaskLog(deskDir, id, {
+				kind: "step_end",
+				seq: reconciled.appendStepEnd.seq,
+				result: "interrupted",
+				next: reconciled.appendStepEnd.next,
+				note: "（服务重启时这一步被打断）",
+				tools: [],
+			});
+		}
+		document.fields = reconciled.fields;
+		await writeStoredTask(document);
+		return true;
+	});
+}
+
+/**
+ * Put a task back in line (`queued`) — a wake from `waiting{time|user}`, a work wait with nothing
+ * left in flight, a repaired start. Idempotent: a task that is not in `waiting` is left alone.
+ */
+export async function requeueWaiting(deskDir: string, id: string): Promise<StoredTaskDocument | undefined> {
+	return updateStoredTask(deskDir, id, (task) => {
+		if (task.fields.state !== "waiting") return;
+		task.fields.state = "queued";
+		task.fields.waiting = undefined;
+	});
+}
+
+/**
+ * Disable a task without losing its stage. The pause and its `pause` record are one write; a task
+ * that is already paused, or gone, is a no-op (`undefined`).
+ */
 export async function pauseTask(
 	deskDir: string,
 	id: string,
 	paused: Omit<TaskPaused, "at"> & { at?: string },
 ): Promise<StoredTaskDocument | undefined> {
-	return updateStoredTask(deskDir, id, (task) => {
-		task.fields.paused = { ...paused, at: paused.at ?? formatLocalTime() };
+	return withTaskMutation(deskDir, id, async () => {
+		const document = await readStoredTask(deskDir, id);
+		if (!document || document.fields.outcome || document.fields.state === "paused") return undefined;
+		document.fields.state = "paused";
+		document.fields.waiting = undefined;
+		document.fields.paused = { ...paused, at: paused.at ?? formatLocalTime() };
+		await appendTaskLog(deskDir, id, { kind: "pause", by: paused.by, reason: paused.reason });
+		await writeStoredTask(document);
+		return document;
 	});
 }
 
 /**
- * Lift a pause. A task that was paused *while parked on a ticket whose backstop has since passed*
- * (the double-expiry stop) is reopened and its expiry count cleared: the user has looked at it,
- * and resuming onto the same dead ticket would just expire — and pause — it a third time.
+ * Lift a pause: back in line, with any budget grant added on top of what the task already spent —
+ * so resuming a task that hit its ceiling lets it run rather than re-stopping on the next step.
+ * `undefined` when the task is gone or not paused.
  */
-export async function resumeTask(deskDir: string, id: string): Promise<StoredTaskDocument | undefined> {
-	return updateStoredTask(deskDir, id, (task) => {
-		task.fields.paused = undefined;
-		if (task.fields.state === "parked" && task.fields.ticket && ticketExpired(task.fields.ticket)) {
-			task.fields.state = "open";
-			task.fields.ticket = undefined;
-			if (task.fields.usage) task.fields.usage = { ...task.fields.usage, expired: 0 };
-		}
-	});
-}
-
-/**
- * The backstop transition (D2): a parked task whose `by` has passed goes back to `open` so its
- * next step can re-check reality, and the second consecutive expiry stops the task and
- * hands the user a deterministic receipt instead of burning another wake.
- *
- * Returns what the caller should do about it, or `undefined` when nothing applied.
- */
-export type TicketExpiryOutcome = "reopened" | "paused";
-
-export async function expireTicket(
+export async function resumeTask(
 	deskDir: string,
 	id: string,
-	limit = 2,
-): Promise<{ document: StoredTaskDocument; outcome: TicketExpiryOutcome; ticket: string } | undefined> {
-	let outcome: TicketExpiryOutcome | undefined;
-	let summary = "";
-	const document = await updateStoredTask(deskDir, id, (task) => {
-		const ticket = task.fields.ticket;
-		if (task.fields.state !== "parked" || !ticket || task.fields.paused) return;
-		summary = describeTicket(ticket);
-		const usage = task.fields.usage ?? createUsage();
-		const expired = usage.expired + 1;
-		task.fields.usage = { ...usage, expired };
-		if (expired >= limit) {
-			outcome = "paused";
-			task.fields.paused = {
-				by: "runtime",
-				reason: `等待条件连续 ${expired} 次未满足：${summary}`,
-				at: formatLocalTime(),
-			};
-			return;
+	grants: Partial<TaskBudget> = {},
+): Promise<StoredTaskDocument | undefined> {
+	return withTaskMutation(deskDir, id, async () => {
+		const document = await readStoredTask(deskDir, id);
+		if (!document || document.fields.outcome || document.fields.state !== "paused") return undefined;
+		const granted: Partial<TaskBudget> = {};
+		const budget = { ...document.fields.budget };
+		for (const key of ["steps", "usd"] as const) {
+			const extra = grants[key];
+			if (extra === undefined || extra <= 0) continue;
+			const spent = key === "steps" ? document.fields.usage?.steps : document.fields.usage?.usd;
+			budget[key] = (spent ?? 0) + extra;
+			granted[key] = extra;
 		}
-		outcome = "reopened";
-		task.fields.state = "open";
-		task.fields.ticket = undefined;
+		document.fields.state = "queued";
+		document.fields.paused = undefined;
+		if (Object.keys(granted).length > 0) document.fields.budget = budget;
+		await appendTaskLog(deskDir, id, {
+			kind: "resume",
+			...(Object.keys(granted).length > 0 ? { grants: granted } : {}),
+		});
+		await writeStoredTask(document);
+		return document;
 	});
-	if (!document || !outcome) return undefined;
-	await appendTaskLog(deskDir, id, {
-		kind: "expired",
-		ticket: summary,
-		action: outcome,
+}
+
+export interface CloseTaskInput {
+	outcome: "complete" | "cancel";
+	by: "leader" | "user";
+	note: string;
+}
+
+/**
+ * Close a task: the `close` record, then the move into `tasks/archive/`. The checks that decide
+ * whether closing is allowed (DoD, work in flight) belong to the caller — they need the run and job
+ * managers. `undefined` when the task is already gone.
+ */
+export async function closeTask(
+	deskDir: string,
+	id: string,
+	input: CloseTaskInput,
+): Promise<StoredTaskDocument | undefined> {
+	return withTaskMutation(deskDir, id, async () => {
+		const document = await readStoredTask(deskDir, id);
+		if (!document || document.fields.outcome) return undefined;
+		const usage = document.fields.usage;
+		await appendTaskLog(deskDir, id, {
+			kind: "close",
+			outcome: input.outcome === "complete" ? "done" : "cancelled",
+			by: input.by,
+			note: input.note,
+			steps: usage?.steps ?? 0,
+			usd: usage?.usd ?? 0,
+		});
+		await archiveTask(deskDir, id, input.outcome === "complete" ? "completed" : "cancelled");
+		return document;
 	});
-	return { document, outcome, ticket: summary };
 }
 
 const LOG_SUFFIXES = ["", ".1", ".2"] as const;

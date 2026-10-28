@@ -8,9 +8,7 @@ import type { WakeEvent } from "../channel/channel-event.js";
  * channel, so results that arrive while the channel is busy are handled together in the next turn.
  * Nothing is delayed to make that happen: the first result still wakes the channel immediately.
  *
- * Only chat-level wakes merge. A task-bound wake carries `internalWake` and goes through its own
- * claim (`task-wake.ts`), which already lets sibling wakes of one fan-out drop out once the task
- * is reopened.
+ * Only completion wakes merge; a task-bound result never wakes a channel at all (spec 064, D19).
  */
 
 /** The merged turn's prompt grows with every result's tail; past this many it is better split. */
@@ -19,7 +17,7 @@ export const MAX_COALESCED_WAKES = 6;
 const COMPLETION_WAKE_ID = /^(subagent|job):.+:done$/;
 
 export function isCoalescableWake(event: WakeEvent): boolean {
-	return !event.internalWake && typeof event.dispatchId === "string" && COMPLETION_WAKE_ID.test(event.dispatchId);
+	return typeof event.dispatchId === "string" && COMPLETION_WAKE_ID.test(event.dispatchId);
 }
 
 /**

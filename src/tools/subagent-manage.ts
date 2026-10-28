@@ -381,7 +381,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				content: [
 					{
 						type: "text",
-						text: `Follow-up dispatched as runId=${newRunId} (resuming ${resolvedRunId}). This channel will be woken when it finishes.`,
+						text: `Follow-up dispatched as runId=${newRunId} (resuming ${resolvedRunId}). Whoever dispatched it (this chat, or the task whose step did) will be woken when it finishes.`,
 					},
 				],
 				details: { op, runId: newRunId, resumedFrom: resolvedRunId },

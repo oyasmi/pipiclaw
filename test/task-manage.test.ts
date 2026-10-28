@@ -2,16 +2,26 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
+import { createFileStore } from "../src/file-store.js";
+import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
+import type { TaskControl, TaskSessionContext, TaskStepIntent } from "../src/tasks/control.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { readStoredTask } from "../src/tasks/store.js";
+import { buildToolSet } from "../src/tools/registry.js";
 import { createTask } from "../src/tools/task-manage/create.js";
-import { createTaskStepEndTool } from "../src/tools/task-manage/factory.js";
-import { closeTask, updateTask } from "../src/tools/task-manage/lifecycle.js";
-import { endTaskStep } from "../src/tools/task-manage/step-end.js";
+import {
+	createTaskAskTool,
+	createTaskCloseTool,
+	createTaskMessageTool,
+	createTaskReportTool,
+	createTaskWaitTool,
+} from "../src/tools/task-manage/factory.js";
+import { closeTaskFromChat, listTasks } from "../src/tools/task-manage/lifecycle.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
 import { testManagers } from "./helpers/background-runtime.js";
 
@@ -24,18 +34,45 @@ const SATISFIED_BODY = renderStandardTaskBody({
 });
 const OPEN_DOD_BODY = renderStandardTaskBody({ title: "W", goal: "G", dod: "- [ ] Not yet" });
 
-describe("task tool surface (spec 052, D7)", () => {
+describe("task tool surfaces (spec 064, D21–D23)", () => {
 	let workspaceDir: string;
 	let deskDir: string;
 	let tasksDir: string;
 	let options: TaskManageToolOptions;
+	let intent: TaskStepIntent;
+	let reports: string[];
+	let deliver: boolean;
+	let sessionOptions: TaskManageToolOptions;
+
+	const control = {
+		created: vi.fn<TaskControl["created"]>(),
+		snapshot: vi.fn<TaskControl["snapshot"]>(async () => []),
+		message: vi.fn<TaskControl["message"]>(async () => ({ kind: "injected" })),
+		pause: vi.fn<TaskControl["pause"]>(async () => ({ kind: "ok" })),
+		resume: vi.fn<TaskControl["resume"]>(async () => ({ kind: "ok" })),
+		cancel: vi.fn<TaskControl["cancel"]>(async () => ({ kind: "cancelled", cancelled: ["run_live"] })),
+	} satisfies TaskControl;
 
 	beforeEach(async () => {
+		vi.clearAllMocks();
 		workspaceDir = await mkdtemp(join(tmpdir(), "task-manage-"));
 		deskDir = join(workspaceDir, CHANNEL_ID);
 		tasksDir = join(deskDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
-		options = { ...testManagers(CHANNEL_ID), deskDir, channelId: CHANNEL_ID };
+		options = { ...testManagers(CHANNEL_ID), desk: "main", deskDir, channelId: CHANNEL_ID, control };
+		intent = { reports: 0 };
+		reports = [];
+		deliver = true;
+		const session: TaskSessionContext = {
+			taskId: "work",
+			seq: () => 2,
+			intent: () => intent,
+			report: async (text) => {
+				reports.push(text);
+				return deliver;
+			},
+		};
+		sessionOptions = { ...options, control: undefined, session };
 	});
 
 	afterEach(async () => {
@@ -46,7 +83,7 @@ describe("task tool surface (spec 052, D7)", () => {
 	async function writeTask(id: string, fields: Partial<TaskFrontmatter> = {}, body = SATISFIED_BODY): Promise<void> {
 		await writeFile(
 			join(tasksDir, `${id}.md`),
-			renderTaskDocument({ state: "open", usage: createUsage(), ...fields }, body),
+			renderTaskDocument({ state: "queued", usage: createUsage(), ...fields }, body),
 		);
 	}
 
@@ -67,8 +104,8 @@ describe("task tool surface (spec 052, D7)", () => {
 		});
 	}
 
-	describe("task_create", () => {
-		it("creates the task open with its usage clock started and numbered Work Items", async () => {
+	describe("task_create and task_list", () => {
+		it("creates the task queued with its usage clock started and numbered Work Items", async () => {
 			const result = await createTask(options, {
 				id: "work",
 				title: "Work",
@@ -77,7 +114,7 @@ describe("task tool surface (spec 052, D7)", () => {
 				items: [{ text: "first" }, { text: "second" }],
 				budget: { steps: 12, usd: 3 },
 			});
-			expect(result).toMatchObject({ state: "open" });
+			expect(result).toMatchObject({ state: "queued" });
 			const document = await readStoredTask(deskDir, "work");
 			expect(document?.fields.usage).toMatchObject({ steps: 0, usd: 0 });
 			expect(document?.fields.budget).toEqual({ steps: 12, usd: 3 });
@@ -91,211 +128,205 @@ describe("task tool surface (spec 052, D7)", () => {
 			await expect(createTask(options, { id: "no-dod", title: "N", goal: "G", dod: "prose" })).rejects.toThrow(
 				/no checklist items/,
 			);
-			await expect(
-				createTask(options, { id: "bad-budget", title: "B", goal: "G", dod: "- [ ] D", budget: { usd: -1 } }),
-			).rejects.toThrow(/positive number/);
 			await createTask(options, { id: "dup", title: "D", goal: "G", dod: "- [ ] D" });
 			await expect(createTask(options, { id: "dup", title: "D", goal: "G", dod: "- [ ] D" })).rejects.toThrow(
 				/already exists/,
 			);
 		});
-	});
 
-	describe("task_update", () => {
-		it("edits Work Items and budget without touching task state", async () => {
-			await writeTask("edit", {
-				state: "parked",
-				ticket: { kind: "ask", asked: "?", by: "2099-01-01T00:00:00+08:00" },
+		it("lists a task with what it waits for and the live step and work the lane reports", async () => {
+			await writeTask("asking", {
+				state: "waiting",
+				waiting: { kind: "user", question: "要合并吗？", since: "2026-10-28T10:00:00+08:00" },
 			});
-			await updateTask(options, {
-				id: "edit",
-				items: [
-					{ id: "W3", text: "Ship it" },
-					{ id: "W1", status: "done" },
-				],
-				budget: { steps: 5 },
-			});
-			const document = await readStoredTask(deskDir, "edit");
-			expect(document?.body).toContain("W3 Ship it");
-			expect(document?.body).toContain("- [x] W1 Build it");
-			expect(document?.fields.budget?.steps).toBe(5);
-			// Metadata edits are not lifecycle moves: the park survives untouched.
-			expect(document?.fields.state).toBe("parked");
-		});
-	});
-
-	describe("task_step_end", () => {
-		const loop = (taskId: string): TaskManageToolOptions => ({ ...options, taskId });
-
-		it("is unavailable outside a task loop", async () => {
-			await writeTask("work");
-			await expect(endTaskStep(options, { outcome: "continue", note: "n" })).rejects.toThrow(
-				/only available inside/,
-			);
-		});
-
-		it("continue keeps the task open, counts the step, and logs the tools it used once each", async () => {
-			await writeTask("work");
-			const result = await endTaskStep(
-				{ ...loop("work"), getToolsUsed: () => ["bash", "read", "bash"] },
-				{ outcome: "continue", note: "ran the check", items: [{ id: "W1", status: "done" }] },
-			);
-			expect(result.state).toBe("open");
-			expect((await readStoredTask(deskDir, "work"))?.body).toContain("- [x] W1 Build it");
-			const [record] = await readTaskLog(deskDir, "work", { kinds: ["step"] });
-			expect(record).toMatchObject({ kind: "step", seq: 1, outcome: "continue" });
-			// Deduplicated: the idle detector asks "did anything happen", not "how many times".
-			expect(record?.kind === "step" && record.tools).toEqual(["bash", "read"]);
-			expect((await readStoredTask(deskDir, "work"))?.fields.usage?.steps).toBe(1);
-		});
-
-		it("adds the step's own model cost to the task's usage, before a done writes its close record", async () => {
-			await writeTask("costly");
-			const priced = (usd: number, estimated = false) => ({
-				...loop("costly"),
-				getStepCost: () => ({ usd, estimated }),
-			});
-			await endTaskStep(priced(0.4), { outcome: "continue", note: "n" });
-			expect((await readStoredTask(deskDir, "costly"))?.fields.usage).toMatchObject({
-				usd: 0.4,
-				usdEstimated: false,
-			});
-
-			// The leader's last step is spent by the time it ends the project, so the close record counts it.
-			await endTaskStep(priced(0.1, true), { outcome: "done", note: "n" });
-			const close = (await readTaskLog(deskDir, "costly", { kinds: ["close"] }))[0];
-			expect(close?.kind === "close" && close.usd).toBeCloseTo(0.5);
-			expect((await readStoredTask(deskDir, "costly", true))?.fields.usage?.usdEstimated).toBe(true);
-		});
-
-		it("park requires a ticket, and refuses a work ticket when nothing is in flight", async () => {
-			await writeTask("work");
-			await expect(endTaskStep(loop("work"), { outcome: "park", note: "n" })).rejects.toThrow(/requires a ticket/);
-			await expect(
-				endTaskStep(loop("work"), { outcome: "park", note: "n", ticket: { kind: "work" } }),
-			).rejects.toThrow(/nothing to wait for|no delegation or background job/);
-
-			await endTaskStep(loop("work"), { outcome: "park", note: "n", ticket: { kind: "time", at: "+2h" } });
-			const fields = (await readStoredTask(deskDir, "work"))?.fields;
-			expect(fields?.state).toBe("parked");
-			expect(fields?.ticket?.by).toBeTruthy();
-		});
-
-		it("park on work succeeds only while a bound delegation is in flight, and records what it waits for", async () => {
-			await writeTask("work");
-			await startRun("work", "run_a");
-			await startRun("other", "run_other");
-			await endTaskStep(loop("work"), { outcome: "park", note: "waiting", ticket: { kind: "work" } });
-			const ticket = (await readStoredTask(deskDir, "work"))?.fields.ticket;
-			// Only this task's own delegation counts; another task's run never props up the wait.
-			expect(ticket).toMatchObject({ kind: "work", refs: ["run_a"] });
-		});
-
-		it("parking on an ask always speaks to the user, with the reply command", async () => {
-			await writeTask("work");
-			await endTaskStep(loop("work"), {
-				outcome: "park",
-				note: "n",
-				ticket: { kind: "ask", asked: "Merge to master?" },
-			});
-			const fields = (await readStoredTask(deskDir, "work"))?.fields;
-			expect(fields?.ticket).toMatchObject({ kind: "ask", asked: "Merge to master?" });
-			// A task waiting on a person that never says so is the silent dead end tickets exist to prevent.
-			const notice = await readFile(join(tasksDir, ".steer", "work.out.md"), "utf-8");
-			expect(notice).toContain("Merge to master?");
-			expect(notice).toContain("/tasks reply work");
-		});
-
-		it("stays silent unless the step asked to report", async () => {
-			await writeTask("quiet");
-			await endTaskStep(loop("quiet"), { outcome: "continue", note: "n" });
-			expect(existsSync(join(tasksDir, ".steer", "quiet.out.md"))).toBe(false);
-			await endTaskStep(loop("quiet"), { outcome: "continue", note: "n", report: "报告一下" });
-			expect(await readFile(join(tasksDir, ".steer", "quiet.out.md"), "utf-8")).toContain("报告一下");
-		});
-
-		it("done archives the task with its step and close records, and delivers the report", async () => {
-			await writeTask("once");
-			await endTaskStep(loop("once"), {
-				outcome: "done",
-				note: "shipped; npm run check green",
-				report: "成果在这里",
-			});
-			expect(existsSync(join(tasksDir, "once.md"))).toBe(false);
-			expect(await readFile(join(tasksDir, "archive", "once.md"), "utf-8")).toContain("outcome: completed");
-			// The step must land in the log that travels with the task, not recreate an active one.
-			expect(existsSync(join(tasksDir, "once.jsonl"))).toBe(false);
-			const archivedLog = await readFile(join(tasksDir, "archive", "once.jsonl"), "utf-8");
-			expect(archivedLog).toContain('"kind":"step"');
-			expect(archivedLog).toContain('"kind":"close"');
-			expect(await readFile(join(tasksDir, ".steer", "once.out.md"), "utf-8")).toContain("成果在这里");
-			// What was delivered is kept with the task, so the next occurrence can see it.
-			const steps = await readTaskLog(deskDir, "once", { kinds: ["step"] });
-			expect(steps[0]).toMatchObject({ kind: "step", report: "成果在这里" });
-		});
-
-		it("refuses done while acceptance items are unmet, or while bound work is still in flight", async () => {
-			await writeTask("open-dod", {}, OPEN_DOD_BODY);
-			await expect(endTaskStep(loop("open-dod"), { outcome: "done", note: "n" })).rejects.toThrow(
-				/unmet acceptance items/,
-			);
-
-			await writeTask("busy");
-			await startRun("busy", "run_late");
-			// Archiving now would send the late result back into the chat with nobody left to read it.
-			await expect(endTaskStep(loop("busy"), { outcome: "done", note: "n" })).rejects.toThrow(/run_late/);
-			expect(existsSync(join(tasksDir, "busy.md"))).toBe(true);
-		});
-
-		it("a rejected done produces no notice, no state change and no log entry", async () => {
-			// Regression: the notice used to fire before the checks, so a rejected `done` still told
-			// the channel "task complete" and a corrected retry queued a second one.
-			await writeTask("open-dod", {}, OPEN_DOD_BODY);
-			const before = await readFile(join(tasksDir, "open-dod.md"), "utf-8");
-			await expect(
-				endTaskStep(loop("open-dod"), { outcome: "done", note: "n", report: "全部搞定了" }),
-			).rejects.toThrow(/unmet acceptance items/);
-			expect(existsSync(join(tasksDir, ".steer", "open-dod.out.md"))).toBe(false);
-			expect(await readFile(join(tasksDir, "open-dod.md"), "utf-8")).toBe(before);
-			expect(await readTaskLog(deskDir, "open-dod")).toEqual([]);
-		});
-
-		it("the tool wrapper sets terminate:true on success but not on a recoverable failure", async () => {
-			await writeTask("term");
-			const tool = createTaskStepEndTool({ ...testManagers(), deskDir, channelId: CHANNEL_ID, taskId: "term" });
-			expect((await tool.execute("c", { outcome: "continue", note: "n" } as never)).terminate).toBe(true);
-
-			await writeTask("term2", {}, OPEN_DOD_BODY);
-			await expect(
-				createTaskStepEndTool({ ...testManagers(), deskDir, channelId: CHANNEL_ID, taskId: "term2" }).execute("c", {
-					outcome: "done",
-					note: "n",
-				} as never),
-			).rejects.toThrow();
+			control.snapshot.mockResolvedValueOnce([
+				{
+					id: "asking",
+					state: "waiting",
+					frozen: false,
+					step: { seq: 4, startedAt: Date.now() - 120_000, toolsDone: 3 },
+					pending: [
+						{ ref: "run_k", kind: "delegation", label: "codex", startedAt: Date.now() - 60_000, stalled: true },
+					],
+				},
+			] as never);
+			const { tasks } = await listTasks(options);
+			expect(tasks?.[0]).toMatchObject({ id: "asking", state: "waiting", deliversHere: false });
+			expect(tasks?.[0]?.waiting).toContain("要合并吗？");
+			expect(tasks?.[0]?.activity).toContain("step 4");
+			expect(tasks?.[0]?.inFlight?.[0]).toContain("looks stalled");
 		});
 	});
 
 	describe("task_close", () => {
-		it("archives a completed task and records the close in the log that travels with it", async () => {
+		it("from chat: completes a task nothing is working on, under the same gates as the leader", async () => {
 			await writeTask("done");
-			const result = await closeTask(options, { id: "done", outcome: "complete", note: "Finished; DoD checked." });
-			expect(result).toMatchObject({ archived: true });
+			expect(await closeTaskFromChat(options, { id: "done", outcome: "complete", note: "Finished." })).toMatchObject(
+				{
+					archived: true,
+				},
+			);
 			expect(existsSync(join(tasksDir, "done.md"))).toBe(false);
-			expect(existsSync(join(tasksDir, "done.jsonl"))).toBe(false);
-			expect(await readFile(join(tasksDir, "archive", "done.jsonl"), "utf-8")).toContain('"kind":"close"');
-		});
+			expect(await readFile(join(tasksDir, "archive", "done.jsonl"), "utf-8")).toContain('"by":"user"');
 
-		it("complete obeys the same gates as done; cancel obeys none but reports what keeps running", async () => {
 			await writeTask("gated", {}, OPEN_DOD_BODY);
-			await expect(closeTask(options, { id: "gated", outcome: "complete", note: "x" })).rejects.toThrow(
+			await expect(closeTaskFromChat(options, { id: "gated", outcome: "complete", note: "x" })).rejects.toThrow(
 				/unmet acceptance items/,
 			);
+			await writeTask("busy", { state: "running" });
+			await expect(closeTaskFromChat(options, { id: "busy", outcome: "complete", note: "x" })).rejects.toThrow(
+				/executing a step/,
+			);
+			await writeTask("flying");
+			await startRun("flying");
+			await expect(closeTaskFromChat(options, { id: "flying", outcome: "complete", note: "x" })).rejects.toThrow(
+				/work in flight[\s\S]*End the step/,
+			);
+		});
 
-			await startRun("gated", "run_running");
-			const cancelled = await closeTask(options, { id: "gated", outcome: "cancel", note: "No longer needed." });
-			expect(await readFile(join(tasksDir, "archive", "gated.md"), "utf-8")).toContain("outcome: cancelled");
-			// Closing a task never cancels its delegations; the leader has to know that.
-			expect(cancelled.notice).toContain("run_running");
+		it("from chat: cancel goes through the lane, which stops the step and what the task started", async () => {
+			await writeTask("doomed", { state: "running" });
+			const result = await closeTaskFromChat(options, {
+				id: "doomed",
+				outcome: "cancel",
+				note: "No longer needed.",
+			});
+			expect(control.cancel).toHaveBeenCalledWith("main", "doomed", {
+				by: "user",
+				note: "No longer needed.",
+				channel: CHANNEL_ID,
+			});
+			expect(result).toMatchObject({ archived: true, cancelled: ["run_live"] });
+		});
+
+		it("in a task session: registers the close as the step's intent — the lane archives it when the step ends", async () => {
+			await writeTask("work");
+			const tool = createTaskCloseTool(sessionOptions);
+			const result = await tool.execute("c", { id: "work", outcome: "complete", note: "All checked." } as never);
+			expect(result.terminate).toBe(true);
+			expect(intent.close).toEqual({ outcome: "complete", note: "All checked." });
+			expect(existsSync(join(tasksDir, "work.md"))).toBe(true);
+
+			await expect(tool.execute("c", { id: "other", outcome: "cancel", note: "n" } as never)).rejects.toThrow(
+				/close only this task/,
+			);
+		});
+
+		it("in a task session: complete is refused while the DoD is open or work is in flight, and a refusal ends nothing", async () => {
+			await writeTask("work", {}, OPEN_DOD_BODY);
+			const tool = createTaskCloseTool(sessionOptions);
+			await expect(tool.execute("c", { id: "work", outcome: "complete", note: "n" } as never)).rejects.toThrow(
+				/unmet acceptance items/,
+			);
+			await writeTask("work");
+			await startRun("work");
+			await expect(tool.execute("c", { id: "work", outcome: "complete", note: "n" } as never)).rejects.toThrow(
+				/in-flight work wakes you when it settles/,
+			);
+			expect(intent.close).toBeUndefined();
+			// Cancel has no gate: abandoning work must always be possible.
+			expect((await tool.execute("c", { id: "work", outcome: "cancel", note: "n" } as never)).terminate).toBe(true);
+		});
+	});
+
+	describe("task_ask, task_wait and task_report", () => {
+		it("end the step on success and refuse each other, with the intent already registered named", async () => {
+			await writeTask("work");
+			const ask = createTaskAskTool(sessionOptions);
+			const wait = createTaskWaitTool(sessionOptions);
+			expect((await wait.execute("c", { until: "+2h" } as never)).terminate).toBe(true);
+			expect(intent.waitUntil).toBeDefined();
+			await expect(ask.execute("c", { question: "merge?" } as never)).rejects.toThrow(
+				/already registered task_wait/,
+			);
+			intent.waitUntil = undefined;
+
+			expect((await ask.execute("c", { question: "merge?" } as never)).terminate).toBe(true);
+			await expect(wait.execute("c", { until: "+2h" } as never)).rejects.toThrow(/already registered task_ask/);
+			await expect(ask.execute("c", { question: "again?" } as never)).rejects.toThrow(/already registered/);
+			const records = await readTaskLog(deskDir, "work");
+			expect(records.map((record) => record.kind)).toEqual(["wait", "ask"]);
+			expect(records[1]).toMatchObject({ seq: 2, question: "merge?" });
+		});
+
+		it("task_wait keeps its moment within one minute and thirty days; task_ask within 500 characters", async () => {
+			await writeTask("work");
+			const wait = createTaskWaitTool(sessionOptions);
+			await expect(wait.execute("c", { until: "+10s" } as never)).rejects.toThrow(/less than a minute/);
+			await expect(wait.execute("c", { until: "+40d" } as never)).rejects.toThrow(/30 days/);
+			await expect(
+				createTaskAskTool(sessionOptions).execute("c", { question: "q".repeat(501) } as never),
+			).rejects.toThrow(/500/);
+			expect(intent.waitUntil).toBeUndefined();
+			expect(intent.ask).toBeUndefined();
+		});
+
+		it("task_report sends at once, records whether it arrived, and stops at three a step", async () => {
+			await writeTask("work");
+			const report = createTaskReportTool(sessionOptions);
+			deliver = false;
+			expect((await report.execute("c", { text: "one" } as never)).details).toMatchObject({ action: "report" });
+			deliver = true;
+			await report.execute("c", { text: "two" } as never);
+			await report.execute("c", { text: "three" } as never);
+			await expect(report.execute("c", { text: "four" } as never)).rejects.toThrow(/already sent 3 reports/);
+			expect(reports).toEqual(["one", "two", "three"]);
+			expect(
+				(await readTaskLog(deskDir, "work")).map((record) => (record.kind === "report" ? record.delivered : "-")),
+			).toEqual([false, true, true]);
+		});
+	});
+
+	describe("the chat management tools", () => {
+		it("relay the user's words verbatim and say where they landed; an unknown task is the model's to fix", async () => {
+			const message = createTaskMessageTool(options);
+			const result = await message.execute("c", { id: "work", text: "  先跑 check  " } as never);
+			expect(control.message).toHaveBeenCalledWith("main", "work", {
+				from: "chat",
+				channel: CHANNEL_ID,
+				text: "先跑 check",
+			});
+			expect((result.details as { notice: string }).notice).toContain("正在执行的这一步");
+
+			control.message.mockResolvedValueOnce({ kind: "not_found" });
+			await expect(message.execute("c", { id: "nope", text: "hi" } as never)).rejects.toThrow(/task_list/);
+		});
+
+		it("are offered to chat only, and the session tools to a task session only — none writes state", () => {
+			const ctx = (extra: Partial<Parameters<typeof buildToolSet>[0]> = {}) =>
+				buildToolSet({
+					executor: { exec: async () => ({ stdout: "", stderr: "", code: 1 }) },
+					fileStore: createFileStore(),
+					securityConfig: DEFAULT_SECURITY_CONFIG,
+					securityContext: { agentWorkspaceDir: workspaceDir, cwd: workspaceDir },
+					channelId: CHANNEL_ID,
+					desk: "main",
+					deskDir,
+					workspaceDir,
+					toolsConfig: DEFAULT_TOOLS_CONFIG,
+					jobManager: options.jobManager,
+					runManager: options.runManager,
+					getCurrentModel: () => ({}) as never,
+					getAvailableModels: () => [],
+					resolveApiKey: async () => "key",
+					getSessionSearchSettings: () => ({}) as never,
+					...extra,
+				}).map((tool) => tool.name);
+			const chat = ctx({ taskControl: control });
+			const inSession = ctx({ taskSession: sessionOptions.session });
+			const taskTools = (names: string[]) => names.filter((name) => name.startsWith("task_")).sort();
+			expect(taskTools(chat)).toEqual([
+				"task_close",
+				"task_create",
+				"task_list",
+				"task_log",
+				"task_message",
+				"task_pause",
+				"task_resume",
+			]);
+			expect(taskTools(inSession)).toEqual(["task_ask", "task_close", "task_log", "task_report", "task_wait"]);
+			expect([...chat, ...inSession]).not.toContain("task_update");
+			expect([...chat, ...inSession]).not.toContain("task_step_end");
 		});
 	});
 });

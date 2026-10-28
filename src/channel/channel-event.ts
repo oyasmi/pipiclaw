@@ -64,7 +64,7 @@ export interface HumanEvent extends EventBase {
 
 export interface WakeEvent extends EventBase {
 	source: "wake";
-	/** Producer tag: JOB, TASK_DRIVER, SUBAGENT, EVENT, … Shown to the model as the sender. */
+	/** Producer tag: JOB, SUBAGENT, EVENT, … Shown to the model as the sender. */
 	producer: string;
 	/**
 	 * The desk this wake was produced for (spec 058, D7). Every in-process producer must set it;
@@ -72,19 +72,11 @@ export interface WakeEvent extends EventBase {
 	 * longer bound to this desk.
 	 */
 	desk: string;
-	/** Structured wake provenance created only by in-process producers; user text cannot manufacture it. */
-	internalWake?: {
-		kind: "job" | "subagent";
-		resourceId: string;
-		taskId: string;
-		dispatchId: string;
-	};
 	/**
 	 * Purely a display hint: `"awaited"` marks a wake a human is actually waiting on (a delegation
-	 * or background job finishing), as opposed to an autonomous check-in (task-driver polling, a
-	 * scheduled event) that normally has nothing to say. All wakes deliver only their result; this
-	 * metadata does not enable progress cards or gate task activation. Trust decisions stay on
-	 * `internalWake` alone.
+	 * or background job finishing), as opposed to an autonomous check-in (a scheduled event) that
+	 * normally has nothing to say. All wakes deliver only their result; this metadata does not
+	 * enable progress cards.
 	 */
 	presentation?: "awaited";
 }

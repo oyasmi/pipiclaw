@@ -21,6 +21,7 @@ describe("compaction deadline and stale requests", () => {
 		// Missing product-switch guard used to turn an automatic operation into SDK manual compaction.
 		const prevent = vi.fn();
 		const pipeline = new TurnPipeline({
+			profile: { kind: "chat" },
 			conversation: { channelId: "dingtalk:dm:test" } as never,
 			workspaceDir: "/tmp",
 			host: {

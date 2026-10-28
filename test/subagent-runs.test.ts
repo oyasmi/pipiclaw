@@ -11,8 +11,7 @@ import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
-import { resetTaskLogAppenders } from "../src/tasks/loop-log.js";
-import { parkTask, readStoredTask } from "../src/tasks/store.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import type { UsageLedgerEntry } from "../src/usage/ledger.js";
 import {
 	configureSubAgentRuntime,
@@ -190,12 +189,12 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(manager.get("run-1")?.settledAt).toBeDefined();
 	});
 
-	it("settling with announce:true dispatches exactly one completion wake naming the run and task", async () => {
+	it("settling with announce:true dispatches exactly one completion wake naming the run", async () => {
 		const { ledger } = makeLedger();
 		const { store } = makeStore();
 		const { dispatch, events } = makeDispatch();
 		const manager = new SubAgentRunManager(DESK, { ledger, store, dispatch });
-		await register(manager, { taskId: "T-7" });
+		await register(manager);
 
 		await manager.settle("run-1", baseSettleInput({ outputText: "Found the bug in src/index.ts." }), {
 			announce: true,
@@ -203,14 +202,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 		expect(events).toHaveLength(1);
 		expect(events[0]?.dispatchId).toBe("subagent:news:run-1:done");
-		expect(events[0]?.internalWake).toEqual({
-			kind: "subagent",
-			resourceId: "run-1",
-			taskId: "T-7",
-			dispatchId: "subagent:news:run-1:done",
-		});
 		expect(events[0]?.text).toContain("[SUBAGENT:run-1]");
-		expect(events[0]?.text).toContain("It belongs to task T-7.");
 		expect(events[0]?.text).toContain("Found the bug in src/index.ts.");
 		expect(events[0]?.text).toContain("[SILENT]");
 		// P0-2: an "awaited" wake renders the resulting turn's progress instead of the "none" style
@@ -218,25 +210,58 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(events[0]?.presentation).toBe("awaited");
 	});
 
-	it("drops the wake for a channel rebound to another desk, but still redeems its task's work ticket", async () => {
-		// Spec 058, D8. Failure caught: a dropped wake leaving the task parked on `work` with nothing
-		// left to redeem it — on rebind the task would sit until its backstop expired.
+	it("reports a task-bound run to its task instead of waking a channel, whether or not the channel is still bound", async () => {
+		// Spec 064, D19. Failure caught: the result travelling through the chat (and being lost with it
+		// when the channel left the desk) instead of landing in the task's log for the lane to read.
 		const deskDir = createTempDir();
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(
 			join(deskDir, "tasks", "T-8.md"),
-			renderTaskDocument({ state: "open", usage: createUsage() }, "# T\n"),
+			renderTaskDocument(
+				{ state: "waiting", waiting: { kind: "work", since: "2026-10-28T10:00:00+08:00" }, usage: createUsage() },
+				"# T\n",
+			),
 		);
-		await parkTask(deskDir, "T-8", { kind: "work", refs: ["run-1"], by: "2099-01-01T00:00:00+08:00" });
 		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager({ desk: "news", deskDir }, { dispatch, isBoundTo: () => false });
+		const onTaskInput = vi.fn();
+		const manager = new SubAgentRunManager(
+			{ desk: "news", deskDir },
+			{ dispatch, onTaskInput, isBoundTo: () => false },
+		);
 		await register(manager, { taskId: "T-8" });
 
-		await manager.settle("run-1", baseSettleInput(), { announce: true });
+		await manager.settle("run-1", baseSettleInput({ outputText: "done and dusted" }), { announce: true });
 
 		expect(events).toHaveLength(0);
+		expect(onTaskInput).toHaveBeenCalledWith("news", "T-8");
 		expect(manager.get("run-1")?.wakeEnqueued).toBe(true);
-		expect((await readStoredTask(deskDir, "T-8"))?.fields.state).toBe("open");
+		const settle = (await readTaskLog(deskDir, "T-8")).find((record) => record.kind === "settle");
+		expect(settle).toMatchObject({ ref: "run-1", status: "completed", tail: "done and dusted" });
+		expect(settle).not.toHaveProperty("inline");
+		await resetTaskLogAppenders();
+	});
+
+	it("marks an inline result so it never wakes or briefs the task, and falls back to the chat when the task is gone", async () => {
+		const deskDir = createTempDir();
+		mkdirSync(join(deskDir, "tasks"), { recursive: true });
+		writeFileSync(
+			join(deskDir, "tasks", "T-9.md"),
+			renderTaskDocument({ state: "running", usage: createUsage() }, "# T\n"),
+		);
+		const { dispatch, events } = makeDispatch();
+		const onTaskInput = vi.fn();
+		const manager = new SubAgentRunManager({ desk: "news", deskDir }, { dispatch, onTaskInput });
+		await register(manager, { runId: "run-inline", taskId: "T-9" });
+		await manager.settle("run-inline", baseSettleInput(), { announce: false });
+		expect(onTaskInput).not.toHaveBeenCalled();
+		expect((await readTaskLog(deskDir, "T-9")).find((record) => record.kind === "settle")).toMatchObject({
+			inline: true,
+		});
+
+		// The task was deleted by hand while its run was still going: the result has nowhere to land, so the chat hears it.
+		await register(manager, { runId: "run-orphan", taskId: "T-gone" });
+		await manager.settle("run-orphan", baseSettleInput(), { announce: true });
+		expect(events.map((event) => event.dispatchId)).toEqual(["subagent:news:run-orphan:done"]);
 		await resetTaskLogAppenders();
 	});
 
@@ -359,22 +384,6 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(events).toHaveLength(1);
 		expect(records).toHaveLength(1);
 		expect(archived).toHaveLength(1);
-	});
-
-	it("refuses a wake claim that does not match the run's own record", async () => {
-		const manager = new SubAgentRunManager(DESK, {});
-		await register(manager, { taskId: "T-1" });
-		const dispatchId = "subagent:news:run-1:done";
-		// Not settled yet: it cannot have produced a completion wake.
-		await expect(manager.beginWakeConsumption("run-1", "T-1", dispatchId)).resolves.toBe(false);
-		await manager.settle("run-1", baseSettleInput(), { announce: false });
-		await expect(manager.beginWakeConsumption("run-missing", "T-1", dispatchId)).resolves.toBe(false);
-		await expect(manager.beginWakeConsumption("run-1", "T-other", dispatchId)).resolves.toBe(false);
-		await expect(manager.beginWakeConsumption("run-1", "T-1", `${dispatchId}:replay`)).resolves.toBe(false);
-		await expect(manager.beginWakeConsumption("run-1", "T-1", dispatchId)).resolves.toBe(true);
-		// The exact wake is consumed once: after it finishes, a replay of it is refused.
-		await manager.finishWakeConsumption("run-1", dispatchId);
-		await expect(manager.beginWakeConsumption("run-1", "T-1", dispatchId)).resolves.toBe(false);
 	});
 
 	it("cancel invokes the registered handle and does not itself dispatch a wake", async () => {

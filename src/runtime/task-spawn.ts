@@ -9,8 +9,8 @@ import { archivedTaskPath, taskPath, tasksDir } from "../tasks/store.js";
 export interface TaskSpawnerOptions {
 	/** The event's desk directory: the instance is created in its `tasks/`. */
 	getDeskDir: (desk: string) => string;
-	/** Wake the driver so the new instance's first step is queued promptly. */
-	nudge: () => void;
+	/** Tell the task lane so the new instance is admitted promptly. */
+	wake: () => void;
 	/** Direct, non-LLM receipt to the event's channel, through the desk's binding guard (D7). */
 	notify: (desk: string, channelId: string, text: string) => Promise<unknown>;
 }
@@ -26,8 +26,8 @@ export interface TaskSpawnerOptions {
  * A second instance of the same event never runs alongside the first: two copies of the same
  * recurring job mostly duplicate work or collide. The occurrence is skipped and the user is told
  * every time (INV-7) — a stuck instance is something they need to know about, not something to
- * hide behind a quiet skip. The stuck instance itself is bounded by its budget, idle detection and
- * ticket backstops, so the skipping cannot go on forever.
+ * hide behind a quiet skip. The stuck instance itself is bounded by its budget and the lane's
+ * guards, so the skipping cannot go on forever.
  */
 export function createTaskSpawner(
 	options: TaskSpawnerOptions,
@@ -44,7 +44,7 @@ export function createTaskSpawner(
 			(entry) => entry.fields.origin === request.eventName && !entry.fields.outcome,
 		);
 		if (active) {
-			const state = `${taskStateLabel(active.fields.state)}${active.fields.paused ? "，已暂停" : ""}`;
+			const state = taskStateLabel(active.fields);
 			await options
 				.notify(
 					request.desk,
@@ -73,7 +73,7 @@ export function createTaskSpawner(
 			channelId: request.channelId,
 			fields: { event: request.eventName, taskId: id },
 		});
-		options.nudge();
+		options.wake();
 		return { outcome: "spawned", id };
 	};
 }

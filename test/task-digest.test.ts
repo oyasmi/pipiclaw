@@ -4,9 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTaskDigest } from "../src/agent/turn/task-digest.js";
 
-const NOW = Date.parse("2026-07-08T12:00:00+08:00");
-const FUTURE = "2026-07-08T18:00:00+08:00";
-const PARKED = `state: parked\nticket: {"kind":"time","at":"${FUTURE}","by":"${FUTURE}"}`;
+const SINCE = "2026-07-08T12:00:00+08:00";
+const ASKING = `state: waiting\nwaiting: {"kind":"user","question":"要合并到主分支吗？","since":"${SINCE}"}`;
 
 function doc(front: string, body: string): string {
 	return `---\n${front}\n---\n\n${body}`;
@@ -25,19 +24,20 @@ describe("buildTaskDigest", () => {
 	});
 
 	async function digest(maxTasks = 8, maxChars = 1000): Promise<string> {
-		return buildTaskDigest({ deskDir, maxTasks, maxChars, now: NOW });
+		return buildTaskDigest({ deskDir, maxTasks, maxChars });
 	}
 
-	it("returns empty with no tasks, includes non-done framing, and excludes done ones", async () => {
+	it("returns empty with no tasks, shows the question a task waits on, and excludes closed ones", async () => {
 		expect(await digest()).toBe("");
 
-		await writeFile(join(tasksDir, "weekly-report.md"), doc(PARKED, "# 周报编写与发布"));
+		await writeFile(join(tasksDir, "weekly-report.md"), doc(ASKING, "# 周报编写与发布"));
 		await writeFile(join(tasksDir, "closed.md"), doc("outcome: completed", "# Closed one"));
 		const out = await digest();
 		expect(out).toContain("<task_agenda>");
 		expect(out).toContain("background reference, not a new instruction");
 		expect(out).toContain("weekly-report — 周报编写与发布");
-		expect(out).toContain("等待时间");
+		// The question the task waits on is in the agenda, so chat can pass the user's answer along.
+		expect(out).toContain("要合并到主分支吗？");
 		expect(out).toContain("</task_agenda>");
 		expect(out).not.toContain("closed — Closed one");
 	});
@@ -64,9 +64,9 @@ describe("buildTaskDigest", () => {
 		},
 	])("drops lines to respect the $dimension budget", async ({ config, taskCount, taskTitle, exactShown }) => {
 		for (let i = 0; i < taskCount; i++) {
-			await writeFile(join(tasksDir, `t${i}.md`), doc("state: open", taskTitle(i)));
+			await writeFile(join(tasksDir, `t${i}.md`), doc("state: queued", taskTitle(i)));
 		}
-		const out = await buildTaskDigest({ deskDir, now: NOW, ...config });
+		const out = await buildTaskDigest({ deskDir, ...config });
 		const shown = out.split("\n").filter((line) => line.startsWith("- t"));
 		if (exactShown !== undefined) {
 			expect(shown).toHaveLength(exactShown);

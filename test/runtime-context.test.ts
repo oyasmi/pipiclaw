@@ -4,6 +4,7 @@ import { type BootstrapPaths, bootstrapAppHome } from "../src/app/home.js";
 import { getActiveSessionRefPath } from "../src/channel/active-session-store.js";
 import { StartupRefusal } from "../src/desk/startup-error.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
+import { TaskLane } from "../src/runtime/task-lane.js";
 import { bindTestChannel, useTempDirs } from "./helpers/fixtures.js";
 import { bootstrapPathsIn } from "./support/fake-runner.js";
 import { RecordingTransport } from "./support/recording-transport.js";
@@ -55,7 +56,7 @@ describe("createRuntimeContext", () => {
 		await runtime.shutdown();
 	});
 
-	it("starts the native task driver and the transports with the other runtime services", async () => {
+	it("starts the task lane and the transports with the other runtime services", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 		// Watchers are per active desk (spec 058, D6): one bound desk, one watcher.
@@ -64,7 +65,8 @@ describe("createRuntimeContext", () => {
 		const transportStart = vi.spyOn(transport, "start");
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 		const memoryScheduler = { start: vi.fn(), stop: vi.fn() };
-		const taskDriver = { start: vi.fn(), stop: vi.fn() };
+		const laneStart = vi.spyOn(TaskLane.prototype, "start");
+		const laneStop = vi.spyOn(TaskLane.prototype, "stop");
 		const runtime = await createRuntimeContext({
 			paths,
 			transports: [transport],
@@ -72,15 +74,14 @@ describe("createRuntimeContext", () => {
 			startServices: true,
 			createEventsWatcher: () => eventsWatcher,
 			createMemoryMaintenanceScheduler: () => memoryScheduler,
-			createTaskDriver: () => taskDriver,
 		});
 
 		expect(eventsWatcher.start).toHaveBeenCalledOnce();
 		expect(memoryScheduler.start).toHaveBeenCalledOnce();
-		expect(taskDriver.start).toHaveBeenCalledOnce();
+		expect(laneStart).toHaveBeenCalledOnce();
 		expect(transportStart).toHaveBeenCalledOnce();
 		await runtime.shutdown();
-		expect(taskDriver.stop).toHaveBeenCalledOnce();
+		expect(laneStop).toHaveBeenCalledOnce();
 	});
 
 	it("recovers when archiving an incoming message fails", async () => {

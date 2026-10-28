@@ -33,7 +33,7 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 }
 
 export interface ShutdownDeps {
-	taskDriver: { stop(): void };
+	taskLane: { stop(): void };
 	getDurableDispatch: () => { stop(): void } | undefined;
 	memoryMaintenanceScheduler: { stop(): void };
 	deskRuntime: { stop(): void; flush?(): Promise<void> };
@@ -54,7 +54,7 @@ export interface ShutdownDeps {
 
 export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "manual") => Promise<void> {
 	const {
-		taskDriver,
+		taskLane,
 		memoryMaintenanceScheduler,
 		deskRuntime,
 		runs,
@@ -77,7 +77,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			deps.markShuttingDown();
 			log.logInfoEvent("runtime.shutdown.started", "Shutting down", { fields: { reason } });
 
-			taskDriver.stop();
+			taskLane.stop();
 			deps.getDurableDispatch()?.stop();
 			memoryMaintenanceScheduler.stop();
 			deskRuntime.stop();

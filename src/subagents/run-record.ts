@@ -90,9 +90,6 @@ export interface RunRecord extends RunUsage {
 	taskAccounted?: boolean;
 	/** Set once the completion wake has been hallmarked for delivery; guards against a duplicate wake. */
 	wakeEnqueued?: boolean;
-	/** Durable one-time relationship between the internally produced wake and task activation (T9). */
-	wakeClaimDispatchId?: string;
-	wakeConsumedAt?: number;
 	// External-runtime fields; absent on internal runs.
 	pid?: number;
 	/** `ps`'s `lstart` for `pid` at launch — the OS-verifiable identity check that tells this

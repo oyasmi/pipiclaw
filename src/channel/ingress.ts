@@ -51,15 +51,6 @@ export type SteerResult =
 	| { kind: "accepted" }
 	| { kind: "rejected"; code: "response_not_active" | "too_many_pending_steers" | "invalid_input" };
 
-/**
- * What `/stop` actually did. Stopping a task step also pauses that task, which the user has to be
- * told: a paused task is not picked up again until `/tasks resume`, so silence would read as "the
- * turn was interrupted" while the whole task has in fact gone quiet.
- */
-export interface StopOutcome {
-	pausedTaskId?: string;
-}
-
 export interface Ingress {
 	receive(message: InboundMessage): Promise<IngressResult>;
 	/** Isolated generation: no channel binding, transcript archive, or automatic reflection. */
@@ -67,7 +58,7 @@ export interface Ingress {
 	/** Inject `message` into the turn running on `channelId`. */
 	steer(channelId: string, message: InboundMessage): Promise<SteerResult>;
 	/** The same as `/stop`: the running turn ends and everything queued behind it is dropped. */
-	cancel(channelId: string): Promise<StopOutcome>;
+	cancel(channelId: string): Promise<void>;
 	/**
 	 * Stop the turn running on `channelId` only if it answers the message that carried `ref`;
 	 * whether it did. What is queued behind it, and anything another sender is waiting for, stays.

@@ -23,7 +23,7 @@ export interface CreateTaskDocumentOptions {
 }
 
 /**
- * Write a new task file, `open`, with its usage clock started. Shared by `task_create` and the
+ * Write a new task file, `queued`, with its usage clock started. Shared by `task_create` and the
  * event-template spawner so both produce byte-identical documents.
  */
 export function createTaskDocument(options: CreateTaskDocumentOptions): Promise<StoredTaskDocument> {
@@ -35,7 +35,9 @@ async function writeNewTask(options: CreateTaskDocumentOptions): Promise<StoredT
 	const id = normalizeTaskId(options.id);
 	const path = taskPath(options.deskDir, id);
 	if (existsSync(path)) {
-		throw new RecoverableToolError(`Task "${id}" already exists; use task_update or edit the body instead.`);
+		throw new RecoverableToolError(
+			`Task "${id}" already exists; choose a new id, or edit its contract file directly.`,
+		);
 	}
 	if (existsSync(archivedTaskPath(options.deskDir, id))) {
 		throw new RecoverableToolError(
@@ -44,7 +46,7 @@ async function writeNewTask(options: CreateTaskDocumentOptions): Promise<StoredT
 	}
 	const now = options.now ?? new Date();
 	const fields: TaskFrontmatter = {
-		state: "open",
+		state: "queued",
 		channel: options.channel,
 		origin: options.origin,
 		usage: createUsage(now),

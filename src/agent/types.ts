@@ -12,6 +12,7 @@ import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
+import type { TaskControl, TaskSessionContext } from "../tasks/control.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
 import type { TurnOutput } from "./turn/turn-output.js";
 
@@ -60,6 +61,12 @@ export interface AgentRunner {
 		costKnown?: boolean;
 		durationMs?: number;
 		silent?: boolean;
+		/** The text of the turn's last assistant message that had any (a task step's note). */
+		finalText?: string;
+		/** Tools the turn completed successfully, in call order (a task step's idle evidence). */
+		toolsUsed?: string[];
+		/** The turn's own model cost: assistant usage only, sub-agents are accounted when they settle. */
+		assistantCost?: { usd: number; estimated: boolean };
 	}>;
 	/** The reply to a runner-handled built-in command (`/help`, `/context`, …), failures included. */
 	handleBuiltinCommand(command: RunnerBuiltInCommand): Promise<string>;
@@ -80,14 +87,14 @@ export interface AgentRunner {
 	isCompacting(): boolean;
 	/** Cancel context summarization synchronously; returns whether one was active. */
 	interruptCompaction(): boolean;
+	/** What the running turn is doing right now (spec 064, D26): the tool calls in flight and how many finished. */
+	getActivity(): RunnerActivity;
 	/**
-	 * Bind this runner to a task's own session for the next turn, and back afterwards
-	 * (spec 051, D3).
+	 * Whether the session's canonical context (what the model would see now — after compaction too)
+	 * contains `needle`; waits for the session to be built. The task lane asks it whether the current contract is already in context
+	 * (spec 064, D15) instead of keeping a flag of its own.
 	 */
-	bindTaskSession(taskId: string): Promise<void>;
-	bindChatSession(): Promise<void>;
-	/** The task whose session this runner is bound to right now, if a task step is running. */
-	getTaskLoop(): { taskId: string } | undefined;
+	contextIncludes(needle: string): Promise<boolean>;
 	/** Permanently retire this runner generation after an out-of-band `/new`. */
 	retireForNewSession(): void;
 	/** Fence an unresponsive generation without changing the active session reference. */
@@ -121,6 +128,11 @@ export interface AgentRunner {
 	 * drop its own reference after calling this; a disposed runner is not reusable.
 	 */
 	dispose(): Promise<void>;
+}
+
+export interface RunnerActivity {
+	pendingTools: PendingTool[];
+	toolsDone: number;
 }
 
 export type FinalOutcome = { kind: "none" } | { kind: "silent" } | { kind: "final"; text: string };
@@ -161,11 +173,13 @@ export interface RunState {
 	/** An `answer` event was emitted this turn (the transport owns whether it reached the user). */
 	answerEmitted: boolean;
 	/**
-	 * Names of the tools this turn actually completed, in call order (spec 051, D6). The task loop
-	 * writes them into its step log so "this step did nothing" is an observed fact rather than the
-	 * heuristic v3's effect ledger tried and admitted was bypassable.
+	 * Names of the tools this turn actually completed, in call order (spec 051, D6). The task lane
+	 * writes them into its `step_end` record so "this step did nothing" is an observed fact rather
+	 * than the heuristic v3's effect ledger tried and admitted was bypassable.
 	 */
 	toolsUsed: string[];
+	/** The text of the latest assistant message that had any, tool-calling messages included. */
+	lastAssistantText: string;
 }
 
 export function createEmptyRunState(): RunState {
@@ -185,6 +199,7 @@ export function createEmptyRunState(): RunState {
 		finalOutcome: { kind: "none" },
 		userMessagesStarted: 0,
 		toolsUsed: [],
+		lastAssistantText: "",
 		answerEmitted: false,
 	};
 }
@@ -252,9 +267,25 @@ export type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_star
 
 export const MAX_USER_MESSAGE_CHARS = 12_000;
 
+/**
+ * What a runner serves, fixed when it is built (spec 064, D13): the channel's chat, one Web API
+ * request, or one task. The profile decides the session it opens, whether memory is maintained, the
+ * tool set and whether the turn gets a task agenda — nothing switches at run time.
+ */
+export type RunnerProfile =
+	| { kind: "chat" }
+	/** Request-owned in-memory session: no persistent transcript or automatic memory maintenance. */
+	| { kind: "request" }
+	/**
+	 * One task's own session (`tasks/.sessions/<id>.jsonl`): read-only memory bootstrap, no boundary
+	 * reflection, the task-session tool set. Its `channelId` is the task's report channel.
+	 */
+	| { kind: "task"; sessionPath: string; session: TaskSessionContext };
+
 export interface RunnerFactoryPaths {
-	/** Request-owned session: no persistent transcript or automatic memory maintenance. */
-	requestScoped?: boolean;
+	profile?: RunnerProfile;
+	/** Chat only: resolves the task lane's control port (the lane is built after the runners' factory). */
+	getTaskControl?: () => TaskControl | undefined;
 	jobManager: DeskJobManager;
 	runManager: SubAgentRunManager;
 	appHomeDir: string;

@@ -16,7 +16,18 @@ import { useTempDirs } from "./helpers/fixtures.js";
 // `task_manage` — and a stale fixture here would make selectRuntimePlaybooks's gating "pass"
 // against tool names that no longer exist.
 const ALL_TOOLS = Array.from(TOOL_NAMES);
-const TASK_TOOLS = ["task_list", "task_create", "task_update", "task_close", "task_log", "task_step_end"];
+const TASK_TOOLS = [
+	"task_list",
+	"task_create",
+	"task_close",
+	"task_log",
+	"task_message",
+	"task_pause",
+	"task_resume",
+	"task_report",
+	"task_ask",
+	"task_wait",
+];
 
 const makeTempDir = useTempDirs("pipiclaw-playbooks-");
 
@@ -34,7 +45,7 @@ describe("runtime playbook catalog", () => {
 
 		expect(selectRuntimePlaybooks(catalog, ALL_TOOLS)).toHaveLength(catalog.length);
 		// Chat and task steps expose different halves of this any-of gate.
-		for (const taskTool of ["task_create", "task_step_end"]) {
+		for (const taskTool of ["task_create", "task_report"]) {
 			expect(selectRuntimePlaybooks(catalog, [taskTool]).map((item) => item.name)).toContain("task-lead");
 		}
 	});

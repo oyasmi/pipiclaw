@@ -14,9 +14,9 @@ import type { PushMessage } from "../channel/transport.js";
 import type { DeskCommandPort } from "../desk/commands.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
+import type { TaskControl } from "../tasks/control.js";
 import type { ChannelResolution } from "./desk-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
-import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import type { TransportRegistry } from "./transports.js";
 import type { ArchivedMessage } from "./turn-run.js";
 
@@ -24,8 +24,6 @@ export interface IngressOptions {
 	paths: BootstrapPaths;
 	/** Override the `/stop` watchdog's grace window (tests use a short one). */
 	stopForceEndGraceMs?: number;
-	/** Test-only fault seams for the atomic structured-wake task transition. */
-	wakeTransitionHooks?: Partial<Record<"job" | "subagent", WakeTaskTransitionHooks>>;
 }
 
 export interface IngressDeps {
@@ -56,7 +54,8 @@ export interface IngressDeps {
 	getDurableDispatch: () => DurableDispatchService | undefined;
 	getJobs: () => JobRuntime;
 	getRuns: () => SubAgentRuntime;
-	getTaskDriver: () => { nudge?(): void };
+	/** The task lane's control port; `undefined` until the runtime has built it. */
+	getTaskControl: () => TaskControl | undefined;
 	/** Say something to a channel outside any turn; whether it was delivered. */
 	pushTo: (channelId: string, message: PushMessage) => Promise<boolean>;
 }

@@ -7,7 +7,7 @@ import { join } from "path";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
 import { scanConversationsForInterruptedTurns } from "../agent/turn/turn-recovery.js";
-import type { AgentRunner } from "../agent/types.js";
+import type { AgentRunner, RunnerFactoryPaths } from "../agent/types.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -31,6 +31,7 @@ import { initializeDefaultDesk } from "../desk/default.js";
 import { getDeskDir } from "../desk/paths.js";
 import { listDesks } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
+import type { DeskConversation } from "../desk/types.js";
 import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
@@ -45,6 +46,8 @@ import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
+import type { TaskControl } from "../tasks/control.js";
+import { taskSessionPath } from "../tasks/session-path.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { acquireDaemonLock, tryAcquireDaemonLock } from "./daemon-lock.js";
 import { DeskRuntime } from "./desk-runtime.js";
@@ -52,9 +55,8 @@ import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable
 import { createIngress, type IngressService } from "./ingress.js";
 import { createRequestExecution } from "./request-execution.js";
 import { createShutdown } from "./shutdown.js";
-import { TaskDriver } from "./task-driver.js";
+import { TaskLane, type TaskLaneOptions } from "./task-lane.js";
 import { createTaskSpawner } from "./task-spawn.js";
-import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { createTransportRegistry, loadTransports } from "./transports.js";
 import type { ArchivedMessage } from "./turn-run.js";
 
@@ -82,10 +84,10 @@ export interface RuntimeContext {
 	ingress: IngressService;
 	transports: ReturnType<typeof createTransportRegistry>;
 	store: ChannelStore;
-	/** Production driver instance, exposed so evals can invoke the real scan path. */
-	taskDriver: { start(): void; stop(): void; nudge?(): void; runOnce?: (now?: Date) => Promise<void> };
+	/** Production task lane, exposed so evals and the e2e harness can invoke the real scan path. */
+	taskLane: TaskLane;
 	/**
-	 * Production maintenance scheduler, exposed for the same reason as `taskDriver`.
+	 * Production maintenance scheduler, exposed for the same reason as `taskLane`.
 	 *
 	 * Evaluation workers run with `startServices: false`, so the background timer never fires and
 	 * no trial could otherwise reach the reflect pass — the whole memory pipeline was structurally
@@ -137,10 +139,6 @@ async function releaseCachedRunner(channelRunners: Map<string, AgentRunner>, cha
 	});
 }
 
-/** The real `TaskDriver` class, or the minimal test-injectable shape `createTaskDriver` may
- * supply instead — `taskDriver.nudge?.()` is the only member either side needs to guarantee. */
-type TaskDriverLike = TaskDriver | { start(): void; stop(): void; nudge?(): void };
-
 interface RuntimeContextOptions {
 	executor?: Executor;
 	paths: BootstrapPaths;
@@ -158,15 +156,12 @@ interface RuntimeContextOptions {
 	memoryMaintenanceSchedulerIntervalMs?: number;
 	/** Background-job sweep cadence override (tests use a short one for timely completion wakes). */
 	jobSweepIntervalMs?: number;
-	createTaskDriver?: () => TaskDriverLike;
 	/** Receives raw SDK session events after subscription, without changing runtime handling. */
 	observer?: (event: unknown, channelId: string) => void;
-	/** Receives TaskDriver dispatch outcomes; used only by isolated evaluation workers. */
-	onTaskDriverDispatch?: (event: WakeEvent, accepted: boolean) => void;
+	/** Observes task steps starting and ending; used only by isolated evaluation workers. */
+	onTaskStep?: TaskLaneOptions["onStep"];
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
-	/** Test-only fault seams for the atomic structured-wake task transition. */
-	wakeTransitionHooks?: Partial<Record<"job" | "subagent", WakeTaskTransitionHooks>>;
 	/** Override the `/stop` watchdog's grace window (tests use a short one). */
 	stopForceEndGraceMs?: number;
 	/**
@@ -236,7 +231,7 @@ async function buildRuntimeContext(
 	const pushTo = (channelId: string, message: PushMessage): Promise<boolean> =>
 		transports.forChannel(channelId)?.push(channelId, message) ?? Promise.resolve(false);
 
-	// The one authority on bindings and active desks (spec 058, D6). `ingress`, `taskDriver` and the
+	// The one authority on bindings and active desks (spec 058, D6). `ingress`, `taskLane` and the
 	// spawner are resolved lazily by its callbacks: none of them runs before this function returns.
 	const deskRuntime: DeskRuntime = new DeskRuntime({
 		workspaceDir,
@@ -279,7 +274,7 @@ async function buildRuntimeContext(
 						dispatch,
 						spawnTask: createTaskSpawner({
 							getDeskDir: (desk) => getDeskDir(workspaceDir, desk),
-							nudge: () => getTaskDriver().nudge?.(),
+							wake: () => taskLane.notify(),
 							notify: (desk, channelId, text) => deskRuntime.sendFromDesk(desk, channelId, text),
 						}),
 					}),
@@ -327,6 +322,33 @@ async function buildRuntimeContext(
 		}
 	};
 
+	/** What every runner of a channel shares: the desk's managers, settings and how the channel is named and answered. */
+	const runnerPaths = (conversation: DeskConversation, channelId: string): RunnerFactoryPaths => ({
+		jobManager: jobs.get(conversation.desk),
+		runManager: runs.get(conversation.desk),
+		appHomeDir,
+		workspaceDir,
+		authConfigPath: options.paths.authConfigPath,
+		modelsConfigPath: options.paths.modelsConfigPath,
+		settingsManager: runtimeSettingsManager,
+		onSessionEvent: options.observer,
+		describeChannel: (id) => (channelIndex.nameOf(id) ? labelOf(id) : undefined),
+		describeConversation: (dir) => {
+			const owner = deskRuntime.channelOfConversation(conversation.desk, dir);
+			return owner ? labelOf(owner) : undefined;
+		},
+		// Enables `send_media`: the file goes out through the transport that owns this channel.
+		...(transports.forChannel(channelId)?.sendsMedia === false
+			? {}
+			: {
+					sendMedia: async (id: string, media: OutboundMedia) =>
+						(await transports.forChannel(id)?.sendMedia(id, media)) ?? {
+							ok: false,
+							error: "This channel cannot receive attachments. Tell the user the file's path on the server instead.",
+						},
+				}),
+	});
+
 	/**
 	 * The channel's runner, or `undefined` when it is not bound to an available desk — the runtime
 	 * never builds a runner (or a directory) for an unbound channel (INV-2).
@@ -344,31 +366,7 @@ async function buildRuntimeContext(
 			return existing;
 		}
 
-		const runner = createRunner(conversation, {
-			jobManager: jobs.get(conversation.desk),
-			runManager: runs.get(conversation.desk),
-			appHomeDir,
-			workspaceDir,
-			authConfigPath: options.paths.authConfigPath,
-			modelsConfigPath: options.paths.modelsConfigPath,
-			settingsManager: runtimeSettingsManager,
-			onSessionEvent: options.observer,
-			describeChannel: (id) => (channelIndex.nameOf(id) ? labelOf(id) : undefined),
-			describeConversation: (dir) => {
-				const owner = deskRuntime.channelOfConversation(conversation.desk, dir);
-				return owner ? labelOf(owner) : undefined;
-			},
-			// Enables `send_media`: the file goes out through the transport that owns this channel.
-			...(transports.forChannel(channelId)?.sendsMedia === false
-				? {}
-				: {
-						sendMedia: async (id: string, media: OutboundMedia) =>
-							(await transports.forChannel(id)?.sendMedia(id, media)) ?? {
-								ok: false,
-								error: "This channel cannot receive attachments. Tell the user the file's path on the server instead.",
-							},
-					}),
-		});
+		const runner = createRunner(conversation, { ...runnerPaths(conversation, channelId), getTaskControl });
 		channelRunners.set(channelId, runner);
 		void evictIdleRunnersOverCap(channelRunners);
 		return runner;
@@ -376,10 +374,10 @@ async function buildRuntimeContext(
 
 	const isShuttingDown = (): boolean => shuttingDown;
 	const getDurableDispatch = (): DurableDispatchService | undefined => durableDispatch;
-	// `jobs`/`runs`/`taskDriver` are declared further down; these closures resolve them lazily.
+	// `jobs`/`runs`/`taskLane` are declared further down; these closures resolve them lazily.
 	const getJobs = (): JobRuntime => jobs;
 	const getRuns = (): SubAgentRuntime => runs;
-	const getTaskDriver = (): TaskDriverLike => taskDriver;
+	const getTaskControl = (): TaskControl | undefined => taskLane;
 
 	const ingress = createIngress({
 		requestExecution: createRequestExecution({
@@ -391,7 +389,7 @@ async function buildRuntimeContext(
 			isShuttingDown,
 			createRunner: (conversation) =>
 				createRunner(conversation, {
-					requestScoped: true,
+					profile: { kind: "request" },
 					jobManager: jobs.get(conversation.desk),
 					runManager: runs.get(conversation.desk),
 					appHomeDir,
@@ -434,7 +432,7 @@ async function buildRuntimeContext(
 		getDurableDispatch,
 		getJobs,
 		getRuns,
-		getTaskDriver,
+		getTaskControl,
 		pushTo,
 	});
 
@@ -467,6 +465,7 @@ async function buildRuntimeContext(
 		workspaceDir,
 		dispatch,
 		isBoundTo,
+		onTaskInput: () => taskLane.notify(),
 		...(options.jobSweepIntervalMs ? { sweepIntervalMs: options.jobSweepIntervalMs } : {}),
 	});
 	const runs = createSubAgentRuntime({
@@ -474,6 +473,7 @@ async function buildRuntimeContext(
 		workspaceDir,
 		dispatch,
 		isBoundTo,
+		onTaskInput: () => taskLane.notify(),
 		// A best-effort out-of-band notice, independent of the completion wake. `notices: "off"`
 		// (settings.json) restores the silent behavior.
 		notify: (desk, channelId, notice) => {
@@ -533,22 +533,43 @@ async function buildRuntimeContext(
 		}
 		return cachedTasksEnabled;
 	};
-	const taskDriver = options.createTaskDriver
-		? options.createTaskDriver()
-		: new TaskDriver({
-				getActiveDesks: () => deskRuntime.activeDesks(),
-				isBoundTo,
-				isReachable: (channelId) => transports.isReachable(channelId),
-				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
-				dispatch,
-				onDispatch: options.onTaskDriverDispatch,
-				notify: (receipt) =>
-					receipt.desk ? deskRuntime.sendFromDesk(receipt.desk, receipt.channelId, receipt.text) : false,
-				isEnabled: tasksToolEnabled,
+	const taskLane = new TaskLane({
+		getActiveDesks: () => deskRuntime.activeDesks(),
+		getDeskDir: (desk) => getDeskDir(workspaceDir, desk),
+		isBoundTo,
+		isReachable: (channelId) => transports.isReachable(channelId),
+		// One runner per executing task, built from the task's own report channel (spec 064, D13).
+		createTaskRunner: (target) => {
+			const resolution = deskRuntime.resolve(target.channelId);
+			if (resolution.kind !== "bound" || resolution.conversation.desk !== target.desk) {
+				throw new Error(
+					`Task ${target.taskId}: report channel ${target.channelId} is not bound to desk ${target.desk}`,
+				);
+			}
+			return createRunner(resolution.conversation, {
+				...runnerPaths(resolution.conversation, target.channelId),
+				profile: {
+					kind: "task",
+					sessionPath: taskSessionPath(target.deskDir, target.taskId),
+					session: target.session,
+				},
 			});
+		},
+		getRuns: (desk) => runs.get(desk),
+		getJobs: (desk) => jobs.get(desk),
+		store,
+		deliver: async (desk, channelId, text) => {
+			const delivered = await deskRuntime.sendFromDesk(desk, channelId, text);
+			if (delivered) await store.logBotResponse(channelId, text, Date.now().toString());
+			return delivered;
+		},
+		isEnabled: tasksToolEnabled,
+		activeTasks,
+		onStep: options.onTaskStep,
+	});
 
 	const shutdownWithReason = createShutdown({
-		taskDriver,
+		taskLane,
 		getDurableDispatch,
 		memoryMaintenanceScheduler,
 		deskRuntime,
@@ -583,7 +604,7 @@ async function buildRuntimeContext(
 	if (startServices) {
 		deskRuntime.startServices();
 		memoryMaintenanceScheduler.start();
-		taskDriver.start();
+		taskLane.start();
 		durableDispatch.start();
 		await transports.startAll(ingress);
 	}
@@ -595,7 +616,7 @@ async function buildRuntimeContext(
 		runs,
 		desks: deskRuntime,
 		store,
-		taskDriver,
+		taskLane,
 		memoryMaintenance: memoryMaintenanceScheduler,
 		shutdown: shutdownWithReason,
 	};

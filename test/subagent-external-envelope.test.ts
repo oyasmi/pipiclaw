@@ -254,6 +254,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const tool = createSubAgentTool({
 			...testManagers("dingtalk:dm:ext_envelope_verify"),
+			boundTaskId: "ship",
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -269,7 +270,6 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			agent: "checker",
 			task: "Run the acceptance plan.",
 			purpose: "verify",
-			taskId: "ship",
 		});
 
 		expect(launchExternalRunMock).toHaveBeenCalledTimes(1);

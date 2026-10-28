@@ -10,8 +10,8 @@ import {
 	fileContains,
 	lastDeliveryMatches,
 	lastDeliveryNotMatches,
-	parkedOnWork,
 	tracePredicate,
+	waitingOnWork,
 } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { seedChannelMemory, writeTask } from "./helpers.js";
@@ -158,7 +158,7 @@ export const coreFamilyCases: EvalCase[] = [
 		id: "T-job-01",
 		suite: "capability",
 		source: "2026-09-10 case design T-job-01",
-		description: "task 启动真实后台报告作业，未完成窗口绑定 work ticket，结算后读取实际产物再交付。",
+		description: "task 启动真实后台报告作业，未完成窗口结束这一步等待结算，结算后读取实际产物再交付。",
 		definitionFile,
 		budget: { maxWallMs: 180_000, maxTurns: 16 },
 		setup: async (ctx) => {
@@ -202,7 +202,7 @@ export const coreFamilyCases: EvalCase[] = [
 					}),
 				"a real background job must start",
 			),
-			parkedOnWork("job-ticket-recorded"),
+			waitingOnWork("job-ticket-recorded"),
 			tracePredicate(
 				"job-output-exists",
 				(ctx) =>

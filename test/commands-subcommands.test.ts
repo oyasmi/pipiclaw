@@ -41,12 +41,12 @@ const EXPECTED_EXAMPLES: Record<string, unknown> = {
 	"/tasks archive": { action: "archive" },
 	"/tasks pause weekly-report": { action: "pause", id: "weekly-report" },
 	"/tasks resume weekly-report +steps 20": { action: "resume", id: "weekly-report", grants: { steps: 20 } },
-	"/tasks steer weekly-report 先跑一遍 npm run check": {
-		action: "steer",
+	"/tasks msg weekly-report 先跑一遍 npm run check": {
+		action: "msg",
 		id: "weekly-report",
 		text: "先跑一遍 npm run check",
 	},
-	"/tasks reply weekly-report 合并到 master": { action: "reply", id: "weekly-report", text: "合并到 master" },
+	"/tasks cancel weekly-report": { action: "cancel", id: "weekly-report" },
 	"/tasks doctor": { action: "doctor" },
 	"/subagents list failed": { action: "list", filter: "failed" },
 	"/subagents show run_a1b2c3": { action: "show", ref: "run_a1b2c3" },

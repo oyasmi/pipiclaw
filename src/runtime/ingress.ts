@@ -7,7 +7,7 @@
  */
 import type { AgentRunner } from "../agent/types.js";
 import type { ChannelEvent, ChannelEventSink, HumanEvent, WakeEvent } from "../channel/channel-event.js";
-import type { InboundMessage, Ingress, IngressResult, SteerResult, StopOutcome } from "../channel/ingress.js";
+import type { InboundMessage, Ingress, IngressResult, SteerResult } from "../channel/ingress.js";
 import type { Transport } from "../channel/transport.js";
 import {
 	formatBusyHint,
@@ -90,7 +90,6 @@ export function createIngress(deps: IngressDeps): IngressService {
 	const busy = createBusyHandlers(deps, { clearPending, reset: resetChannelQueue });
 	const commands = createCommandHandlers(deps, resetChannelQueue);
 	const runEventTurn = createEventTurnRunner({
-		options: deps.options,
 		transports,
 		store: deps.store,
 		activeTasks,
@@ -101,9 +100,7 @@ export function createIngress(deps: IngressDeps): IngressService {
 		reservedTurns,
 		isShuttingDown,
 		getDurableDispatch: deps.getDurableDispatch,
-		getJobs: deps.getJobs,
-		getRuns: deps.getRuns,
-		getTaskDriver: deps.getTaskDriver,
+		getTaskControl: deps.getTaskControl,
 		runRuntimeCommand: commands.runRuntimeCommand,
 	});
 
@@ -195,14 +192,8 @@ export function createIngress(deps: IngressDeps): IngressService {
 					await reply(event, renderBuiltInHelp(builtIn.args), { title: "/help", markdown: true });
 					return { kind: "replied" };
 				case "stop": {
-					const outcome = await busy.handleStop(channelId);
-					await reply(
-						event,
-						outcome.pausedTaskId
-							? `已停止当前回合。任务 \`${outcome.pausedTaskId}\` 已暂停，用 \`/tasks resume ${outcome.pausedTaskId}\` 继续。`
-							: "已停止当前回合。",
-						{ title: "/stop", markdown: true },
-					);
+					await busy.handleStop(channelId);
+					await reply(event, "已停止当前回合。", { title: "/stop", markdown: true });
 					return { kind: "replied" };
 				}
 				case "steer":
@@ -350,9 +341,9 @@ export function createIngress(deps: IngressDeps): IngressService {
 			}
 		},
 
-		async cancel(channelId: string): Promise<StopOutcome> {
-			if (await deps.requestExecution?.cancel(channelId)) return {};
-			return busy.handleStop(channelId);
+		async cancel(channelId: string): Promise<void> {
+			if (await deps.requestExecution?.cancel(channelId)) return;
+			await busy.handleStop(channelId);
 		},
 
 		async cancelTurn(channelId: string, ref: string): Promise<boolean> {

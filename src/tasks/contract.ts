@@ -3,9 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { normalizeSafeId } from "../shared/safe-id.js";
-import { isTaskRunnable, parseTaskFrontmatter, renderTaskFrontmatter, type TaskFrontmatter } from "./frontmatter.js";
-
-import { ticketDueMs, ticketExpired } from "./ticket.js";
+import { parseTaskFrontmatter, renderTaskFrontmatter, type TaskFrontmatter } from "./frontmatter.js";
 
 /**
  * Shared reader for the task ledger (`workspace/<channelId>/tasks/*.md`).
@@ -14,8 +12,8 @@ import { ticketDueMs, ticketExpired } from "./ticket.js";
  * on unreadable frontmatter) because task files are hand-editable and must degrade toward "wake
  * me up so I can be fixed". `/tasks`, the task digest, and `task_list` all read through here.
  *
- * Frontmatter lives in `frontmatter.ts` and the waiting claim in `ticket.ts`; what stays here is
- * the *body*: sections, Work Items, DoD, and the skeleton.
+ * Frontmatter lives in `frontmatter.ts`; what stays here is the *body*: sections, Work Items, DoD,
+ * and the skeleton.
  */
 
 export interface TaskLedgerEntry {
@@ -26,12 +24,6 @@ export interface TaskLedgerEntry {
 	fields: TaskFrontmatter;
 	/** false => frontmatter could not be read; the task is surfaced rather than skipped. */
 	readable: boolean;
-	/** The driver may schedule a step for this task right now. */
-	runnable: boolean;
-	/** When a driver-polled `time` ticket comes due, if it has not already. */
-	dueMs?: number;
-	/** True when a parked task's backstop has passed and the runtime owes it a reopen. */
-	expired: boolean;
 	/** Parsed `## Work Items` section, if the task has one. */
 	items?: TaskItemsSummary;
 }
@@ -375,22 +367,30 @@ export function renderTaskDocument(fields: TaskFrontmatter, rawBody: string): st
 	return `${renderTaskFrontmatter(fields)}\n${rawBody}`;
 }
 
-/**
- * Runnable first; then a parked task whose backstop already expired (the runtime owes it a
- * reopen); then earliest due ticket; then id. Sorting expired parks ahead of ordinary parks is
- * what keeps D2-INV's deadline honest when a channel has more ready work than one tick can carry.
- */
+/** Display order (D6): what is happening now first, what waits on the user next, the idle last. */
+function stateRank(fields: TaskFrontmatter): number {
+	switch (fields.state) {
+		case "running":
+			return 0;
+		case "waiting":
+			return fields.waiting?.kind === "user" ? 1 : fields.waiting?.kind === "work" ? 2 : 4;
+		case "queued":
+			return 3;
+		case "paused":
+			return 5;
+	}
+}
+
+/** Group by state, then oldest project first (`usage.startedAt`, the lane's own admission order), then id. */
 export function compareTaskEntries(a: TaskLedgerEntry, b: TaskLedgerEntry): number {
-	if (a.runnable !== b.runnable) return a.runnable ? -1 : 1;
-	if (a.expired !== b.expired) return a.expired ? -1 : 1;
-	const paused = (entry: TaskLedgerEntry) => (entry.fields.paused ? 1 : 0);
-	if (paused(a) !== paused(b)) return paused(a) - paused(b);
-	const due = (entry: TaskLedgerEntry) => entry.dueMs ?? Number.POSITIVE_INFINITY;
-	if (due(a) !== due(b)) return due(a) - due(b);
+	const rank = stateRank(a.fields) - stateRank(b.fields);
+	if (rank !== 0) return rank;
+	const started = (entry: TaskLedgerEntry) => entry.fields.usage?.startedAt ?? "";
+	if (started(a) !== started(b)) return started(a) < started(b) ? -1 : 1;
 	return a.id.localeCompare(b.id);
 }
 
-function toEntry(id: string, content: string): Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired"> {
+function toEntry(id: string, content: string): TaskLedgerEntry {
 	const parsed = parseTaskFrontmatter(content);
 	return {
 		id,
@@ -401,25 +401,12 @@ function toEntry(id: string, content: string): Omit<TaskLedgerEntry, "runnable" 
 	};
 }
 
-/** The clock-dependent half of an entry, recomputed on every read (never cached). */
-function withClock(entry: Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired">, now: number): TaskLedgerEntry {
-	const nowDate = new Date(now);
-	const ticket = entry.fields.ticket;
-	return {
-		...entry,
-		runnable: isTaskRunnable(entry.fields),
-		dueMs: ticket ? ticketDueMs(ticket) : undefined,
-		expired: ticket !== undefined && !entry.fields.paused && ticketExpired(ticket, nowDate),
-	};
-}
-
 /**
  * Parsed task files, keyed by path and invalidated by (mtime, ctime, size) — the same
  * fingerprint the memory candidate store uses.
  *
- * The task driver re-reads every channel's whole ledger on every tick *and* after every turn
- * (`nudge`), so an unchanged file was being read and re-parsed many times per minute. Only the
- * clock-dependent fields are recomputed per call; the parse itself is cached.
+ * The lane re-reads every desk's whole ledger on every scan and after every notification, so an
+ * unchanged file was being read and re-parsed many times per minute.
  *
  * Cached entries are handed out by reference, which is safe because every consumer of
  * `readActiveTasks` only reads: the read-modify-write path goes through `readStoredTask`, which
@@ -429,32 +416,31 @@ interface CachedTaskParse {
 	mtimeMs: number;
 	ctimeMs: number;
 	size: number;
-	entry: Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired">;
+	entry: TaskLedgerEntry;
 }
 
 const parseCache = new Map<string, CachedTaskParse>();
 /** Bound the cache for a long-lived daemon: far above any real ledger, and cheap to refill. */
 const PARSE_CACHE_LIMIT = 512;
 
-async function readEntry(path: string, id: string, now: number): Promise<TaskLedgerEntry> {
+async function readEntry(path: string, id: string): Promise<TaskLedgerEntry> {
 	const stats = await stat(path);
 	const cached = parseCache.get(path);
 	if (cached && cached.mtimeMs === stats.mtimeMs && cached.ctimeMs === stats.ctimeMs && cached.size === stats.size) {
-		return withClock(cached.entry, now);
+		return cached.entry;
 	}
 	const entry = toEntry(id, await readFile(path, "utf-8"));
 	if (parseCache.size >= PARSE_CACHE_LIMIT) parseCache.clear();
 	parseCache.set(path, { mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs, size: stats.size, entry });
-	return withClock(entry, now);
+	return entry;
 }
 
 /**
  * Read every `.md` file in `tasks/` (root only — the `archive/` subdirectory is not
- * scanned), returning entries sorted runnable-first. A file that cannot be read is still
- * returned (fail-open: `readable: false`, `runnable: true`) so problems surface.
- * Missing directory → empty list.
+ * scanned), in display order. A file that cannot be read is still returned (fail-open:
+ * `readable: false`) so problems surface. Missing directory → empty list.
  */
-export async function readActiveTasks(tasksDir: string, now: number = Date.now()): Promise<TaskLedgerEntry[]> {
+export async function readActiveTasks(tasksDir: string): Promise<TaskLedgerEntry[]> {
 	let dirents: Dirent[];
 	try {
 		dirents = await readdir(tasksDir, { withFileTypes: true });
@@ -468,16 +454,14 @@ export async function readActiveTasks(tasksDir: string, now: number = Date.now()
 		const id = dirent.name.slice(0, -".md".length);
 		const path = join(tasksDir, dirent.name);
 		try {
-			entries.push(await readEntry(path, id, now));
+			entries.push(await readEntry(path, id));
 		} catch {
 			parseCache.delete(path);
 			entries.push({
 				id,
 				title: id,
-				fields: { state: "open" },
+				fields: { state: "queued" },
 				readable: false,
-				runnable: true,
-				expired: false,
 			});
 		}
 	}

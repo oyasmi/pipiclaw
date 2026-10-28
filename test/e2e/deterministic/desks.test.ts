@@ -3,9 +3,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBindingsPath, getDeskDir } from "../../../src/desk/paths.js";
 import type { InboundMessages } from "../../../src/dingtalk/inbound.js";
-import { type DurableDispatchRecord, DurableDispatchService } from "../../../src/runtime/durable-dispatch.js";
+import type { DurableDispatchRecord } from "../../../src/runtime/durable-dispatch.js";
 import { createTaskDocument } from "../../../src/tasks/create.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
+import { waitFor } from "../helpers/wait.js";
 
 /** Spec 058: desks, bindings and what an unbound channel may and may not do. */
 describe("E2E deterministic: desks and bindings", () => {
@@ -90,26 +91,16 @@ describe("E2E deterministic: desks and bindings", () => {
 		// Catches a rebind that lets the old desk keep talking into the channel: a queued wake of the
 		// old desk answered in the new desk's conversation, or the old desk's task still stepping.
 		// Mutation checks (2026-10-18): removing the admission check in `runEventTurn` lets the stale
-		// wake reach the provider; removing the task driver's binding filter puts the task's step on
-		// the outbox while the channel is bound to `lab` (admission would then drop it, so the
-		// outbox is where that shows). Either turns the case red.
-		const dispatched: string[] = [];
-		const originalDispatch = DurableDispatchService.prototype.dispatch;
-		vi.spyOn(DurableDispatchService.prototype, "dispatch").mockImplementation(function (
-			this: DurableDispatchService,
-			event,
-		) {
-			if (event.dispatchId) dispatched.push(event.dispatchId);
-			return originalDispatch.call(this, event);
-		});
-		// A second channel keeps `e2e` active after the rebind, so the driver still scans it and the
-		// per-task binding filter (not the desk's dormancy) is what holds the task back.
+		// wake reach the provider; removing the lane's freeze check lets the task step run while the
+		// channel is bound to `lab` (the step's request reaches the provider). Either turns the case red.
+		// A second channel keeps `e2e` active after the rebind, so the lane still scans it and the
+		// per-task freeze (not the desk's dormancy) is what holds the task back.
 		harness = await createDeterministicHarness({ extraChannels: [{ channelId: "dingtalk:group:cidKEEP+e2e==" }] });
 		const taskId = "weekly-digest";
 		await createTaskDocument({
 			deskDir: harness.deskDir,
 			id: taskId,
-			input: { title: "Weekly digest", goal: "Send the digest", dod: "- [ ] digest sent" },
+			input: { title: "Weekly digest", goal: "Send the digest", dod: "- [x] digest sent" },
 			channel: harness.channelId,
 		});
 		harness.model.script.route({
@@ -119,8 +110,8 @@ describe("E2E deterministic: desks and bindings", () => {
 		});
 		harness.model.script.route({
 			name: "step",
-			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
-			respond: [reply.toolCall("task_step_end", { outcome: "done", note: "digest sent" }), reply.text("ok")],
+			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #`),
+			respond: [reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "digest sent" })],
 		});
 
 		await harness.sendUserMessage("/desk new lab");
@@ -156,11 +147,12 @@ describe("E2E deterministic: desks and bindings", () => {
 		const before = harness.modelRequestCount();
 		expect(harness.enqueueWake(wake.text, wake)).toBe(true);
 		await harness.waitForIdle();
-		await harness.runtime.taskDriver.runOnce?.();
+		await harness.runtime.taskLane.runOnce();
 		await harness.waitForIdle();
 		expect(harness.modelRequestCount()).toBe(before);
 		expect(existsSync(recordPath)).toBe(false);
-		expect(dispatched.filter((id) => id.startsWith(`task:${harness.desk}:${taskId}:`))).toEqual([]);
+		// Frozen, not dropped: no step ran, and the task is exactly where it was.
+		expect(harness.mainTurnRequests().some((r) => r.matchedRoute === "step")).toBe(false);
 
 		// The channel's next turn runs in its conversation in `lab`, not in the old desk.
 		await harness.sendUserMessage("IN_LAB 你在哪个 desk");
@@ -169,12 +161,12 @@ describe("E2E deterministic: desks and bindings", () => {
 		expect(labSession && readFileSync(join(labConversation, labSession), "utf8")).toContain("IN_LAB");
 		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).not.toContain("IN_LAB");
 
-		// Bound back, the old desk's task resumes on the driver's next pass.
+		// Bound back, the old desk's task resumes on the lane's next pass.
 		await harness.sendUserMessage("/desk bind e2e");
-		await harness.runtime.taskDriver.runOnce?.();
-		await harness.waitForIdle();
-		expect(dispatched.some((id) => id.startsWith(`task:${harness.desk}:${taskId}:`))).toBe(true);
-		expect(harness.mainTurnRequests().some((r) => r.matchedRoute === "step")).toBe(true);
+		await harness.runtime.taskLane.runOnce();
+		await waitFor("the frozen task to run", () => harness.mainTurnRequests().some((r) => r.matchedRoute === "step"), {
+			intervalMs: 25,
+		});
 		expect(JSON.stringify(harness.mainTurnRequests().map((r) => r.lastUserText))).not.toContain("STALE_RESULT");
 	});
 });

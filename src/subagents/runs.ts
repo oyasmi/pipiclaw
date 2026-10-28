@@ -8,9 +8,8 @@ import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../share
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
-import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
-import { redeemTicket } from "../tasks/store.js";
+import { logTaskDispatch, logTaskSettlement, logTaskStall } from "../tasks/bound-work.js";
+import { readStoredTask } from "../tasks/store.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
 import { buildRunCompletionWake, countWakeSiblings, WAKE_OUTPUT_TAIL_CHARS } from "./completion-wake.js";
@@ -62,6 +61,12 @@ export interface RunManagerOptions {
 	/** Best-effort out-of-band notice sink (see `RunNotice`). Never awaited by settlement or the
 	 *  progress tail — a slow or failing notifier must not delay either. */
 	notify?: RunNotifier;
+	/**
+	 * A task-bound run settled or went quiet: its record is already in the task's log. The lane
+	 * recomputes from it (spec 064, D19) — this replaces the completion wake a task-bound run used to
+	 * send through the channel.
+	 */
+	onTaskInput?: (desk: string, taskId: string) => void;
 	ledger?: UsageLedger;
 	store?: ChannelStore;
 	/** Application-wide admission count, supplied by the owning runtime. */
@@ -115,7 +120,7 @@ export class SubAgentRunManager {
 		private readonly options: RunManagerOptions,
 	) {}
 
-	/** The completion wake's dispatch id — the only id `beginWakeConsumption` accepts for it. */
+	/** The completion wake's dispatch id (a chat-level run; a task-bound run never wakes a channel). */
 	private wakeDispatchId(runId: string): string {
 		return `subagent:${this.target.desk}:${runId}:done`;
 	}
@@ -213,9 +218,29 @@ export class SubAgentRunManager {
 					durationMs: Date.now() - (record.processStartedAt ?? record.startedAt),
 					silentMs,
 				});
+				this.noteTaskStall(record, silentMs);
 			},
 		});
 		this.externalProgressTails.set(record.runId, tail);
+	}
+
+	/** Tell a task-bound run's task that the run has gone quiet: it is the leader's call what to do (spec 064, D16). */
+	private noteTaskStall(record: RunRecord, silentMs: number): void {
+		const taskId = record.taskId;
+		if (!taskId || this.stopped) return;
+		void logTaskStall(this.target.deskDir, taskId, {
+			ref: record.runId,
+			silentMinutes: Math.max(1, Math.round(silentMs / 60_000)),
+		})
+			.then((logged) => {
+				if (logged) this.options.onTaskInput?.(this.target.desk, taskId);
+			})
+			.catch((error) =>
+				log.logWarn("subagent.task_stall.log_failed", "Task stall record for run failed", {
+					reason: errorMessage(error),
+					fields: { runId: record.runId, taskId },
+				}),
+			);
 	}
 
 	/**
@@ -450,39 +475,6 @@ export class SubAgentRunManager {
 		});
 	}
 
-	/** Reserve a task wake exactly once. A replay of the same durable dispatch may resume an
-	 * interrupted activation, while copied text or a different dispatch id can never claim it. */
-	async beginWakeConsumption(runId: string, taskId: string, dispatchId: string): Promise<boolean> {
-		return this.queue.run(runId, async () => {
-			const record = this.runs.get(runId);
-			if (!record) return false;
-			const expected = this.wakeDispatchId(runId);
-			const eligible = record.settledAt !== undefined && record.taskId === taskId && dispatchId === expected;
-			const previousClaim = record.wakeClaimDispatchId;
-			if (!beginWakeClaim(record, eligible, dispatchId)) return false;
-			try {
-				await this.persist(record, true);
-			} catch (error) {
-				record.wakeClaimDispatchId = previousClaim;
-				throw error;
-			}
-			return true;
-		});
-	}
-
-	async finishWakeConsumption(runId: string, dispatchId: string): Promise<void> {
-		await this.queue.run(runId, async () => {
-			const record = this.runs.get(runId);
-			if (!record || !finishWakeClaim(record, dispatchId)) return;
-			try {
-				await this.persist(record, true);
-			} catch (error) {
-				record.wakeConsumedAt = undefined;
-				throw error;
-			}
-		});
-	}
-
 	/** Let a caller (subagent tool) register a way to abort this run's in-process worker. */
 	registerCancelHandle(runId: string, cancel: () => void): void {
 		this.cancelHandles.set(runId, cancel);
@@ -574,7 +566,7 @@ export class SubAgentRunManager {
 			// inside the same settlement lock, so a replay writes nothing twice.
 			if (!record.taskAccounted && record.taskId) {
 				record.taskAccounted = true;
-				await this.creditOwningTask(record, input, outputSaved).catch((error) => {
+				await this.creditOwningTask(record, input, outputSaved, !options.announce).catch((error) => {
 					log.logWarn("subagent.task_settle.log_failed", "Task credit for run failed", {
 						reason: errorMessage(error),
 						fields: { runId: record.runId, taskId: record.taskId },
@@ -598,7 +590,12 @@ export class SubAgentRunManager {
 	 * Best-effort by design: a task whose file has since been archived or hand-deleted must not
 	 * block the completion wake.
 	 */
-	private async creditOwningTask(record: RunRecord, input: SettleInput, outputSaved: boolean): Promise<void> {
+	private async creditOwningTask(
+		record: RunRecord,
+		input: SettleInput,
+		outputSaved: boolean,
+		inline: boolean,
+	): Promise<void> {
 		const taskId = record.taskId;
 		if (!taskId) return;
 		await logTaskSettlement(
@@ -613,6 +610,7 @@ export class SubAgentRunManager {
 				tail: input.outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim() || undefined,
 				changed: record.workspaceSummary,
 				durationMs: input.durationMs,
+				...(inline ? { inline: true } : {}),
 			},
 			{ usd: input.usage.cost.total, estimated: input.costKnown === false },
 		);
@@ -636,6 +634,15 @@ export class SubAgentRunManager {
 			status: record.status,
 			durationMs: record.durationMs ?? 0,
 		});
+		// A task-bound run reports to its task, not to a channel (spec 064, D19): the settle record
+		// is already in the task's log, so the lane only needs to look. A task that has since vanished
+		// has nowhere to read the result, so the run falls back to waking the chat.
+		if (record.taskId && (await readStoredTask(this.target.deskDir, record.taskId))) {
+			this.options.onTaskInput?.(this.target.desk, record.taskId);
+			record.wakeEnqueued = true;
+			await this.persist(record);
+			return;
+		}
 		if (!this.options.dispatch) return;
 		if (this.options.isBoundTo && !this.options.isBoundTo(record.channelId, this.target.desk)) {
 			await this.suppressWake(record);
@@ -670,24 +677,14 @@ export class SubAgentRunManager {
 	}
 
 	/**
-	 * Spec 058, D8: the run's channel left this desk, so the wake has no recipient. Settlement and the
-	 * task's settle record already happened; the wake is dropped (marker set, never replayed), and the
-	 * `work` ticket it would have redeemed is redeemed here via `redeemTicket`, so the suspended task
-	 * resumes as soon as its delivery channel is bound again.
+	 * Spec 058, D8: the run's channel left this desk, so the chat wake has no recipient. Settlement
+	 * already happened; the wake is dropped (marker set, never replayed).
 	 */
 	private async suppressWake(record: RunRecord): Promise<void> {
 		log.logInfoEvent("subagent.wake.suppressed", "Completion wake dropped: channel not bound to the run's desk", {
 			channelId: record.channelId,
-			fields: { runId: record.runId, desk: this.target.desk, taskId: record.taskId },
+			fields: { runId: record.runId, desk: this.target.desk },
 		});
-		if (record.taskId) {
-			await redeemTicket(this.target.deskDir, record.taskId, (ticket) => ticket.kind === "work").catch((error) => {
-				log.logWarn("subagent.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
-					reason: errorMessage(error),
-					fields: { runId: record.runId, taskId: record.taskId },
-				});
-			});
-		}
 		record.wakeEnqueued = true;
 		await this.persist(record);
 	}

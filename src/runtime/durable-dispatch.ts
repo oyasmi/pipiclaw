@@ -100,16 +100,14 @@ function withRedeliveryNotice(event: WakeEvent, deliveries: number): WakeEvent {
 
 /**
  * What a wake was for, in the user's terms (spec 053, D2). The wake's own `text` is a prompt for
- * the model and its `producer` an internal tag (`TASK_DRIVER`, `SUBAGENT`, …), so neither
+ * the model and its `producer` an internal tag (`SUBAGENT`, `JOB`, …), so neither
  * may reach the chat; every in-process producer prefixes its text with a `[KIND:id…]` tag, which
  * is what this reads instead.
  */
 function describeWakeSource(event: WakeEvent): { label: string; nextStep?: string } {
-	const tag = /^\[(TASK_DRIVER|SUBAGENT|JOB|EVENT):([^:\]\s]+)/.exec(event.text);
+	const tag = /^\[(SUBAGENT|JOB|EVENT):([^:\]\s]+)/.exec(event.text);
 	const id = tag?.[2];
 	switch (tag?.[1]) {
-		case "TASK_DRIVER":
-			return { label: `任务 \`${id}\` 的一次后台唤醒`, nextStep: `用 \`/tasks show ${id}\` 确认任务状态` };
 		case "SUBAGENT":
 			return { label: `委派 \`${id}\` 的完成通知`, nextStep: `用 \`/subagents show ${id}\` 查看结果` };
 		case "JOB":

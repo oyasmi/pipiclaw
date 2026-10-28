@@ -4,7 +4,6 @@ import { applyMemoryOps, type MemorySource, type MemoryType } from "../../src/me
 import { createUsage } from "../../src/tasks/budget.js";
 import { renderTaskDocument } from "../../src/tasks/contract.js";
 import type { TaskFrontmatter, TaskState } from "../../src/tasks/frontmatter.js";
-import type { Ticket } from "../../src/tasks/ticket.js";
 import { EVAL_CHANNEL_ID } from "../harness/layout.js";
 import type { TrialSetup } from "../harness/schema.js";
 
@@ -25,17 +24,15 @@ export async function writeTask(
 	options: {
 		body: string;
 		state?: TaskState;
-		ticket?: Ticket;
 		budget?: TaskFrontmatter["budget"];
 		/** Start the task's usage clock, as the runtime would have when it created the task. */
 		started?: boolean;
 	} = { body: "# Goal\nEvaluate behavior.\n\n## DoD\n- [ ] Evidence recorded\n" },
 ): Promise<void> {
 	const fields: TaskFrontmatter = {
-		state: options.ticket ? "parked" : (options.state ?? "open"),
+		state: options.state ?? "queued",
 		// Every task names its delivery channel (spec 058); one without it is suspended, never driven.
 		channel: EVAL_CHANNEL_ID,
-		ticket: options.ticket,
 		budget: options.budget,
 		usage: options.started ? createUsage() : undefined,
 	};
@@ -135,4 +132,4 @@ export const longNonAsciiValue = (sentinel: string, repeats = 40): string =>
 	).join("")}结尾标记：${sentinel}`;
 
 export const wakeBody = (token: string, releaseToken = "NEVER-PROVIDED") =>
-	`# Task\n\n## Goal\nPreserve the exact goal token ${token}; it must remain the sole target.\n\n## Manual\nUse the supplied task contract to preserve ${token}. Record observed progress with task_step_end; ask for the release token when that is the only blocker. Do not mark done until the user supplies ${releaseToken}.\n\n## DoD\n- [ ] User supplied ${releaseToken}\n`;
+	`# Task\n\n## Goal\nPreserve the exact goal token ${token}; it must remain the sole target.\n\n## Manual\nUse the supplied task contract to preserve ${token}. Record observed progress in the last reply of each step; ask for the release token with task_ask when that is the only blocker. Do not mark done until the user supplies ${releaseToken}.\n\n## DoD\n- [ ] User supplied ${releaseToken}\n`;

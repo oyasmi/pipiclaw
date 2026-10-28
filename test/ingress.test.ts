@@ -1,5 +1,3 @@
-import { mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunner } from "../src/agent/types.js";
 import { bootstrapAppHome } from "../src/app/home.js";
@@ -430,52 +428,6 @@ describe("stopping and steering through the ingress", () => {
 		expect(runner.abort).toHaveBeenCalledTimes(1);
 		expect(run).toHaveBeenCalledTimes(1);
 	});
-
-	it("durably pauses a task-driver task before aborting it, and reports which", async () => {
-		const { run, started, release } = blockingRun();
-		const paths = bootstrapPathsIn(createTempDir());
-		bootstrapAppHome(paths);
-		const conversation = await bindTestChannel(paths.workspaceDir, CHANNEL);
-		const taskPath = join(conversation.deskDir, "tasks", "long-run.md");
-		mkdirSync(join(conversation.deskDir, "tasks"), { recursive: true });
-		writeFileSync(taskPath, "---\nstate: open\n---\n\n# Long running task\n", "utf-8");
-		const runner = createFakeRunner({ run, abort: vi.fn(async () => release()) });
-		Object.assign(runner, { conversation });
-		createRunnerMock.mockReturnValue(runner);
-		const transport = new RecordingTransport();
-		const runtime = await createRuntimeContext({
-			paths,
-			transports: [transport],
-			registerSignalHandlers: false,
-			startServices: false,
-			stopForceEndGraceMs: 60_000,
-			createEventsWatcher: () => ({ start() {}, stop() {} }),
-		});
-		runtimes.push(runtime);
-		await transport.start(runtime.ingress);
-
-		const wake = {
-			source: "wake" as const,
-			channelId: CHANNEL,
-			ts: "1000",
-			producer: "TASK_DRIVER",
-			text: "[TASK_DRIVER:long-run] Resume task long-run.",
-			desk: conversation.desk,
-		};
-		runtime.ingress.reserveEvent(wake);
-		const turn = runtime.ingress.handleEvent(wake);
-		await started;
-		const outcome = await runtime.ingress.cancel(CHANNEL);
-		await turn;
-
-		expect(runner.abort).toHaveBeenCalledTimes(1);
-		// Pausing is orthogonal to the stage (spec 051, D1): the task keeps whatever it was doing
-		// and only gains a `paused` marker, so /tasks resume can pick it up exactly where it was.
-		const stopped = readFileSync(taskPath, "utf-8");
-		expect(stopped).toContain("state: open");
-		expect(stopped).toContain('"by":"user"');
-		expect(outcome).toEqual({ pausedTaskId: "long-run" });
-	}, 20_000);
 
 	it("force-releases the channel when a stopped turn never finishes its epilogue, and drops its queue", async () => {
 		// The turn ignores abort(): it is wedged in its teardown (delivery drain, resource reload,

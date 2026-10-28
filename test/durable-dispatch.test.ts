@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WakeEvent } from "../src/channel/channel-event.js";
@@ -9,12 +9,7 @@ import {
 	DurableDispatchService,
 	renderDispatchExhaustedNotice,
 } from "../src/runtime/durable-dispatch.js";
-import { createTaskDriverEvent } from "../src/runtime/task-driver.js";
-import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import * as atomicFile from "../src/shared/atomic-file.js";
-import { renderTaskDocument } from "../src/tasks/contract.js";
-import { readStoredTask } from "../src/tasks/store.js";
-import { configureSubAgentRuntime, getSubAgentRunManager, testDesk } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const tempDir = useTempDirs("pipiclaw-dispatch-");
@@ -205,98 +200,6 @@ describe("DurableDispatchService", () => {
 		expect(delivered[1]?.dispatchId).toBe(delivered[0]?.dispatchId);
 		const stored = JSON.parse(readFileSync(join(stateDir, `${delivered[0]?.dispatchId}.json`), "utf-8"));
 		expect(stored.event.text).toBe("[EVENT:once] do work");
-	});
-
-	it("redelivers a structured task wake once despite the redelivery text prefix", async () => {
-		const root = tempDir();
-		const stateDir = join(root, "state", "dispatch");
-		const workspaceDir = join(root, "workspace");
-		const channelId = "dingtalk:dm:redelivery_task";
-		const deskDir = join(workspaceDir, channelId);
-		await mkdir(join(deskDir, "tasks", "archive"), { recursive: true });
-		await writeFile(
-			join(deskDir, "tasks", "T-redelivery.md"),
-			renderTaskDocument(
-				{
-					state: "parked",
-					// Parked on the work whose wake is being redelivered (spec 052, D3).
-					ticket: { kind: "work", refs: ["run-redelivery"], by: "2099-01-01T00:00:00+08:00" },
-				},
-				"# Redelivery\n",
-			),
-		);
-		configureSubAgentRuntime({});
-		const manager = getSubAgentRunManager(channelId);
-		await manager.register({
-			runId: "run-redelivery",
-			channelId,
-			runtime: "external",
-			harness: "exec",
-			agent: "runner",
-			label: "redelivery",
-			source: "inline",
-			tools: [],
-			purpose: "work",
-			taskId: "T-redelivery",
-			workingDirectory: workspaceDir,
-			artifactDir: join(root, "artifacts"),
-		});
-		await manager.settle(
-			"run-redelivery",
-			{
-				status: "completed",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					total: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				usageKnown: false,
-				costKnown: false,
-				turns: 0,
-				toolCalls: 0,
-				durationMs: 1,
-				outputText: "done",
-			},
-			{ announce: false },
-		);
-		const dispatchId = `subagent:${testDesk(channelId)}:run-redelivery:done`;
-		const wake: WakeEvent = {
-			...event(),
-			channelId,
-			text: "[SUBAGENT:run-redelivery] done. It belongs to task T-redelivery.",
-			dispatchId,
-			internalWake: { kind: "subagent", resourceId: "run-redelivery", taskId: "T-redelivery", dispatchId },
-		};
-		const delivered: WakeEvent[] = [];
-		const service = new DurableDispatchService({
-			stateDir,
-			leaseMs: 10,
-			bot: {
-				enqueueEvent(next) {
-					delivered.push(next);
-					return true;
-				},
-			},
-		});
-		await service.dispatch(wake); // delivery #1 crashes before activation
-		await service.drainOnce(Date.now() + 11);
-		expect(delivered[1]?.text).toContain("[REDELIVERY:2]");
-
-		const claimed = await claimVerifiedWake(delivered[1]!, deskDir, manager);
-		expect(claimed?.activated).toBe(true);
-		await claimed?.finish();
-		expect((await readStoredTask(deskDir, "T-redelivery"))?.fields.state).toBe("open");
-
-		await service.drainOnce(Date.now() + 22);
-		expect(delivered[2]?.text).toContain("[REDELIVERY:3]");
-		// The task is already open, so a further claim on the same wake is a no-op — the run
-		// manager's dispatchId-scoped wake claim is what makes this idempotent, not any per-task
-		// attempt counter (that mechanism was retired).
-		await expect(claimVerifiedWake(delivered[2]!, workspaceDir, manager)).resolves.toBeUndefined();
-		expect((await readStoredTask(deskDir, "T-redelivery"))?.fields.state).toBe("open");
 	});
 
 	it("renews a running turn's lease — persisting only past the half-life — so it never redelivers itself (spec 031, D2)", async () => {
@@ -562,22 +465,16 @@ describe("DurableDispatchService", () => {
 		expect(delivered).toHaveLength(1);
 	});
 
-	// Spec 053 F1.1: the exhausted-wake notice used to forward `event.text` and `event.user` — for a
-	// task step that is the model's English prompt and the `TASK_DRIVER` tag, sent to the user.
-	it("names the wake's task in the exhausted notice without forwarding the prompt or producer tag", () => {
-		const wake = createTaskDriverEvent(
-			"news",
-			"dingtalk:group:cid+a/b==",
-			{
-				id: "weekly-report",
-				title: "周报",
-				fields: { state: "open" },
-				readable: true,
-				runnable: true,
-				expired: false,
-			},
-			Date.now(),
-		);
+	// Spec 053 F1.1: the exhausted-wake notice used to forward `event.text` and `event.user` — the
+	// model's English prompt and the internal producer tag, sent to the user.
+	it("names the wake's delegation in the exhausted notice without forwarding the prompt or producer tag", () => {
+		const wake: WakeEvent = {
+			...event(),
+			channelId: "dingtalk:group:cid+a/b==",
+			producer: "SUBAGENT",
+			text: "[SUBAGENT:run_k2x9] Delegation finished. Continue whatever was waiting. If it needs no follow-up, respond with exactly [SILENT].",
+			dispatchId: "subagent:news:run_k2x9:done",
+		};
 		const record: DurableDispatchRecord = {
 			version: 1,
 			id: wake.dispatchId as string,
@@ -589,9 +486,9 @@ describe("DurableDispatchService", () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const notice = renderDispatchExhaustedNotice(record, stateDir);
 
-		expect(notice).not.toContain("TASK_DRIVER");
-		expect(notice).not.toContain("Resume task");
-		expect(notice).toContain("/tasks show weekly-report");
+		expect(notice).not.toContain("SUBAGENT:");
+		expect(notice).not.toContain("[SILENT]");
+		expect(notice).toContain("/subagents show run_k2x9");
 		// An absolute path to the kept record, not a path relative to an unnamed directory.
 		expect(notice).toContain(stateDir);
 	});

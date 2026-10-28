@@ -18,22 +18,7 @@ describe("completion-wake coalescing", () => {
 	it("merges only chat-level run/job completion wakes", () => {
 		expect(isCoalescableWake(event({ dispatchId: "subagent:dingtalk:dm:1:run_a:done" }))).toBe(true);
 		expect(isCoalescableWake(event({ dispatchId: "job:dingtalk:dm:1:job_1:done" }))).toBe(true);
-		// A task-bound wake must go through its own verified claim, never be folded into a chat turn.
-		expect(
-			isCoalescableWake(
-				event({
-					dispatchId: "subagent:dingtalk:dm:1:run_a:done",
-					internalWake: {
-						kind: "subagent",
-						resourceId: "run_a",
-						taskId: "t1",
-						dispatchId: "subagent:dingtalk:dm:1:run_a:done",
-					},
-				}),
-			),
-		).toBe(false);
-		// Task steps, events and user messages are not completion wakes.
-		expect(isCoalescableWake(event({ dispatchId: "task:dingtalk:dm:1:t1:step" }))).toBe(false);
+		// Events and user messages are not completion wakes.
 		expect(isCoalescableWake(event({ dispatchId: "event:dingtalk:dm:1:x" }))).toBe(false);
 		expect(isCoalescableWake(event({}))).toBe(false);
 		// Spec 058, D7: only a wake produced for the primary's desk rides along — never one from the

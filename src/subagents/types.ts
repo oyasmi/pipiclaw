@@ -60,7 +60,6 @@ export interface DelegationParams {
 	task: string;
 	workingDirectory?: string;
 	purpose?: "work" | "verify";
-	taskId?: string;
 	item?: string;
 }
 

@@ -41,21 +41,16 @@ export function controlFile(ctx: TrialContext, path: string, content: string): v
 	writeFileSync(target, content);
 }
 
+function stepEnded(ctx: TrialContext, next: string): void {
+	controlEvent(ctx, "runtime-log", undefined, { taskStep: "ended", stepNext: next, stepResult: "ok", taskId: "T" });
+}
+
 function workPark(ctx: TrialContext): void {
-	controlEvent(ctx, "tool-call", "task_step_end", { argsJson: '{"ticket":{"kind":"work"},"outcome":"park"}' });
-	ctx.trace.at(-1)!.correlationId = "park-call";
-	controlEvent(ctx, "tool-result", "task_step_end");
-	ctx.trace.at(-1)!.correlationId = "park-call";
+	stepEnded(ctx, "work");
 }
 
 function askPark(ctx: TrialContext): void {
-	const id = `ask-${ctx.trace.length}`;
-	controlEvent(ctx, "tool-call", "task_step_end", {
-		argsJson: JSON.stringify({ outcome: "park", ticket: { kind: "ask", asked: "Provide the next input" } }),
-	});
-	ctx.trace.at(-1)!.correlationId = id;
-	controlEvent(ctx, "tool-result", "task_step_end", { detail: "accepted" });
-	ctx.trace.at(-1)!.correlationId = id;
+	stepEnded(ctx, "user");
 }
 
 export function buildPositiveContext(id: string, ctx: TrialContext): TrialContext {

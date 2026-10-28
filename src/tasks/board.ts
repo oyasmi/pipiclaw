@@ -5,8 +5,8 @@ import { parseTaskItems, type TaskItem } from "./contract.js";
 import {
 	describeSettlement,
 	describeWorkRef,
-	readTaskLog,
 	type TaskDispatchRecord,
+	type TaskLogRecord,
 	type TaskSettleRecord,
 } from "./loop-log.js";
 
@@ -16,8 +16,8 @@ import {
  * It is derived from the loop log, never from the run registry — settled runs are garbage
  * collected after a week, while a project can outlive that (INV-5). Every row is one `ref`
  * (a run or job id) with its latest state; rows are grouped under the Work Item they were
- * dispatched for. The board itself carries status and output *paths*; only results that came back
- * since the previous step also carry their tail, in `renderNewResults`.
+ * dispatched for. The board itself carries status and output *paths*; what came back since the
+ * previous step (with its output tail) reaches the leader as `<task_inputs>`.
  */
 export interface BoardRef {
 	ref: string;
@@ -26,7 +26,7 @@ export interface BoardRef {
 	purpose?: "work" | "verify";
 	dispatchedAtMs: number;
 	settled?: TaskSettleRecord;
-	/** Settled since the previous step ended — i.e. what this step was (probably) woken for. */
+	/** Settled since the previous step began — kept on the board even when old results are folded away. */
 	isNew: boolean;
 }
 
@@ -41,8 +41,7 @@ export interface TaskBoard {
 /** Ref lines the board renders before folding old, already-seen results away. */
 export const BOARD_REF_LINE_BUDGET = 12;
 
-export async function buildTaskBoard(deskDir: string, taskId: string, body: string): Promise<TaskBoard | undefined> {
-	const records = await readTaskLog(deskDir, taskId, { kinds: ["dispatch", "settle", "step"] });
+export function buildTaskBoard(records: readonly TaskLogRecord[], body: string): TaskBoard | undefined {
 	const dispatches = new Map<string, TaskDispatchRecord>();
 	const settles = new Map<string, { record: TaskSettleRecord; index: number }>();
 	let lastStepIndex = -1;
@@ -65,7 +64,7 @@ export async function buildTaskBoard(deskDir: string, taskId: string, body: stri
 			isNew: settle !== undefined && settle.index > lastStepIndex,
 		});
 	}
-	// A settle with no dispatch record (a run bound before this version) still belongs on the board.
+	// A settle with no dispatch record (its dispatch line was lost) still belongs on the board.
 	for (const [ref, settle] of settles) {
 		if (dispatches.has(ref)) continue;
 		refs.push({
@@ -117,10 +116,7 @@ function renderRef(entry: BoardRef, nowMs: number): string {
 	if (settle.verdict) parts.push(`VERDICT ${settle.verdict.toUpperCase()}`);
 	if (settle.exitCode !== undefined) parts.push(`exit ${settle.exitCode}`);
 	if (settle.durationMs !== undefined) parts.push(formatDuration(settle.durationMs));
-	const tail = [entry.isNew ? "★新" : undefined, settle.output ? `output: ${settle.output}` : undefined]
-		.filter(Boolean)
-		.join(" · ");
-	return `${label} ${parts.join(" ")}${tail ? ` ${tail}` : ""}`;
+	return `${label} ${parts.join(" ")}${settle.output ? ` output: ${settle.output}` : ""}`;
 }
 
 const ITEM_MARKER: Record<TaskItem["status"], string> = { todo: " ", done: "x", blocked: "!", dropped: "~" };
@@ -177,27 +173,4 @@ export function renderTaskBoardForUser(board: TaskBoard, taskId: string, nowMs: 
 		lines.push(`- 另有 ${board.hiddenSettled} 项较早结束的工作未列出，用 \`/tasks log ${taskId}\` 查看`);
 	}
 	return lines.join("\n");
-}
-
-/**
- * The `<task_results>` block body: what came back since the previous step, as the completion wake
- * showed it — the output's tail and, for a run, what it left changed. A task step's brief replaces
- * the wake text, so without this block a task step would see less of a result than a chat turn.
- * Returns `undefined` when nothing new settled.
- */
-export function renderNewResults(board: TaskBoard): string | undefined {
-	const fresh = [...board.items.flatMap((entry) => entry.refs), ...board.unlinked].filter(
-		(entry) => entry.isNew && entry.settled,
-	);
-	if (fresh.length === 0) return undefined;
-	return fresh
-		.map((entry) => {
-			const settle = entry.settled as TaskSettleRecord;
-			const head = [entry.ref, entry.item, entry.agent, settle.status].filter(Boolean).join(" · ");
-			const lines = [`[${head}]`];
-			if (settle.changed) lines.push(`改动（git status）：${settle.changed}`);
-			lines.push(`<untrusted_agent_output>\n${settle.tail ?? "（无输出）"}\n</untrusted_agent_output>`);
-			return lines.join("\n");
-		})
-		.join("\n\n");
 }

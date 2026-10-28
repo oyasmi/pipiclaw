@@ -42,19 +42,19 @@ function tool(execute: AgentTool<typeof schema>["execute"]): AgentTool<typeof sc
 }
 
 async function run(inner: AgentTool<typeof schema>["execute"]) {
-	return withToolDetails(tool(inner), "task_update").execute("call-1", { label: "l" });
+	return withToolDetails(tool(inner), "task_pause").execute("call-1", { label: "l" });
 }
 
 describe("details contract", () => {
 	it("stamps the registered kind onto every result shape it wraps", async () => {
 		const unstamped = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
-		expect(toolResultDetails(unstamped)).toEqual({ kind: "task_update" });
+		expect(toolResultDetails(unstamped)).toEqual({ kind: "task_pause" });
 
 		const withFields = await run(async () => ({
 			content: [{ type: "text", text: "ok" }],
 			details: { op: "list", count: 3 },
 		}));
-		expect(withFields.details).toEqual({ op: "list", count: 3, kind: "task_update" });
+		expect(withFields.details).toEqual({ op: "list", count: 3, kind: "task_pause" });
 
 		// Guards the drift this contract exists to prevent: a hand-written kind can no longer
 		// disagree with the name the tool is registered under.
@@ -62,7 +62,7 @@ describe("details contract", () => {
 			content: [{ type: "text", text: "ok" }],
 			details: { kind: "something_stale" },
 		}));
-		expect(toolResultDetails(staleKind)?.kind).toBe("task_update");
+		expect(toolResultDetails(staleKind)?.kind).toBe("task_pause");
 	});
 
 	it("reads no details off a malformed or absent result", () => {
@@ -81,7 +81,7 @@ describe("recoverable rejection", () => {
 
 		expect(rejected.content[0]).toEqual({ type: "text", text: 'Rejected: action "create" requires an id.' });
 		expect(isRecoverableRejection(rejected)).toBe(true);
-		expect(toolResultDetails(rejected)?.kind).toBe("task_update");
+		expect(toolResultDetails(rejected)?.kind).toBe("task_pause");
 
 		const ordinary = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
 		expect(isRecoverableRejection(ordinary)).toBe(false);
@@ -131,7 +131,7 @@ function handlerContext(ctx: TurnOutput, runState: RunState): SessionEventHandle
 
 async function endEvent(ctx: TurnOutput, result: unknown, isError: boolean) {
 	await handleSessionEvent(
-		{ type: "tool_execution_end", toolCallId: "c1", toolName: "task_update", result, isError },
+		{ type: "tool_execution_end", toolCallId: "c1", toolName: "task_pause", result, isError },
 		handlerContext(ctx, createEmptyRunState()),
 	);
 }
@@ -144,7 +144,7 @@ describe("rejections stay out of the user's chat", () => {
 			ctx,
 			{
 				content: [{ type: "text", text: "Rejected: requires an id." }],
-				details: { kind: "task_update", recoverable: true },
+				details: { kind: "task_pause", recoverable: true },
 			},
 			false,
 		);
@@ -171,7 +171,7 @@ describe("rejections stay out of the user's chat", () => {
 			scope.ctx,
 			{
 				content: [{ type: "text", text: 'Task "x" requires a user decision outside its current scope' }],
-				details: { kind: "task_update" },
+				details: { kind: "task_pause" },
 			},
 			true,
 		);

@@ -4,8 +4,9 @@
  * `turn/`. Owns the turn state machine.
  */
 import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { mkdirSync } from "fs";
 import { mkdir } from "fs/promises";
-import { join } from "path";
+import { dirname, join } from "path";
 import { resolveActiveSessionFile } from "../channel/active-session-store.js";
 import type { ChannelContext } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
@@ -37,7 +38,6 @@ import { loadPipiclawSkills } from "../skills/loader.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { getUsageLedger } from "../usage/ledger.js";
-import type { UsageTotals } from "../usage/totals.js";
 import { handleBuiltinCommand, requireQueuedMessage } from "./builtin-commands.js";
 import { measureToolSchemas, type PromptTurnContextStats, renderContextReport } from "./prompt/manifest.js";
 import { ModelSelection } from "./session/model-selection.js";
@@ -54,6 +54,8 @@ import type { RunnerDeps, RunnerFactoryPaths } from "./types.js";
 import {
 	type AgentRunner,
 	createEmptyRunState,
+	type RunnerActivity,
+	type RunnerProfile,
 	type RunnerStatusSnapshot,
 	type RunState,
 	type TurnStatus,
@@ -82,7 +84,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly turnFinisher: TurnFinisher;
 	private readonly pipeline: TurnPipeline;
 	private readonly memoryLifecycle: MemoryLifecycle;
-	private readonly requestScoped: boolean;
+	private readonly profile: RunnerProfile;
 	private readonly ledger = getUsageLedger();
 	private readonly memoryActivityRecorder: MemoryActivityRecorder;
 	// --- Mutable across runs ---
@@ -99,7 +101,7 @@ export class ChannelRunner implements AgentRunner {
 	private runState: RunState = createEmptyRunState();
 
 	constructor(conversation: DeskConversation, paths: RunnerFactoryPaths, deps: RunnerDeps) {
-		this.requestScoped = paths.requestScoped === true;
+		this.profile = paths.profile ?? { kind: "chat" };
 		const { channelId, conversationDir } = conversation;
 		this.conversation = conversation;
 		this.channelId = channelId;
@@ -128,10 +130,8 @@ export class ChannelRunner implements AgentRunner {
 		// (or the context.jsonl default, for a conversation that has never run a topology op) names
 		// (spec 043, D1). The cwd override is the desk's working directory: `desk.json` can change
 		// its `cwd` after a session was created, so the header's cwd may be stale.
-		const activeSessionFile = this.requestScoped ? "context.jsonl" : resolveActiveSessionFile(conversationDir);
-		const sessionManager = this.requestScoped
-			? SessionManager.inMemory(conversation.cwd)
-			: SessionManager.open(join(conversationDir, activeSessionFile), conversationDir, conversation.cwd);
+		const sessionFile = this.openSessionFile();
+		const sessionManager = this.openSessionManager(sessionFile);
 
 		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact
 		// SessionManager instance, before anything else touches it — a second `open()` of the same
@@ -147,7 +147,7 @@ export class ChannelRunner implements AgentRunner {
 		if (recoveryOutcome.kind === "blocked") {
 			throw new Error(
 				`[${channelId}] Cannot start channel: session left in an unrecoverable state after a restart (${recoveryOutcome.reason}). ` +
-					`Back up ${join(conversationDir, activeSessionFile)} on the host, move it aside, then use /new to start a fresh session.`,
+					`Back up ${sessionFile} on the host, move it aside, then use /new to start a fresh session.`,
 			);
 		}
 		if (recoveryOutcome.kind === "repaired") {
@@ -179,7 +179,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
-			enabled: !this.requestScoped,
+			enabled: this.profile.kind === "chat",
 			conversation,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
@@ -191,7 +191,8 @@ export class ChannelRunner implements AgentRunner {
 		});
 
 		this.host = new SessionHost({
-			requestScoped: this.requestScoped,
+			profile: this.profile,
+			getTaskControl: paths.getTaskControl,
 			conversation,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
@@ -216,6 +217,7 @@ export class ChannelRunner implements AgentRunner {
 			markStreaming: () => this.turnState.markStreaming(),
 		});
 		this.pipeline = new TurnPipeline({
+			profile: this.profile,
 			conversation,
 			workspaceDir: this.workspaceDir,
 			describeChannel: paths.describeChannel,
@@ -226,7 +228,7 @@ export class ChannelRunner implements AgentRunner {
 			getRunState: () => this.runState,
 		});
 		this.turnFinisher = new TurnFinisher({
-			requestScoped: this.requestScoped,
+			profile: this.profile,
 			conversation,
 			host: this.host,
 			models: this.models,
@@ -285,18 +287,7 @@ export class ChannelRunner implements AgentRunner {
 		return this.turnState.status();
 	}
 
-	async run(
-		info: TurnInfo,
-		channel: ChannelContext,
-		store: ChannelStore,
-	): Promise<{
-		stopReason: string;
-		errorMessage?: string;
-		usage: UsageTotals;
-		costKnown: boolean;
-		durationMs: number;
-		silent: boolean;
-	}> {
+	async run(info: TurnInfo, channel: ChannelContext, store: ChannelStore): ReturnType<AgentRunner["run"]> {
 		const startedAt = Date.now();
 		const ctx = new TurnOutput(channel, this.channelId);
 		this.resetRunState(info, ctx, store);
@@ -325,7 +316,7 @@ export class ChannelRunner implements AgentRunner {
 				: await this.pipeline.prepareUserInput(info, ctx);
 
 			// Ensure the conversation directory (and with it the desk directory) exists.
-			if (!this.requestScoped) await mkdir(this.conversationDir, { recursive: true });
+			if (this.profile.kind === "chat") await mkdir(this.conversationDir, { recursive: true });
 
 			const channelCapsule = await this.pipeline.gatherTurnContext(input.preserveRawInput, turn);
 			const assembled = assembleTurnPrompt({
@@ -387,6 +378,9 @@ export class ChannelRunner implements AgentRunner {
 			costKnown: this.runState.usageSources > 0 && this.runState.costKnown,
 			durationMs: Date.now() - startedAt,
 			silent: this.runState.finalOutcome.kind === "silent",
+			finalText: this.runState.lastAssistantText,
+			toolsUsed: [...this.runState.toolsUsed],
+			assistantCost: { usd: this.runState.assistantUsage.cost.total, estimated: !this.runState.costKnown },
 		};
 	}
 
@@ -542,23 +536,38 @@ export class ChannelRunner implements AgentRunner {
 		return this.host.subAgentDiscovery;
 	}
 
-	/**
-	 * Bind this runner to a task cycle's own session (spec 051, D3/INV-5): task work must not
-	 * accumulate in the channel's chat transcript, so each task turn runs in its own bounded session
-	 * while turn state, `/stop` and delivery stay exactly where they already are.
-	 */
-	bindTaskSession(taskId: string): Promise<void> {
-		return this.retired ? Promise.resolve() : this.host.bindTaskSession(taskId);
+	getActivity(): RunnerActivity {
+		return { pendingTools: [...this.runState.pendingTools.values()], toolsDone: this.runState.toolsUsed.length };
 	}
 
-	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
-	bindChatSession(): Promise<void> {
-		return this.retired ? Promise.resolve() : this.host.bindChatSession();
+	async contextIncludes(needle: string): Promise<boolean> {
+		await this.host.ensureSessionReady();
+		return this.host.contextIncludes((text) => text.includes(needle));
 	}
 
-	/** Which task loop this runner is currently bound to, if any. */
-	getTaskLoop(): { taskId: string } | undefined {
-		return this.host.taskLoop;
+	/** The session file this profile opens: the channel's active chat session, a task's own, or none (a request lives in memory). */
+	private openSessionFile(): string {
+		switch (this.profile.kind) {
+			case "chat":
+				return join(this.conversationDir, resolveActiveSessionFile(this.conversationDir));
+			case "task":
+				return this.profile.sessionPath;
+			case "request":
+				return "context.jsonl";
+		}
+	}
+
+	private openSessionManager(sessionFile: string): SessionManager {
+		const { cwd } = this.conversation;
+		if (this.profile.kind === "request") return SessionManager.inMemory(cwd);
+		// The cwd override is the desk's working directory: `desk.json` can change its `cwd` after a
+		// session was created, so the header's cwd may be stale (spec 043, D1).
+		if (this.profile.kind === "task") mkdirSync(dirname(sessionFile), { recursive: true });
+		return SessionManager.open(
+			sessionFile,
+			this.profile.kind === "task" ? dirname(sessionFile) : this.conversationDir,
+			cwd,
+		);
 	}
 
 	// === Private helpers ===
@@ -569,7 +578,7 @@ export class ChannelRunner implements AgentRunner {
 	 * point the maintenance gates actually start looking at this state.
 	 */
 	private recordMemoryActivity(event: MemoryActivityEvent): void {
-		if (this.requestScoped) return;
+		if (this.profile.kind !== "chat") return;
 		const eventTime = parseLocalTime(event.timestamp);
 		const eligibleAfter =
 			eventTime !== undefined

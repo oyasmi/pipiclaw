@@ -104,7 +104,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "stop",
-		description: "停止当前回合；若该回合是某个任务的一步，同时暂停该任务",
+		description: "停止当前聊天回合并丢弃排在它后面的消息；后台任务不受影响，暂停任务用 /tasks pause",
 		examples: ["/stop"],
 		availableWhileBusy: true,
 		runnerHandled: true,
@@ -168,15 +168,15 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "tasks",
 		argumentHint:
-			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|archive|doctor]",
-		description: "查看、指挥并诊断本工位的长程任务；pause 只停止自动执行，保留等待条件",
+			"[show <id>|log <id>|msg <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|cancel <id>|archive|doctor]",
+		description: "查看、对话、暂停与取消本工位在后台执行的长程任务；任务与聊天互不占用",
 		availableWhileBusy: true,
 		subcommands: [
 			{ name: "list", description: "列出本工位进行中的任务（默认动作，可省略）", example: "/tasks" },
 			{
 				name: "show",
 				args: "<id>",
-				description: "查看任务说明、工作项、最近记录与用量",
+				description: "查看任务的当前活动、在途委派、工作项、最近记录与用量",
 				example: "/tasks show weekly-report",
 			},
 			{
@@ -187,35 +187,36 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			},
 			{ name: "archive", description: "列出已归档（已关闭）的任务", example: "/tasks archive" },
 			{
+				name: "msg",
+				args: "<id> <内容>",
+				description: "对任务说话：步骤执行中直接送进当前步骤，否则排给下一步；也是回答任务提问的方式",
+				example: "/tasks msg weekly-report 先跑一遍 npm run check",
+			},
+			{
 				name: "pause",
 				args: "<id>",
-				description: "停止该任务的自动执行（保留等待条件）",
+				description: "暂停任务：中止当前这一步，在途的委派和作业继续运行，结果会记下",
 				example: "/tasks pause weekly-report",
 			},
 			{
 				name: "resume",
 				args: "<id> [+steps N|+usd X]",
-				description: "重新启用该任务，可同时追加预算",
+				description: "恢复已暂停的任务，可同时追加预算",
 				example: "/tasks resume weekly-report +steps 20",
 			},
 			{
-				name: "steer",
-				args: "<id> <内容>",
-				description: "把一条指示排给该任务的下一步，不打断正在执行的这一步",
-				example: "/tasks steer weekly-report 先跑一遍 npm run check",
+				name: "cancel",
+				args: "<id>",
+				description: "取消任务：中止当前步骤，取消在途的委派和作业，并归档",
+				example: "/tasks cancel weekly-report",
 			},
-			{
-				name: "reply",
-				args: "<id> <内容>",
-				description: "回答该任务提出的问题，并让它继续",
-				example: "/tasks reply weekly-report 合并到 master",
-			},
+			{ name: "archive", description: "列出已归档（已关闭）的任务", example: "/tasks archive" },
 			{ name: "doctor", description: "只读检查手工编辑造成的任务问题", example: "/tasks doctor" },
 		],
 	},
 	{
 		name: "status",
-		description: "显示运行状态、当前模型、上下文占用、运行时长与版本",
+		description: "显示运行状态、当前模型、上下文占用、运行时长、版本与本工位后台任务概况",
 		examples: ["/status"],
 		availableWhileBusy: true,
 	},

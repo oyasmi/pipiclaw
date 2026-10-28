@@ -16,7 +16,7 @@ import { snapshotContext } from "../session/context-snapshot.js";
 import { getLastAssistantUsage } from "../session/event-guards.js";
 import type { ModelSelection } from "../session/model-selection.js";
 import type { SessionHost } from "../session/session-host.js";
-import type { FinalOutcome, RunState } from "../types.js";
+import type { FinalOutcome, RunnerProfile, RunState } from "../types.js";
 import type { createRunQueue } from "./run-queue.js";
 import { renderTurnErrorReply } from "./turn-error.js";
 import type { TurnOutput } from "./turn-output.js";
@@ -27,7 +27,7 @@ function isSilentOutcome(outcome: FinalOutcome): outcome is { kind: "silent" } {
 }
 
 export interface TurnFinisherDeps {
-	requestScoped?: boolean;
+	profile: RunnerProfile;
 	conversation: DeskConversation;
 	host: SessionHost;
 	models: ModelSelection;
@@ -73,7 +73,7 @@ export class TurnFinisher {
 	 * response with the length of the conversation.
 	 */
 	private continuationOf(): Pick<TurnOutcome, "continuation" | "contextRef"> {
-		if (this.deps.requestScoped) return { continuation: snapshotContext(this.host.session.messages) };
+		if (this.deps.profile.kind === "request") return { continuation: snapshotContext(this.host.session.messages) };
 		const sessionFile = this.host.sessionManager.getSessionFile();
 		const leafId = this.host.sessionManager.getLeafId();
 		return sessionFile && leafId ? { contextRef: { sessionFile, leafId } } : {};
@@ -123,7 +123,7 @@ export class TurnFinisher {
 		// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
 		// string the provider actually received — base sections, pi's tail, and the boundary
 		// footer the prompt extension appends at before_agent_start.
-		if (process.env.PIPICLAW_DEBUG && !this.deps.requestScoped) {
+		if (process.env.PIPICLAW_DEBUG && this.deps.profile.kind === "chat") {
 			const debugContext = {
 				systemPrompt: this.host.lastFinalPrompt ?? this.host.agent.state.systemPrompt,
 				promptManifest: this.host.lastPromptBuild

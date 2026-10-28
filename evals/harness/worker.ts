@@ -4,13 +4,11 @@ import type { ChannelEvent } from "../../src/channel/channel-event.js";
 import type { MediaSendResult, OutboundMedia } from "../../src/channel/transport.js";
 import { DingTalkBot } from "../../src/dingtalk/bot.js";
 import { DingTalkTransport } from "../../src/dingtalk/transport.js";
-import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
-import { readActiveTasks } from "../../src/tasks/contract.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import { trialSeed } from "./fixture-seed.js";
 import { traceIdentity, traceToolResultFailed } from "./identity.js";
-import { EVAL_CHANNEL_ID, EVAL_DESK, evalConversationDir, evalDeskDir, prepareEvalDesk } from "./layout.js";
+import { EVAL_CHANNEL_ID, evalConversationDir, evalDeskDir, prepareEvalDesk } from "./layout.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
 import { modelResultFields } from "./scoring.js";
 import { fallbackCostUsd, hash, tree } from "./util.js";
@@ -83,16 +81,21 @@ const TOOL_FIELDS: Record<string, string[]> = {
 	read: ["path", "file_path", "offset", "limit"],
 	write: ["path", "file_path", "content"],
 	edit: ["path", "file_path"],
-	bash: ["command", "timeout", "async", "notify", "taskId"],
+	bash: ["command", "timeout", "async", "notify"],
 	web_fetch: ["url"],
 	web_search: ["query"],
 	send_media: ["path", "fileName"],
 	event_manage: ["action", "name", "definition"],
 	task_list: [],
 	task_create: ["id", "title", "goal", "dod"],
-	task_update: ["id"],
 	task_close: ["id", "outcome", "note"],
-	task_step_end: ["outcome", "note", "report"],
+	task_log: ["id"],
+	task_message: ["id", "text"],
+	task_pause: ["id", "reason"],
+	task_resume: ["id"],
+	task_report: ["text"],
+	task_ask: ["question"],
+	task_wait: ["until"],
 	memory_save: ["content", "replaces"],
 	memory_search: ["query"],
 	memory_forget: ["name"],
@@ -363,35 +366,24 @@ async function main(): Promise<void> {
 		startServices: false,
 		createEventsWatcher: () => ({ start() {}, stop() {} }),
 		observer: eventTrace,
-		onTaskDriverDispatch: (event, accepted) => {
+		onTaskStep: (event) => {
 			trace({
 				kind: "runtime-log",
-				fields: { driverDispatch: "true", taskEvent: event.text.slice(0, 2_000), accepted: String(accepted) },
-				ok: accepted,
+				fields: {
+					taskStep: event.phase,
+					taskId: event.taskId,
+					seq: String(event.seq),
+					// What the lane derived for the task after the step: `work` / `user` / `time` / `closed` / ….
+					...(event.next ? { stepNext: event.next, stepResult: event.result ?? "" } : {}),
+					// `started` is the lane admitting a step: the successor of the old driver dispatch.
+					...(event.phase === "started" ? { driverDispatch: "true" } : {}),
+				},
+				ok: true,
 			});
 		},
 	});
 
-	// A wake the runtime queues itself (a task step, a completion) runs as that task's actor, so the
-	// trace can tell its tool calls from the main agent's.
 	const handleEvent = runtime.ingress.handleEvent.bind(runtime.ingress);
-	runtime.ingress.handleEvent = async (event) => {
-		const taskId =
-			/^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text)?.[1] ??
-			(event.source === "wake" ? event.internalWake?.taskId : undefined);
-		const priorActor = currentActorId;
-		const priorSession = currentSessionId;
-		if (taskId) {
-			currentActorId = `task:${taskId}`;
-			currentSessionId = `${caseId}:${channelId}:task:${taskId}`;
-		}
-		try {
-			await handleEvent(event);
-		} finally {
-			currentActorId = priorActor;
-			currentSessionId = priorSession;
-		}
-	};
 	const sendEvent = async (event: ChannelEvent): Promise<void> => {
 		await handleEvent(event);
 	};
@@ -452,17 +444,23 @@ async function main(): Promise<void> {
 			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, deskDir));
 			trace({ kind: "runtime-log", fields: { environment: step.action, path: rel }, ok: true });
 			currentPhase = "runtime";
-		} else if (step.kind === "syntheticTaskTurn") {
-			const entries = await readActiveTasks(join(deskDir, "tasks"), Date.now());
-			const entry = entries.find((candidate) => candidate.id === step.taskId);
-			if (!entry) throw new Error(`Synthetic task ${step.taskId} is missing; repair the case fixture.`);
-			await sendEvent(createTaskDriverEvent(EVAL_DESK, channelId, entry, Date.now()));
-		} else if (step.kind === "runTaskDriver") {
+		} else if (step.kind === "syntheticTaskTurn" || step.kind === "runTaskDriver") {
+			// Task steps run in the task lane (spec 064), apart from the chat; everything that happens
+			// while the lane works is attributed to the task's actor, so the trace can tell its tool
+			// calls from the main agent's. The lane has no clock to inject: `at` is not honoured.
 			currentPhase = "scheduler";
-			if (!runtime.taskDriver.runOnce) {
-				throw new Error("Runtime did not expose TaskDriver.runOnce; use the production runtime driver.");
+			const priorActor = currentActorId;
+			const priorSession = currentSessionId;
+			const taskId = step.kind === "syntheticTaskTurn" ? step.taskId : undefined;
+			currentActorId = `task:${taskId ?? "lane"}`;
+			currentSessionId = `${caseId}:${channelId}:task:${taskId ?? "lane"}`;
+			try {
+				await runtime.taskLane.runOnce();
+				await runtime.taskLane.drained();
+			} finally {
+				currentActorId = priorActor;
+				currentSessionId = priorSession;
 			}
-			await runtime.taskDriver.runOnce(step.at ? new Date(step.at) : new Date());
 			await drain();
 			currentPhase = "runtime";
 		} else if (step.kind === "runMemoryMaintenance") {

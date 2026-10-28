@@ -181,19 +181,26 @@ describe("DeskJobManager", () => {
 		}
 	});
 
-	it("logs a task-bound job's dispatch and settlement onto the task, once, before the completion wake (spec 052, D4)", async () => {
+	it("records a task-bound job on the task and tells the lane — no completion wake — once (spec 064, D19)", async () => {
 		const deskDir = mkdtempSync(join(tmpdir(), "job-task-"));
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(
 			join(deskDir, "tasks", "T.md"),
-			renderTaskDocument({ state: "open", usage: createUsage() }, "# T\n"),
+			renderTaskDocument(
+				{ state: "waiting", waiting: { kind: "work", since: "2026-10-28T10:00:00+08:00" }, usage: createUsage() },
+				"# T\n",
+			),
 		);
-		const wakeSawSettle: boolean[] = [];
+		const told: boolean[] = [];
+		const wakes: unknown[] = [];
 		const executor = new FakeJobExecutor();
 		const manager = new DeskJobManager({ desk: "news", deskDir }, executor, {
-			dispatch: async () => {
-				wakeSawSettle.push((await readTaskLog(deskDir, "T", { kinds: ["settle"] })).length === 1);
+			dispatch: async (event) => {
+				wakes.push(event);
 				return true;
+			},
+			onTaskInput: async (desk, taskId) => {
+				told.push((await readTaskLog(deskDir, taskId, { kinds: ["settle"] })).length === 1 && desk === "news");
 			},
 		});
 		const job = await manager.start("make", "build", 300, { taskId: "T", channelId: "dingtalk:dm:1" });
@@ -208,8 +215,9 @@ describe("DeskJobManager", () => {
 		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
 		// The output tail travels with the settlement: a task step's brief replaces the wake that carried it.
 		expect(records[1]).toMatchObject({ ref: job.id, status: "completed", exitCode: 0, tail: "compiling\nBUILD_OK" });
-		// The step the wake starts must already find the result on its board.
-		expect(wakeSawSettle).toEqual([true]);
+		// The lane is told after the result is in the log, so the step it starts already finds it (INV-6).
+		expect(told).toEqual([true]);
+		expect(wakes).toEqual([]);
 		await resetTaskLogAppenders();
 		manager.stop();
 	});
@@ -516,7 +524,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		const executor = new FakeJobExecutor();
 		executor.output = "build succeeded";
 		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
-		const job = await manager.start("make", "build", 300, { taskId: "release", channelId: "dingtalk:dm:1" });
+		const job = await manager.start("make", "build", 300, { channelId: "dingtalk:dm:1" });
 
 		executor.probeResult = "EXIT:0";
 		await manager.list();
@@ -527,26 +535,12 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		expect(events[0]?.text).toContain("completed");
 		expect(events[0]?.text).toContain("exit 0");
 		expect(events[0]?.text).toContain("build succeeded");
-		expect(events[0]?.text).toContain("It belongs to task release.");
 		// The wake goes to the starting channel and carries the job's desk (spec 058, D7).
 		expect(events[0]).toMatchObject({
 			channelId: "dingtalk:dm:1",
 			desk: "news",
 			dispatchId: `job:news:${job.id}:done`,
 		});
-		expect(events[0]?.internalWake).toEqual({
-			kind: "job",
-			resourceId: job.id,
-			taskId: "release",
-			dispatchId: `job:news:${job.id}:done`,
-		});
-		const dispatchId = events[0]?.dispatchId ?? "";
-		await expect(manager.beginWakeConsumption(job.id, "other-task", dispatchId)).resolves.toBe(false);
-		await expect(manager.beginWakeConsumption(job.id, "release", `${dispatchId}:replay`)).resolves.toBe(false);
-		await expect(manager.beginWakeConsumption("job-missing", "release", dispatchId)).resolves.toBe(false);
-		await expect(manager.beginWakeConsumption(job.id, "release", dispatchId)).resolves.toBe(true);
-		await manager.finishWakeConsumption(job.id, dispatchId);
-		await expect(manager.beginWakeConsumption(job.id, "release", dispatchId)).resolves.toBe(false);
 	});
 
 	it("announces a job that finished while the daemon was down", async () => {

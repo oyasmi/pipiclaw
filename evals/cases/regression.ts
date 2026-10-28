@@ -463,7 +463,7 @@ export const regressionCases: EvalCase[] = [
 		],
 		graders: [
 			toolCallCount("no-unnecessary-task", "task_create", 0),
-			toolCallCount("no-step-tool-in-chat", "task_step_end", 0),
+			toolCallCount("no-step-tool-in-chat", "task_report", 0),
 			toolCallCount("one-native-send", "send_media", 1, ["path", /quarterly-report\.csv$/]),
 			noFailedToolResult("media-send-succeeded", "send_media"),
 			deliveryNotMatches("csv-not-pasted", /account,total|alpha,42/i),
@@ -622,22 +622,15 @@ export const regressionCases: EvalCase[] = [
 		suite: "regression",
 		source: "046 tool schema partitioning D5 — checkpoint-routing risk",
 		description:
-			"A routine task-driven wake must end with task_step_end carrying a non-empty note, " +
-			"not a bare metadata edit or an ordinary chat response.",
+			"A routine task step is run by the task lane to its own end — a derived next state, not an ordinary chat response.",
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "route-checkpoint", { body: wakeBody("ROUTE-CHECK-1") }),
 		script: [{ kind: "syntheticTaskTurn", taskId: "route-checkpoint" }],
 		graders: [
 			tracePredicate(
-				"ends-with-noted-checkpoint",
-				(ctx) => {
-					const calls = ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === "task_step_end");
-					const last = calls[calls.length - 1];
-					if (!last) return false;
-					const note = last.fields?.note;
-					return typeof note === "string" && note.trim().length > 0;
-				},
-				"the turn's last task_step_end call must carry a non-empty note",
+				"step-ended-by-the-lane",
+				(ctx) => ctx.trace.some((event) => event.fields?.taskStep === "ended"),
+				"the lane recorded the end of a task step",
 			),
 		],
 	},

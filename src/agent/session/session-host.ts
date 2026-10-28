@@ -20,9 +20,7 @@ import {
 	type SessionManager,
 	type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { mkdir } from "fs/promises";
-import { dirname, join } from "path";
-import { commitActiveSessionRef, resolveActiveSessionFile } from "../../channel/active-session-store.js";
+import { commitActiveSessionRef } from "../../channel/active-session-store.js";
 import type { SendMedia } from "../../channel/transport.js";
 import type { TurnContext } from "../../channel/turn-context.js";
 import type { PipiclawSettingsManager } from "../../config/settings.js";
@@ -47,7 +45,7 @@ import { getSkillRoots } from "../../skills/roots.js";
 import type { PipiclawSkillsResult } from "../../skills/types.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../../subagents/discovery.js";
 import type { SubAgentRunManager } from "../../subagents/runs.js";
-import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../../tasks/session-path.js";
+import type { TaskControl } from "../../tasks/control.js";
 import { createPipiclawTools } from "../../tools/index.js";
 import type { UsageLedger } from "../../usage/ledger.js";
 import { buildPipiclawSystemPrompt } from "../prompt/builder.js";
@@ -55,7 +53,7 @@ import { createPromptBoundaryExtension } from "../prompt/extension.js";
 import { measureToolSchemas, TOOL_SCHEMA_TARGET_UNITS, toolSchemaBudgetWarning } from "../prompt/manifest.js";
 import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResources } from "../prompt/resources.js";
 import type { PromptBuildResult } from "../prompt/types.js";
-import type { RunState } from "../types.js";
+import type { RunnerProfile, RunState } from "../types.js";
 import { createCommandExtension } from "./command-extension.js";
 import { SessionCompaction } from "./compaction.js";
 import { RequestContextInput } from "./context-input.js";
@@ -85,13 +83,10 @@ function plainTextOf(content: unknown): string {
 		.join("\n");
 }
 
-/** Task sessions live under `<deskDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
-function isTaskSessionPath(sessionFile: string | undefined): boolean {
-	return sessionFile?.replace(/\\/g, "/").includes(`/${TASK_SESSIONS_DIRNAME}/`) === true;
-}
-
 export interface SessionHostDeps {
-	requestScoped?: boolean;
+	profile: RunnerProfile;
+	/** Chat only: resolves the task lane's control port when tools are (re)built. */
+	getTaskControl?: () => TaskControl | undefined;
 	conversation: DeskConversation;
 	workspaceDir: string;
 	appHomeDir: string;
@@ -180,14 +175,6 @@ export class SessionHost {
 	readonly compaction: SessionCompaction;
 	/** Mirror of `tools.tasks.enabled` from the last tools-config load (see buildRuntimeTools). */
 	tasksEnabled = true;
-	/**
-	 * Set while this runner is bound to a task's own session (spec 051, D3). Turns are serialized
-	 * per channel, so one runner can carry both surfaces by swapping which session file it is
-	 * bound to between turns — which keeps busy state, `/stop`, steering and turn recovery with
-	 * their existing single owner instead of splitting them across two runner instances.
-	 */
-	taskLoop?: { taskId: string };
-
 	constructor(private readonly deps: SessionHostDeps) {
 		this.conversation = deps.conversation;
 		this.channelId = deps.conversation.channelId;
@@ -344,10 +331,10 @@ export class SessionHost {
 				// the pointer before we rebuild and rebind to it, so a crash between "SDK created
 				// session" and "we finished rebinding" leaves the old ref (and old session)
 				// authoritative rather than an orphaned new file (spec 043, D1.3).
-				// A task session is not the channel's chat session: never repoint the active-session
-				// ref at it, or `/new` and restart recovery would adopt a task's transcript as the
-				// conversation (spec 051, D3).
-				if (!isTaskSessionPath(sessionManager.getSessionFile())) {
+				// Only a chat owns an active-session ref: a task session or a request must never
+				// repoint it, or `/new` and restart recovery would adopt their transcript as the
+				// conversation (spec 051, D3; spec 064, D13).
+				if (this.deps.profile.kind === "chat") {
 					await commitActiveSessionRef(this.conversationDir, sessionManager);
 				}
 				const next = await this.createSessionRuntime(sessionManager, sessionStartEvent);
@@ -652,43 +639,21 @@ export class SessionHost {
 		return { session, resourceLoader };
 	}
 
-	/** Bind a task to its own transcript, keeping scheduled work out of the chat history. */
-	async bindTaskSession(taskId: string): Promise<void> {
-		await this.sessionReady;
-		if (this.retired) return;
-		const path = taskSessionPath(this.deskDir, taskId);
-		await mkdir(dirname(path), { recursive: true });
-		this.taskLoop = { taskId };
-		await this.sessionRuntime.switchSession(path);
-		this.syncMemoryBootstrapPendingFromSession();
-	}
-
-	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
-	async bindChatSession(): Promise<void> {
-		if (this.retired || !this.taskLoop) return;
-		this.taskLoop = undefined;
-		await this.sessionRuntime.switchSession(
-			join(this.conversationDir, resolveActiveSessionFile(this.conversationDir)),
-		);
-		this.syncMemoryBootstrapPendingFromSession();
-	}
-
 	/** Bootstrap presence follows canonical context, including omissions and compaction.
-	 * Returning from a task or restarting must neither duplicate a visible bootstrap nor
-	 * mistake an omitted failed input for one. Raw messages remain available to memory/recovery.
+	 * Restarting must neither duplicate a visible bootstrap nor mistake an omitted failed input for
+	 * one. Raw messages remain available to memory/recovery.
 	 */
 	private syncMemoryBootstrapPendingFromSession(): void {
-		const injected = this.sessionManager.buildSessionContext().messages.some((value) => {
-			const message: unknown = value;
-			if (!isRecord(message)) return false;
-			return message.role === "user" && hasMemoryBootstrapBlock(plainTextOf(message.content));
-		});
-		this.firstTurnMemoryBootstrapPending = !injected;
+		this.firstTurnMemoryBootstrapPending = !this.contextIncludes((text) => hasMemoryBootstrapBlock(text));
 	}
 
-	/** Which task loop this runner is currently bound to, if any. */
-	getTaskLoop(): { taskId: string } | undefined {
-		return this.taskLoop;
+	/** Whether any user message of the session's canonical context satisfies `matches` (spec 064, D15). */
+	contextIncludes(matches: (userText: string) => boolean): boolean {
+		return this.sessionManager.buildSessionContext().messages.some((value) => {
+			const message: unknown = value;
+			if (!isRecord(message)) return false;
+			return message.role === "user" && matches(plainTextOf(message.content));
+		});
 	}
 
 	private buildRuntimeTools(): AgentTool<any>[] {
@@ -718,13 +683,10 @@ export class SessionHost {
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
 			sendMedia: this.sendMedia,
-			taskLoop: this.taskLoop,
-			getToolsUsed: () => this.runState.toolsUsed,
-			// Assistant usage only: an internal sub-agent's cost is also in `totalUsage`, and a bound
-			// one is already credited to the task when it settles.
-			getStepCost: () => ({ usd: this.runState.assistantUsage.cost.total, estimated: !this.runState.costKnown }),
+			...(this.deps.profile.kind === "task" ? { taskSession: this.deps.profile.session } : {}),
+			...(this.deps.profile.kind === "chat" ? { taskControl: this.deps.getTaskControl?.() } : {}),
 		});
-		const active = this.deps.requestScoped ? requestTools(tools) : tools;
+		const active = this.deps.profile.kind === "request" ? requestTools(tools) : tools;
 		this.currentTools = active;
 		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.
 		// Warn where the prompt's own budget diagnostics are reported, once per tool rebuild.

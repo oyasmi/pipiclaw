@@ -38,13 +38,13 @@ export const taskLoopQualityCases: EvalCase[] = [
 			taskFrontmatter(
 				"parks-on-the-job",
 				"await-job",
-				(frontmatter) => frontmatter.fields.ticket?.kind === "work" || frontmatter.fields.state === "open",
+				(frontmatter) => frontmatter.fields.waiting?.kind === "work" || frontmatter.fields.state === "queued",
 			),
 			taskLog(
 				"no-guessed-timer",
 				"await-job",
-				(log) => !/"kind":"step"[^\n]*"outcome":"park"/.test(log) || !/等一会|稍后再看|过几分钟/.test(log),
-				"a park should wait on the bound job, not describe a wait the model invented",
+				(log) => !/"kind":"step_end"[^\n]*"next":"time"/.test(log) || !/等一会|稍后再看|过几分钟/.test(log),
+				"a wait should be on the bound job, not a moment the model invented",
 			),
 		],
 	},

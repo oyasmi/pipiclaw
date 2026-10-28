@@ -92,19 +92,11 @@ const bashSchema = Type.Object({
 				"For async jobs: wake this channel when the job finishes (default true). Set false only for fire-and-forget work whose result you will never need.",
 		}),
 	),
-	taskId: Type.Optional(
-		Type.String({
-			description: "For async jobs: the task this job advances, so the completion wake lands in that context.",
-		}),
-	),
 });
 
 /** Schema shown when background execution is unavailable (sub-agent path): the async trio is
  * dropped so the model is never offered a parameter its context cannot honor (fix plan §3.2). */
-const bashSchemaNoJobs = Type.Omit(bashSchema, ["async", "notify", "taskId"]);
-/** Schema shown inside a task session: `taskId` is bound by the runtime, so the model never
- * supplies (or misfills) it (fix plan §3.3). */
-const bashSchemaBoundTask = Type.Omit(bashSchema, ["taskId"]);
+const bashSchemaNoJobs = Type.Omit(bashSchema, ["async", "notify"]);
 
 interface BashToolDetails {
 	truncation?: TruncationResult;
@@ -140,10 +132,9 @@ export interface BashToolOptions {
 	 */
 	jobManager?: DeskJobManager;
 	/**
-	 * Set inside a task's session. A background job started here belongs to this task, so the
-	 * runtime binds the id rather than asking the model to repeat it (and rejects a conflicting one
-	 * before the job launches — the old "relaunch with taskId=…" told the model to re-run a command
-	 * that may have side effects). Chat sessions leave this unset and keep the optional `taskId`.
+	 * Set inside a task's session (spec 064, INV-8). A background job started here belongs to this
+	 * task and its completion wakes the task; a job started in chat binds to no task. The model has no
+	 * parameter to say otherwise.
 	 */
 	boundTaskId?: string;
 	/**
@@ -237,11 +228,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 		// not serialized by it. The SDK serializes the whole batch if *any* tool in it is sequential.
 		executionMode: "sequential",
 		description: `Execute a ${EXECUTOR_SHELL_IS_BASH ? "bash" : "POSIX sh (no bash on this host)"} command in the current working directory. Returns stdout, stderr, and the exit code (a non-zero exit code is reported in the output, not raised as an error). Output is truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, the full output is saved to a file whose path is included. Commands time out after ${options.defaultTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS}s unless you pass a larger \`timeout\`.`,
-		parameters: (options.jobManager
-			? options.boundTaskId
-				? bashSchemaBoundTask
-				: bashSchema
-			: bashSchemaNoJobs) as typeof bashSchema,
+		parameters: (options.jobManager ? bashSchema : bashSchemaNoJobs) as typeof bashSchema,
 		execute: async (
 			_toolCallId: string,
 			{
@@ -249,8 +236,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				timeout,
 				async: runAsync,
 				notify,
-				taskId,
-			}: { command: string; timeout?: number; async?: boolean; notify?: boolean; taskId?: string },
+			}: { command: string; timeout?: number; async?: boolean; notify?: boolean },
 			signal?: AbortSignal,
 		) => {
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
@@ -292,19 +278,12 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			// Background execution: hand off to the channel's job manager and return immediately so
 			// the run queue is not held for the command's duration. Gated by `tools.jobs.enabled`
 			// (the main path supplies a jobManager; the sub-agent path never does).
-			// Inside a task session the runtime owns the task id; a conflicting one supplied through a
-			// non-schema path is rejected before anything launches (fix plan §3.3).
-			if (options.boundTaskId && taskId && taskId !== options.boundTaskId) {
-				throw new RecoverableToolError(
-					`This is task ${options.boundTaskId}'s session — drop taskId (it is bound automatically); "${taskId}" does not belong here.`,
-				);
-			}
-			const effectiveTaskId = options.boundTaskId ?? taskId;
+			const effectiveTaskId = options.boundTaskId;
 
 			if (runAsync) {
 				if (effectiveTaskId && notify === false) {
 					throw new RecoverableToolError(
-						"Task-owned jobs must notify their task when they finish. Keep notify=true (the default); only use notify=false for fire-and-forget work with no taskId.",
+						"Task-owned jobs must notify their task when they finish. Keep notify=true (the default); only use notify=false for fire-and-forget work outside a task.",
 					);
 				}
 				if (!options.jobManager) {
@@ -331,8 +310,9 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 							text:
 								`Background job ${job.id} started: ${jobLabel}\n` +
 								(willNotify
-									? "Complete any independent work, then end the turn when only waiting remains. Completion wakes this channel with the exit code and output; do not poll or schedule a check-in. " +
-										'Inside a task step, park with task_step_end on ticket {"kind":"work"}.'
+									? effectiveTaskId
+										? "Complete any independent work, then end the step when only waiting remains. Completion wakes this task with the exit code and output; do not poll or schedule a check-in."
+										: "Complete any independent work, then end the turn when only waiting remains. Completion wakes this channel with the exit code and output; do not poll or schedule a check-in."
 									: "It runs off-turn and will NOT wake you when it finishes; check it with the job tool (op:poll/list)."),
 						},
 					],

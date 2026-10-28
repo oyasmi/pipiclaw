@@ -11,7 +11,7 @@ import {
 } from "../graders/observations.js";
 import { publicPaginationTest } from "../graders/pagination-fixture.js";
 import { fixtureToken } from "../harness/fixture-seed.js";
-import { fileContains, parkedOnWork, tracePredicate } from "../harness/graders.js";
+import { fileContains, tracePredicate, waitingOnWork } from "../harness/graders.js";
 import type { EvalCase, TrialSetup } from "../harness/schema.js";
 import { writeTask } from "./helpers.js";
 import { controlledProducer } from "./producers.js";
@@ -151,7 +151,7 @@ export const coreRenovatedCases: EvalCase[] = [
 			tracePredicate(
 				"ask-ticket-recorded",
 				(ctx) => taskParkObservations(ctx, "ask").length > 0,
-				"task parked on an ask ticket",
+				"a task step ended waiting for the user",
 			),
 		],
 		invariants: [
@@ -166,7 +166,7 @@ export const coreRenovatedCases: EvalCase[] = [
 		id: "T-run-01",
 		suite: "capability",
 		source: "2026-09-10 case design T-run-01",
-		description: "task 派发真实 external run，绑定 work ticket 等待结算，再从运行证据交付未知值。",
+		description: "task 派发真实 external run，派发后结束这一步等待结算，再从运行证据交付未知值。",
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 14 },
 		setup: async (ctx) => {
@@ -183,7 +183,7 @@ export const coreRenovatedCases: EvalCase[] = [
 			);
 			await writeTask(ctx, "delegated-read", {
 				started: true,
-				body: `# Task\n\n## Goal\nDelegate reading ${join(ctx.deskDir, "run-input.txt")} to external role run-reader. Park on the task's bound work. After its completion wake, inspect the run result and deliver the actual value through task_step_end report. Never guess it.\n\n## DoD\n- [ ] settled run output delivered\n\n## Work Items\n- [ ] W1: Read the controlled input through run-reader and verify its actual output\n`,
+				body: `# Task\n\n## Goal\nDelegate reading ${join(ctx.deskDir, "run-input.txt")} to external role run-reader. End the step while the run is in flight. When its result arrives, inspect it and deliver the actual value with task_report. Never guess it.\n\n## DoD\n- [ ] settled run output delivered\n\n## Work Items\n- [ ] W1: Read the controlled input through run-reader and verify its actual output\n`,
 			});
 		},
 		script: [
@@ -244,7 +244,7 @@ export const coreRenovatedCases: EvalCase[] = [
 				(ctx) => ctx.deliveries.some((delivery) => delivery.text?.includes(fixtureToken(ctx.seed, "RUN-RESULT"))),
 				"the final report must contain the actual frozen run result",
 			),
-			parkedOnWork("run-ticket-recorded"),
+			waitingOnWork("run-ticket-recorded"),
 		],
 	},
 ];

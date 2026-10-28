@@ -42,9 +42,8 @@ export function buildDispatchedText(
 ): string {
 	return (
 		`[Dispatched] runId=${runId}, agent ${agentName} (${runtimeLabel}), working directory ${workingDirectory}.\n` +
-		"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
-		"Finish independent work and dispatches, then end the turn when only waiting remains; do not re-dispatch or poll to wait. " +
-		'Inside a task step, use task_step_end outcome=park with ticket {"kind":"work"}.'
+		"Status: running. Whoever dispatched it (this chat, or the task whose step did) will be woken with the result and artifact path once it finishes.\n" +
+		"Finish independent work and dispatches, then end the turn when only waiting remains; do not re-dispatch or poll to wait."
 	);
 }
 

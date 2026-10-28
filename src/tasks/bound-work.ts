@@ -27,14 +27,16 @@ export interface TaskSettlementCost {
 
 /**
  * Record that bound work settled and add its cost to the task's usage. The cost lands in the
- * same budget the leader's own steps spend from, so a runaway fan-out stops the task.
+ * same budget the leader's own steps spend from, so a runaway fan-out stops the task. Returns
+ * whether the task still existed to receive the record — callers fall back to a chat wake when it
+ * did not (spec 064, D19).
  */
 export async function logTaskSettlement(
 	deskDir: string,
 	taskId: string,
 	record: Omit<TaskSettleRecord, "ts" | "kind" | "usd" | "usdEstimated">,
 	cost: TaskSettlementCost = { usd: 0, estimated: false },
-): Promise<void> {
+): Promise<boolean> {
 	if (cost.usd > 0 || cost.estimated) {
 		await updateStoredTask(deskDir, taskId, (task) => {
 			const usage = task.fields.usage;
@@ -46,11 +48,23 @@ export async function logTaskSettlement(
 			};
 		});
 	}
-	if (!(await readStoredTask(deskDir, taskId))) return;
+	if (!(await readStoredTask(deskDir, taskId))) return false;
 	await appendTaskLog(deskDir, taskId, {
 		kind: "settle",
 		...record,
 		...(cost.usd > 0 ? { usd: cost.usd } : {}),
 		...(cost.estimated ? { usdEstimated: true } : {}),
 	});
+	return true;
+}
+
+/** An external run bound to the task has been silent for `silentMinutes`: an input the leader judges (D16). */
+export async function logTaskStall(
+	deskDir: string,
+	taskId: string,
+	record: { ref: string; silentMinutes: number },
+): Promise<boolean> {
+	if (!(await readStoredTask(deskDir, taskId))) return false;
+	await appendTaskLog(deskDir, taskId, { kind: "stall", ...record });
+	return true;
 }

@@ -42,7 +42,7 @@ export function renderDeskTurnContext(
 	].join("\n");
 }
 
-/** Gated by the same master autonomy switch as the task_* tools and the TaskDriver. */
+/** Gated by the same master autonomy switch as the task_* tools and the task lane. */
 export function buildTaskDigestForTurn(deskDir: string, channelId: string): Promise<string> {
 	return buildTaskDigest({
 		deskDir,

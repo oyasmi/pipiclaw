@@ -44,20 +44,13 @@ export interface PipiclawRetrySettings {
 }
 
 // Whether the autonomous task mechanism runs at all is governed by the single
-// `tools.tasks.enabled` switch in tools.json (task_* tools + TaskDriver +
-// task digest together). Cadence and size are fixed constants — settings.json has no field for
-// either, so these two are plain exported constants (`TASK_DIGEST_SETTINGS`/`TASK_DRIVER_SETTINGS`
-// below), not `PipiclawSettingsManager` getters like every settings.json-backed shape here.
+// `tools.tasks.enabled` switch in tools.json (task_* tools + the task lane +
+// task digest together). The digest's size is a fixed constant — settings.json has no field for
+// it, so it is a plain exported constant (`TASK_DIGEST_SETTINGS` below), not a
+// `PipiclawSettingsManager` getter like every settings.json-backed shape here.
 export interface PipiclawTaskDigestSettings {
 	maxTasks: number;
 	maxChars: number;
-}
-
-export interface PipiclawTaskDriverSettings {
-	/** Global enqueue cap per scan, with round-robin fairness across channels. */
-	maxDispatchesPerTick: number;
-	/** Cap on idle sleep between scans; also the upper bound on how late a manual edit is noticed. */
-	maxSleepMinutes: number;
 }
 
 /** Only the on/off switch is a setting; cadence constants live in `memory/maintenance-tuning.ts`. */
@@ -192,14 +185,6 @@ const DEFAULT_RETRY: PipiclawRetrySettings = {
 export const TASK_DIGEST_SETTINGS: PipiclawTaskDigestSettings = {
 	maxTasks: 8,
 	maxChars: 1000,
-};
-
-// Only the two knobs the scan itself needs. The retry/backoff tiers are gone with the governor
-// (spec 051, D6): a task continues immediately or stops on a budget it can see, so there is no
-// longer a "how long to wait before guessing again" question to answer.
-export const TASK_DRIVER_SETTINGS: PipiclawTaskDriverSettings = {
-	maxDispatchesPerTick: 4,
-	maxSleepMinutes: 15,
 };
 
 const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {

@@ -439,7 +439,7 @@ export function driverDispatchCount(graderId: string, expected: number): CodeGra
 		return result(
 			grader,
 			actual === expected ? "pass" : "fail",
-			`expected ${expected} accepted TaskDriver dispatches, observed ${actual}`,
+			`expected ${expected} task steps started by the lane, observed ${actual}`,
 			"trace",
 			"trace.jsonl",
 		);
@@ -579,38 +579,16 @@ export function noDeliveriesAfterStep(graderId: string, stepKind: string, severi
 	return grader;
 }
 
-/** Parse the public tool contract: JSON key order is not behavior. */
-export function isWorkParkCall(event: import("./schema.js").TraceEvent): boolean {
-	if (event.kind !== "tool-call" || event.tool !== "task_step_end") return false;
-	try {
-		const args = JSON.parse(event.fields?.argsJson ?? "null") as {
-			outcome?: string;
-			ticket?: { kind?: string };
-		} | null;
-		return args?.outcome === "park" && args.ticket?.kind === "work";
-	} catch {
-		return false;
-	}
+/** The lane's own record that a step ended and what it derived for the task (`work` / `user` / `time` / `closed` / …). */
+export function stepEndedAs(ctx: { trace: import("./schema.js").TraceEvent[] }, next: string): number {
+	return ctx.trace.filter((event) => event.fields?.taskStep === "ended" && event.fields?.stepNext === next).length;
 }
 
-/** A rejected proposal is not evidence of a task having parked. */
-export function parkedOnWork(graderId: string): CodeGrader {
+/** A task step ended waiting on the delegations or jobs bound to it — a fact the lane derived, not a claim the model made. */
+export function waitingOnWork(graderId: string): CodeGrader {
 	return tracePredicate(
 		graderId,
-		(ctx) =>
-			ctx.trace.some(
-				(call) =>
-					isWorkParkCall(call) &&
-					Boolean(call.correlationId) &&
-					ctx.trace.some(
-						(reply) =>
-							reply.kind === "tool-result" &&
-							reply.tool === "task_step_end" &&
-							reply.correlationId === call.correlationId &&
-							reply.seq > call.seq &&
-							reply.ok === true,
-					),
-			),
-		"task successfully parked on its bound work",
+		(ctx) => stepEndedAs(ctx, "work") > 0,
+		"a task step ended waiting on its bound work",
 	);
 }

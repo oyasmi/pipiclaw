@@ -14,10 +14,9 @@ export interface JobSnapshot {
 	startedAt: number;
 	durationMs: number;
 	exitCode?: number;
-	/** The job's own wall-clock limit; a task's `work` ticket derives its backstop from it. */
+	/** The job's own wall-clock limit: the longest it can keep a bound task waiting. */
 	timeoutSeconds: number;
-	/** The task this job's completion wake belongs to, if any — lets a caller verify that a
-	 *  `[JOB:<id>] ... belongs to task <taskId>.` wake actually names the job it claims to (T9). */
+	/** The task whose step started this job, if any (spec 064, INV-8). Its completion goes to the task, not to a channel. */
 	taskId?: string;
 	/** The channel that started the job, where its completion wake goes; jobs are shared per desk. */
 	channelId: string;
@@ -27,7 +26,7 @@ export interface JobSnapshot {
 export interface JobWakeContract {
 	/** Wake the channel on completion. Defaults to true — that is the point of the mechanism. */
 	notify: boolean;
-	/** The task this job is advancing, surfaced in the wake so the model lands in context. */
+	/** The task whose step started the job; its completion is recorded on the task instead of waking a channel. */
 	taskId?: string;
 }
 
@@ -57,8 +56,6 @@ export interface JobRecord extends JobSnapshot {
 	 * point this terminal status is applied. Internal only — never surfaced in a `JobSnapshot`.
 	 */
 	pendingKill?: "cancelled" | "failed";
-	wakeClaimDispatchId?: string;
-	wakeConsumedAt?: number;
 }
 
 export function isTerminal(status: JobStatus): boolean {

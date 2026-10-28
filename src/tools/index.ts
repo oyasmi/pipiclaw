@@ -10,11 +10,11 @@ import type { SecurityConfig } from "../security/types.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import type { WorkerToolRequest } from "../subagents/types.js";
+import type { TaskControl, TaskSessionContext } from "../tasks/control.js";
 import { withToolDetails } from "./contract/details.js";
 import { buildToolSet } from "./registry.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "./subagent.js";
 import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
-import type { TaskStepCost } from "./task-manage/types.js";
 
 export interface CreatePipiclawToolsOptions {
 	jobManager: DeskJobManager;
@@ -42,16 +42,14 @@ export interface CreatePipiclawToolsOptions {
 	/** Transport-provided attachment port; when present, enables the `send_media` tool. */
 	sendMedia?: SendMedia;
 	/**
-	 * Present only while this tool set belongs to a task loop step (spec 051, D3). It enables
-	 * `task_step_end` and removes the three tools a task must not use: `task_create` (a task does
-	 * not spawn tasks), `memory_save` (task state is not a channel fact — this was memory v2's
-	 * single biggest pollution source) and `event_manage`.
+	 * Present only while this tool set belongs to a task session (spec 064, D13). It selects the
+	 * task-session surface (`task_report`, `task_ask`, `task_wait`), binds every delegation and job
+	 * started here to the task, and removes the two tools a task must not use: `memory_save` (task
+	 * state is not a channel fact — memory v2's single biggest pollution source) and `event_manage`.
 	 */
-	taskLoop?: { taskId: string };
-	/** Tools completed in the current turn; only `task_step_end` reads it. */
-	getToolsUsed?: () => string[];
-	/** The current turn's own model cost so far; only `task_step_end` reads it. */
-	getStepCost?: () => TaskStepCost;
+	taskSession?: TaskSessionContext;
+	/** Chat only: the task lane's control port. */
+	taskControl?: TaskControl;
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
@@ -67,7 +65,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	// registry so this set, the sub-agent set, and the prompt hints share one source.
 	// The `subagent` tool is appended separately: it is never available to sub-agents
 	// and needs dispatch-time context the registry does not model.
-	const taskLoopExcluded = new Set(["task_create", "memory_save", "event_manage"]);
+	const taskSessionExcluded = new Set(["memory_save", "event_manage"]);
 	const leafTools = buildToolSet({
 		executor: options.executor,
 		fileStore: options.fileStore,
@@ -88,9 +86,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		resolveApiKey: options.resolveApiKey,
 		getSessionSearchSettings: options.getSessionSearchSettings,
 		sendMedia: options.sendMedia,
-		taskLoop: options.taskLoop,
-		getToolsUsed: options.getToolsUsed,
-		getStepCost: options.getStepCost,
+		taskSession: options.taskSession,
+		taskControl: options.taskControl,
 	});
 	const subAgentToolOptions = {
 		buildWorkerTools: (request: WorkerToolRequest) => buildToolSet(request, { forSubagent: true }),
@@ -117,7 +114,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			channelId: options.channelId,
 		},
 		// Inside a task session every delegation binds to that task automatically (spec 052, D4).
-		boundTaskId: options.taskLoop?.taskId,
+		boundTaskId: options.taskSession?.taskId,
 	};
 	const subAgentManageOptions = {
 		runManager: options.runManager,
@@ -141,5 +138,5 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		withToolDetails(createSubAgentListTool(subAgentManageOptions), "subagent_list"),
 		withToolDetails(createSubAgentRunTool(subAgentManageOptions), "subagent_run"),
 	];
-	return options.taskLoop ? all.filter((tool) => !taskLoopExcluded.has(tool.name)) : all;
+	return options.taskSession ? all.filter((tool) => !taskSessionExcluded.has(tool.name)) : all;
 }

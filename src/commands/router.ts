@@ -8,7 +8,8 @@ import { handleSkillsCommand } from "../skills/commands.js";
 import { handleSubagentsCommand } from "../subagents/commands.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
-import { handleTasksCommand } from "../tasks/commands.js";
+import { handleTasksCommand, renderTaskStatusLine } from "../tasks/commands.js";
+import type { TaskControl } from "../tasks/control.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import type { RuntimeCommandName } from "./catalog.js";
@@ -43,8 +44,10 @@ export interface ReportCommandContext {
 	/** The channel's runner, built on demand (`/context` needs a session to report on). */
 	getRunner: () => AgentRunner;
 	runManager: SubAgentRunManager;
-	/** Immediate task wake for `/tasks run|reply`; absent where there is no durable dispatch (the TUI). */
-	dispatchTask?: (taskId: string) => Promise<boolean>;
+	/** The task lane's control port: what `/tasks` and the `/status` task line read and write. */
+	taskControl: TaskControl;
+	/** Who typed the command, for the `message` record a `/tasks msg` writes. */
+	senderName: string;
 }
 
 /**
@@ -78,17 +81,22 @@ export async function runReportCommand(
 		case "tasks":
 			return handleTasksCommand({
 				args,
+				desk,
 				deskDir,
 				currentChannelId: channelId,
+				senderName: context.senderName,
 				describeChannel: context.describeChannel,
-				dispatchTask: context.dispatchTask,
+				control: context.taskControl,
 			});
-		case "status":
-			return renderStatus({
+		case "status": {
+			const status = renderStatus({
 				runner: context.peekRunner(),
 				version: context.version,
 				uptimeMs: Date.now() - context.startedAt,
 			});
+			const tasks = renderTaskStatusLine(await context.taskControl.snapshot(desk).catch(() => []));
+			return tasks ? `${status}\n${tasks}` : status;
+		}
 		case "usage":
 			return renderUsageReport(getUsageLedger(), { desk, channelId }, parseUsageMode(args), new Date());
 		// Read-only prompt accounting; safe mid-turn.

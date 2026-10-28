@@ -66,7 +66,7 @@ export const EXECUTION_SECTION: PromptSectionDefinition = {
 			"## Working Contract",
 			"- For actionable requests, continue until the requested outcome exists or you are genuinely blocked. Inspect before changing and verify material results.",
 			"- State what remains unverified. Tool definitions are the source of truth for available capabilities and parameters.",
-			"- Jobs and delegations you start wake this channel on completion. Finish independent work and dispatches; when only waiting remains, end the turn without polling or check-in events.",
+			"- Jobs and delegations you start wake whoever started them — this chat, or the task whose step started them. Finish independent work and dispatches; when only waiting remains, end the turn without polling or check-in events.",
 			"- Before non-trivial use of a runtime mechanism or workspace procedure, read its guide or skill; reuse it while it remains in context.",
 		].join("\n"),
 };
@@ -97,13 +97,13 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	source: "runtime/tasks",
 	authority: "runtime-hard",
 	cacheClass: "runtime-stable",
-	requiresAllTools: ["task_create", "task_update", "task_close"],
+	requiresAllTools: ["task_create", "task_close"],
 	maxChars: 600,
 	overflow: "error",
 	render: () =>
 		[
 			"## Persistent Work",
-			"Use a task when work must survive this turn, has several pieces to delegate, or needs to wait on results; you lead it — split, delegate, check, report. Recurring or scheduled work is an event with a task template. Chat creates or manages tasks; the runtime drives them in task sessions. Follow the task's contract and runtime guide without expanding its scope.",
+			"Use a task when work must survive this turn, has several pieces to delegate, or needs to wait on results; you lead it — split, delegate, check, report. Recurring or scheduled work is an event with a task template. Chat creates and manages tasks; the runtime runs each in the background in its own session, in parallel with this chat. Follow the task's contract and runtime guide without expanding its scope.",
 		].join("\n"),
 };
 

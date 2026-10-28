@@ -8,6 +8,7 @@ import type { FileStore } from "../file-store.js";
 import type { DeskJobManager } from "../jobs/manager.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
+import type { TaskControl, TaskSessionContext } from "../tasks/control.js";
 import { createBashTool } from "./bash.js";
 import { type ToolDetailsKind, withToolDetails } from "./contract/details.js";
 import { SUBAGENT_TOOL_NAMES } from "./contract/names.js";
@@ -22,14 +23,17 @@ import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillTool } from "./skill.js";
 import {
+	createTaskAskTool,
 	createTaskCloseTool,
 	createTaskCreateTool,
 	createTaskListTool,
 	createTaskLogTool,
-	createTaskStepEndTool,
-	createTaskUpdateTool,
+	createTaskMessageTool,
+	createTaskPauseTool,
+	createTaskReportTool,
+	createTaskResumeTool,
+	createTaskWaitTool,
 } from "./task-manage/factory.js";
-import type { TaskStepCost } from "./task-manage/types.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWriteTool } from "./write.js";
@@ -86,15 +90,13 @@ export interface ToolBuildContext {
 	 */
 	sendMedia?: SendMedia;
 	/**
-	 * Present only inside a task loop step (spec 051, D3): which task this tool set belongs to.
-	 * `task_step_end` is registered only when this is set, so the chat surface can never end a
-	 * step that is not running.
+	 * Present only in a task session (spec 064, D13/D21): which task this tool set belongs to and how
+	 * its step reports back to the lane. The step tools (`task_report`, `task_ask`, `task_wait`) are
+	 * registered only when this is set, and the chat management tools only when it is not.
 	 */
-	taskLoop?: { taskId: string };
-	/** Tools completed in the current turn; only the task loop reads it. */
-	getToolsUsed?: () => string[];
-	/** The current turn's own model cost so far; only the task loop reads it. */
-	getStepCost?: () => TaskStepCost;
+	taskSession?: TaskSessionContext;
+	/** Chat only: the lane's control port, behind `task_message`, `task_pause`, `task_resume` and the live part of `task_list`. */
+	taskControl?: TaskControl;
 }
 
 export interface ToolRegistration {
@@ -133,9 +135,26 @@ function taskToolOptions(ctx: ToolBuildContext) {
 	return {
 		jobManager: req(ctx.jobManager, "jobManager"),
 		runManager: req(ctx.runManager, "runManager"),
+		desk: req(ctx.desk, "desk"),
 		deskDir: ctx.deskDir,
 		channelId: ctx.channelId,
+		control: ctx.taskControl,
+		session: ctx.taskSession,
 	};
+}
+
+/** `tools.tasks` is the master switch for the whole background-task mechanism: the lane and the per-turn agenda honor it too. */
+function tasksEnabled(ctx: ToolBuildContext): boolean {
+	return ctx.toolsConfig?.tools.tasks.enabled !== false;
+}
+
+/** Chat-only tools: managing tasks is the chat's job, a task session works inside one. */
+function chatTasksEnabled(ctx: ToolBuildContext): boolean {
+	return tasksEnabled(ctx) && ctx.taskSession === undefined;
+}
+
+function taskSessionEnabled(ctx: ToolBuildContext): boolean {
+	return tasksEnabled(ctx) && ctx.taskSession !== undefined;
 }
 
 function webEnabled(ctx: ToolBuildContext): boolean {
@@ -162,7 +181,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				interceptorEnabled: ctx.toolsConfig?.tools.bashInterceptor.enabled === true,
 				// Sub-agents get no channel dir (their guard context has none); their spill stays in tmpdir.
 				...(ctx.forSubagent ? {} : { deskDir: ctx.deskDir }),
-				...(ctx.taskLoop ? { boundTaskId: ctx.taskLoop.taskId } : {}),
+				...(ctx.taskSession ? { boundTaskId: ctx.taskSession.taskId } : {}),
 				...(ctx.jobManager ? { jobManager: ctx.jobManager } : {}),
 				...(ctx.bashDefaultTimeoutSeconds !== undefined
 					? { defaultTimeoutSeconds: ctx.bashDefaultTimeoutSeconds }
@@ -260,45 +279,57 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				commandGuardConfig: ctx.securityConfig.commandGuard,
 			}),
 	},
-	// tools.tasks is the master switch for the whole autonomous long-running task mechanism;
-	// the TaskDriver and per-turn task digest honor the same flag. Five tools, one per payload
-	// shape (spec 046, D3.1) — all share it, since none is meaningful without the others.
+	// Spec 064, D21: two surfaces. Chat creates, lists, messages, pauses, resumes, closes and reads
+	// tasks; a task session reads, closes and talks to the user. Each tool has one call shape (spec 046).
 	{
 		name: "task_list",
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		enabledBy: chatTasksEnabled,
 		create: (ctx) => createTaskListTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "task_create",
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		enabledBy: chatTasksEnabled,
 		create: (ctx) => createTaskCreateTool(taskToolOptions(ctx)),
 	},
 	{
-		name: "task_update",
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
-		create: (ctx) => createTaskUpdateTool(taskToolOptions(ctx)),
-	},
-	{
 		name: "task_close",
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		enabledBy: tasksEnabled,
 		create: (ctx) => createTaskCloseTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "task_log",
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		enabledBy: tasksEnabled,
 		create: (ctx) => createTaskLogTool(taskToolOptions(ctx)),
 	},
 	{
-		name: "task_step_end",
-		// Only inside a task session: it is the loop's closing move, not a chat action.
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false && ctx.taskLoop !== undefined,
-		create: (ctx) =>
-			createTaskStepEndTool({
-				...taskToolOptions(ctx),
-				taskId: ctx.taskLoop?.taskId,
-				getToolsUsed: ctx.getToolsUsed,
-				getStepCost: ctx.getStepCost,
-			}),
+		name: "task_message",
+		enabledBy: chatTasksEnabled,
+		create: (ctx) => createTaskMessageTool(taskToolOptions(ctx)),
+	},
+	{
+		name: "task_pause",
+		enabledBy: chatTasksEnabled,
+		create: (ctx) => createTaskPauseTool(taskToolOptions(ctx)),
+	},
+	{
+		name: "task_resume",
+		enabledBy: chatTasksEnabled,
+		create: (ctx) => createTaskResumeTool(taskToolOptions(ctx)),
+	},
+	{
+		name: "task_report",
+		enabledBy: taskSessionEnabled,
+		create: (ctx) => createTaskReportTool(taskToolOptions(ctx)),
+	},
+	{
+		name: "task_ask",
+		enabledBy: taskSessionEnabled,
+		create: (ctx) => createTaskAskTool(taskToolOptions(ctx)),
+	},
+	{
+		name: "task_wait",
+		enabledBy: taskSessionEnabled,
+		create: (ctx) => createTaskWaitTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "job",

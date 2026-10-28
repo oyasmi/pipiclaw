@@ -1,10 +1,9 @@
 /**
  * One turn of the daemon's per-channel pipeline (what a channel queue runs for each item): dispatch
- * admission, built-in commands, wake verification, the agent run — as a task step when the wake is
- * one — and the settle-and-release epilogue that runs whatever happens.
+ * admission, built-in commands, the agent run, and the settle-and-release epilogue that runs
+ * whatever happens. Task steps never come through here — they run in the task lane (spec 064).
  */
 import type { AgentRunner } from "../agent/types.js";
-import type { BootstrapPaths } from "../app/home.js";
 import type { ChannelContext, TurnOutcome } from "../channel/channel-context.js";
 import { type ChannelEvent, senderOf, type WakeEvent } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
@@ -19,20 +18,14 @@ import {
 	slashCommandName,
 } from "../commands/catalog.js";
 import { formatNoDeskReply } from "../desk/commands.js";
-import { getDeskDir } from "../desk/paths.js";
-import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { SubAgentRuntime } from "../subagents/run-registry.js";
-import { buildTaskStepBrief } from "../tasks/brief.js";
-import { consumeTaskNotice } from "../tasks/steer.js";
+import { renderStopTaskHint } from "../tasks/commands.js";
+import type { TaskControl } from "../tasks/control.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
 import { admitsSyntheticEvent, type ChannelResolution, resolvedDesk } from "./desk-runtime.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";
 import { relativeImagePaths } from "./inbound-images.js";
-import { parseDriverTaskId } from "./task-driver.js";
-import type { WakeTaskTransitionHooks } from "./task-wake.js";
-import { claimVerifiedWake } from "./task-wake.js";
 import type { TransportRegistry } from "./transports.js";
 import { canAbsorbWake, isCoalescableWake, MAX_COALESCED_WAKES, mergeCompletionWakes } from "./wake-coalescing.js";
 
@@ -91,11 +84,6 @@ function trackOutput(ctx: ChannelContext): TrackedOutput {
 	return tracked;
 }
 
-/** A task step is silent: its output never reaches the channel (only `task_step_end`'s report does, through `push`). */
-function silenceAnswers(ctx: ChannelContext): ChannelContext {
-	return { emit: () => undefined, finish: (outcome) => ctx.finish(outcome) };
-}
-
 function turnInfoOf(event: ChannelEvent): TurnInfo {
 	return {
 		channelId: event.channelId,
@@ -109,11 +97,6 @@ function turnInfoOf(event: ChannelEvent): TurnInfo {
 }
 
 export interface EventTurnDeps {
-	options: {
-		paths: BootstrapPaths;
-		/** Test-only fault seams for the atomic structured-wake task transition. */
-		wakeTransitionHooks?: Partial<Record<"job" | "subagent", WakeTaskTransitionHooks>>;
-	};
 	transports: TransportRegistry;
 	store: ChannelStore;
 	activeTasks: Set<Promise<void>>;
@@ -126,9 +109,7 @@ export interface EventTurnDeps {
 	reservedTurns: WeakSet<ChannelEvent>;
 	isShuttingDown: () => boolean;
 	getDurableDispatch: () => DurableDispatchService | undefined;
-	getJobs: () => JobRuntime;
-	getRuns: () => SubAgentRuntime;
-	getTaskDriver: () => { nudge?(): void };
+	getTaskControl: () => TaskControl | undefined;
 	/** The handler's `runRuntimeCommand`, for stateless reports typed on an idle channel. */
 	runRuntimeCommand: (event: ChannelEvent, name: RuntimeCommandName, args: string) => Promise<string>;
 }
@@ -138,96 +119,14 @@ export interface EventTurnDeps {
  * step when the wake is one), and always settle the dispatch and release the turn.
  */
 export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: ChannelEvent) => Promise<void> {
-	const {
-		options,
-		transports,
-		store,
-		activeTasks,
-		archiveIncomingMessage,
-		getRunner,
-		isShuttingDown,
-		getDurableDispatch,
-		getJobs,
-		getRuns,
-		getTaskDriver,
-	} = deps;
-
-	/**
-	 * Turn a `[TASK_DRIVER:<id>]` dispatch into a task loop step: bind the runner to the task
-	 * cycle's own session and replace the wake text with the step brief. Returns `undefined` for
-	 * every other event, which then follows the unchanged chat path.
-	 *
-	 * Binding failures fall back to the chat path rather than dropping the wake — a task that
-	 * cannot open its session should still be visible, not silently skipped.
-	 */
-	const prepareTaskStep = async (
-		event: ChannelEvent,
-		runner: AgentRunner,
-	): Promise<{ taskId: string; brief: string } | undefined> => {
-		if (event.source !== "wake") return undefined;
-		const taskId = parseDriverTaskId(event.text) ?? event.internalWake?.taskId;
-		if (!taskId) return undefined;
-		const { desk, deskDir } = runner.conversation;
-		// Admission already refused a wake for another desk (spec 058, D7); a task step bound to the
-		// wrong desk's session would run a task this runner does not own, so check once more.
-		if (event.desk !== desk) {
-			log.logWarn("taskdriver.step.desk_mismatch", "Task step refused: wake is not for this runner's desk", {
-				channelId: event.channelId,
-				fields: { taskId, eventDesk: event.desk, runnerDesk: desk },
-			});
-			return undefined;
-		}
-		try {
-			const brief = await buildTaskStepBrief({ deskDir, taskId });
-			if (!brief) return undefined;
-			await runner.bindTaskSession(taskId);
-			return { taskId, brief };
-		} catch (error) {
-			log.logWarn("taskdriver.step.start_failed", "Task step start failed", {
-				channelId: event.channelId,
-				reason: errorMessage(error),
-				fields: { taskId },
-			});
-			return undefined;
-		}
-	};
-
-	/** Deliver whatever the step asked to say, then hand the runner back to the chat session. */
-	const finishTaskStep = async (
-		runner: AgentRunner,
-		channelId: string,
-		taskId: string,
-		transport: Transport,
-	): Promise<void> => {
-		try {
-			const notice = await consumeTaskNotice(runner.conversation.deskDir, taskId);
-			if (notice) {
-				// runner.run finishes its per-turn output before returning. Sending through that
-				// finished output silently dropped successful task_step_end notifications (T-run-01).
-				const delivered = await transport.push(channelId, { text: notice });
-				if (delivered) await store.logBotResponse(channelId, notice, Date.now().toString());
-				else
-					log.logWarn("taskdriver.notice.delivery_failed", "Task notice delivery failed", {
-						channelId: channelId,
-						fields: { taskId },
-					});
-			}
-		} catch (error) {
-			log.logWarn("taskdriver.notice.delivery_failed", "Task notice delivery failed", {
-				channelId: channelId,
-				reason: errorMessage(error),
-				fields: { taskId },
-			});
-		}
-		await runner.bindChatSession();
-	};
+	const { transports, store, activeTasks, archiveIncomingMessage, getRunner, isShuttingDown, getDurableDispatch } =
+		deps;
 
 	/** Mutable state of one turn, shared by the steps below (the wake may be merged or rewritten mid-turn). */
 	interface TurnState {
 		event: ChannelEvent;
 		/** The turn's open output port, once there is one; `finishTurn` settles it if the run did not. */
 		output: TrackedOutput | undefined;
-		structuredWakeFinalized: boolean;
 		/** Other completion wakes folded into this turn; finished together with this one. */
 		absorbedDispatchIds: string[];
 		/** Only an agent run that returns without aborting or erroring can acknowledge merged notifications. */
@@ -251,7 +150,6 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			runner.endTurn();
 			return undefined;
 		}
-		const structuredWakeFinalized = event.source !== "wake" || event.internalWake === undefined;
 		let absorbedDispatchIds: string[] = [];
 		if (durable && event.source === "wake" && event.dispatchId && isCoalescableWake(event)) {
 			const primary = event;
@@ -284,7 +182,6 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		return {
 			event,
 			output: undefined,
-			structuredWakeFinalized,
 			absorbedDispatchIds,
 			mergedWakesHandled: false,
 			threw: false,
@@ -324,6 +221,16 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 				response = await deps.runRuntimeCommand(event, builtInCommand.name, builtInCommand.args);
 			} else if (isRunnerBuiltInCommand(builtInCommand)) {
 				response = await runner.handleBuiltinCommand(builtInCommand);
+				// `/stop` only reaches an idle channel's chat turn. Say so, and where a task can be
+				// stopped: tasks run apart from the chat (spec 064, D27).
+				if (builtInCommand.name === "stop") {
+					const snapshots = await deps
+						.getTaskControl()
+						?.snapshot(runner.conversation.desk)
+						.catch(() => []);
+					const hint = renderStopTaskHint(snapshots ?? []);
+					if (hint) response = `${response}\n${hint}`;
+				}
 			}
 			if (response !== undefined) {
 				// Command echoes are control-plane traffic, not conversation: sent, never archived.
@@ -355,43 +262,7 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		}
 	};
 
-	/**
-	 * A completion wake for a task's job or delegation: verified against the resource's own record
-	 * before it may reopen the task (see `claimVerifiedWake`). Plain "belongs to task" text in a
-	 * message never counts — only the producer-created `internalWake` envelope. Returns whether the
-	 * turn should still run.
-	 */
-	const verifyInternalWake = async (
-		turn: TurnState,
-		runner: AgentRunner,
-		internalWake: NonNullable<WakeEvent["internalWake"]>,
-	) => {
-		const event = turn.event as WakeEvent;
-		const { kind, resourceId, taskId: wakeTaskId } = internalWake;
-		const { desk, deskDir } = runner.conversation;
-		const claimed = await claimVerifiedWake(
-			event,
-			deskDir,
-			kind === "job" ? getJobs().get(desk) : getRuns().get(desk),
-			options.wakeTransitionHooks?.[kind],
-		);
-		if (!claimed) {
-			log.logWarn("dispatch.wake.unverified", "Unverifiable wake ignored", {
-				channelId: event.channelId,
-				fields: { kind, resourceId, taskId: wakeTaskId },
-			});
-			turn.structuredWakeFinalized = true;
-			return false;
-		}
-		await claimed.finish();
-		turn.structuredWakeFinalized = true;
-		// Drop without a turn only when something else is still driving this task (a sibling
-		// wake in the same fan-out already reopened it); in every other case nobody else will
-		// look at this result, so it still reaches a normal turn.
-		return claimed.activated || !claimed.taskStillDriven;
-	};
-
-	/** The turn proper: archive, route commands, verify wakes, then run the agent (as a task step if one). */
+	/** The turn proper: archive, route commands, then run the agent. */
 	const executeTurn = async (
 		turn: TurnState,
 		runner: AgentRunner,
@@ -440,39 +311,21 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			ctx: { channelId: event.channelId, userName: sender.userName },
 			fields: { messageLength: event.text.length, source: backgroundOnly ? "event" : "message" },
 		});
-		if (
-			event.source === "wake" &&
-			event.internalWake &&
-			!(await verifyInternalWake(turn, runner, event.internalWake))
-		)
-			return;
-		// Verified job/run wakes that activate a task are task steps too. Verification must happen
-		// first: routing directly from user-controlled wake text would grant task-only tools.
-		const taskStep = await prepareTaskStep(turn.event, runner);
-		if (taskStep) {
-			turn.event = { ...turn.event, text: taskStep.brief };
-		}
 		// Background wakes deliver their result, not their process: no progress card, no
 		// thinking stream, nothing to clean up when a check-in ends `[SILENT]`. Awaited completions
 		// deliver their result too, without opening another progress card.
-		// Spec 051, D3: a task-driver dispatch runs as a *task step* — in the task cycle's own
-		// session, with a brief instead of the wake text, and silent unless the step asked for a
-		// notify. Everything below (busy state, /stop, delivery) is unchanged; only which session
-		// the turn is bound to, and what reaches the channel, differ.
 		const info = turnInfoOf(turn.event);
-		const opened = transport.openTurn(info, { quiet: backgroundOnly || taskStep !== undefined });
-		turn.output = trackOutput(taskStep ? silenceAnswers(opened) : opened);
+		turn.output = trackOutput(transport.openTurn(info, { quiet: backgroundOnly }));
 		const result = await runner.run(info, turn.output.ctx, store);
 		if (!deps.isCurrentRunner(runner)) return;
 		turn.mergedWakesHandled = result.stopReason !== "aborted" && result.stopReason !== "error";
-		if (taskStep) await finishTaskStep(runner, turn.event.channelId, taskStep.taskId, transport);
 
 		if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
 			log.logInfoEvent("agent.turn.stopped", "Turn stopped", { channelId: turn.event.channelId });
 		}
 	};
 
-	/** Always runs: finish the output, settle the dispatch records, release the turn, nudge the task driver. */
+	/** Always runs: finish the output, settle the dispatch records, release the turn. */
 	const finishTurn = async (turn: TurnState, runner: AgentRunner): Promise<void> => {
 		const { event } = turn;
 		// The runner finishes the output when it runs; a command, or a turn that failed before the
@@ -502,8 +355,7 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			runner.endTurn();
 			return;
 		}
-		if (turn.structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
-		else await getDurableDispatch()?.markRetryable(event.dispatchId);
+		await getDurableDispatch()?.markCompleted(event.dispatchId);
 		// A stopped turn has not finished handling its merged notifications. Release their
 		// claims even if /stop's asynchronous cancelChannel reset raced admission or failed.
 		const stopped = !turn.mergedWakesHandled || runner.getTurnStatus().stopRequested;
@@ -512,31 +364,6 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			else await getDurableDispatch()?.markCompleted(absorbedId);
 		}
 		runner.endTurn();
-		// A finished turn may have written task files; rescan now so `outcome: continue`
-		// queues the next step immediately instead of waiting out the current sleep.
-		getTaskDriver().nudge?.();
-	};
-
-	/**
-	 * A task-bound wake dropped at admission because its channel left the wake's desk while it was
-	 * queued. No turn runs, but the business side settles exactly as when the producer suppresses
-	 * the wake itself: the owner verifies and claims it and the task's `work` ticket is redeemed, so
-	 * the task resumes as soon as its channel is bound back instead of waiting out the backstop.
-	 */
-	const settleDroppedTaskWake = async (event: WakeEvent): Promise<void> => {
-		const wake = event.internalWake;
-		if (!wake) return;
-		try {
-			const owner = wake.kind === "job" ? getJobs().get(event.desk) : getRuns().get(event.desk);
-			const claimed = await claimVerifiedWake(event, getDeskDir(options.paths.workspaceDir, event.desk), owner);
-			await claimed?.finish();
-		} catch (error) {
-			log.logWarn("dispatch.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
-				channelId: event.channelId,
-				reason: errorMessage(error),
-				fields: { dispatchId: event.dispatchId, taskId: wake.taskId },
-			});
-		}
 	};
 
 	/** Release a turn `reserveEvent` began for an event that admission then refused. */
@@ -635,7 +462,6 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 					},
 				});
 				releaseReservation(inboundEvent);
-				await settleDroppedTaskWake(inboundEvent);
 				await getDurableDispatch()?.markCompleted(inboundEvent.dispatchId);
 				return;
 			}

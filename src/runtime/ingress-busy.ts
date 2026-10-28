@@ -6,14 +6,11 @@
 import { forceEndStuckTurnAfterStop } from "../agent/stop-watchdog.js";
 import type { AgentRunner } from "../agent/types.js";
 import type { HumanEvent } from "../channel/channel-event.js";
-import type { StopOutcome } from "../channel/ingress.js";
 import { formatMissingQueueMessage, formatSteerQueued } from "../commands/catalog.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { pauseTask as pauseStoredTask } from "../tasks/store.js";
 import { relativeImagePaths } from "./inbound-images.js";
 import type { IngressDeps } from "./ingress-deps.js";
-import { parseDriverTaskId } from "./task-driver.js";
 
 function isNoRunningTaskQueueError(err: unknown): boolean {
 	return err instanceof Error && err.message === "No task is currently running.";
@@ -80,24 +77,6 @@ export function createBusyHandlers(
 		if (runner.interruptCompaction()) {
 			log.logInfoEvent("agent.compaction.interrupted", "Compaction interrupted for a new user message", {
 				channelId: event.channelId,
-			});
-			return { kind: "requeue", text: trimmedQueueText };
-		}
-
-		// A task step runs in the task's own session and is muted: a steer here would land in
-		// the background task's context and its answer would never reach the user, while the
-		// message itself is kept out of the chat session. Run it as the next chat turn instead.
-		const taskLoop = runner.getTaskLoop();
-		if (taskLoop) {
-			if (!quiet) {
-				await say(
-					event,
-					`后台任务 \`${taskLoop.taskId}\` 正在执行一步，你的消息会在这一步结束后处理；要给该任务补充指示，用 \`/tasks steer ${taskLoop.taskId} <内容>\`。`,
-				);
-			}
-			log.logEvent("info", "agent.turn.followup_queued", "Message deferred past a task step", {
-				ctx: { channelId: event.channelId, userName: event.userName },
-				fields: { messageLength: trimmedQueueText.length, taskId: taskLoop.taskId },
 			});
 			return { kind: "requeue", text: trimmedQueueText };
 		}
@@ -206,28 +185,12 @@ export function createBusyHandlers(
 		return true;
 	}
 
-	/** `/stop`: abort the running turn, drop what was queued behind it, and pause the task it was a step of. */
-	async function handleStop(channelId: string): Promise<StopOutcome> {
+	/** `/stop`: abort the running turn and drop what was queued behind it. Tasks run apart from the chat and are stopped with `/tasks pause` (spec 064, D27). */
+	async function handleStop(channelId: string): Promise<void> {
 		const runner = channelRunners.get(channelId);
-		let pausedTaskId: string | undefined;
 		if (runner?.isBusy()) {
-			// The runner ends the turn's output at once (the card is closed, late events dropped),
-			// before the task is paused below.
+			// The runner ends the turn's output at once (the card is closed, late events dropped).
 			runner.requestStop();
-			// Stopping a task step stops the task: otherwise the driver would queue the next step
-			// straight away. The step may not be bound to its session yet, so fall back to the text.
-			const taskId = runner.getTaskLoop()?.taskId ?? parseDriverTaskId(runner.getTurnStatus().taskText);
-			if (taskId) {
-				await pauseStoredTask(runner.conversation.deskDir, taskId, {
-					by: "user",
-					reason: "用户 /stop 中止了该任务的当前步骤。",
-				});
-				pausedTaskId = taskId;
-				log.logInfoEvent("tasks.task.paused_on_stop", "Task paused on /stop", {
-					channelId: channelId,
-					fields: { taskId },
-				});
-			}
 			// Drop queued-but-not-started messages so a burst does not keep
 			// running after the user asked to halt; abort the in-flight one.
 			const dropped = queues.clearPending(channelId);
@@ -257,7 +220,6 @@ export function createBusyHandlers(
 				});
 			log.logInfoEvent("agent.turn.stop_requested", "Stop requested", { channelId: channelId });
 		}
-		return { pausedTaskId };
 	}
 
 	return { handleBusyMessage, handleStop, cancelRunningTurn };

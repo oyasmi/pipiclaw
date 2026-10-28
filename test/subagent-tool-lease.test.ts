@@ -314,6 +314,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		let releasePrompt: (() => void) | undefined;
 		const tool = createSubAgentInlineTool({
 			...testManagers(channelId),
+			boundTaskId: "ship",
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -344,7 +345,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			mutates: "write",
 			task: "Run the acceptance checks.",
 			purpose: "verify",
-			taskId: "ship",
 		});
 		for (let attempt = 0; attempt < 100 && !releasePrompt; attempt++) {
 			await new Promise((resolve) => setTimeout(resolve, 5));
@@ -414,7 +414,6 @@ Check things.
 				agent: "builder",
 				task: "Check it.",
 				purpose: "verify",
-				taskId: "ship",
 			}),
 		).rejects.toThrow(/exec harness/);
 	});

@@ -7,7 +7,7 @@ order: 20
 
 # 记忆与学习
 
-需要跨回合保留或找回信息时，先按生命周期选落点；文件位置不清才读 `runtime-orientation.md` 的“文件地图”。任务步骤没有 `memory_save`，经验先记本任务的 `note`。
+需要跨回合保留或找回信息时，先按生命周期选落点；文件位置不清才读 `runtime-orientation.md` 的“文件地图”。任务步骤没有 `memory_save`，经验写进本步最后的回复或 `task_close` 的 `note`。
 
 记忆属于当前工位。同一工位的所有频道——私聊、群和终端——共享 memory、journal，以及 `session_search` 能检索到的原始对话；其他工位的这些内容不会自动出现，工位里积累的偏好也不会自动变成所有工位的规则。
 
@@ -22,7 +22,7 @@ order: 20
 | 项目的稳定事实、决策、约束 | 工位 memory，`type: project` |
 | 路径、URL、命令、联系人、id | 工位 memory，`type: reference` |
 | 今天发生了什么、定了什么、卡在哪 | journal，后台反思自动写 |
-| 未闭合工作的目标、状态、证据 | task 契约与循环日志 |
+| 未闭合工作的目标、状态、证据 | task 契约与任务记录 |
 | 机器安装、依赖、环境变量来源 | workspace `ENVIRONMENT.md` |
 | 多次验证有效的跨任务流程 | workspace `skills/` |
 
@@ -48,7 +48,7 @@ order: 20
 
 后台反思同时维护 journal 与 memory：明确的高必要性约束直接永久保留；日常运作知识默认试用 30 天，后续对话依赖或印证后转正，否则到期移除，之后仍可重新学到。用户明确保存的记忆立即永久。模型不需要手动维护这些期限。
 
-任务内教训先写 `note`；确实约束后续实施的，写进契约的 Goal 或对应 DoD 项。周期工作的持久改进（要求、检查项）在 `report` 里提给用户，由聊天侧在用户确认后更新事件模板，不写进 memory。
+任务内教训先写进本步最后的回复（成为这一步的记录）或 `task_close` 的 `note`；确实约束后续实施的，写进契约的 Goal 或对应 DoD 项。周期工作的持久改进（要求、检查项）用 `task_report` 提给用户，由聊天侧在用户确认后更新事件模板，不写进 memory。
 
 流程多次验证有效且能跨任务复用，才写为 skill。使用 **workspace 绝对路径**下的 `skills/<name>/SKILL.md`；已有技能用 `edit`。frontmatter 必须有与目录一致的 kebab-case `name` 和说明触发条件的 `description`。
 

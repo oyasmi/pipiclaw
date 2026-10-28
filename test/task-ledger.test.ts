@@ -11,11 +11,6 @@ import {
 	renderTaskDocument,
 	uncheckedTaskAcceptanceItems,
 } from "../src/tasks/contract.js";
-import type { Ticket } from "../src/tasks/ticket.js";
-
-const NOW = new Date("2026-09-05T10:00:00+08:00");
-const FUTURE: Ticket = { kind: "time", at: "2026-09-06T10:00:00+08:00", by: "2026-09-06T10:00:00+08:00" };
-const STALE: Ticket = { kind: "time", at: "2026-09-04T10:00:00+08:00", by: "2026-09-04T10:00:00+08:00" };
 
 describe("task contract body (spec 052, §3.4)", () => {
 	it("renders Goal, DoD and numbered Work Items — and nothing the runtime would later rewrite", () => {
@@ -73,26 +68,42 @@ describe("readActiveTasks", () => {
 		await rm(root, { recursive: true, force: true });
 	});
 
-	it("sorts runnable work first, then expired parks, then paused tasks", async () => {
-		await writeFile(join(tasksDir, "later.md"), doc({ state: "parked", ticket: FUTURE }, "# Later"));
-		await writeFile(join(tasksDir, "now.md"), doc({ state: "open" }, "# Now"));
-		await writeFile(join(tasksDir, "overdue.md"), doc({ state: "parked", ticket: STALE }, "# Overdue"));
+	it("lists what is happening first, then what waits on the user, then the rest — oldest project first within a state", async () => {
+		const since = "2026-09-05T10:00:00+08:00";
+		const usage = (startedAt: string) => ({ startedAt, steps: 0, usd: 0, usdEstimated: false });
 		await writeFile(
 			join(tasksDir, "stopped.md"),
-			doc({ state: "open", paused: { by: "user", reason: "hold", at: "2026-01-01T00:00:00+08:00" } }, "# Stopped"),
+			doc({ state: "paused", paused: { by: "user", reason: "hold", at: since } }, "# Stopped"),
 		);
+		await writeFile(
+			join(tasksDir, "later.md"),
+			doc({ state: "waiting", waiting: { kind: "time", until: since, since } }, "# Later"),
+		);
+		await writeFile(
+			join(tasksDir, "young.md"),
+			doc({ state: "queued", usage: usage("2026-09-05T09:00:00+08:00") }, "# Young"),
+		);
+		await writeFile(
+			join(tasksDir, "old.md"),
+			doc({ state: "queued", usage: usage("2026-09-01T09:00:00+08:00") }, "# Old"),
+		);
+		await writeFile(
+			join(tasksDir, "asks.md"),
+			doc({ state: "waiting", waiting: { kind: "user", question: "q", since } }, "# Asks"),
+		);
+		await writeFile(
+			join(tasksDir, "results.md"),
+			doc({ state: "waiting", waiting: { kind: "work", since } }, "# Results"),
+		);
+		await writeFile(join(tasksDir, "now.md"), doc({ state: "running" }, "# Now"));
 
-		const entries = await readActiveTasks(tasksDir, NOW.getTime());
-		expect(entries.map((entry) => entry.id)).toEqual(["now", "overdue", "later", "stopped"]);
-		// An expired park is work the runtime owes an answer for, so it must outrank an ordinary one.
-		expect(entries.find((entry) => entry.id === "overdue")?.expired).toBe(true);
-		expect(entries.find((entry) => entry.id === "later")?.expired).toBe(false);
-		expect(entries.find((entry) => entry.id === "stopped")?.runnable).toBe(false);
+		const entries = await readActiveTasks(tasksDir);
+		expect(entries.map((entry) => entry.id)).toEqual(["now", "asks", "results", "old", "young", "later", "stopped"]);
 	});
 
-	it("returns a runnable repair entry for unreadable frontmatter", async () => {
+	it("lists a task with unreadable frontmatter, flagged, rather than hiding it", async () => {
 		await writeFile(join(tasksDir, "broken.md"), "no frontmatter");
-		const [entry] = await readActiveTasks(tasksDir, NOW.getTime());
-		expect(entry).toMatchObject({ id: "broken", runnable: true, readable: false });
+		const [entry] = await readActiveTasks(tasksDir);
+		expect(entry).toMatchObject({ id: "broken", readable: false });
 	});
 });

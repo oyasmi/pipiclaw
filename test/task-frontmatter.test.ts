@@ -8,60 +8,76 @@ import {
 	parseTaskFrontmatter,
 	renderTaskFrontmatter,
 	type TaskFrontmatter,
+	taskStateLabel,
 } from "../src/tasks/frontmatter.js";
 import { resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { readStoredTask, writeStoredTask } from "../src/tasks/store.js";
-import type { Ticket } from "../src/tasks/ticket.js";
-
-const TICKET: Ticket = { kind: "ask", asked: "merge?", by: "2099-01-01T00:00:00+08:00" };
 
 afterEach(async () => {
 	await resetTaskLogAppenders();
 });
 
-describe("task frontmatter contract (spec 052, §3.3)", () => {
-	it("round-trips every field without loss", () => {
+describe("task frontmatter contract (spec 064, D2)", () => {
+	it("round-trips every field without loss, in the fixed render order", () => {
 		const fields: TaskFrontmatter = {
-			state: "parked",
-			paused: { by: "runtime", reason: "budget", at: "2026-09-05T10:00:00+08:00" },
+			state: "waiting",
+			waiting: { kind: "user", question: "merge?", since: "2026-09-05T10:00:00+08:00" },
 			// A real group id is base64: `/`, `+` and `=` must survive as plain text (spec 058, D13).
 			channel: "dingtalk:group:cidL1/dcU8u+SV7I9YuUXLeXg==",
 			origin: "weekly-report",
-			ticket: { kind: "work", refs: ["run_a", "job_b"], by: "2099-01-01T00:00:00+08:00" },
-			usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 3, usd: 1.5, usdEstimated: true, expired: 1 },
+			usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 3, usd: 1.5, usdEstimated: true },
 			budget: { steps: 10, usd: 5 },
 		};
 		const rendered = renderTaskFrontmatter(fields);
 		expect(parseTaskFrontmatter(`${rendered}\n# T\n`).fields).toEqual(fields);
+		const keys = rendered.split("\n").map((line) => line.split(":")[0]);
+		expect(keys).toEqual(["---", "state", "waiting", "channel", "origin", "usage", "budget", "---"]);
 	});
 
-	// INV-1: the pair cannot be written wrong, so nothing has to diagnose it afterwards.
-	it("keeps `parked` and `ticket` in lockstep in both directions", () => {
-		expect(normalizeTaskFrontmatter({ state: "parked" }).state).toBe("open");
-		expect(normalizeTaskFrontmatter({ state: "open", ticket: TICKET }).ticket).toBeUndefined();
-		const parsed = parseTaskFrontmatter(`${renderTaskFrontmatter({ state: "parked", ticket: TICKET })}\n# T\n`);
-		expect(parsed.fields).toMatchObject({ state: "parked", ticket: TICKET });
+	// INV-3: the pairs cannot be written wrong, so nothing has to diagnose them afterwards.
+	it("keeps `waiting` / `paused` in lockstep with their state in both directions", () => {
+		const waiting = { kind: "work" as const, since: "2026-09-05T10:00:00+08:00" };
+		const paused = { by: "user" as const, reason: "hold", at: "2026-09-05T10:00:00+08:00" };
+		expect(normalizeTaskFrontmatter({ state: "waiting" }).state).toBe("queued");
+		expect(normalizeTaskFrontmatter({ state: "paused" }).state).toBe("queued");
+		expect(normalizeTaskFrontmatter({ state: "running", waiting, paused })).toMatchObject({
+			waiting: undefined,
+			paused: undefined,
+		});
+		expect(normalizeTaskFrontmatter({ state: "paused", paused })).toMatchObject({ state: "paused", paused });
 	});
 
-	it("drops a park that survives into an archived document, keeping its delivery channel", () => {
-		const fields = normalizeTaskFrontmatter({ state: "parked", ticket: TICKET, outcome: "completed" });
-		expect(fields).toMatchObject({ state: "done", ticket: undefined, paused: undefined });
-		const archived = renderTaskFrontmatter({ state: "done", outcome: "cancelled", channel: "dingtalk:dm:1" });
+	it("drops live fields from an archived document, keeping its report channel", () => {
+		const fields = normalizeTaskFrontmatter({
+			state: "waiting",
+			waiting: { kind: "work", since: "2026-09-05T10:00:00+08:00" },
+			outcome: "completed",
+		});
+		expect(fields).toMatchObject({ waiting: undefined, paused: undefined });
+		const archived = renderTaskFrontmatter({ state: "queued", outcome: "cancelled", channel: "dingtalk:dm:1" });
+		expect(archived).not.toContain("state:");
 		expect(parseTaskFrontmatter(`${archived}\n# T\n`).fields.channel).toBe("dingtalk:dm:1");
 	});
 
-	it("fails open to a live task when the block is missing or corrupt", () => {
-		for (const content of ["# no frontmatter\n", "---\nnot: closed\n"]) {
+	it("fails open to a listed but unreadable task when the block is missing or in a retired shape", () => {
+		for (const content of [
+			"# no frontmatter\n",
+			"---\nnot: closed\n",
+			"---\nstate: parked\nticket: {}\n---\n# T\n",
+		]) {
 			const parsed = parseTaskFrontmatter(content);
 			expect(parsed.readable, content).toBe(false);
-			expect(parsed.fields.state, content).toBe("open");
+			expect(parsed.fields.state, content).toBe("queued");
 		}
 	});
 
-	it("ignores a ticket whose backstop is unreadable instead of trusting it", () => {
-		const parsed = parseTaskFrontmatter('---\nstate: parked\nticket: {"kind":"ask","asked":"x"}\n---\n# T\n');
-		expect(parsed.fields.ticket).toBeUndefined();
-		expect(parsed.fields.state).toBe("open");
+	it("names the state once, for everyone", () => {
+		const since = "2026-09-05T10:00:00+08:00";
+		expect(taskStateLabel({ state: "waiting", waiting: { kind: "work", since } })).toBe("等结果");
+		expect(taskStateLabel({ state: "waiting", waiting: { kind: "user", question: "q", since } })).toBe("等你回复");
+		expect(
+			taskStateLabel({ state: "waiting", waiting: { kind: "time", until: "2026-10-12T09:00:00+08:00", since } }),
+		).toBe("等到 10-12 09:00");
 	});
 });
 
@@ -71,7 +87,7 @@ describe("the runtime never rewrites the body (INV-6)", () => {
 		await mkdir(join(dir, "tasks"), { recursive: true });
 		const path = join(dir, "tasks", "verbose.md");
 		const body = `# Verbose\n\n## Goal\n${"g".repeat(6_000)}\n\n## DoD\n- [ ] done\n\n## Work Items\n- [ ] W1 thing\n`;
-		await writeFile(path, renderTaskDocument({ state: "open" }, body));
+		await writeFile(path, renderTaskDocument({ state: "queued" }, body));
 
 		const document = await readStoredTask(dir, "verbose");
 		document!.fields.usage = {
@@ -79,7 +95,6 @@ describe("the runtime never rewrites the body (INV-6)", () => {
 			steps: 1,
 			usd: 0,
 			usdEstimated: false,
-			expired: 0,
 		};
 		await writeStoredTask(document!);
 

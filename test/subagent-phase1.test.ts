@@ -352,6 +352,7 @@ describe("sub-agent tool", () => {
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
 			...testManagers("dingtalk:dm:123", deskDir),
+			boundTaskId: "ship",
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -376,7 +377,6 @@ describe("sub-agent tool", () => {
 			tools: ["read", "bash"],
 			task: "Run the acceptance plan.",
 			purpose: "verify",
-			taskId: "ship",
 			item: "W1",
 		});
 		// spec 041: the run's own id, minted by the manager — never the dispatching tool call's id.
@@ -397,7 +397,7 @@ describe("sub-agent tool", () => {
 		await resetTaskLogAppenders();
 	});
 
-	it("binds a delegation made inside a task session to that task, and rejects a foreign task or an unknown item", async () => {
+	it("binds a delegation made inside a task session to that task, and rejects an unknown item or an item outside a task", async () => {
 		const workspaceDir = createTempWorkspace();
 		const deskDir = join(workspaceDir, "dingtalk:dm:123");
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
@@ -425,10 +425,9 @@ describe("sub-agent tool", () => {
 		});
 		const base = { workingDirectory: workspaceDir, systemPrompt: "Build.", task: "Build it." };
 
-		// No taskId passed: the session's own task is bound automatically.
+		// The session's own task is bound automatically; the model has no parameter to say otherwise.
 		const bound = await tool.execute("c1", { ...base, item: "W1" });
 		expect(bound.details).toMatchObject({ taskId: "lead" });
-		await expect(tool.execute("c2", { ...base, taskId: "other" })).rejects.toThrow(/drop taskId/);
 		await expect(tool.execute("c3", { ...base, item: "W9" })).rejects.toThrow(/no Work Item "W9".*W1/);
 		await resetTaskLogAppenders();
 	});

@@ -25,8 +25,6 @@ import type {
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict } from "./workspace-lease.js";
 import { snapshotWorkspace } from "./workspace-summary.js";
 
-const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
-
 function safeRunSegment(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 48) || "run";
 }
@@ -79,29 +77,24 @@ function resolveRunWorkingDirectory(requested: string | undefined, options: SubA
 
 async function prepareRunContext(
 	runId: string,
-	params: Pick<DelegationParams, "purpose" | "taskId" | "item" | "workingDirectory">,
+	params: Pick<DelegationParams, "purpose" | "item" | "workingDirectory">,
 	options: SubAgentToolOptions,
 ): Promise<SubAgentRunContext> {
 	const purpose = params.purpose ?? "work";
-	let taskId = params.taskId?.trim() || undefined;
-	// Inside a task session the binding is automatic, like `bash`'s: a delegation from a task step
-	// belongs to that task, so the leader never has to remember to pass it (spec 052, D4).
-	if (options.boundTaskId) {
-		if (taskId && taskId !== options.boundTaskId) {
-			throw new RecoverableToolError(
-				`This is task ${options.boundTaskId}'s session — drop taskId (it is bound automatically); "${taskId}" does not belong here.`,
-			);
-		}
-		taskId = options.boundTaskId;
-	}
+	// A delegation belongs to the task whose step started it, and to no task when started in chat
+	// (spec 064, INV-8): the model has no parameter to choose.
+	const taskId = options.boundTaskId;
 	const item = params.item?.trim() || undefined;
-	if (item && !taskId) throw new RecoverableToolError("item names a Work Item of a task; pass taskId too.");
-	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new RecoverableToolError(`Invalid taskId: ${taskId}`);
+	if (item && !taskId) {
+		throw new RecoverableToolError(
+			"item names a Work Item of a task and is only valid inside a task step. Omit item for a delegation started from chat; to hand work to a task, tell it with task_message and let its leader delegate.",
+		);
+	}
 	if (taskId) {
 		const task = await readStoredTask(options.deskDir, taskId);
 		if (!task) {
 			throw new RecoverableToolError(
-				`Task ${taskId} does not exist. Create it with task_create before delegating task-owned work.`,
+				`Task ${taskId} no longer exists, so this delegation cannot be bound to it. End the step.`,
 			);
 		}
 		if (item && !findTaskItem(task.body, item)) {
@@ -109,7 +102,7 @@ async function prepareRunContext(
 				?.items.map((entry) => entry.id)
 				.join(", ");
 			throw new RecoverableToolError(
-				`Task ${taskId} has no Work Item "${item}"${known ? ` (known: ${known})` : " (it has no Work Items yet — add one with task_update first)"}.`,
+				`Task ${taskId} has no Work Item "${item}"${known ? ` (known: ${known})` : " (it has no Work Items yet — add one to the contract with edit first)"}.`,
 			);
 		}
 	}

@@ -1,17 +1,19 @@
 /**
- * `/tasks`: the user's control path for the channel's long-horizon tasks (list, show, log, pause,
- * resume, run, reply, steer, archive, doctor).
+ * `/tasks`: the user's control path for the desk's long-horizon tasks (list, show, log, msg, pause,
+ * resume, cancel, archive, doctor). Every state change goes through the `TaskControl` port (spec 064,
+ * D25); this module only parses, renders and calls it.
  */
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
-import { formatSpanZh } from "../shared/format.js";
+import { formatElapsedZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { buildTaskBoard, renderTaskBoardForUser } from "./board.js";
 import { normalizeTaskId, readActiveTasks, type TaskLedgerEntry } from "./contract.js";
+import type { TaskControl, TaskLiveSnapshot } from "./control.js";
 import { type TaskBudget, taskStateLabel } from "./frontmatter.js";
 import {
 	readTaskLog,
@@ -20,35 +22,26 @@ import {
 	taskLogIsArchived,
 	taskLogPath,
 } from "./loop-log.js";
-import { withTaskMutation } from "./mutation-lock.js";
-import { hasTaskSteer, queueTaskSteer } from "./steer.js";
-import {
-	archivedTaskPath,
-	pauseTask as pauseTaskDocument,
-	readStoredTask,
-	redeemTicket,
-	resumeTask as resumeTaskDocument,
-	taskPath,
-	updateStoredTask,
-} from "./store.js";
-import { describeTicketForUser } from "./ticket.js";
+import { archivedTaskPath, readStoredTask, taskPath } from "./store.js";
 
 /** What `/tasks` needs to say about a delivery channel (structurally `channel/channel-id.ts`'s `ChannelDescription`). */
 interface TaskChannelDescription {
 	label: string;
-	/** Still bound to this desk; false means the task is suspended (spec 058, D8). */
+	/** Still bound to this desk; false means the task is frozen (spec 058, D8). */
 	boundHere: boolean;
 }
 
 export interface HandleTasksCommandOptions {
 	args: string;
+	desk: string;
 	/** The desk directory; tasks live in `<deskDir>/tasks/`. */
 	deskDir: string;
 	/** The channel the command was typed in: a task delivering elsewhere names its channel. */
 	currentChannelId: string;
+	/** Who is typing, for the `message` record a `/tasks msg` writes. */
+	senderName: string;
 	describeChannel: (channelId: string) => TaskChannelDescription;
-	/** Optional immediate task wake, available in the long-lived DingTalk runtime. */
-	dispatchTask?: (id: string) => Promise<boolean>;
+	control: TaskControl;
 }
 
 /** `/tasks show <id>` contract excerpt; the full file is always readable at its own path. */
@@ -57,8 +50,8 @@ const SHOW_LOG_LINES = 5;
 /** `/tasks log <id>`: the most recent records; older ones are in the `.jsonl` it names. */
 const LOG_LINES = 15;
 const ARCHIVE_LIST_LIMIT = 20;
-/** A backstop this far past due means the driver is not running, not that it is merely about to act. */
-const EXPIRED_GRACE_MS = 60 * 60 * 1000;
+/** A work wait this old with nothing in flight means the lane is not running, not that it is about to act. */
+const STALE_WORK_WAIT_MS = 60 * 60 * 1000;
 
 type TasksCommand =
 	| { action: "list" }
@@ -67,9 +60,9 @@ type TasksCommand =
 	| { action: "archive" }
 	| { action: "doctor" }
 	| { action: "pause"; id: string }
+	| { action: "cancel"; id: string }
 	| { action: "resume"; id: string; grants: Partial<TaskBudget> }
-	| { action: "steer"; id: string; text: string }
-	| { action: "reply"; id: string; text: string };
+	| { action: "msg"; id: string; text: string };
 
 // Broadcast (subcommand names, args, descriptions, examples) lives once in commands/catalog.ts's
 // `BUILT_IN_COMMANDS` entry for "tasks"; this just renders it (review 2026-08-24 §3.1).
@@ -103,7 +96,7 @@ export function parseTasksCommand(args: string): TasksCommand {
 		if (parts.length > 1) throw new Error(`用法：/tasks ${action}`);
 		return { action };
 	}
-	if (action === "show" || action === "pause" || action === "log") {
+	if (action === "show" || action === "pause" || action === "log" || action === "cancel") {
 		const id = parts[1];
 		if (!id || parts.length > 2) throw new Error(`用法：/tasks ${action} <id>`);
 		return { action, id };
@@ -113,10 +106,10 @@ export function parseTasksCommand(args: string): TasksCommand {
 		if (!id) throw new Error("用法：/tasks resume <id> [+steps N|+usd X]");
 		return { action: "resume", id, grants: parseGrants(parts.slice(2).join(" ")) };
 	}
-	if (action === "steer" || action === "reply") {
-		// Everything after the id is the message, verbatim — guidance is a sentence.
-		const match = /^(?:steer|reply)\s+(\S+)\s+([\s\S]+)$/.exec(trimmed);
-		if (!match) throw new Error(`用法：/tasks ${action} <id> <内容>`);
+	if (action === "msg") {
+		// Everything after the id is the message, verbatim — it is a sentence addressed to the task.
+		const match = /^msg\s+(\S+)\s+([\s\S]+)$/.exec(trimmed);
+		if (!match) throw new Error("用法：/tasks msg <id> <内容>");
 		return { action, id: match[1], text: match[2].trim() };
 	}
 	throw new Error(`未知子命令 \`${action}\`。`);
@@ -126,14 +119,6 @@ function tasksDir(deskDir: string): string {
 	return join(deskDir, "tasks");
 }
 
-/** `（最晚 3 小时后重新检查）` — when the runtime looks at a parked task again no matter what. */
-function backstopHint(by: string, now: number): string {
-	const atMs = parseLocalTime(by);
-	if (atMs === undefined || !Number.isFinite(atMs)) return "";
-	const diffMs = atMs - now;
-	return diffMs <= 0 ? "（已过最晚检查时间）" : `（最晚 ${formatSpanZh(diffMs)}后重新检查）`;
-}
-
 function usageSummary(entry: TaskLedgerEntry): string | undefined {
 	const usage = entry.fields.usage;
 	if (!usage) return undefined;
@@ -141,45 +126,83 @@ function usageSummary(entry: TaskLedgerEntry): string | undefined {
 	return `已用 ${usage.steps} 步${cost}`;
 }
 
-function ticketSummary(entry: TaskLedgerEntry, now: number): string | undefined {
-	const ticket = entry.fields.ticket;
-	return ticket ? `${describeTicketForUser(ticket)}${backstopHint(ticket.by, now)}` : undefined;
-}
-
 /** The delivery-channel note for a task, or `undefined` when it delivers here and is live. */
 function deliveryNote(channel: string | undefined, options: HandleTasksCommandOptions): string | undefined {
-	if (!channel) return "已暂停：未指定投递频道";
+	if (!channel) return "已冻结：未指定汇报频道";
 	const described = options.describeChannel(channel);
-	if (!described.boundHere) return `已暂停：投递频道未绑定到本工位（${described.label}）`;
-	return channel === options.currentChannelId ? undefined : `投递到${described.label}`;
+	if (!described.boundHere) return `已冻结：汇报频道未绑定到本工位（${described.label}）`;
+	return channel === options.currentChannelId ? undefined : `汇报到${described.label}`;
 }
 
-function renderListLine(entry: TaskLedgerEntry, options: HandleTasksCommandOptions, now: number): string {
-	const { deskDir } = options;
-	const bits = [`\`${entry.id}\` ${entry.title}`, taskStateLabel(entry.fields.state)];
+/** The state in the user's words, with how long it has been so and what is happening right now. */
+function describeLive(entry: TaskLedgerEntry, live: TaskLiveSnapshot | undefined, now: number): string {
+	const label = taskStateLabel(entry.fields);
+	if (entry.fields.state === "running" && live?.step) {
+		const tool = live.step.tool ? `，正在${live.step.tool.summary}` : "";
+		return `${label}（第 ${live.step.seq} 步，已 ${formatElapsedZh(now - live.step.startedAt)}${tool}）`;
+	}
+	const since = entry.fields.waiting ? parseLocalTime(entry.fields.waiting.since) : undefined;
+	if (
+		entry.fields.state === "waiting" &&
+		entry.fields.waiting?.kind !== "time" &&
+		since !== undefined &&
+		now > since
+	) {
+		return `${label}（已等 ${formatElapsedZh(now - since)}）`;
+	}
+	return label;
+}
+
+function describePending(live: TaskLiveSnapshot, now: number): string[] {
+	return live.pending.map((work) => {
+		const who = work.kind === "delegation" ? `委派 \`${work.ref}\`（${work.label}）` : `后台作业 \`${work.ref}\``;
+		const quiet =
+			work.stalled && work.lastOutputAt !== undefined
+				? ` · ⚠️ ${formatElapsedZh(now - work.lastOutputAt)}没有输出`
+				: "";
+		return `${who} 已运行 ${formatElapsedZh(now - work.startedAt)}${quiet}`;
+	});
+}
+
+function renderListLine(
+	entry: TaskLedgerEntry,
+	live: TaskLiveSnapshot | undefined,
+	options: HandleTasksCommandOptions,
+	now: number,
+): string {
+	const bits = [`\`${entry.id}\` ${entry.title}`, describeLive(entry, live, now)];
 	const delivery = deliveryNote(entry.fields.channel, options);
 	if (delivery) bits.push(delivery);
-	if (entry.fields.paused) bits.push(`已暂停（${entry.fields.paused.reason}）`);
-	const ticket = ticketSummary(entry, now);
-	if (ticket) bits.push(ticket);
+	if (entry.fields.state === "waiting" && entry.fields.waiting?.kind === "user") {
+		bits.push(`问题：${entry.fields.waiting.question.replace(/\s+/g, " ").slice(0, 80)}`);
+	}
+	if (live && live.pending.length > 0) {
+		const stalled = live.pending.filter((work) => work.stalled).length;
+		bits.push(`在途 ${live.pending.length} 项${stalled > 0 ? `（⚠️ ${stalled} 项疑似卡住）` : ""}`);
+	}
 	if (entry.items) bits.push(`工作项 ${entry.items.done}/${entry.items.total}`);
 	if (entry.fields.origin) bits.push(`来自 ${entry.fields.origin}`);
 	const usage = usageSummary(entry);
 	if (usage) bits.push(usage);
-	if (hasTaskSteer(deskDir, entry.id)) bits.push("有待处理的指示");
 	if (!entry.readable) bits.push("⚠️ 文件头（frontmatter）不可读");
 	return `- ${bits.join(" · ")}`;
 }
 
+async function snapshotsById(options: HandleTasksCommandOptions): Promise<Map<string, TaskLiveSnapshot>> {
+	const snapshots = await options.control.snapshot(options.desk).catch(() => [] as TaskLiveSnapshot[]);
+	return new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
+}
+
 async function listTasks(options: HandleTasksCommandOptions): Promise<string> {
 	const now = Date.now();
-	const entries = (await readActiveTasks(tasksDir(options.deskDir), now)).filter((entry) => !entry.fields.outcome);
+	const entries = (await readActiveTasks(tasksDir(options.deskDir))).filter((entry) => !entry.fields.outcome);
 	if (entries.length === 0) {
 		return "暂无进行中的任务。\n在对话里告诉我目标，并说明作为长程任务推进。";
 	}
+	const live = await snapshotsById(options);
 	const report = [
 		`**任务（${entries.length}）**`,
-		...entries.map((entry) => renderListLine(entry, options, now)),
+		...entries.map((entry) => renderListLine(entry, live.get(entry.id), options, now)),
 	].join("\n");
 	return capReply(report, { nextStepHint: "用 `/tasks show <id>` 查看单个任务" }).text;
 }
@@ -205,39 +228,40 @@ async function showTask(options: HandleTasksCommandOptions, idInput: string): Pr
 	const document = (await readStoredTask(deskDir, id, true)) ?? undefined;
 	if (!document) return notFound(id);
 	const now = Date.now();
-	const entry = (await readActiveTasks(tasksDir(deskDir), now)).find((candidate) => candidate.id === id);
+	const entry = (await readActiveTasks(tasksDir(deskDir))).find((candidate) => candidate.id === id);
+	const live = entry ? (await options.control.snapshot(options.desk, id).catch(() => []))[0] : undefined;
 
 	const head: string[] = [`**任务 ${id}**`];
-	head.push(`- 状态：${taskStateLabel(document.fields.state)}`);
+	head.push(`- 状态：${entry ? describeLive(entry, live, now) : taskOutcomeLabel(document.fields.outcome)}`);
+	if (document.fields.state === "waiting" && document.fields.waiting?.kind === "user") {
+		head.push(`- 等你回复：${document.fields.waiting.question}`);
+	}
 	const channel = document.fields.channel;
 	if (!document.fields.outcome) {
 		const note = deliveryNote(channel, options);
 		head.push(
 			channel
-				? `- 投递频道（channel）：${options.describeChannel(channel).label}${note?.startsWith("已暂停") ? `（${note}）` : ""}`
-				: `- 投递频道：未指定（${note}）`,
+				? `- 汇报频道（channel）：${options.describeChannel(channel).label}${note?.startsWith("已冻结") ? `（${note}）` : ""}`
+				: `- 汇报频道：未指定（${note}）`,
 		);
 	}
 	if (document.fields.paused) {
 		const by = document.fields.paused.by === "user" ? "由你暂停" : "由系统暂停";
 		head.push(`- 已暂停（${by}）：${document.fields.paused.reason}`);
 	}
-	if (document.fields.ticket) {
-		const ticket = document.fields.ticket;
-		head.push(`- 等待：${describeTicketForUser(ticket)}${backstopHint(ticket.by, now)}`);
-	}
+	if (live) for (const line of describePending(live, now)) head.push(`- 在途：${line}`);
 	if (document.fields.origin) head.push(`- 来自事件：${document.fields.origin}`);
 	const usage = entry ? usageSummary(entry) : undefined;
 	if (usage) head.push(`- 用量：${usage}`);
 
-	const board = await buildTaskBoard(deskDir, id, document.body);
+	const records = await readTaskLog(deskDir, id);
+	const board = buildTaskBoard(records, document.body);
 	const boardLines = board ? ["", "**工作项**", renderTaskBoardForUser(board, id, now)] : [];
 
-	const log = await readTaskLog(deskDir, id, {
-		kinds: ["step", "expired", "close"],
-		limit: SHOW_LOG_LINES,
-	});
-	const logLines = log.length > 0 ? ["", "**最近记录**", ...log.map(renderTaskLogLineForUser)] : [];
+	const recent = records
+		.filter((record) => record.kind !== "step" && record.kind !== "dispatch" && record.kind !== "stall")
+		.slice(-SHOW_LOG_LINES);
+	const logLines = recent.length > 0 ? ["", "**最近记录**", ...recent.map(renderTaskLogLineForUser)] : [];
 
 	const path = existsSync(taskPath(deskDir, id)) ? taskPath(deskDir, id) : archivedTaskPath(deskDir, id);
 	const contract = contractExcerpt(document.body, TASK_SHOW_CONTRACT_CHARS);
@@ -253,6 +277,10 @@ async function showTask(options: HandleTasksCommandOptions, idInput: string): Pr
 		`完整记录：\`/tasks log ${id}\`；任务文件：\`${path}\``,
 	].join("\n");
 	return capReply(report, { nextStepHint: `用 \`/tasks log ${id}\` 查看记录，完整任务说明在 \`${path}\`` }).text;
+}
+
+function taskOutcomeLabel(outcome: string | undefined): string {
+	return outcome === "completed" ? "已完成" : outcome === "cancelled" ? "已取消" : "未知";
 }
 
 const ARCHIVE_OUTCOME: Record<string, string> = { completed: "已完成", cancelled: "已取消" };
@@ -296,66 +324,66 @@ async function showTaskLog(deskDir: string, idInput: string): Promise<string> {
 
 async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await pauseTaskDocument(options.deskDir, id, {
+	const outcome = await options.control.pause(options.desk, id, {
 		by: "user",
 		reason: "用户通过 /tasks pause 暂停。",
 	});
-	if (!document) return notFound(id);
-	return `已暂停任务 \`${id}\`，等待条件已保留；需要继续时用 \`/tasks resume ${id}\`。`;
+	if (outcome.kind === "not_found") return notFound(id);
+	if (outcome.kind === "unchanged") return `任务 \`${id}\` 已经是暂停状态。`;
+	return `已暂停任务 \`${id}\`：当前这一步已中止，在途的委派和作业继续运行，结果会记下。继续用 \`/tasks resume ${id}\`。`;
 }
 
-export async function resumeTask(
+async function resumeTask(
 	options: HandleTasksCommandOptions,
 	idInput: string,
-	grants: Partial<TaskBudget> = {},
+	grants: Partial<TaskBudget>,
 ): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await resumeTaskDocument(options.deskDir, id);
-	if (!document) return notFound(id);
+	const outcome = await options.control.resume(options.desk, id, grants);
+	if (outcome.kind === "not_found") return notFound(id);
+	if (outcome.kind === "unchanged") return `任务 \`${id}\` 当前没有暂停，无需恢复。`;
 	const granted: string[] = [];
-	if (Object.keys(grants).length > 0) {
-		await updateStoredTask(options.deskDir, id, (task) => {
-			const budget = { ...task.fields.budget };
-			for (const key of ["steps", "usd"] as const) {
-				const extra = grants[key];
-				if (extra === undefined) continue;
-				// A grant is *additional* headroom on top of whatever the task already spent, so
-				// resuming a task that hit its ceiling actually lets it run rather than re-stopping
-				// on the next step.
-				const spent = key === "steps" ? task.fields.usage?.steps : task.fields.usage?.usd;
-				budget[key] = (spent ?? 0) + extra;
-				granted.push(key === "steps" ? `${extra} 步` : `$${extra}`);
-			}
-			task.fields.budget = budget;
-		});
-	}
+	if (grants.steps) granted.push(`${grants.steps} 步`);
+	if (grants.usd) granted.push(`$${grants.usd}`);
 	return `已恢复任务 \`${id}\`${granted.length > 0 ? `，追加预算 ${granted.join("、")}` : ""}。`;
 }
 
-async function steerTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {
+async function cancelTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await readStoredTask(options.deskDir, id);
-	if (!document) return notFound(id);
-	await queueTaskSteer(options.deskDir, id, text);
-	return `已把这条指示排给任务 \`${id}\` 的下一步，不会打断正在执行的这一步。`;
+	const outcome = await options.control.cancel(options.desk, id, {
+		by: "user",
+		note: "用户通过 /tasks cancel 取消。",
+		channel: options.currentChannelId,
+	});
+	if (outcome.kind === "not_found") return notFound(id);
+	const stopped =
+		outcome.cancelled.length > 0
+			? `，并取消了在途工作 ${outcome.cancelled.map((ref) => `\`${ref}\``).join("、")}`
+			: "";
+	return `已取消任务 \`${id}\`${stopped}。任务记录已归档，可用 \`/tasks log ${id}\` 查看。`;
 }
 
-/**
- * Answer an `ask` ticket: the reply becomes the next step's first input, and redeeming the ticket
- * is what actually reopens the task. A task parked on something else keeps its ticket — the reply
- * is still queued, because the user's words should not be dropped just because the timing was off.
- */
-async function replyToTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {
+async function messageTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const document = await readStoredTask(options.deskDir, id);
-	if (!document) return notFound(id);
-	await queueTaskSteer(options.deskDir, id, text, "用户回答");
-	const redeemed = await redeemTicket(options.deskDir, id, (ticket) => ticket.kind === "ask");
-	if (!redeemed) {
-		return `任务 \`${id}\` 当前并没有在等你的回答；内容已记下，下一步会看到。`;
+	const outcome = await options.control.message(options.desk, id, {
+		from: options.senderName,
+		channel: options.currentChannelId,
+		text,
+	});
+	switch (outcome.kind) {
+		case "not_found":
+			return notFound(id);
+		case "injected":
+			return `已把这条消息交给任务 \`${id}\` 正在执行的这一步。`;
+		case "woke":
+			return `已收到，任务 \`${id}\` 会继续推进。`;
+		case "queued_for_next_step":
+			return `已把这条消息排给任务 \`${id}\` 的下一步。`;
+		case "held_paused":
+			return `任务 \`${id}\` 已暂停：消息已记下，恢复（\`/tasks resume ${id}\`）后下一步会看到。`;
+		case "held_frozen":
+			return `任务 \`${id}\` 的汇报频道未绑定到本工位，任务已冻结：消息已记下，频道绑定回来后下一步会看到。`;
 	}
-	if (options.dispatchTask) await options.dispatchTask(id);
-	return `已回复任务 \`${id}\`，它会继续推进。`;
 }
 
 function issue(problem: string, nextStep: string): string {
@@ -363,22 +391,20 @@ function issue(problem: string, nextStep: string): string {
 }
 
 /**
- * `/tasks doctor`, deliberately small (spec 051, D11; spec 052, D11).
- *
- * Most of what older doctors looked for cannot be produced any more: the frontmatter normalizer
- * and `resolveTicket` reject those states at write time. What is left is what a *hand edit* can
- * still create.
+ * `/tasks doctor`, deliberately small (spec 064, D25). The state machine rejects most bad states at
+ * write time; what is left is what a *hand edit* can still create, and a lane that is not running.
  */
 async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	const now = Date.now();
-	const entries = await readActiveTasks(tasksDir(options.deskDir), now);
+	const entries = await readActiveTasks(tasksDir(options.deskDir));
+	const live = await snapshotsById(options);
 	const problems: string[] = [];
 
 	for (const entry of entries) {
 		if (!entry.readable) {
 			problems.push(
 				issue(
-					`\`${entry.id}\` 的文件头（frontmatter）不可读`,
+					`\`${entry.id}\` 的文件头（frontmatter）不可读，任务不会执行`,
 					`让我修复 \`${taskPath(options.deskDir, entry.id)}\` 的文件头，或手动修改`,
 				),
 			);
@@ -387,24 +413,25 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (!entry.fields.channel) {
 			problems.push(
 				issue(
-					`\`${entry.id}\` 没有投递频道（channel），已暂停`,
+					`\`${entry.id}\` 没有汇报频道（channel），已冻结`,
 					`在 \`${taskPath(options.deskDir, entry.id)}\` 的文件头加一行 \`channel: <频道 ID>\``,
 				),
 			);
 		} else if (!options.describeChannel(entry.fields.channel).boundHere) {
 			problems.push(
 				issue(
-					`\`${entry.id}\` 的投递频道没有绑定到本工位，已暂停`,
+					`\`${entry.id}\` 的汇报频道没有绑定到本工位，已冻结`,
 					"在那个频道里把它绑定回本工位，或把文件头的 `channel:` 改成本工位已绑定的频道",
 				),
 			);
 		}
-		const by = entry.fields.ticket ? parseLocalTime(entry.fields.ticket.by) : undefined;
-		if (entry.expired && !entry.fields.paused && by !== undefined && by < now - EXPIRED_GRACE_MS) {
+		const waiting = entry.fields.waiting;
+		const since = waiting?.kind === "work" ? parseLocalTime(waiting.since) : undefined;
+		if (since !== undefined && now - since > STALE_WORK_WAIT_MS && (live.get(entry.id)?.pending.length ?? 0) === 0) {
 			problems.push(
 				issue(
-					`\`${entry.id}\` 的等待条件已超过最晚检查时间 1 小时以上`,
-					"自动调度本该重新开始或通知；请部署者确认服务器上的 pipiclaw 仍在运行",
+					`\`${entry.id}\` 在等结果，但已超过 1 小时没有任何在途工作`,
+					"自动调度本该重新开始；请部署者确认服务器上的 pipiclaw 仍在运行",
 				),
 			);
 		}
@@ -416,6 +443,33 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	}).text;
 }
 
+/** Tasks holding an execution slot: a step is running or delegated work is awaited (D12). */
+function isExecuting(snapshot: TaskLiveSnapshot): boolean {
+	return (
+		!snapshot.frozen &&
+		(snapshot.state === "running" || (snapshot.state === "waiting" && snapshot.waiting?.kind === "work"))
+	);
+}
+
+/** `/stop` stops the chat turn only; a line naming the executing tasks says where a task is stopped (spec 064, D27). */
+export function renderStopTaskHint(snapshots: readonly TaskLiveSnapshot[]): string | undefined {
+	const executing = snapshots.filter(isExecuting);
+	if (executing.length === 0) return undefined;
+	const ids = executing.map((snapshot) => `\`${snapshot.id}\``).join("、");
+	return `本工位有任务在后台执行：${ids}。\`/stop\` 不会停它们；要暂停用 \`/tasks pause <id>\`。`;
+}
+
+/** The one `/status` line about the desk's tasks, or `undefined` when there are none (D28). */
+export function renderTaskStatusLine(snapshots: readonly TaskLiveSnapshot[]): string | undefined {
+	if (snapshots.length === 0) return undefined;
+	const running = snapshots.filter(isExecuting).length;
+	const queued = snapshots.filter((snapshot) => snapshot.state === "queued").length;
+	const asking = snapshots.filter(
+		(snapshot) => snapshot.state === "waiting" && snapshot.waiting?.kind === "user",
+	).length;
+	return `- 后台任务：执行中 ${running} · 排队 ${queued} · 等你回复 ${asking}`;
+}
+
 export async function handleTasksCommand(options: HandleTasksCommandOptions): Promise<string> {
 	let command: TasksCommand;
 	try {
@@ -425,9 +479,6 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 	}
 
 	try {
-		if ("id" in command && command.id && command.action !== "show" && command.action !== "log") {
-			return await withTaskMutation(options.deskDir, command.id, () => dispatchTasksCommand(options, command));
-		}
 		return await dispatchTasksCommand(options, command);
 	} catch (error) {
 		return `执行 /tasks ${command.action} 失败：${errorMessage(error)}`;
@@ -448,10 +499,10 @@ async function dispatchTasksCommand(options: HandleTasksCommandOptions, command:
 			return await pauseTask(options, command.id);
 		case "resume":
 			return await resumeTask(options, command.id, command.grants);
-		case "steer":
-			return await steerTask(options, command.id, command.text);
-		case "reply":
-			return await replyToTask(options, command.id, command.text);
+		case "cancel":
+			return await cancelTask(options, command.id);
+		case "msg":
+			return await messageTask(options, command.id, command.text);
 		case "doctor":
 			return await doctor(options);
 	}

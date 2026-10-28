@@ -41,7 +41,7 @@ export interface PipiclawToolsConfig {
 		web: PipiclawWebToolsConfig;
 		/**
 		 * Master switch for the autonomous long-running task mechanism: gates the
-		 * task_* tools, the native TaskDriver, and the per-turn task digest
+		 * task_* tools, the task lane (new steps), and the per-turn task digest
 		 * together. Core capabilities (read/bash/edit/write/grep, memory, skills,
 		 * events, background jobs) are always on and have no switches.
 		 */

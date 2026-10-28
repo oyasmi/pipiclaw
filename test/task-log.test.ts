@@ -7,6 +7,7 @@ import { logTaskDispatch, logTaskSettlement } from "../src/tasks/bound-work.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
 import {
 	appendTaskLog,
+	newInputs,
 	readTaskLog,
 	resetTaskLogAppenders,
 	taskArchiveLogPath,
@@ -19,7 +20,7 @@ let dir: string;
 beforeEach(async () => {
 	dir = await mkdtemp(join(tmpdir(), "task-log-"));
 	await mkdir(join(dir, "tasks"), { recursive: true });
-	await writeFile(join(dir, "tasks", "T.md"), renderTaskDocument({ state: "open" }, "# T\n"));
+	await writeFile(join(dir, "tasks", "T.md"), renderTaskDocument({ state: "queued" }, "# T\n"));
 });
 
 afterEach(async () => {
@@ -29,13 +30,7 @@ afterEach(async () => {
 describe("loop log (spec 051, D5)", () => {
 	it("filters by kind, and keeps the most recent when limited", async () => {
 		for (const index of [0, 1, 2]) {
-			await appendTaskLog(dir, "T", {
-				kind: "step",
-				seq: index + 1,
-				outcome: "continue",
-				note: `note ${index + 1}`,
-				tools: [],
-			});
+			await appendTaskLog(dir, "T", { kind: "step", seq: index + 1, reason: "continue", brief: "delta" });
 		}
 		await appendTaskLog(dir, "T", { kind: "dispatch", ref: "run_v" });
 
@@ -47,38 +42,40 @@ describe("loop log (spec 051, D5)", () => {
 
 	// A hand-edited or half-written line must not make a whole task's history unreadable — the
 	// log is the only durable trace of what each step did.
-	it("skips unparseable lines instead of failing the read", async () => {
-		await appendTaskLog(dir, "T", { kind: "step", seq: 1, outcome: "continue", note: "ok", tools: [] });
-		await appendFile(taskLogPath(dir, "T"), '{not json\n{"ts":"x"}\n');
+	it("skips unparseable lines and records of a retired shape instead of failing the read", async () => {
+		await appendTaskLog(dir, "T", { kind: "step", seq: 1, reason: "start", brief: "full" });
+		const retired = JSON.stringify({ ts: "t", kind: "step", seq: 9, outcome: "park", note: "old", tools: [] });
+		await appendFile(taskLogPath(dir, "T"), `{not json\n{"ts":"x"}\n${retired}\n`);
 		const records = await readTaskLog(dir, "T");
-		expect(records.length).toBe(1);
-		expect(records[0]?.kind).toBe("step");
+		expect(records.map((record) => record.kind)).toEqual(["step"]);
+		expect(records[0]).toMatchObject({ seq: 1 });
 	});
 
 	it("archiveTask moves rotated shards along with the current file, and readTaskLog still sees all of them", async () => {
 		await appendFile(
 			`${taskLogPath(dir, "T")}.2`,
-			`${JSON.stringify({ ts: "t1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
+			`${JSON.stringify({ ts: "t1", kind: "step_end", seq: 1, result: "ok", next: "continue", note: "oldest", tools: [] })}\n`,
 		);
 		await appendFile(
 			`${taskLogPath(dir, "T")}.1`,
-			`${JSON.stringify({ ts: "t2", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
+			`${JSON.stringify({ ts: "t2", kind: "step_end", seq: 2, result: "ok", next: "continue", note: "middle", tools: [] })}\n`,
 		);
 		await appendTaskLog(dir, "T", {
-			kind: "step",
+			kind: "step_end",
 			seq: 3,
-			outcome: "continue",
+			result: "ok",
+			next: "continue",
 			note: "newest",
 			tools: [],
 		});
 		await resetTaskLogAppenders();
 
-		expect((await readTaskLog(dir, "T")).map((r) => (r.kind === "step" ? r.note : undefined))).toEqual([
+		expect((await readTaskLog(dir, "T")).map((r) => (r.kind === "step_end" ? r.note : undefined))).toEqual([
 			"oldest",
 			"middle",
 			"newest",
 		]);
-		expect((await readTaskLog(dir, "T", { limit: 1 }))[0]).toMatchObject({ kind: "step", seq: 3 });
+		expect((await readTaskLog(dir, "T", { limit: 1 }))[0]).toMatchObject({ kind: "step_end", seq: 3 });
 		await archiveTask(dir, "T", "completed");
 
 		expect(existsSync(taskLogPath(dir, "T"))).toBe(false);
@@ -89,7 +86,28 @@ describe("loop log (spec 051, D5)", () => {
 		expect(existsSync(`${taskArchiveLogPath(dir, "T")}.2`)).toBe(true);
 
 		const records = await readTaskLog(dir, "T");
-		expect(records.map((r) => (r.kind === "step" ? r.note : undefined))).toEqual(["oldest", "middle", "newest"]);
+		expect(records.map((r) => (r.kind === "step_end" ? r.note : undefined))).toEqual(["oldest", "middle", "newest"]);
+	});
+});
+
+describe("new input (INV-6)", () => {
+	const at = (kind: string, extra: Record<string, unknown> = {}) => ({ ts: "t", kind, ...extra }) as never;
+
+	it("is what arrived after the last step began — not what was injected into it or returned inline", () => {
+		const records = [
+			at("settle", { ref: "old" }),
+			at("step", { seq: 1, reason: "start", brief: "full" }),
+			at("settle", { ref: "a" }),
+			at("settle", { ref: "inline", inline: true }),
+			at("message", { text: "mid-step", injected: 1 }),
+			at("message", { text: "later" }),
+			at("stall", { ref: "b", silentMinutes: 12 }),
+			at("pause", { by: "user", reason: "r" }),
+			at("resume"),
+			at("report", { seq: 1, text: "t", delivered: true }),
+		];
+		expect(newInputs(records).map((input) => input.kind)).toEqual(["settle", "message", "stall", "resume"]);
+		expect(newInputs([...records, at("step", { seq: 2, reason: "input", brief: "delta" })])).toEqual([]);
 	});
 });
 
@@ -99,8 +117,8 @@ describe("work log (spec 052, D4)", () => {
 			join(dir, "tasks", "U.md"),
 			renderTaskDocument(
 				{
-					state: "open",
-					usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 0, usd: 1, usdEstimated: false, expired: 0 },
+					state: "queued",
+					usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 0, usd: 1, usdEstimated: false },
 				},
 				"# U\n",
 			),

@@ -14,17 +14,23 @@ import { handleMemoryCommand } from "../src/memory/commands.js";
 import { applyMemoryOps } from "../src/memory/store.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { type DurableDispatchRecord, renderDispatchExhaustedNotice } from "../src/runtime/durable-dispatch.js";
-import { createTaskDriverEvent, taskStopReceipt } from "../src/runtime/task-driver.js";
 import { renderGuardBlockForUser } from "../src/security/block-message.js";
 import { handleSkillsCommand } from "../src/skills/commands.js";
 import { handleSubagentsCommand, renderRunNotice } from "../src/subagents/commands.js";
 import type { RunRecord } from "../src/subagents/run-record.js";
 import type { SubAgentRunManager } from "../src/subagents/runs.js";
 import { createUsage } from "../src/tasks/budget.js";
-import { handleTasksCommand } from "../src/tasks/commands.js";
-import type { TaskLedgerEntry } from "../src/tasks/contract.js";
+import { handleTasksCommand, renderStopTaskHint, renderTaskStatusLine } from "../src/tasks/commands.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
+import type { TaskControl, TaskLiveSnapshot } from "../src/tasks/control.js";
 import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import {
+	askReceipt,
+	cancelledByLeaderReceipt,
+	cancelledByUserReceipt,
+	completedReceipt,
+	pausedReceipt,
+} from "../src/tasks/receipts.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";
 import type { UsageLedger } from "../src/usage/ledger.js";
 import { renderUsageReport } from "../src/usage/render.js";
@@ -32,8 +38,40 @@ import { testConversation, useTempDirs } from "./helpers/fixtures.js";
 
 /** `/tasks` asked from `dingtalk:dm:1`; a task delivering to any other channel is shown as suspended. */
 const TASK_CHANNELS = {
+	desk: "news",
+	senderName: "Alice",
 	currentChannelId: "dingtalk:dm:1",
 	describeChannel: (channelId: string) => ({ label: `\`${channelId}\``, boundHere: channelId === "dingtalk:dm:1" }),
+	control: {
+		created: () => undefined,
+		snapshot: async (): Promise<TaskLiveSnapshot[]> => [
+			{
+				id: "task-0",
+				state: "running",
+				frozen: false,
+				step: {
+					seq: 3,
+					startedAt: Date.now() - 300_000,
+					toolsDone: 2,
+					tool: { summary: "运行测试", startedAt: Date.now() },
+				},
+				pending: [
+					{
+						ref: "run_1",
+						kind: "delegation",
+						label: "builder",
+						startedAt: Date.now() - 600_000,
+						lastOutputAt: Date.now() - 700_000,
+						stalled: true,
+					},
+				],
+			},
+		],
+		message: async () => ({ kind: "injected" }),
+		pause: async () => ({ kind: "ok" }),
+		resume: async () => ({ kind: "ok" }),
+		cancel: async () => ({ kind: "cancelled", cancelled: ["run_1"] }),
+	} satisfies TaskControl,
 };
 
 /**
@@ -109,10 +147,16 @@ async function seedTasks(deskDir: string): Promise<void> {
 			join(tasksDir, `task-${index}.md`),
 			renderTaskDocument(
 				{
-					state: index % 2 ? "parked" : "open",
+					state: index % 5 === 0 ? "paused" : index % 2 ? "waiting" : "running",
 					usage: { ...createUsage(), steps: index, usd: index / 3 },
-					...(index % 2
-						? { ticket: { kind: "ask" as const, asked: "要合并到 master 吗？", by: "2099-01-01T00:00:00+08:00" } }
+					...(index % 5 !== 0 && index % 2
+						? {
+								waiting: {
+									kind: "user" as const,
+									question: "要合并到 master 吗？",
+									since: "2026-10-01T00:00:00+08:00",
+								},
+							}
 						: {}),
 					...(index % 5 === 0
 						? { paused: { by: "runtime" as const, reason: "已用满 60 步", at: "2026-10-01T00:00:00+08:00" } }
@@ -139,19 +183,36 @@ async function seedTasks(deskDir: string): Promise<void> {
 			exitCode: index % 3 ? 0 : 1,
 			output: `/tmp/runs/run_${index}/output.md`,
 		});
+		await appendTaskLog(deskDir, "task-0", { kind: "step", seq: index + 1, reason: "continue", brief: "delta" });
 		await appendTaskLog(deskDir, "task-0", {
-			kind: "step",
+			kind: "step_end",
 			seq: index + 1,
-			outcome: index % 2 ? "park" : "continue",
+			result: index % 7 ? "ok" : "timeout",
+			next: index % 2 ? "work" : "continue",
 			note: `第 ${index + 1} 步：${"检查并记录。".repeat(30)}\n第二行`,
 			tools: ["read"],
-			report: index % 5 ? undefined : "向用户汇报了进度",
 		});
+		if (index % 5 === 0) {
+			await appendTaskLog(deskDir, "task-0", {
+				kind: "report",
+				seq: index + 1,
+				text: "向用户汇报了进度",
+				delivered: true,
+			});
+		}
+		if (index % 6 === 0) {
+			await appendTaskLog(deskDir, "task-0", {
+				kind: "message",
+				from: "Alice",
+				channel: "dingtalk:dm:1",
+				text: "请先看 W3\n再继续",
+			});
+		}
 	}
 	for (let index = 0; index < 30; index++) {
 		await writeFile(
 			join(tasksDir, "archive", `old-${index}.md`),
-			renderTaskDocument({ state: "done", outcome: "completed", closedAt: "2026-09-01T10:00:00.000+08:00" }, body),
+			renderTaskDocument({ state: "queued", outcome: "completed", closedAt: "2026-09-01T10:00:00.000+08:00" }, body),
 		);
 	}
 }
@@ -208,7 +269,19 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 	it("keeps every /tasks report in shape and inside the budget", async () => {
 		const deskDir = tempDir();
 		await seedTasks(deskDir);
-		for (const args of ["", "show task-0", "log task-0", "archive", "doctor", "show missing", "bogus"]) {
+		for (const args of [
+			"",
+			"show task-0",
+			"log task-0",
+			"archive",
+			"doctor",
+			"show missing",
+			"bogus",
+			"msg task-0 好的",
+			"pause task-0",
+			"resume task-0",
+			"cancel task-0",
+		]) {
 			expectUserCopyShape(`/tasks ${args}`, await handleTasksCommand({ args, deskDir, ...TASK_CHANNELS }));
 		}
 		// Empty state, too.
@@ -432,20 +505,28 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 	});
 
 	it("keeps runtime pushes in shape: receipts, notices, refusals and error bubbles", () => {
-		const entry: TaskLedgerEntry = {
-			id: "weekly",
-			title: "周报",
-			fields: { state: "parked", usage: { ...createUsage(), steps: 60 } },
-			readable: true,
-			runnable: true,
-			expired: false,
-		};
-		for (const breach of ["steps", "usd", undefined] as const) {
-			expectUserCopyShape(
-				`stop receipt ${breach}`,
-				taskStopReceipt("news", "dingtalk:dm:1", entry, "已用满 60 步", 0, breach).text,
-			);
+		for (const breach of ["steps", "usd", "idle", undefined] as const) {
+			expectUserCopyShape(`pause receipt ${breach}`, pausedReceipt("weekly", "周报", "已用满 60 步", breach));
 		}
+		for (const [label, text] of [
+			["ask", askReceipt("weekly", "要合并到 master 吗？推荐：合并。")],
+			["completed", completedReceipt("weekly", "周报")],
+			["cancelled by leader", cancelledByLeaderReceipt("weekly", "周报", "目标已不可行\n换方案")],
+			["cancelled by user", cancelledByUserReceipt("weekly", "周报")],
+		] as const) {
+			expectUserCopyShape(`task receipt ${label}`, text);
+		}
+		const snap = (id: string, state: TaskLiveSnapshot["state"]): TaskLiveSnapshot => ({
+			id,
+			state,
+			frozen: false,
+			pending: [],
+		});
+		expectUserCopyShape("stop task hint", renderStopTaskHint([snap("weekly", "running")]) ?? "");
+		expectUserCopyShape(
+			"status task line",
+			renderTaskStatusLine([snap("weekly", "running"), snap("w2", "queued")]) ?? "",
+		);
 		for (const status of ["completed", "failed", "cancelled", "lost"] as const) {
 			expectUserCopyShape(
 				`run notice ${status}`,
@@ -462,7 +543,15 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 				silentMs: 660_000,
 			}) ?? "",
 		);
-		const wake = createTaskDriverEvent("news", "dingtalk:dm:1", entry, 0);
+		const wake = {
+			source: "wake" as const,
+			channelId: "dingtalk:dm:1",
+			producer: "SUBAGENT",
+			desk: "news",
+			text: "[SUBAGENT:run_a1] Delegation finished. Continue whatever was waiting.",
+			ts: "0",
+			dispatchId: "subagent:news:run_a1:done",
+		};
 		const record: DurableDispatchRecord = {
 			version: 1,
 			id: wake.dispatchId as string,

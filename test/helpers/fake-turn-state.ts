@@ -57,9 +57,8 @@ export function createFakeSessionBinding(
 		conversation,
 		isCompacting: () => false,
 		interruptCompaction: () => false,
-		bindTaskSession: async (_taskId: string): Promise<void> => {},
-		bindChatSession: async (): Promise<void> => {},
-		getTaskLoop: (): { taskId: string } | undefined => undefined,
+		getActivity: () => ({ pendingTools: [], toolsDone: 0 }),
+		contextIncludes: async (_needle: string): Promise<boolean> => false,
 		retireForNewSession: (): void => {},
 		retireForRecovery: (): void => {},
 	};

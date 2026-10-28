@@ -6,39 +6,45 @@ import { formatLocalTime } from "../shared/local-time.js";
 import { clipText, truncate } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { normalizeTaskId } from "./contract.js";
+import type { TaskBudget } from "./frontmatter.js";
 import { withTaskMutation } from "./mutation-lock.js";
 
 /**
- * The task's append-only loop log (spec 051, D5) — `tasks/<id>.jsonl`.
+ * The task's append-only loop log (spec 051, D5; spec 064, D3) — `tasks/<id>.jsonl`.
  *
- * v3 kept this history inline in the task file under `## History`, capped at 24 KB / 8 entries.
- * Both long-lived tasks on the author's machine sat permanently *at* that cap: 79% of a 30 KB
- * task file was closed cycles the model re-read on every single wake and never acted on. Moving
- * it here keeps the contract small enough to inject whole (INV-6) while making the history much
- * longer before anything is folded away: the log rotates at `MAX_LOG_BYTES` and keeps two rotated
- * backups (`.1`, `.2`) alongside the current file — bounded retention, not an accidental cap.
- * `readTaskLog`/`archiveTask` must enumerate all three; reading or archiving only the current
- * file silently drops whatever had already rotated out of it (R9).
- *
- * Spec 052 adds `dispatch` / `settle` records: the run and job managers write them when work is
- * bound to the task and when it settles, so the task keeps the outcome of every delegation long
- * after the run record itself has been garbage-collected (INV-5). The step brief renders them as
- * the `<task_board>`. The log is append-only and is never rewritten.
+ * Every input to the task (a settlement, a stall report, a user message, a resume) is appended here
+ * *before* the lane is told, and the next step is built from "what arrived after the last `step`
+ * record" (INV-6) — file order, not timestamps, so it does not depend on clock precision. The
+ * log rotates at `MAX_LOG_BYTES` and keeps two rotated backups (`.1`, `.2`) alongside the current
+ * file: `readTaskLog`/`archiveTask` must enumerate all three, or whatever had already rotated out is
+ * silently dropped (R9). The log is append-only and is never rewritten (INV-9).
  */
-export type TaskStepOutcome = "continue" | "park" | "done";
+export type TaskStepReason = "start" | "input" | "continue" | "resume" | "retry";
+export type TaskStepResult = "ok" | "timeout" | "error" | "aborted" | "interrupted";
+export type TaskStepNext = "continue" | "work" | "user" | "time" | "closed" | "paused";
 
+/** A step began: written by the lane before the model is called. */
 export interface TaskStepRecord {
 	ts: string;
 	kind: "step";
 	seq: number;
-	outcome: TaskStepOutcome;
+	reason: TaskStepReason;
+	brief: "full" | "delta";
+}
+
+/** A step ended. `step` without `step_end` means the process died mid-step (D10 repairs it). */
+export interface TaskStepEndRecord {
+	ts: string;
+	kind: "step_end";
+	seq: number;
+	result: TaskStepResult;
+	next: TaskStepNext;
+	/** The model's last reply of the step: what it did, the evidence, what comes next. */
 	note: string;
 	tools: string[];
-	/** What this step sent the user, when it sent anything. Kept so the next occurrence knows what was delivered. */
-	report?: string;
 	usd?: number;
 	usdEstimated?: boolean;
-	units?: number;
+	error?: string;
 }
 
 /** A delegation or background job was bound to this task (spec 052, D4). `ref` is a run or job id. */
@@ -76,19 +82,71 @@ export interface TaskSettleRecord {
 	changed?: string;
 	exitCode?: number;
 	durationMs?: number;
+	/**
+	 * The result was returned to the step inside the very tool call that started the work, so it is
+	 * not news to anyone: it stays on the board but is not an input that wakes or briefs (D3).
+	 */
+	inline?: boolean;
 }
 
-export interface TaskExpiredRecord {
+/** An external run has produced no output for a long while; the leader decides what to do (D16). */
+export interface TaskStallRecord {
 	ts: string;
-	kind: "expired";
-	ticket: string;
-	action: "reopened" | "paused";
+	kind: "stall";
+	ref: string;
+	silentMinutes: number;
+}
+
+/** The user said something to the task. `injected` names the step it was delivered into mid-run. */
+export interface TaskMessageRecord {
+	ts: string;
+	kind: "message";
+	from: string;
+	channel: string;
+	text: string;
+	injected?: number;
+}
+
+export interface TaskAskRecord {
+	ts: string;
+	kind: "ask";
+	seq: number;
+	question: string;
+}
+
+export interface TaskWaitRecord {
+	ts: string;
+	kind: "wait";
+	seq: number;
+	until: string;
+}
+
+export interface TaskReportRecord {
+	ts: string;
+	kind: "report";
+	seq: number;
+	text: string;
+	delivered: boolean;
+}
+
+export interface TaskPauseRecord {
+	ts: string;
+	kind: "pause";
+	by: "user" | "runtime";
+	reason: string;
+}
+
+export interface TaskResumeRecord {
+	ts: string;
+	kind: "resume";
+	grants?: Partial<TaskBudget>;
 }
 
 export interface TaskCloseRecord {
 	ts: string;
 	kind: "close";
 	outcome: "done" | "cancelled";
+	by: "leader" | "user";
 	note: string;
 	steps: number;
 	usd: number;
@@ -96,9 +154,16 @@ export interface TaskCloseRecord {
 
 export type TaskLogRecord =
 	| TaskStepRecord
+	| TaskStepEndRecord
 	| TaskDispatchRecord
 	| TaskSettleRecord
-	| TaskExpiredRecord
+	| TaskStallRecord
+	| TaskMessageRecord
+	| TaskAskRecord
+	| TaskWaitRecord
+	| TaskReportRecord
+	| TaskPauseRecord
+	| TaskResumeRecord
 	| TaskCloseRecord;
 
 /** Same rotation shape as the channel archive: the log is working history, not an audit trail. */
@@ -136,12 +201,9 @@ export async function resetTaskLogAppenders(): Promise<void> {
 	await Promise.all(open.map((appender) => appender.close()));
 }
 
-export type TaskLogInput =
-	| Omit<TaskStepRecord, "ts">
-	| Omit<TaskDispatchRecord, "ts">
-	| Omit<TaskSettleRecord, "ts">
-	| Omit<TaskExpiredRecord, "ts">
-	| Omit<TaskCloseRecord, "ts">;
+type OmitTs<T> = T extends unknown ? Omit<T, "ts"> : never;
+
+export type TaskLogInput = OmitTs<TaskLogRecord>;
 
 /**
  * Append one record. `appendStrict` rather than `append`: the loop log is the only durable trace
@@ -153,21 +215,34 @@ export async function appendTaskLog(
 	record: TaskLogInput & { ts?: string },
 ): Promise<void> {
 	const withTs = { ts: record.ts ?? formatLocalTime(), ...record };
-	if (withTs.kind === "step") {
-		withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
-		if (withTs.report) withTs.report = clipText(withTs.report, NOTE_MAX_CHARS);
-	}
+	if (withTs.kind === "step_end") withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
+	if (withTs.kind === "report" || withTs.kind === "message") withTs.text = clipText(withTs.text, NOTE_MAX_CHARS);
 	// Under the task's mutation lock: the appender rotates by size, and two processes rotating
 	// one log at once would each move the other's fresh records aside.
 	await withTaskMutation(deskDir, id, () => appenderFor(taskLogPath(deskDir, id)).appendStrict(withTs));
 }
 
-const RECORD_KINDS: readonly TaskLogRecord["kind"][] = ["step", "dispatch", "settle", "expired", "close"];
+const RECORD_KINDS: readonly TaskLogRecord["kind"][] = [
+	"step",
+	"step_end",
+	"dispatch",
+	"settle",
+	"stall",
+	"message",
+	"ask",
+	"wait",
+	"report",
+	"pause",
+	"resume",
+	"close",
+];
 
+/** Only the current record shapes are read: a `step` without `reason` is a pre-064 record. */
 function toRecord(value: unknown): TaskLogRecord | undefined {
 	if (!isPlainObject(value) || typeof value.ts !== "string") return undefined;
 	const kind = value.kind;
 	if (typeof kind !== "string" || !(RECORD_KINDS as readonly string[]).includes(kind)) return undefined;
+	if (kind === "step" && (typeof value.seq !== "number" || typeof value.reason !== "string")) return undefined;
 	return value as unknown as TaskLogRecord;
 }
 
@@ -233,17 +308,32 @@ export async function readTaskLog(
 
 /** One line per record, for the step brief and `task_log` (model-facing; `/tasks` uses `renderTaskLogLineForUser`). */
 export function renderTaskLogLine(record: TaskLogRecord): string {
+	const at = `[${record.ts}]`;
 	switch (record.kind) {
 		case "step":
-			return `- [${record.ts}] step ${record.seq} → ${record.outcome}: ${record.note}${record.report ? " · 已向用户汇报" : ""}`;
+			return `- ${at} step ${record.seq} 开始（${record.reason}，${record.brief === "full" ? "完整" : "增量"} brief）`;
+		case "step_end":
+			return `- ${at} step ${record.seq} 结束 ${record.result} → ${record.next}${record.tools.length > 0 ? `（工具：${record.tools.join(", ")}）` : ""}: ${record.note}${record.error ? ` · 错误：${record.error}` : ""}`;
 		case "dispatch":
-			return `- [${record.ts}] 派发 ${record.ref}${record.item ? ` → ${record.item}` : ""}${record.agent ? ` (${record.agent}${record.purpose === "verify" ? ", verify" : ""})` : ""}`;
+			return `- ${at} 派发 ${record.ref}${record.item ? ` → ${record.item}` : ""}${record.agent ? ` (${record.agent}${record.purpose === "verify" ? ", verify" : ""})` : ""}`;
 		case "settle":
-			return `- [${record.ts}] 结算 ${record.ref}: ${record.status}${record.verdict ? ` VERDICT ${record.verdict.toUpperCase()}` : ""}${record.exitCode !== undefined ? ` exit ${record.exitCode}` : ""}${record.output ? ` · ${record.output}` : ""}`;
-		case "expired":
-			return `- [${record.ts}] 等待票过期（${record.ticket}）→ ${record.action}`;
+			return `- ${at} 结算 ${record.ref}: ${record.status}${record.verdict ? ` VERDICT ${record.verdict.toUpperCase()}` : ""}${record.exitCode !== undefined ? ` exit ${record.exitCode}` : ""}${record.output ? ` · ${record.output}` : ""}`;
+		case "stall":
+			return `- ${at} 卡顿 ${record.ref}: 已 ${record.silentMinutes} 分钟没有输出`;
+		case "message":
+			return `- ${at} 用户消息（${record.from}）${record.injected !== undefined ? `，已注入 step ${record.injected}` : ""}: ${record.text}`;
+		case "ask":
+			return `- ${at} step ${record.seq} 向用户提问: ${record.question}`;
+		case "wait":
+			return `- ${at} step ${record.seq} 约定等到 ${record.until}`;
+		case "report":
+			return `- ${at} step ${record.seq} 汇报${record.delivered ? "" : "（未送达）"}: ${record.text}`;
+		case "pause":
+			return `- ${at} 暂停（${record.by}）: ${record.reason}`;
+		case "resume":
+			return `- ${at} 恢复${record.grants ? `，追加预算 ${JSON.stringify(record.grants)}` : ""}`;
 		case "close":
-			return `- [${record.ts}] ${record.outcome === "done" ? "完成" : "取消"}：${record.note}`;
+			return `- ${at} ${record.outcome === "done" ? "完成" : "取消"}（${record.by}）：${record.note}`;
 	}
 }
 
@@ -280,16 +370,26 @@ function oneLine(text: string, max: number): string {
 
 /**
  * One line per record for `/tasks show` and `/tasks log` (spec 053, D2). The same records as
- * `renderTaskLogLine`, said in the user's terms: no `task_step_end` outcome values, no `VERDICT`,
- * no tool names, minute precision.
+ * `renderTaskLogLine`, said in the user's terms: no `result` / `next` values, no `VERDICT`, no
+ * tool names, minute precision.
  */
 export function renderTaskLogLineForUser(record: TaskLogRecord): string {
 	const at = minuteStamp(record.ts);
 	switch (record.kind) {
-		case "step": {
-			const after = record.outcome === "park" ? "（之后转入等待）" : record.outcome === "done" ? "（任务完成）" : "";
-			const reported = record.report ? "，已向你汇报" : "";
-			return `- ${at} 第 ${record.seq} 步：${oneLine(record.note, 160)}${after}${reported}`;
+		case "step":
+			return `- ${at} 开始第 ${record.seq} 步`;
+		case "step_end": {
+			const outcome =
+				record.result === "ok"
+					? oneLine(record.note, 160)
+					: record.result === "timeout"
+						? "这一步超时，已中止"
+						: record.result === "error"
+							? "这一步出错"
+							: record.result === "aborted"
+								? "这一步被中止"
+								: "这一步被服务重启打断";
+			return `- ${at} 第 ${record.seq} 步结束：${outcome}`;
 		}
 		case "dispatch": {
 			const who =
@@ -300,9 +400,75 @@ export function renderTaskLogLineForUser(record: TaskLogRecord): string {
 		}
 		case "settle":
 			return `- ${at} ${describeWorkRef(record.ref)}结束：${describeSettlement(record)}`;
-		case "expired":
-			return `- ${at} 等待超时（${oneLine(record.ticket, 80)}），${record.action === "reopened" ? "已重新开始" : "已暂停"}`;
+		case "stall":
+			return `- ${at} ${describeWorkRef(record.ref)}已 ${record.silentMinutes} 分钟没有输出`;
+		case "message":
+			return `- ${at} 你说：${oneLine(record.text, 120)}`;
+		case "ask":
+			return `- ${at} 向你提问：${oneLine(record.question, 160)}`;
+		case "wait":
+			return `- ${at} 约定等到 ${minuteStamp(record.until)}`;
+		case "report":
+			return `- ${at} 向你汇报${record.delivered ? "" : "（未送达）"}：${oneLine(record.text, 160)}`;
+		case "pause":
+			return `- ${at} ${record.by === "user" ? "你暂停了任务" : "系统暂停了任务"}：${oneLine(record.reason, 120)}`;
+		case "resume":
+			return `- ${at} 任务已恢复`;
 		case "close":
 			return `- ${at} ${record.outcome === "done" ? "任务完成" : "任务取消"}：${oneLine(record.note, 160)}`;
 	}
+}
+
+// === Cursors over the log (spec 064, D3/D16) ===
+
+/** The last `step` record, and whether a `step_end` for it exists. `undefined` before the first step. */
+export function lastStep(records: readonly TaskLogRecord[]): { step: TaskStepRecord; ended: boolean } | undefined {
+	for (let index = records.length - 1; index >= 0; index--) {
+		const record = records[index];
+		if (record?.kind !== "step") continue;
+		const ended = records.slice(index + 1).some((later) => later.kind === "step_end" && later.seq === record.seq);
+		return { step: record, ended };
+	}
+	return undefined;
+}
+
+/** A record that wakes a waiting task and is shown to the next step. */
+export type TaskInputRecord = TaskSettleRecord | TaskStallRecord | TaskMessageRecord | TaskResumeRecord;
+
+/**
+ * What arrived since the last `step` began: `settle` (unless it was returned inline), `stall`,
+ * `message` (unless it was already injected into a running step) and `resume` records. The one definition both the wake decision and
+ * the next brief use (INV-6); file order, not time, decides "after".
+ */
+export function newInputs(records: readonly TaskLogRecord[]): TaskInputRecord[] {
+	let from = 0;
+	for (let index = records.length - 1; index >= 0; index--) {
+		if (records[index]?.kind === "step") {
+			from = index + 1;
+			break;
+		}
+	}
+	const inputs: TaskInputRecord[] = [];
+	for (const record of records.slice(from)) {
+		if (record.kind === "stall" || record.kind === "resume") inputs.push(record);
+		else if (record.kind === "settle" && !record.inline) inputs.push(record);
+		else if (record.kind === "message" && record.injected === undefined) inputs.push(record);
+	}
+	return inputs;
+}
+
+/**
+ * The `step_end` records since the user last resumed the task, oldest first. A guard (idle, timeout,
+ * error) counts only these: a resume is the user looking at the problem, so the same evidence must
+ * not pause the task a second time.
+ */
+export function stepEndsSinceResume(records: readonly TaskLogRecord[]): TaskStepEndRecord[] {
+	let from = 0;
+	for (let index = records.length - 1; index >= 0; index--) {
+		if (records[index]?.kind === "resume") {
+			from = index + 1;
+			break;
+		}
+	}
+	return records.slice(from).filter((record): record is TaskStepEndRecord => record.kind === "step_end");
 }

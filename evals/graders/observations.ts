@@ -39,19 +39,10 @@ export function observesFile(ctx: TrialContext, path: string, content: RegExp, s
 	});
 }
 
+/** Steps the lane saw end waiting for the user (`ask`) or for bound work (`work`). */
 export function taskParkObservations(ctx: TrialContext, kind: "ask" | "work") {
-	return toolObservations(ctx, "task_step_end").filter(({ call, result }) => {
-		if (!result.ok) return false;
-		try {
-			const args = JSON.parse(call.fields?.argsJson ?? "null") as {
-				outcome?: string;
-				ticket?: { kind?: string };
-			} | null;
-			return args?.outcome === "park" && args.ticket?.kind === kind;
-		} catch {
-			return false;
-		}
-	});
+	const next = kind === "ask" ? "user" : "work";
+	return ctx.trace.filter((event) => event.fields?.taskStep === "ended" && event.fields?.stepNext === next);
 }
 
 export function sourceMutation(call: TraceEvent): boolean {

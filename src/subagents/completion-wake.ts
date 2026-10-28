@@ -91,15 +91,5 @@ export function buildRunCompletionWake(input: {
 		desk,
 		// The result is awaited; the wake itself still runs without a progress card.
 		presentation: "awaited",
-		...(record.taskId
-			? {
-					internalWake: {
-						kind: "subagent" as const,
-						resourceId: record.runId,
-						taskId: record.taskId,
-						dispatchId,
-					},
-				}
-			: {}),
 	};
 }

@@ -11,10 +11,9 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 import { shellEscape } from "../shared/os.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
-import { redeemTicket } from "../tasks/store.js";
-import { buildJobCompletionWake, jobWakeDispatchId } from "./completion-wake.js";
+import { readStoredTask } from "../tasks/store.js";
+import { buildJobCompletionWake } from "./completion-wake.js";
 import { buildLaunchScript, type JobArtifacts, jobArtifacts, parseLaunchOutput } from "./launch.js";
 import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobRecord, toSnapshot } from "./record.js";
 
@@ -61,6 +60,7 @@ export interface JobStartOptions {
 	channelId: string;
 	signal?: AbortSignal;
 	notify?: boolean;
+	/** The task whose step starts the job (spec 064, INV-8): its completion is recorded there instead of waking `channelId`. */
 	taskId?: string;
 }
 
@@ -71,6 +71,8 @@ export interface JobManagerOptions {
 	isBoundTo?: (channelId: string, desk: string) => boolean;
 	/** Delivers the completion wake. Omit to disable waking (sub-agent and test paths). */
 	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
+	/** A task-bound job settled and its record is in the task's log; the lane recomputes from it (spec 064, D19). */
+	onTaskInput?: (desk: string, taskId: string) => void;
 	sweepIntervalMs?: number;
 	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
 	fileStore?: FileStore;
@@ -123,7 +125,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export class DeskJobManager {
 	private readonly jobs = new Map<string, JobRecord>();
-	private readonly wakeQueue = createSerialQueue<string>();
 	/**
 	 * Serializes every probe → decide → terminal-transition sequence for a single job. The sweeper,
 	 * `list`/`poll`/`restore` (via `refresh`), `cancel`, and the persist-failure rollback all pass
@@ -651,9 +652,9 @@ export class DeskJobManager {
 	}
 
 	/**
-	 * Tell the owning task this job settled (spec 052, D4). Runs before the completion wake is
-	 * dispatched, so the step the wake starts already finds the result on its board. Best-effort and
-	 * once-only: a task that no longer exists, or a replayed finish, writes nothing.
+	 * Tell the owning task this job settled (spec 052, D4). Runs before the lane is told, so the step
+	 * it starts already finds the result in its inputs. Best-effort and once-only: a task that no
+	 * longer exists, or a replayed finish, writes nothing.
 	 */
 	private async logSettlementToTask(record: JobRecord): Promise<void> {
 		const taskId = record.contract.taskId;
@@ -668,6 +669,8 @@ export class DeskJobManager {
 			output: record.spillFile,
 			tail: output?.text.slice(-WAKE_OUTPUT_TAIL_BYTES).trim() || undefined,
 			durationMs: record.durationMs,
+			// The caller delivered this result to the model in the same tool call (`announce: false`).
+			...(record.notified ? { inline: true } : {}),
 		}).catch((error) => {
 			log.logWarn("job.task_settle.log_failed", "Task settlement record failed", {
 				reason: errorMessage(error),
@@ -685,7 +688,18 @@ export class DeskJobManager {
 	 * version that persisted `notified` first, which could crash-lose the wake entirely).
 	 */
 	private async announce(record: JobRecord, signal?: AbortSignal): Promise<void> {
-		if (!this.options.dispatch || !record.contract.notify || record.notified) {
+		if (record.notified) return;
+		// A task-bound job reports to its task, not to a channel (spec 064, D19): the settle record
+		// is in the task's log, so the lane only has to look. A task that has since vanished has
+		// nowhere to read the result, so the job falls back to waking the chat.
+		const taskId = record.contract.taskId;
+		if (taskId && this.target.deskDir && (await readStoredTask(this.target.deskDir, taskId))) {
+			this.options.onTaskInput?.(this.target.desk, taskId);
+			record.notified = true;
+			await this.persist(record);
+			return;
+		}
+		if (!this.options.dispatch || !record.contract.notify) {
 			return;
 		}
 
@@ -710,21 +724,12 @@ export class DeskJobManager {
 		await this.persist(record);
 	}
 
-	/** Same contract as `SubAgentRunManager.suppressWake`: drop the wake, still redeem the `work` ticket. */
+	/** Same contract as `SubAgentRunManager.suppressWake`: drop the chat wake of a job whose channel left the desk. */
 	private async suppressWake(record: JobRecord): Promise<void> {
 		log.logInfoEvent("job.wake.suppressed", "Completion wake dropped: channel not bound to the job's desk", {
 			channelId: record.channelId,
-			fields: { jobId: record.id, desk: this.target.desk, taskId: record.contract.taskId },
+			fields: { jobId: record.id, desk: this.target.desk },
 		});
-		const taskId = record.contract.taskId;
-		if (taskId && this.target.deskDir) {
-			await redeemTicket(this.target.deskDir, taskId, (ticket) => ticket.kind === "work").catch((error) => {
-				log.logWarn("job.wake.redeem_failed", "Work ticket redeem for a dropped wake failed", {
-					reason: errorMessage(error),
-					fields: { jobId: record.id, taskId },
-				});
-			});
-		}
 		record.notified = true;
 		await this.persist(record);
 	}
@@ -795,37 +800,6 @@ export class DeskJobManager {
 			await this.refresh(record, signal);
 		}
 		return Array.from(this.jobs.values()).map(toSnapshot);
-	}
-
-	async beginWakeConsumption(id: string, taskId: string, dispatchId: string): Promise<boolean> {
-		return this.wakeQueue.run(id, async () => {
-			const record = this.jobs.get(id);
-			const expected = jobWakeDispatchId(this.target.desk, id);
-			if (!record) return false;
-			const eligible = record.status !== "running" && record.contract.taskId === taskId && dispatchId === expected;
-			const previousClaim = record.wakeClaimDispatchId;
-			if (!beginWakeClaim(record, eligible, dispatchId)) return false;
-			try {
-				await this.persist(record, true);
-			} catch (error) {
-				record.wakeClaimDispatchId = previousClaim;
-				throw error;
-			}
-			return true;
-		});
-	}
-
-	async finishWakeConsumption(id: string, dispatchId: string): Promise<void> {
-		await this.wakeQueue.run(id, async () => {
-			const record = this.jobs.get(id);
-			if (!record || !finishWakeClaim(record, dispatchId)) return;
-			try {
-				await this.persist(record, true);
-			} catch (error) {
-				record.wakeConsumedAt = undefined;
-				throw error;
-			}
-		});
 	}
 
 	async cancel(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; status: JobStatus | "not_found" }>> {
@@ -993,6 +967,7 @@ interface JobRuntimeConfig {
 	workspaceDir?: string;
 	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
 	isBoundTo?: JobManagerOptions["isBoundTo"];
+	onTaskInput?: JobManagerOptions["onTaskInput"];
 	/** Sweep cadence override for the lazily-built desk managers (tests). */
 	sweepIntervalMs?: number;
 }
@@ -1012,6 +987,7 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 				...(deskDir ? { spillDir: getDeskLogsDir(deskDir) } : {}),
 				...(config.dispatch ? { dispatch: config.dispatch } : {}),
 				...(config.isBoundTo ? { isBoundTo: config.isBoundTo } : {}),
+				...(config.onTaskInput ? { onTaskInput: config.onTaskInput } : {}),
 				...(config.sweepIntervalMs ? { sweepIntervalMs: config.sweepIntervalMs } : {}),
 			});
 			managers.set(desk, manager);

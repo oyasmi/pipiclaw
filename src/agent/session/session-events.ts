@@ -196,9 +196,9 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			log.logToolSuccess(logCtx, event.toolName, durationMs, resultStr);
 		}
 
-		// The task loop's idle-step detector reads this: a step that completed no tool other than
-		// its own `task_step_end` did nothing (spec 051, D6).
-		if (!treatAsError && !rejected && event.toolName !== "task_step_end") {
+		// The task lane's idle-step detector reads this: a step that completed no tool did nothing
+		// (spec 051, D6; spec 064, D16).
+		if (!treatAsError && !rejected) {
 			runState.toolsUsed.push(event.toolName);
 		}
 
@@ -280,6 +280,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			}
 
 			const text = textParts.join("\n");
+			if (text.trim()) runState.lastAssistantText = text;
 
 			for (const thinking of thinkingParts) {
 				log.logThinking(logCtx, thinking);

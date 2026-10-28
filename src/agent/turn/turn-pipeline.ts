@@ -15,7 +15,7 @@ import { errorMessage } from "../../shared/text-utils.js";
 import type { ModelSelection } from "../session/model-selection.js";
 import { SessionRetryAttempt } from "../session/session-adapter.js";
 import type { SessionHost } from "../session/session-host.js";
-import { MAX_USER_MESSAGE_CHARS, type RunState } from "../types.js";
+import { MAX_USER_MESSAGE_CHARS, type RunnerProfile, type RunState } from "../types.js";
 import { estimateIncomingMessageTokens } from "./context-budget.js";
 import { clipUserInput } from "./progress-formatter.js";
 import { buildFirstTurnMemoryBootstrap, buildTaskDigestForTurn, renderDeskTurnContext } from "./turn-context.js";
@@ -56,6 +56,7 @@ export function createTurnProgress(): TurnProgress {
 }
 
 export interface TurnPipelineDeps {
+	profile: RunnerProfile;
 	conversation: DeskConversation;
 	workspaceDir: string;
 	/** The channel's human name for the capsule; absent when the channel index has none. */
@@ -139,10 +140,10 @@ export class TurnPipeline {
 		// Settled into a result object rather than left as a bare promise: if the bootstrap
 		// throws first we would otherwise leave a rejection unobserved, which Node's default
 		// policy turns into a process exit. Rethrown at the await, so a digest failure still
-		// fails the turn exactly as it did when this ran inline. A task step gets none: its brief
-		// already carries its own task, and the channel's other tasks are noise there.
+		// fails the turn exactly as it did when this ran inline. A task step gets none: its
+		// brief already carries its own task, and the desk's other tasks are noise there.
 		const taskDigestPromise = (
-			this.host.tasksEnabled && !this.host.taskLoop
+			this.host.tasksEnabled && this.deps.profile.kind !== "task"
 				? buildTaskDigestForTurn(this.deskDir, this.channelId)
 				: Promise.resolve("")
 		).then(

@@ -184,10 +184,14 @@ const cases: Record<string, OracleControl[]> = {
 				ctx.trace = ctx.trace.filter((entry) => !(entry.kind === "tool-result" && entry.tool === "bash"));
 			},
 		),
-		reject("rejected-park", "A rejected park is not waiting on work", ["job-ticket-recorded"], (ctx) => {
-			for (const entry of ctx.trace)
-				if (entry.kind === "tool-result" && entry.tool === "task_step_end") entry.ok = false;
-		}),
+		reject(
+			"not-waiting",
+			"A step that ended some other way is not waiting on work",
+			["job-ticket-recorded"],
+			(ctx) => {
+				for (const entry of ctx.trace) if (entry.fields?.stepNext === "work") entry.fields.stepNext = "continue";
+			},
+		),
 	],
 	"T-run-01": [
 		reject(
@@ -203,12 +207,11 @@ const cases: Record<string, OracleControl[]> = {
 			},
 		),
 		reject(
-			"rejected-work-park",
-			"A work park must have a successful correlated result",
+			"not-waiting-on-work",
+			"A step that did not end waiting on its bound work does not establish the wait",
 			["run-ticket-recorded"],
 			(ctx) => {
-				for (const entry of ctx.trace)
-					if (entry.kind === "tool-result" && entry.tool === "task_step_end") entry.ok = false;
+				for (const entry of ctx.trace) if (entry.fields?.stepNext === "work") entry.fields.stepNext = "continue";
 			},
 		),
 		reject("double-execution", "Two settled executions must not pass as one", ["single-settled-run"], (ctx) => {

@@ -27,21 +27,6 @@ export function formatElapsedZh(ms: number): string {
 }
 
 /**
- * A coarse, single-unit span in Chinese (`30 秒`, `12 分钟`, `3 小时`, `2 天`) — for "how far away is
- * this deadline", where a second unit is noise. Rounds within a unit and promotes to the next unit
- * when rounding reaches it, so the output never reads `60 分钟` or `24 小时`.
- */
-export function formatSpanZh(ms: number): string {
-	const seconds = Math.max(0, Math.round(ms / 1000));
-	if (seconds < 60) return `${seconds} 秒`;
-	const minutes = Math.round(ms / 60_000);
-	if (minutes < 60) return `${minutes} 分钟`;
-	const hours = Math.round(ms / 3_600_000);
-	if (hours < 24) return `${hours} 小时`;
-	return `${Math.round(ms / 86_400_000)} 天`;
-}
-
-/**
  * Coerce an untrusted numeric config/request value into an integer within `[minimum, maximum]`,
  * falling back to `fallback` for anything not a finite number or out of range. Shared by the
  * app-level config loaders (`tools.json`) and web request parameter resolution — both need the
