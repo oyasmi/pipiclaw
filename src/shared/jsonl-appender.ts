@@ -31,6 +31,8 @@ export interface JsonlAppenderOptions {
 	reservedCriticalBytes?: number;
 	/** Optional work that must follow a successful rotation in the same file queue. */
 	onRotate?: (filePath: string) => Promise<void>;
+	/** Defer rotation while the oldest shard still holds required recovery records. */
+	canRotate?: () => Promise<boolean>;
 }
 
 export interface JsonlAppender {
@@ -144,7 +146,13 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 	const write = async (filePath: string, line: string, lineBytes: number): Promise<void> => {
 		await ensureDir(filePath);
 		const size = await currentSize(filePath);
-		if (options.maxSizeBytes && options.maxSizeBytes > 0 && size + lineBytes > options.maxSizeBytes && size > 0) {
+		if (
+			options.maxSizeBytes &&
+			options.maxSizeBytes > 0 &&
+			size + lineBytes > options.maxSizeBytes &&
+			size > 0 &&
+			((await options.canRotate?.()) ?? true)
+		) {
 			await rotate(filePath);
 		}
 		await appendFile(filePath, line, { encoding: "utf-8", mode });

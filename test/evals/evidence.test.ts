@@ -148,6 +148,41 @@ describe("eval supervision and evidence", () => {
 			expect(trace.some((entry) => entry.kind === "model-result")).toBe(true);
 			expect(deliveries.some((delivery) => delivery.method === "sendPlain")).toBe(true);
 			expect(model.unmatched()).toHaveLength(0);
+
+			// R10: drive a real task through ask -> command reply -> checkpoint wait -> close.
+			// A worker that only scans on explicit runTaskLane cannot finish this chain.
+			const taskHome = createDeterministicHome({ homeDir: temp(), mockBaseUrl: model.baseUrl });
+			const deskDir = join(taskHome.workspaceDir, "desk-eval");
+			model.script.prependRoute({
+				name: "eval-task-resume",
+				when: (request) => request.tools.includes("task_ask"),
+				respond: [
+					reply.toolCall("task_ask", { question: "Environment and window?" }),
+					reply.toolCall("write", { path: join(deskDir, "release-plan.txt"), content: "staging\n周四 22:00\n" }),
+					reply.toolCall("edit", {
+						path: join(deskDir, "tasks/release-plan.md"),
+						oldText: "- [ ]",
+						newText: "- [x]",
+					}),
+					reply.toolCall("task_close", { id: "release-plan", outcome: "complete", note: "verified" }),
+				],
+			});
+			const taskCase = allCases.find((entry) => entry.id === "T-ask-01")!;
+			const taskResult = await runWorkerSegment({
+				item: taskCase,
+				homeDir: taskHome.homeDir,
+				preparedHome: true,
+				segment: { start: 0, end: taskCase.script.length, mode: "graceful", delayMs: 0 },
+				segmentNumber: 1,
+				externalBaseUrl: "",
+				trace: [],
+				deliveries: [],
+				usage: { costUsd: 0, turns: 0 },
+				deadlineMs: Date.now() + 15_000,
+			});
+			expect(taskResult.kind).toBe("complete");
+			expect(existsSync(join(deskDir, "tasks/archive/release-plan.md"))).toBe(true);
+			expect(readFileSync(join(deskDir, "release-plan.txt"), "utf8")).toBe("staging\n周四 22:00\n");
 		} finally {
 			await model.close();
 		}

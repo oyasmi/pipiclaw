@@ -2,6 +2,7 @@ import type { FileStore } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { preserveTaskFields, withTaskFileMutation } from "../tasks/file-mutation.js";
 
 export async function writeContent(
 	fileStore: FileStore,
@@ -9,6 +10,7 @@ export async function writeContent(
 	content: string,
 	signal: AbortSignal | undefined,
 	options?: {
+		deskDir?: string;
 		createParentDir?: boolean;
 		securityConfig?: SecurityConfig;
 		securityContext?: SecurityRuntimeContext;
@@ -33,6 +35,12 @@ export async function writeContent(
 	// `cp -p` + `cat > tmp && mv` shell script did, but content now goes straight to `node:fs`
 	// instead of a stdin pipe into `sh -c` -- it never exists in memory twice, and there is no
 	// shell script to escape or an EPIPE to swallow.
-	await fileStore.writeAtomic(target, content, { createParentDir, preserveMode: true, signal });
+	await withTaskFileMutation(options?.deskDir, target, (document) =>
+		fileStore.writeAtomic(target, preserveTaskFields(document, content), {
+			createParentDir,
+			preserveMode: true,
+			signal,
+		}),
+	);
 	return target;
 }

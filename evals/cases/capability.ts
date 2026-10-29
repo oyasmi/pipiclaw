@@ -17,10 +17,6 @@ import { copyFixture, wakeBody, writeTask } from "./helpers.js";
 
 const definitionFile = "evals/cases/capability.ts";
 
-/** `k`-th tick of a virtual TaskDriver schedule spaced past `continuationDelayMinutes` (5m default). */
-const driverTick = (k: number): string =>
-	new Date(Date.parse("2026-01-01T00:00:00.000Z") + k * 10 * 60_000).toISOString();
-
 export const capabilityCases: EvalCase[] = [
 	{
 		id: "T-resume-10",
@@ -30,7 +26,15 @@ export const capabilityCases: EvalCase[] = [
 		definitionFile,
 		budget: { maxTurns: 14, maxWallMs: 300_000 },
 		setup: (ctx) => writeTask(ctx, "resume-ten", { body: wakeBody("GAMMA-10", "RELEASE-GAMMA") }),
-		script: Array.from({ length: 10 }, () => ({ kind: "syntheticTaskTurn", taskId: "resume-ten" }) as const),
+		script: Array.from(
+			{ length: 10 },
+			() =>
+				({
+					kind: "taskMessage",
+					taskId: "resume-ten",
+					text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
+				}) as const,
+		),
 		graders: [
 			fileContains("goal-and-dod-retained", "tasks/resume-ten.md", /GAMMA-10[\s\S]*RELEASE-GAMMA/),
 			tracePredicate(
@@ -78,7 +82,7 @@ export const capabilityCases: EvalCase[] = [
 				body: "# Task\n\n## Goal\nWrite crash-checkpoint.txt containing DURABLE-CHECKPOINT, then record progress but do not close the task.\n\n## DoD\n- [ ] User supplies CLOSE-CRASH\n",
 			}),
 		script: [
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
+			{ kind: "runTaskLane" },
 			{ kind: "crash", mode: "atStepBoundary" },
 			{
 				kind: "user",
@@ -95,7 +99,7 @@ export const capabilityCases: EvalCase[] = [
 			},
 		],
 		graders: [
-			driverDispatchCount("crash-initial-dispatch", 1),
+			driverDispatchCount("crash-initial-dispatch", { min: 1 }),
 			fileContains("checkpoint-survived", "crash-checkpoint.txt", /DURABLE-CHECKPOINT/),
 			deliveryMatches("cold-recovery", /RECOVERY-CONFIRMED/),
 		],
@@ -222,7 +226,7 @@ export const capabilityCases: EvalCase[] = [
 					"- [ ] Item 7's line uses the current data (RECOVERED-7), not the retired ledger\n",
 			});
 		},
-		script: Array.from({ length: 16 }, (_, index) => ({ kind: "runTaskDriver", at: driverTick(index) }) as const),
+		script: Array.from({ length: 16 }, () => ({ kind: "runTaskLane" }) as const),
 		graders: [
 			// At least one real dispatch is part of this case's explicit contract. More than
 			// one is allowed: the exact number diagnoses recovery efficiency, not correctness.
@@ -236,7 +240,7 @@ export const capabilityCases: EvalCase[] = [
 					status: accepted > 0 ? "pass" : "fail",
 					severity: "quality",
 					evidence: [{ kind: "trace", ref: "trace.jsonl" }],
-					rationale: `${accepted}/16 scheduled TaskDriver ticks were accepted and dispatched before the trial ended`,
+					rationale: `${accepted}/16 lane scans produced task steps before the trial ended`,
 				};
 			}),
 			fileContains(

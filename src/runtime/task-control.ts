@@ -1,5 +1,6 @@
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { withTimeout } from "../shared/with-timeout.js";
 import { extractTaskTitle, readActiveTasks } from "../tasks/contract.js";
 import type {
 	TaskCancelOutcome,
@@ -9,6 +10,7 @@ import type {
 	TaskMessageOutcome,
 } from "../tasks/control.js";
 import type { TaskBudget, TaskFrontmatter } from "../tasks/frontmatter.js";
+import { taskInputTag } from "../tasks/input-receipts.js";
 import { appendTaskLog } from "../tasks/loop-log.js";
 import { cancelledByUserReceipt } from "../tasks/receipts.js";
 import {
@@ -36,6 +38,10 @@ export function isFrozen(ctx: LaneContext, desk: string, fields: TaskFrontmatter
  */
 export class LaneControl implements TaskControl {
 	constructor(private readonly ctx: LaneContext) {}
+
+	isRunning(desk: string, id: string): boolean {
+		return this.ctx.live.get(taskKey(desk, id))?.driving ?? false;
+	}
 
 	created(): void {
 		this.ctx.notify();
@@ -94,32 +100,26 @@ export class LaneControl implements TaskControl {
 		const live = ctx.live.get(taskKey(desk, id));
 		const text = input.text.trim();
 
-		// Delivered into the step that is running right now, when one is: the record says which
-		// step took it, so the next brief does not repeat it (INV-6). The steer comes first — a record
-		// of an injection that never happened would hide the message from the next step.
+		// Durability precedes best-effort steering. A transcript receipt, never queue acceptance,
+		// consumes this input; an aborted/unconsumed steer remains eligible for the next brief.
+		const messageId = await appendTaskLog(deskDir, id, {
+			kind: "message",
+			from: input.from,
+			channel: input.channel,
+			text,
+		});
 		if (live?.step && live.runner && !live.step.abort) {
-			const seq = live.step.seq;
-			let injected = false;
 			try {
-				await live.runner.queueSteer(`[用户对任务 ${id} 说] ${text}`, input.from);
-				injected = true;
+				await live.runner.queueSteer(`[用户对任务 ${id} 说] ${text}\n${taskInputTag(messageId)}`, input.from);
+				ctx.notify();
+				return { kind: "injected" };
 			} catch (error) {
 				log.logInfoEvent("tasks.message.inject_failed", "Message could not join the running step", {
 					fields: { taskId: id, desk, reason: errorMessage(error) },
 				});
 			}
-			await appendTaskLog(deskDir, id, {
-				kind: "message",
-				from: input.from,
-				channel: input.channel,
-				text,
-				...(injected ? { injected: seq } : {}),
-			});
-			ctx.notify();
-			return { kind: injected ? "injected" : "queued_for_next_step" };
 		}
 
-		await appendTaskLog(deskDir, id, { kind: "message", from: input.from, channel: input.channel, text });
 		ctx.notify();
 		if (document.fields.state === "paused") return { kind: "held_paused" };
 		if (isFrozen(ctx, desk, document.fields)) return { kind: "held_frozen" };
@@ -136,7 +136,7 @@ export class LaneControl implements TaskControl {
 		// recorded for the step that follows the resume (D24).
 		const live = ctx.live.get(taskKey(desk, id));
 		if (live) {
-			abortStep(live, "pause");
+			abortStep(ctx, live, "pause");
 			if (!live.driving) void ctx.release(live);
 		}
 		ctx.notify();
@@ -146,6 +146,7 @@ export class LaneControl implements TaskControl {
 	async resume(desk: string, id: string, grants: Partial<TaskBudget>): Promise<TaskControlOutcome> {
 		const deskDir = this.ctx.options.getDeskDir(desk);
 		if (!deskDir || !(await readStoredTask(deskDir, id))) return { kind: "not_found" };
+		if (this.ctx.live.get(taskKey(desk, id))?.driving) return { kind: "stopping" };
 		const resumed = await resumeStoredTask(deskDir, id, grants);
 		if (!resumed) return { kind: "unchanged" };
 		this.ctx.notify();
@@ -162,7 +163,17 @@ export class LaneControl implements TaskControl {
 		const document = deskDir ? await readStoredTask(deskDir, id) : undefined;
 		if (!deskDir || !document || document.fields.outcome) return { kind: "not_found" };
 		const live = ctx.live.get(taskKey(desk, id));
-		if (live) abortStep(live, "cancel");
+		await pauseStoredTask(deskDir, id, { by: "user", reason: "正在取消任务" });
+		if (live) {
+			abortStep(ctx, live, "cancel");
+			try {
+				await withTimeout("task cancellation", ctx.timing.stopGraceMs, () => live.done ?? Promise.resolve());
+			} catch {
+				throw new Error(
+					`任务 \`${id}\` 的当前步骤尚未停止，暂未归档。请联系部署者重启服务，再用 \`/tasks cancel ${id}\` 重试。`,
+				);
+			}
+		}
 		const cancelled = await this.cancelBoundWork(desk, id);
 		await closeStoredTask(deskDir, id, { outcome: "cancel", by: input.by, note: input.note });
 		if (live) await ctx.release(live);
@@ -201,6 +212,11 @@ export class LaneControl implements TaskControl {
 				});
 			}
 		}
+		const remaining = (await listPendingWork(options, desk, this.ctx.now())).get(taskId) ?? [];
+		if (remaining.length > 0)
+			throw new Error(
+				`任务 \`${taskId}\` 仍有工作未停止（${remaining.map((work) => work.ref).join("、")}），暂未归档。请稍后用 \`/tasks cancel ${taskId}\` 重试；仍未停止时请联系部署者检查服务器。`,
+			);
 		return cancelled;
 	}
 }

@@ -6,6 +6,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { withTaskFileMutation } from "../tasks/file-mutation.js";
 
 /**
  * Generate a unified diff string with line numbers and context. `startLineOld`/`startLineNew` let
@@ -111,6 +112,7 @@ const editSchema = Type.Object({
 });
 
 export interface EditToolOptions {
+	deskDir?: string;
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
@@ -370,78 +372,80 @@ export function createEditTool(fileStore: FileStore, options: EditToolOptions = 
 				channelId: options.channelId,
 			});
 
-			const before = await fileStore.stat(target);
-			if (!before || !before.isFile) {
-				throw new RecoverableToolError(`File not found: ${path}`);
-			}
+			return withTaskFileMutation(options.deskDir, target, async () => {
+				const before = await fileStore.stat(target);
+				if (!before || !before.isFile) {
+					throw new RecoverableToolError(`File not found: ${path}`);
+				}
 
-			const needle = Buffer.from(oldText, "utf-8");
-			const replacement = Buffer.from(newText, "utf-8");
-			const isNoopPayload = needle.equals(replacement);
+				const needle = Buffer.from(oldText, "utf-8");
+				const replacement = Buffer.from(newText, "utf-8");
+				const isNoopPayload = needle.equals(replacement);
 
-			const applyNoop = () => {
-				const noopKey = `${path}\x00${oldText}\x00${newText}`;
-				const streak = (noopCounts.get(noopKey) ?? 0) + 1;
-				noopCounts.set(noopKey, streak);
-				if (streak >= NOOP_HARD_LIMIT) {
-					throw new Error(
-						`STOP. This exact edit to ${path} has been a no-op ${streak} times in a row. ` +
-							`The bug is somewhere else — re-read the file to verify the anchor text before editing again. ` +
-							`Do NOT widen oldText or add lines to force a match.`,
+				const applyNoop = () => {
+					const noopKey = `${path}\x00${oldText}\x00${newText}`;
+					const streak = (noopCounts.get(noopKey) ?? 0) + 1;
+					noopCounts.set(noopKey, streak);
+					if (streak >= NOOP_HARD_LIMIT) {
+						throw new Error(
+							`STOP. This exact edit to ${path} has been a no-op ${streak} times in a row. ` +
+								`The bug is somewhere else — re-read the file to verify the anchor text before editing again. ` +
+								`Do NOT widen oldText or add lines to force a match.`,
+						);
+					}
+					throw new RecoverableToolError(
+						`No changes made to ${path}: oldText and newText are byte-identical at the match, so the replacement produced no change. ` +
+							`Re-read the file to confirm what actually needs changing before editing again.`,
+					);
+				};
+
+				let result: { text: string; diff: string; patch: string; occurrences: number };
+				if (before.size <= EDIT_INLINE_MAX_BYTES) {
+					result = await editInline(
+						fileStore,
+						target,
+						path,
+						before,
+						needle,
+						replacement,
+						replaceAll === true,
+						signal,
+					);
+				} else {
+					result = await editStreaming(
+						fileStore,
+						target,
+						path,
+						before,
+						needle,
+						replacement,
+						replaceAll === true,
+						isNoopPayload,
+						signal,
 					);
 				}
-				throw new RecoverableToolError(
-					`No changes made to ${path}: oldText and newText are byte-identical at the match, so the replacement produced no change. ` +
-						`Re-read the file to confirm what actually needs changing before editing again.`,
-				);
-			};
 
-			let result: { text: string; diff: string; patch: string; occurrences: number };
-			if (before.size <= EDIT_INLINE_MAX_BYTES) {
-				result = await editInline(
-					fileStore,
-					target,
-					path,
-					before,
-					needle,
-					replacement,
-					replaceAll === true,
-					signal,
-				);
-			} else {
-				result = await editStreaming(
-					fileStore,
-					target,
-					path,
-					before,
-					needle,
-					replacement,
-					replaceAll === true,
-					isNoopPayload,
-					signal,
-				);
-			}
+				if (isNoopPayload) {
+					applyNoop();
+				}
+				// A real edit breaks any no-op streak.
+				noopCounts.clear();
 
-			if (isNoopPayload) {
-				applyNoop();
-			}
-			// A real edit breaks any no-op streak.
-			noopCounts.clear();
+				const replacementSummary = replaceAll
+					? `Replaced ${result.occurrences} occurrence${result.occurrences === 1 ? "" : "s"} in ${path}.`
+					: `Successfully replaced text in ${path}. Changed ${oldText.length} characters to ${newText.length} characters.`;
 
-			const replacementSummary = replaceAll
-				? `Replaced ${result.occurrences} occurrence${result.occurrences === 1 ? "" : "s"} in ${path}.`
-				: `Successfully replaced text in ${path}. Changed ${oldText.length} characters to ${newText.length} characters.`;
+				const echoedDiff = result.diff.trim() ? `\n\n${clampDiffForEcho(result.diff)}` : "";
 
-			const echoedDiff = result.diff.trim() ? `\n\n${clampDiffForEcho(result.diff)}` : "";
-
-			return {
-				content: [{ type: "text", text: `${replacementSummary}${echoedDiff}` }],
-				details: {
-					path: target,
-					diff: result.diff,
-					patch: result.patch,
-				},
-			};
+				return {
+					content: [{ type: "text", text: `${replacementSummary}${echoedDiff}` }],
+					details: {
+						path: target,
+						diff: result.diff,
+						patch: result.patch,
+					},
+				};
+			});
 		},
 	};
 }

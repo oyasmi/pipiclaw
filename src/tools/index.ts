@@ -138,5 +138,15 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		withToolDetails(createSubAgentListTool(subAgentManageOptions), "subagent_list"),
 		withToolDetails(createSubAgentRunTool(subAgentManageOptions), "subagent_run"),
 	];
-	return options.taskSession ? all.filter((tool) => !taskSessionExcluded.has(tool.name)) : all;
+	if (!options.taskSession) return all;
+	return all
+		.filter((tool) => !taskSessionExcluded.has(tool.name))
+		.map((tool) => ({
+			...tool,
+			execute: (...args: Parameters<typeof tool.execute>) => {
+				args[2]?.throwIfAborted();
+				options.taskSession?.assertActive?.();
+				return tool.execute(...args);
+			},
+		}));
 }

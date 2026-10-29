@@ -2,12 +2,14 @@ import type { AgentRunner } from "../agent/types.js";
 import type { ChannelContext } from "../channel/channel-context.js";
 import type { TurnInfo } from "../channel/transport.js";
 import * as log from "../log.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { buildTaskStepBrief, contractOpenTag, contractSha, type PendingWorkView } from "../tasks/brief.js";
 import type { TaskSessionContext, TaskStepIntent } from "../tasks/control.js";
+import { acknowledgeTaskInputs } from "../tasks/input-receipts.js";
 import type { TaskStepResult } from "../tasks/loop-log.js";
 import type { StepDerivation } from "../tasks/state.js";
-import { beginStep, type EndedStep, endStep, readStoredTask } from "../tasks/store.js";
+import { beginStep, type EndedStep, endStep, pauseTask, readStoredTask } from "../tasks/store.js";
 import type { LaneContext, LiveTask, StepAbort, TaskStepEvent } from "./task-lane-types.js";
 import { listPendingWork } from "./task-pending.js";
 
@@ -16,11 +18,25 @@ const SILENT_CONTEXT: ChannelContext = { emit: () => undefined, finish: async ()
 
 /** The task session's view of its lane: which step is running and where it reports. */
 function sessionContextOf(ctx: LaneContext, live: LiveTask): TaskSessionContext {
+	const assertActive = () => {
+		if (!live.step || live.step.abort || live.quarantined || ctx.isStopped())
+			throw new RecoverableToolError(
+				"This task step has stopped. End the turn; the runtime will preserve its pending inputs.",
+			);
+	};
 	return {
+		assertActive,
 		taskId: live.taskId,
-		seq: () => live.seq,
-		intent: () => live.intent,
+		seq: () => {
+			assertActive();
+			return live.seq;
+		},
+		intent: () => {
+			assertActive();
+			return live.intent;
+		},
 		report: async (text) => {
+			assertActive();
 			try {
 				return await ctx.options.deliver(live.desk, live.channelId, text);
 			} catch (error) {
@@ -49,13 +65,38 @@ export function ensureRunner(ctx: LaneContext, live: LiveTask): AgentRunner {
 }
 
 /** Stop the running step: the turn is asked to end, and the abort cuts a tool that would not. */
-export function abortStep(live: LiveTask, reason: StepAbort): void {
+export function abortStep(ctx: LaneContext, live: LiveTask, reason: StepAbort): void {
 	const step = live.step;
 	if (!step || step.abort) return;
 	step.abort = reason;
 	const runner = live.runner;
 	if (!runner) return;
 	runner.requestStop();
+	if (reason !== "shutdown") {
+		step.stopTimer = setTimeout(() => {
+			if (live.step !== step) return;
+			live.quarantined = true;
+			runner.retireForRecovery();
+			void pauseTask(live.deskDir, live.taskId, {
+				by: "runtime",
+				reason: "当前步骤未能停止，请联系部署者重启服务后再恢复任务",
+			})
+				.then(async () => {
+					await ctx.options.deliver(
+						live.desk,
+						live.channelId,
+						`⚠️ 任务 \`${live.taskId}\` 的当前步骤未能停止，已暂停后续执行。请联系部署者重启服务，再用 \`/tasks resume ${live.taskId}\` 恢复。`,
+					);
+				})
+				.catch((error: unknown) =>
+					log.logWarn("tasks.step.quarantine_failed", "Task step quarantine failed", {
+						reason: errorMessage(error),
+						fields: { taskId: live.taskId, desk: live.desk },
+					}),
+				);
+		}, ctx.timing.stopGraceMs);
+		step.stopTimer.unref?.();
+	}
 	void runner.abort().catch((error: unknown) => {
 		log.logWarn("tasks.step.abort_failed", "Task step abort failed", {
 			channelId: live.channelId,
@@ -97,11 +138,20 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	const document = await readStoredTask(live.deskDir, live.taskId);
 	if (!document || document.fields.outcome) return { kind: "skipped" };
 
+	await acknowledgeTaskInputs(live.deskDir, live.taskId);
 	const runner = ensureRunner(ctx, live);
 	// Whether the session still holds the current contract is read from the session itself, so a
 	// compaction that dropped it, or an edit that changed it, brings the full brief back (D15).
 	const full = !(await runner.contextIncludes(contractOpenTag(live.taskId, contractSha(document.body))));
-	const begun = await beginStep(live.deskDir, live.taskId, { brief: full ? "full" : "delta" });
+	const begun = await beginStep(live.deskDir, live.taskId, {
+		brief: full ? "full" : "delta",
+		allowed: (fields) =>
+			!ctx.isStopped() &&
+			options.isEnabled?.() !== false &&
+			!!fields.channel &&
+			options.isBoundTo(fields.channel, live.desk) &&
+			options.isReachable(fields.channel),
+	});
 	if (!begun) return { kind: "skipped" };
 
 	live.seq = begun.seq;
@@ -126,7 +176,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 
 	const step: NonNullable<LiveTask["step"]> = { seq: begun.seq, startedAt: now };
 	live.step = step;
-	step.timer = setTimeout(() => abortStep(live, "timeout"), ctx.timing.stepTimeLimitMs);
+	step.timer = setTimeout(() => abortStep(ctx, live, "timeout"), ctx.timing.stepTimeLimitMs);
 	step.timer.unref?.();
 	const info: TurnInfo = {
 		channelId: live.channelId,
@@ -170,7 +220,9 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 		error = errorMessage(cause);
 	} finally {
 		if (step.timer) clearTimeout(step.timer);
+		if (step.stopTimer) clearTimeout(step.stopTimer);
 	}
+	await acknowledgeTaskInputs(live.deskDir, live.taskId);
 	live.step = undefined;
 
 	// A stop from the lane decides the result whatever the turn reported on its way out.
@@ -200,10 +252,11 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 		usd,
 		usdEstimated,
 		...(error ? { error } : {}),
+		...(honoured && intent.close ? { close: intent.close } : {}),
 		facts: {
 			result,
 			closed: honoured && intent.close !== undefined,
-			pausedByUser: step.abort === "pause",
+			pausedByUser: step.abort === "pause" || step.abort === "cancel" || live.quarantined === true,
 			...(honoured && intent.ask ? { asked: intent.ask } : {}),
 			...(honoured && intent.waitUntil ? { waitUntil: intent.waitUntil } : {}),
 			pendingWork: (await listPendingWork(options, live.desk, ctx.now())).get(live.taskId)?.length ?? 0,

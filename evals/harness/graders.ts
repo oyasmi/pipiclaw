@@ -433,13 +433,13 @@ export function externalRequestCount(
 	return grader;
 }
 
-export function driverDispatchCount(graderId: string, expected: number): CodeGrader {
+export function driverDispatchCount(graderId: string, expected: number | { min: number }): CodeGrader {
 	const grader = codeGrader(graderId, (ctx) => {
 		const actual = ctx.trace.filter((event) => event.fields?.driverDispatch === "true" && event.ok).length;
 		return result(
 			grader,
-			actual === expected ? "pass" : "fail",
-			`expected ${expected} task steps started by the lane, observed ${actual}`,
+			(typeof expected === "number" ? actual === expected : actual >= expected.min) ? "pass" : "fail",
+			`expected ${typeof expected === "number" ? expected : `at least ${expected.min}`} task steps started by the lane, observed ${actual}`,
 			"trace",
 			"trace.jsonl",
 		);

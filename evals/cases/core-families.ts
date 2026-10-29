@@ -177,7 +177,7 @@ export const coreFamilyCases: EvalCase[] = [
 			});
 		},
 		script: [
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
+			{ kind: "runTaskLane" },
 			{ kind: "checkpoint", id: "job-must-be-parked" },
 			{ kind: "environment", action: "writeFile", path: "desk-eval/.eval/job-release", content: "released\n" },
 			{
@@ -233,7 +233,7 @@ export const coreFamilyCases: EvalCase[] = [
 			});
 		},
 		script: [
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
+			{ kind: "runTaskLane" },
 			{ kind: "checkpoint", id: "after-a" },
 			{
 				kind: "environment",
@@ -241,7 +241,7 @@ export const coreFamilyCases: EvalCase[] = [
 				path: "desk-eval/stage-b.txt",
 				content: "B-RESULT-27\nnew target: green (supersedes blue)\n",
 			},
-			{ kind: "user", text: "/tasks reply migration-horizon stage-b.txt 已开放；读取它，它可能修正旧计划。" },
+			{ kind: "user", text: "/tasks msg migration-horizon stage-b.txt 已开放；读取它，它可能修正旧计划。" },
 			{
 				kind: "waitFor",
 				timeoutMs: 60_000,
@@ -257,7 +257,7 @@ export const coreFamilyCases: EvalCase[] = [
 			},
 			{
 				kind: "user",
-				text: "/tasks reply migration-horizon stage-c.txt 已开放。现在完成迁移报告并说明当前 target。",
+				text: "/tasks msg migration-horizon stage-c.txt 已开放。现在完成迁移报告并说明当前 target。",
 			},
 			{
 				kind: "waitFor",

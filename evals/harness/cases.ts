@@ -32,8 +32,8 @@ export function validateCases(cases: EvalCase[]): void {
 				const step = item.script[index];
 				if (step?.kind !== "crash" || step.mode !== "midTurn") continue;
 				const previous = item.script[index - 1];
-				if (previous?.kind !== "user" && previous?.kind !== "syntheticTaskTurn") {
-					throw new Error(`${item.id} midTurn crash must immediately follow a user or syntheticTaskTurn step.`);
+				if (previous?.kind !== "user" && previous?.kind !== "taskMessage") {
+					throw new Error(`${item.id} midTurn crash must immediately follow a user or taskMessage step.`);
 				}
 			}
 		}

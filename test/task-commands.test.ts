@@ -26,6 +26,7 @@ describe("/tasks (spec 064, D25)", () => {
 	let boundHere: (channelId: string) => boolean;
 
 	const control = {
+		isRunning: () => false,
 		created: vi.fn<TaskControl["created"]>(),
 		snapshot: vi.fn<TaskControl["snapshot"]>(async (_desk, id) =>
 			snapshots.filter((snapshot) => id === undefined || snapshot.id === id),

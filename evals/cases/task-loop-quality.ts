@@ -29,17 +29,13 @@ export const taskLoopQualityCases: EvalCase[] = [
 					"# Task\n\n## Goal\nRun `sleep 45 && echo TICKET-DONE > ticket-done.txt` as a background job, then report the file's content.\n\n" +
 					"## DoD\n- [ ] ticket-done.txt contains TICKET-DONE\n",
 			}),
-		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
+		script: [{ kind: "runTaskLane" }],
 		graders: [
-			driverDispatchCount("tl-ticket-01-dispatch", 1),
+			driverDispatchCount("tl-ticket-01-dispatch", { min: 1 }),
 			// The point of the ticket model: name the thing you are actually waiting for. A `time`
 			// ticket here is a guess that happens to work; a `job` ticket is a fact the runtime can
 			// redeem the moment the job settles.
-			taskFrontmatter(
-				"parks-on-the-job",
-				"await-job",
-				(frontmatter) => frontmatter.fields.waiting?.kind === "work" || frontmatter.fields.state === "queued",
-			),
+			taskFrontmatter("parks-on-the-job", "await-job", (frontmatter) => frontmatter.fields.waiting?.kind === "work"),
 			taskLog(
 				"no-guessed-timer",
 				"await-job",
@@ -62,9 +58,9 @@ export const taskLoopQualityCases: EvalCase[] = [
 					"# Task\n\n## Goal\nWrite the string EVIDENCE-42 into evidence.txt, then verify it by reading the file back.\n\n" +
 					"## DoD\n- [ ] evidence.txt contains EVIDENCE-42\n",
 			}),
-		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
+		script: [{ kind: "runTaskLane" }],
 		graders: [
-			driverDispatchCount("tl-note-01-dispatch", 1),
+			driverDispatchCount("tl-note-01-dispatch", { min: 1 }),
 			noteObservedEvidence(),
 			{
 				kind: "model",
@@ -92,10 +88,7 @@ export const taskLoopQualityCases: EvalCase[] = [
 					"# Task\n\n## Goal\nKeep investigating the repository and report findings; this task is deliberately open-ended.\n\n" +
 					"## DoD\n- [ ] A written report exists\n",
 			}),
-		script: [
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
-			{ kind: "runTaskDriver", at: "2026-01-01T00:05:00.000Z" },
-		],
+		script: [{ kind: "runTaskLane" }, { kind: "runTaskLane" }],
 		graders: [
 			driverDispatchCount("tl-budget-01-dispatch", 1),
 			taskFrontmatter(

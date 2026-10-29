@@ -175,7 +175,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 	} else if (id === "T-ask-01") {
 		controlFile(ctx, "release-plan.txt", "staging\n周四 22:00\n");
 		askPark(ctx);
-		controlEvent(ctx, "step", undefined, { kind: "runTaskDriver" });
+		controlEvent(ctx, "step", undefined, { kind: "runTaskLane" });
 		controlEvent(ctx, "step", undefined, { kind: "checkpoint" });
 		controlEvent(ctx, "runtime-log", undefined, { checkpoint: "parked-on-ask", fileTree: "[]" });
 		controlEvent(ctx, "step", undefined, { kind: "user" });
@@ -255,7 +255,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		controlFile(
 			ctx,
 			"tasks/archive/evidence-note.jsonl",
-			'{"kind":"step","note":"已写入并读取 evidence.txt，实际内容 EVIDENCE-42。"}\n',
+			'{"kind":"step_end","note":"已写入并读取 evidence.txt，实际内容 EVIDENCE-42。"}\n',
 		);
 		controlEvent(ctx, "tool-call", "read", { path: "evidence.txt" });
 		ctx.trace.at(-1)!.correlationId = "note-proof";

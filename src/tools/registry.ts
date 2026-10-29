@@ -190,7 +190,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "edit",
-		create: (ctx) => createEditTool(ctx.fileStore, fileToolOptions(ctx)),
+		create: (ctx) => createEditTool(ctx.fileStore, { ...fileToolOptions(ctx), deskDir: ctx.deskDir }),
 	},
 	{
 		name: "grep",
@@ -202,7 +202,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "write",
-		create: (ctx) => createWriteTool(ctx.fileStore, fileToolOptions(ctx)),
+		create: (ctx) => createWriteTool(ctx.fileStore, { ...fileToolOptions(ctx), deskDir: ctx.deskDir }),
 	},
 	{
 		name: "web_search",

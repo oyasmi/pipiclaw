@@ -43,6 +43,7 @@ const TASK_CHANNELS = {
 	currentChannelId: "dingtalk:dm:1",
 	describeChannel: (channelId: string) => ({ label: `\`${channelId}\``, boundHere: channelId === "dingtalk:dm:1" }),
 	control: {
+		isRunning: () => false,
 		created: () => undefined,
 		snapshot: async (): Promise<TaskLiveSnapshot[]> => [
 			{

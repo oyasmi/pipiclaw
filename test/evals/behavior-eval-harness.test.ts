@@ -495,7 +495,7 @@ describe("behavior eval process and gate semantics", () => {
 				},
 			],
 		});
-		const item = evalCase({ script: [{ kind: "runTaskDriver" }] });
+		const item = evalCase({ script: [{ kind: "runTaskLane" }] });
 		const grades = await gradeTrial(item, context, "completed", async () => passingGrade);
 		expect(resultOutcome(assessTrial(grades, "completed", true))).toBe("pass");
 		expect(grades).toHaveLength(1);

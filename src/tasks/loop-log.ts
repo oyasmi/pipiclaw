@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -6,15 +7,15 @@ import { formatLocalTime } from "../shared/local-time.js";
 import { clipText, truncate } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { normalizeTaskId } from "./contract.js";
-import type { TaskBudget } from "./frontmatter.js";
+import type { TaskBudget, TaskFrontmatter } from "./frontmatter.js";
 import { withTaskMutation } from "./mutation-lock.js";
 
 /**
  * The task's append-only loop log (spec 051, D5; spec 064, D3) — `tasks/<id>.jsonl`.
  *
  * Every input to the task (a settlement, a stall report, a user message, a resume) is appended here
- * *before* the lane is told, and the next step is built from "what arrived after the last `step`
- * record" (INV-6) — file order, not timestamps, so it does not depend on clock precision. The
+ * *before* the lane is told. Inputs remain pending until their identity appears in a persisted
+ * user message in the task transcript and an `input_ack` records that receipt (INV-6). The
  * log rotates at `MAX_LOG_BYTES` and keeps two rotated backups (`.1`, `.2`) alongside the current
  * file: `readTaskLog`/`archiveTask` must enumerate all three, or whatever had already rotated out is
  * silently dropped (R9). The log is append-only and is never rewritten (INV-9).
@@ -45,6 +46,24 @@ export interface TaskStepEndRecord {
 	usd?: number;
 	usdEstimated?: boolean;
 	error?: string;
+	close?: { outcome: "complete" | "cancel"; note: string };
+}
+
+export interface TaskInputAckRecord {
+	ts: string;
+	kind: "input_ack";
+	ids: string[];
+}
+
+export interface TaskAskDeliveredRecord {
+	ts: string;
+	kind: "ask_delivered";
+	seq: number;
+}
+
+export interface TaskCheckpointRecord {
+	ts: string;
+	kind: "checkpoint";
 }
 
 /** A delegation or background job was bound to this task (spec 052, D4). `ref` is a run or job id. */
@@ -97,14 +116,13 @@ export interface TaskStallRecord {
 	silentMinutes: number;
 }
 
-/** The user said something to the task. `injected` names the step it was delivered into mid-run. */
+/** The user said something to the task; only a durable input receipt consumes it. */
 export interface TaskMessageRecord {
 	ts: string;
 	kind: "message";
 	from: string;
 	channel: string;
 	text: string;
-	injected?: number;
 }
 
 export interface TaskAskRecord {
@@ -152,7 +170,10 @@ export interface TaskCloseRecord {
 	usd: number;
 }
 
-export type TaskLogRecord =
+export type TaskLogRecord = (
+	| TaskInputAckRecord
+	| TaskAskDeliveredRecord
+	| TaskCheckpointRecord
 	| TaskStepRecord
 	| TaskStepEndRecord
 	| TaskDispatchRecord
@@ -164,7 +185,8 @@ export type TaskLogRecord =
 	| TaskReportRecord
 	| TaskPauseRecord
 	| TaskResumeRecord
-	| TaskCloseRecord;
+	| TaskCloseRecord
+) & { id?: string; checkpoint?: TaskFrontmatter };
 
 /** Same rotation shape as the channel archive: the log is working history, not an audit trail. */
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
@@ -186,10 +208,33 @@ export function taskLogIsArchived(deskDir: string, id: string): boolean {
 
 const appenders = new Map<string, JsonlAppender>();
 
-function appenderFor(path: string): JsonlAppender {
+function appenderFor(path: string, deskDir: string, id: string): JsonlAppender {
 	const existing = appenders.get(path);
 	if (existing) return existing;
-	const appender = createJsonlAppender({ path, maxSizeBytes: MAX_LOG_BYTES, maxRotations: 2 });
+	const appender = createJsonlAppender({
+		path,
+		maxSizeBytes: MAX_LOG_BYTES,
+		maxRotations: 2,
+		canRotate: async () => {
+			if (!existsSync(`${path}.2`)) return true;
+			const records = await readTaskLog(deskDir, id, { strict: true });
+			const latest = (kind: TaskLogRecord["kind"]) => [...records].reverse().find((record) => record.kind === kind);
+			const required = [
+				...newInputs(records),
+				...records.filter((record) => record.kind === "settle"),
+				latest("step"),
+				latest("resume"),
+				latest("ask_delivered"),
+				latest("close"),
+				...stepEndsSinceResume(records).slice(-3),
+				[...records].reverse().find((record) => record.checkpoint),
+			];
+			const pinned = new Set(required.flatMap((record) => (record?.id ? [record.id] : [])));
+			const oldest: TaskLogRecord[] = [];
+			parseLogLines(await readFile(`${path}.2`, "utf-8"), {}, oldest);
+			return !oldest.some((record) => record.id && pinned.has(record.id));
+		},
+	});
 	appenders.set(path, appender);
 	return appender;
 }
@@ -213,16 +258,20 @@ export async function appendTaskLog(
 	deskDir: string,
 	id: string,
 	record: TaskLogInput & { ts?: string },
-): Promise<void> {
-	const withTs = { ts: record.ts ?? formatLocalTime(), ...record };
+): Promise<string> {
+	const withTs = { ts: record.ts ?? formatLocalTime(), ...record, id: record.id ?? randomUUID() };
 	if (withTs.kind === "step_end") withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
 	if (withTs.kind === "report" || withTs.kind === "message") withTs.text = clipText(withTs.text, NOTE_MAX_CHARS);
 	// Under the task's mutation lock: the appender rotates by size, and two processes rotating
 	// one log at once would each move the other's fresh records aside.
-	await withTaskMutation(deskDir, id, () => appenderFor(taskLogPath(deskDir, id)).appendStrict(withTs));
+	await withTaskMutation(deskDir, id, () => appenderFor(taskLogPath(deskDir, id), deskDir, id).appendStrict(withTs));
+	return withTs.id;
 }
 
 const RECORD_KINDS: readonly TaskLogRecord["kind"][] = [
+	"input_ack",
+	"ask_delivered",
+	"checkpoint",
 	"step",
 	"step_end",
 	"dispatch",
@@ -250,6 +299,8 @@ export interface ReadTaskLogOptions {
 	/** Keep at most this many, counted from the end (the most recent). */
 	limit?: number;
 	kinds?: readonly TaskLogRecord["kind"][];
+	/** Recovery must distinguish unreadable storage from an empty history. */
+	strict?: boolean;
 }
 
 /** Rotated-shard paths for `basePath`, oldest first, then the current file — the chronological
@@ -298,7 +349,8 @@ export async function readTaskLog(
 		let content: string;
 		try {
 			content = await readFile(path, "utf-8");
-		} catch {
+		} catch (error) {
+			if (options.strict) throw error;
 			continue;
 		}
 		parseLogLines(content, options, records);
@@ -310,6 +362,11 @@ export async function readTaskLog(
 export function renderTaskLogLine(record: TaskLogRecord): string {
 	const at = `[${record.ts}]`;
 	switch (record.kind) {
+		case "input_ack":
+		case "checkpoint":
+			return "";
+		case "ask_delivered":
+			return `- ${at} step ${record.seq} 提问已送达`;
 		case "step":
 			return `- ${at} step ${record.seq} 开始（${record.reason}，${record.brief === "full" ? "完整" : "增量"} brief）`;
 		case "step_end":
@@ -321,7 +378,7 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 		case "stall":
 			return `- ${at} 卡顿 ${record.ref}: 已 ${record.silentMinutes} 分钟没有输出`;
 		case "message":
-			return `- ${at} 用户消息（${record.from}）${record.injected !== undefined ? `，已注入 step ${record.injected}` : ""}: ${record.text}`;
+			return `- ${at} 用户消息（${record.from}）: ${record.text}`;
 		case "ask":
 			return `- ${at} step ${record.seq} 向用户提问: ${record.question}`;
 		case "wait":
@@ -376,6 +433,11 @@ function oneLine(text: string, max: number): string {
 export function renderTaskLogLineForUser(record: TaskLogRecord): string {
 	const at = minuteStamp(record.ts);
 	switch (record.kind) {
+		case "input_ack":
+		case "checkpoint":
+			return "";
+		case "ask_delivered":
+			return `- ${at} 提问已送达`;
 		case "step":
 			return `- ${at} 开始第 ${record.seq} 步`;
 		case "step_end": {
@@ -433,26 +495,24 @@ export function lastStep(records: readonly TaskLogRecord[]): { step: TaskStepRec
 }
 
 /** A record that wakes a waiting task and is shown to the next step. */
-export type TaskInputRecord = TaskSettleRecord | TaskStallRecord | TaskMessageRecord | TaskResumeRecord;
+export type TaskInputRecord = (TaskSettleRecord | TaskStallRecord | TaskMessageRecord | TaskResumeRecord) & {
+	id?: string;
+};
 
 /**
- * What arrived since the last `step` began: `settle` (unless it was returned inline), `stall`,
- * `message` (unless it was already injected into a running step) and `resume` records. The one definition both the wake decision and
- * the next brief use (INV-6); file order, not time, decides "after".
+ * Pending inputs, in journal order. Starting a step or accepting a steer never consumes them.
+ * Inline results are already returned by their tool; other inputs need a durable receipt.
  */
 export function newInputs(records: readonly TaskLogRecord[]): TaskInputRecord[] {
-	let from = 0;
-	for (let index = records.length - 1; index >= 0; index--) {
-		if (records[index]?.kind === "step") {
-			from = index + 1;
-			break;
-		}
-	}
+	const consumed = new Set(records.flatMap((record) => (record.kind === "input_ack" ? record.ids : [])));
 	const inputs: TaskInputRecord[] = [];
-	for (const record of records.slice(from)) {
+	const seen = new Set<string>();
+	for (const record of records) {
+		if (record.id && (consumed.has(record.id) || seen.has(record.id))) continue;
+		if (record.id) seen.add(record.id);
 		if (record.kind === "stall" || record.kind === "resume") inputs.push(record);
 		else if (record.kind === "settle" && !record.inline) inputs.push(record);
-		else if (record.kind === "message" && record.injected === undefined) inputs.push(record);
+		else if (record.kind === "message") inputs.push(record);
 	}
 	return inputs;
 }
@@ -462,7 +522,7 @@ export function newInputs(records: readonly TaskLogRecord[]): TaskInputRecord[] 
  * error) counts only these: a resume is the user looking at the problem, so the same evidence must
  * not pause the task a second time.
  */
-export function stepEndsSinceResume(records: readonly TaskLogRecord[]): TaskStepEndRecord[] {
+export function stepEndsSinceResume(records: readonly TaskLogRecord[]): Array<TaskStepEndRecord & { id?: string }> {
 	let from = 0;
 	for (let index = records.length - 1; index >= 0; index--) {
 		if (records[index]?.kind === "resume") {

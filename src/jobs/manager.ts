@@ -206,7 +206,12 @@ export class DeskJobManager {
 	 */
 	private async collectGarbage(now = Date.now()): Promise<void> {
 		for (const record of Array.from(this.jobs.values())) {
-			if (isTerminal(record.status) && record.finishedAt && now - record.finishedAt >= FINISHED_JOB_RETENTION_MS) {
+			if (
+				isTerminal(record.status) &&
+				(!record.contract.taskId || record.taskLogged) &&
+				record.finishedAt &&
+				now - record.finishedAt >= FINISHED_JOB_RETENTION_MS
+			) {
 				await this.forget(record);
 			}
 		}
@@ -553,6 +558,8 @@ export class DeskJobManager {
 	 */
 	private async reconcileLocked(record: JobRecord, signal?: AbortSignal, announce = true): Promise<void> {
 		if (record.status !== "running") {
+			await this.logSettlementToTask(record);
+			await this.announce(record, signal);
 			return;
 		}
 		const probes = await this.probeAll([record], signal);
@@ -660,7 +667,6 @@ export class DeskJobManager {
 		const taskId = record.contract.taskId;
 		const deskDir = this.target.deskDir;
 		if (!taskId || !deskDir || record.taskLogged) return;
-		record.taskLogged = true;
 		const output = await this.readOutput(record.id).catch(() => undefined);
 		await logTaskSettlement(deskDir, taskId, {
 			ref: record.id,
@@ -671,12 +677,8 @@ export class DeskJobManager {
 			durationMs: record.durationMs,
 			// The caller delivered this result to the model in the same tool call (`announce: false`).
 			...(record.notified ? { inline: true } : {}),
-		}).catch((error) => {
-			log.logWarn("job.task_settle.log_failed", "Task settlement record failed", {
-				reason: errorMessage(error),
-				fields: { jobId: record.id, taskId },
-			});
 		});
+		record.taskLogged = true;
 		await this.persist(record);
 	}
 

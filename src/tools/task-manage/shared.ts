@@ -20,7 +20,7 @@ export async function pendingWorkRefs(options: TaskManageToolOptions, taskId: st
 	for (const run of options.runManager.list()) {
 		if (run.taskId === taskId && run.settledAt === undefined) refs.push(run.runId);
 	}
-	const jobs = await options.jobManager.list().catch(() => []);
+	const jobs = await options.jobManager.list();
 	for (const job of jobs) {
 		if (job.taskId === taskId && job.status === "running") refs.push(job.id);
 	}

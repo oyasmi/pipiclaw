@@ -10,6 +10,7 @@ const writeSchema = Type.Object({
 });
 
 export interface WriteToolOptions {
+	deskDir?: string;
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
@@ -31,6 +32,7 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 			signal?: AbortSignal,
 		) => {
 			const target = await writeContent(fileStore, path, content, signal, {
+				deskDir: options.deskDir,
 				createParentDir: true,
 				securityConfig: options.securityConfig,
 				securityContext: options.securityContext,
@@ -38,7 +40,6 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 				toolName: "write",
 			});
 			const bytesWritten = Buffer.byteLength(content, "utf-8");
-
 			return {
 				content: [{ type: "text", text: `Successfully wrote ${bytesWritten} bytes to ${path}` }],
 				details: { path: target },

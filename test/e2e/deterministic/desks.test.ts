@@ -93,6 +93,9 @@ describe("E2E deterministic: desks and bindings", () => {
 		// Mutation checks (2026-10-18): removing the admission check in `runEventTurn` lets the stale
 		// wake reach the provider; removing the lane's freeze check lets the task step run while the
 		// channel is bound to `lab` (the step's request reaches the provider). Either turns the case red.
+		// R3 extension (2026-10-29): rebind while step 1 is held, then release it; step 2 must
+		// not reach the provider until rebound. Mutation: remove the drive and beginStep binding
+		// checks; step 2 reaches the provider while frozen and this case fails (verified).
 		// A second channel keeps `e2e` active after the rebind, so the lane still scans it and the
 		// per-task freeze (not the desk's dormancy) is what holds the task back.
 		harness = await createDeterministicHarness({ extraChannels: [{ channelId: "dingtalk:group:cidKEEP+e2e==" }] });
@@ -110,16 +113,29 @@ describe("E2E deterministic: desks and bindings", () => {
 		});
 		harness.model.script.route({
 			name: "step",
-			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #`),
+			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #2]`),
 			respond: [reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "digest sent" })],
 		});
 
+		harness.model.script.route({
+			name: "before-freeze",
+			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #1]`),
+			respond: [
+				reply.toolCall("read", { path: join(harness.deskDir, "tasks", `${taskId}.md`) }),
+				reply.text("current step finished"),
+			],
+		});
+		const running = harness.model.script.hold({ when: (r) => r.lastUserText.includes(`[TASK_STEP:${taskId} #1]`) });
+		await harness.runtime.taskLane.runOnce();
+		await running.arrived;
 		await harness.sendUserMessage("/desk new lab");
 		await harness.sendUserMessage("/desk bind lab");
 		expect(JSON.parse(readFileSync(getBindingsPath(harness.workspaceDir), "utf8")).bindings).toMatchObject({
 			[harness.channelId]: { desk: "lab" },
 		});
 
+		running.release();
+		await harness.runtime.taskLane.drained();
 		// A completion wake the old desk produced before the rebind, still on the durable outbox.
 		const dispatchId = `subagent:${harness.desk}:run_stale:done`;
 		const dispatchDir = join(harness.homeDir, "state", "dispatch");

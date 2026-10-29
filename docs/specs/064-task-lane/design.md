@@ -86,10 +86,10 @@
 - **INV-1（响应）** 任务步骤不进入任何频道队列，不占用任何频道的回合；聊天回合不等待任何任务步骤，任务步骤也不等待聊天回合。
 - **INV-2（状态归属）** frontmatter 的 `state`、`waiting`、`paused`、`usage` 只由运行时写入（车道、`tasks/store.ts` 的状态转换、`/tasks` 命令与聊天工具经 `TaskControl` 端口）。模型的任何工具参数都不能直接写它们；契约正文归负责人。
 - **INV-3（形状）** `state: waiting` ⟺ `waiting` 存在；`state: paused` ⟺ `paused` 存在。读写两侧都由 `normalizeTaskFrontmatter` 强制。
-- **INV-4（存活）** 一个未暂停的活动任务，在车道对账之后必处于下列之一：`running`；`queued`（有槽即执行）；`waiting{work}` 且至少有一个本任务在途的委派或作业（各有硬截止时间）；`waiting{time}` 且 `until` 有限；`waiting{user}` 且问题已发给用户。不存在「在等，但没有任何东西能叫醒它」的状态。
-- **INV-5（并发）** 同一任务同时最多一个步骤；同一工位执行中（`running` 或 `waiting{work}`）的任务最多 3 个，全局最多 5 个。启动对账时已在执行的任务允许暂时超额，但超额期间不接纳新任务。
-- **INV-6（不丢输入）** 结算、卡顿、用户消息都先追加到任务日志，再通知车道。下一步看到上一步开始之后的全部输入，只排除已在上一步中途注入的消息。
-- **INV-7（冻结）** 投递频道缺失、未绑定到任务所在工位、或其渠道未开启时，任务冻结：车道不为它开新步骤、不写它的状态、不占执行槽；输入照常记入日志。频道恢复后从原状态继续（保留 spec 058 D8）。
+- **INV-4（存活）** 一个未暂停的活动任务，在车道对账之后必处于下列之一：`running`；`queued`（有槽即执行）；`waiting{work}` 且至少有一个本任务在途的委派或作业（各有硬截止时间）；`waiting{time}` 且 `until` 有限；`waiting{user}` 且问题已发给用户，或问题有持久化补发依据、由车道重试投递。不存在「在等，但没有任何东西能叫醒它」的状态。
+- **INV-5（并发）** 同一任务同时最多一个步骤；同一工位执行中（`running` 或 `waiting{work}`）的任务最多 3 个，全局最多 5 个。启动或解冻对账时已在执行的任务允许暂时超额，但超额期间不接纳新任务。
+- **INV-6（不丢输入）** 结算、卡顿、用户消息都先追加到任务日志，再通知车道。输入带稳定身份；只有在任务会话的持久化用户消息中确认收到后才消费。步骤开始与中途注入入队都不是消费确认，未确认输入恢复后重投。
+- **INV-7（冻结）** 投递频道缺失、未绑定到任务所在工位、或其渠道未开启时，任务冻结：车道不为它开新步骤、不做调度状态维护；在途步骤允许收尾并记账，退出前仍计入实际并发。其余冻结任务不占槽，输入照常记入日志。频道恢复后从原状态继续（保留 spec 058 D8）。
 - **INV-8（绑定）** 委派与作业归属哪个任务，只由发起它的会话决定：任务会话里发起的自动绑定该任务，聊天里发起的不绑定任何任务。模型不能通过参数指定任务归属。
 - **INV-9（日志）** 任务日志只追加不改写；运行时从不改写契约正文。
 
@@ -119,23 +119,24 @@ budget: {"usd":10}
 | `origin` | 仅事件模板生成的实例：事件名 |
 | `usage` | `{"startedAt","steps","usd","usdEstimated"}`；删除旧的 `expired` |
 | `budget` | 可选的 `steps` / `usd` 覆盖 |
+| `revision` | 运行时已应用的日志检查点版本，与状态、用量一同原子写入 |
 
-渲染顺序固定为 `state, waiting, paused, channel, origin, usage, budget`。`ticket`、`usage.expired`、`state: open|parked` 全部删除，读取器不认识它们。
+渲染顺序固定为 `state, waiting, paused, channel, origin, usage, budget, revision`。`ticket`、`usage.expired`、`state: open|parked` 全部删除，读取器不认识它们。
 
 **归一化（INV-3）**：`waiting` 状态却没有合法的 `waiting` → `queued`；`paused` 状态却没有合法的 `paused` → `queued`；非 `waiting` / `paused` 状态带着对应字段 → 丢弃该字段。无法读取的 frontmatter 仍按旧原则 fail open：任务出现在列表里并标「文件头不可读」，但车道不执行它（不可读的任务不能安全执行，修复入口见 `/tasks doctor`）。
 
 ### D3. 任务日志
 
-`tasks/<id>.jsonl`，追加写、轮转方式不变。记录种类（全部带 `ts`）：
+`tasks/<id>.jsonl`，追加写。记录全部带 `ts` 与稳定 `id`；状态写入记录带 `checkpoint`（完整 frontmatter 与递增 `revision`）。轮转保留未消费输入、结算去重记录与最近恢复依据；这些记录仍在最旧分片时暂缓轮转，活动日志可能超过大小目标。记录种类：
 
 | kind | 字段 | 写入者 | 是否算输入 |
 |---|---|---|---|
 | `step` | `seq`, `reason`（`start` / `input` / `continue` / `resume` / `retry`）, `brief`（`full` / `delta`） | 车道，步骤开始时 | — |
-| `step_end` | `seq`, `result`（`ok` / `timeout` / `error` / `aborted` / `interrupted`）, `next`（`continue` / `work` / `user` / `time` / `closed` / `paused`）, `note`, `tools`, `usd?`, `usdEstimated?`, `error?` | 车道，步骤结束时 | — |
+| `step_end` | `seq`, `result`（`ok` / `timeout` / `error` / `aborted` / `interrupted`）, `next`（`continue` / `work` / `user` / `time` / `closed` / `paused`）, `note`, `tools`, `usd?`, `usdEstimated?`, `error?`, `close?`（关闭结果与说明） | 车道，步骤结束时 | — |
 | `dispatch` | 同现状 | run / job 管理器 | — |
 | `settle` | 同现状 | run / job 管理器 | 是 |
 | `stall` | `ref`, `silentMinutes` | run 管理器 | 是 |
-| `message` | `from`, `channel`, `text`, `injected?`（被注入的步骤 `seq`） | `TaskControl.message` | 是（`injected` 的除外） |
+| `message` | `from`, `channel`, `text` | `TaskControl.message` | 是 |
 | `ask` | `seq`, `question` | `task_ask` | — |
 | `wait` | `seq`, `until` | `task_wait` | — |
 | `report` | `seq`, `text`, `delivered` | `task_report` | — |
@@ -143,7 +144,13 @@ budget: {"usd":10}
 | `resume` | `grants?` | `TaskControl.resume` | 是 |
 | `close` | `outcome`（`done` / `cancelled`）, `by`（`leader` / `user`）, `note`, `steps`, `usd` | `task_close`、`TaskControl.cancel` | — |
 
-**新输入**：最后一条 `step` 记录之后、种类为 `settle` / `stall` / `message`（不含 `injected`）/ `resume` 的记录。这一个定义同时用于唤醒判断（D9）和下一步的 brief（D15）。用文件顺序而不是时间戳判断先后，所以不依赖时钟精度；`step` 写在步骤开始，因此步骤进行期间到达的输入一定排在它后面，下一步一定看得到（INV-6）。
+| `input_ack` | `ids`（已在持久化任务会话确认收到的输入） | 车道 | — |
+| `ask_delivered` | `seq`（已成功投递的问题所属步骤） | 车道 | — |
+| `checkpoint` | 无业务载荷，仅 `checkpoint` | 状态维护 | — |
+
+**新输入**：没有 `input_ack` 确认的 `settle`（非 `inline`）/ `stall` / `message` / `resume`，保持日志顺序。brief 与 steer 在每条输入正文末尾带稳定身份，车道读取实际会话 JSONL 的用户消息后追加确认；SDK 入队和公共消息事件均早于持久化，不能充当确认。未确认项允许重投，超出单次 brief 预算的项继续保留。
+
+**提交协议**：在任务锁内，从最新已提交版本派生状态与用量，先追加带检查点的日志，再原子写 Markdown。读取与对账重放比 Markdown `revision` 更新的检查点；后续写入基于重放结果，防止暂停、恢复或结算覆盖未落快照的步骤。结算以 `ref` 去重，生产者仅在接收成功后保存确认，存储失败保留重试资格。
 
 `step` 有、`step_end` 无，表示步骤被进程中断，由启动对账补写 `step_end{result:"interrupted"}`（D10）。
 
@@ -215,7 +222,7 @@ budget: {"usd":10}
 
 ### D10. 启动对账
 
-运行时启动（以及车道从停用恢复）时，对每个活动任务：
+每次扫描，对可达且本进程没有正在执行步骤的活动任务先重放未应用检查点。冻结任务延后到解冻后处理。随后：
 
 - `running` → 补写 `step_end{result:"interrupted", next:…}`（`usage.steps` 计入这一步），再按 D8 第 5、6 条推导为 `waiting{work}` 或 `queued`。
 - `waiting{work}` 而本任务没有任何在途工作 → `queued`。
@@ -261,7 +268,7 @@ task profile 的 runner 以任务的 `channel` 作为 `channelId`：委派通知
 
 1. 车道写 `step{seq, reason, brief}`，构建 brief（D15）。
 2. `runner.run(stepTurn, silentContext, store)`：`stepTurn` 的发送者为 `TASK`，文本是 brief；`silentContext` 丢弃一切流式输出（任务步骤不向频道说话，对用户说话只有 `task_report` / `task_ask` 与运行时回执）。
-3. 步骤计时器 `STEP_TIME_LIMIT_MS = 20 分钟`，到时 `requestStop` + `abort`，结果记为 `timeout`。
+3. 步骤计时器 `STEP_TIME_LIMIT_MS = 20 分钟`，到时 `requestStop` + `abort`。3 秒宽限后仍不退出则退休 runner、暂停后续执行并通知部署者重启；旧执行退出前保留占用，禁止同任务替代步骤，迟到意图不能生效。结束后记为 `timeout`。同进程无法强杀任意已发出的工具副作用，不承诺物理停止的硬上界。
 4. 回合结束后车道写 `step_end`：`note` 是模型最后一段回复（截断到 4,000 字符，空则记「（无）」），`tools` 是本步完成的工具名（来自 `RunState.toolsUsed`），`usd` 是本步自身的模型成本（委派成本在结算时计入）。同时 `usage.steps += 1`、`usage.usd` 累加。
 5. 按 D8 推导并转换状态，再按 D9 判断是否立即醒来。
 
@@ -311,7 +318,7 @@ task profile 的 runner 以任务的 `channel` 作为 `channelId`：委派通知
 
 ### D17. 冻结
 
-见 INV-7。冻结判断与现在相同（频道缺失、未绑定到该工位、渠道未开启），由车道在每次扫描时进行。冻结的任务若持有 runner 与槽：正在执行的步骤跑完，之后释放；`waiting{work}` 直接释放。冻结期间的结算、卡顿、消息照常记入日志；频道恢复后按 D9 自然醒来。状态转换只记一次 info 日志（`tasks.task.frozen` / `tasks.task.unfrozen`）。
+见 INV-7。冻结判断为频道缺失、未绑定到该工位或渠道未开启，每次扫描及每步接纳时都复核。冻结的任务若持有 runner 与槽：正在执行的步骤跑完，之后释放；`waiting{work}` 直接释放。解冻时恢复槽位统计，暂时超额时不接纳新任务；实际同时执行的步骤始终遵守 3/5 限制。冻结期间的结算、卡顿、消息照常记入日志；频道恢复后按 D9 自然醒来。状态转换只记一次 info 日志（`tasks.task.frozen` / `tasks.task.unfrozen`）。
 
 ## 8. 工作绑定与结果回流
 
@@ -389,12 +396,12 @@ interface TaskControl {
 
 | 任务此刻 | 行为 | outcome |
 |---|---|---|
-| 执行中 | 写 `message{injected: seq}`，并 `queueSteer` 注入当前步骤；注入失败（回合恰好结束）则改写为普通输入 | `injected` / `queued_for_next_step` |
+| 执行中 | 先写普通 `message`，再 `queueSteer` 尝试加入当前步骤；只有会话落盘确认才排除后续重投 | `injected` / `queued_for_next_step` |
 | 等待中（任意 kind）或排队中 | 写 `message`，按 D9 唤醒 | `woke` / `queued_for_next_step` |
 | 已暂停 | 写 `message`，保持暂停 | `held_paused` |
 | 冻结 | 写 `message`，保持冻结 | `held_frozen` |
 
-`pause` 中止正在执行的步骤（`requestStop` + `abort`，沿用 stop 看门狗防卡死），不取消在途工作。`cancel` 中止步骤、取消本任务在途的委派（`runManager.cancel`）与作业（`jobManager.cancel`），写 `close{outcome:"cancelled", by}` 并归档。
+`pause` 请求中止正在执行的步骤（`requestStop` + `abort`，宽限后退休未响应的 runner 并保持暂停），不取消在途工作。`cancel` 先暂停以封住新步骤，等待当前步骤退出，再取消本任务在途的委派（`runManager.cancel`）与作业（`jobManager.cancel`），确认在途工作均已退出后写 `close{outcome:"cancelled", by}` 并归档；未能停止或归档失败不得报告成功。
 
 ### D25. `/tasks` 命令
 
@@ -560,7 +567,7 @@ playbook 是模型执行的机制参考，与运行时同一变更落地（spec 
 | 聊天与任务同时改同一工作目录 | 接受（工位内不隔离）；写委派仍有 lease；playbook 约束 |
 | 每个执行中的任务常驻一个 runner | 至多 5 个；离开执行即释放 |
 | `waiting{user}` 无超时，问题可能被遗忘 | 不占槽、不花钱；`/tasks`、`<task_agenda>` 与 `/status` 持续显示「等你回复」 |
-| 步骤中途注入与步骤结束竞态 | 注入失败自动改写为普通输入；`injected` 只在注入成功后写入 |
+| 步骤中途注入与步骤结束竞态 | 输入先落日志；入队不消费，持久化会话确认前始终允许重投 |
 | 格式变化需要迁移 | 一次性离线迁移说明与副本演练；运行时不读旧格式 |
 | 删除 `taskId` 参数后，聊天无法把工作挂到任务上 | 有意为之：工作归属由会话决定；用 `task_message` 让负责人派发 |
 
@@ -578,7 +585,7 @@ playbook 是模型执行的机制参考，与运行时同一变更落地（spec 
 
 实施在分支 `feat/task-lane` 上完成。下表按阶段记录步骤、偏差与理由；用例数 before → after 取自实施前后同一口径（vitest 实际用例数：单测 975 → 974，deterministic e2e 以文件内 `it` 计 69 → 64）。
 
-### 偏差（需要用户知悉或确认）
+### 初次实施偏差（后续修复见 §21）
 
 | # | 偏差 | 理由 |
 |---|---|---|
@@ -618,6 +625,10 @@ playbook 是模型执行的机制参考，与运行时同一变更落地（spec 
 用例净变化：单测 975 → 974。`task-lane` 的 +8 是新子系统自身的故障面（取代 `task-driver` 的 10 个，且不再有 `bootstrap-structured-wake`、`task-ticket`）。
 
 ---
+
+## 21. 审查后修复
+
+2026-10-29 的审查修复采用本文件 D3 的日志检查点与输入确认协议，补齐提问重试、步骤统一入口、文件编辑互斥与关闭校验。评测脚本改为 `runTaskLane`（一次扫描到本轮 drive 静止，可有多步）及 `taskMessage`（真实追加指定任务的消息后推进车道），移除忽略的模拟时间和指定任务执行假象。硬停止能力的限制见 D14。验证与取舍记录见 [修复记录](../../reviews/2026-10-29-spec-064-task-lane-fixes.md)。
 
 ## 附录 A. `task-lead.md` 目标稿
 

@@ -42,9 +42,21 @@ export const regressionCases: EvalCase[] = [
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "resume-three", { body: wakeBody("BETA-17", "RELEASE-BETA") }),
 		script: [
-			{ kind: "syntheticTaskTurn", taskId: "resume-three" },
-			{ kind: "syntheticTaskTurn", taskId: "resume-three" },
-			{ kind: "syntheticTaskTurn", taskId: "resume-three" },
+			{
+				kind: "taskMessage",
+				taskId: "resume-three",
+				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
+			},
+			{
+				kind: "taskMessage",
+				taskId: "resume-three",
+				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
+			},
+			{
+				kind: "taskMessage",
+				taskId: "resume-three",
+				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
+			},
 		],
 		graders: [
 			fileContains("goal-not-drifted", "tasks/resume-three.md", /BETA-17[\s\S]*RELEASE-BETA/),
@@ -564,7 +576,13 @@ export const regressionCases: EvalCase[] = [
 		description: "A task wake loads the task-lead playbook from the runtime catalog.",
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "playbook-task", { body: wakeBody("PLAYBOOK-7") }),
-		script: [{ kind: "syntheticTaskTurn", taskId: "playbook-task" }],
+		script: [
+			{
+				kind: "taskMessage",
+				taskId: "playbook-task",
+				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
+			},
+		],
 		graders: [
 			tracePredicate(
 				"playbook-read",
@@ -625,7 +643,13 @@ export const regressionCases: EvalCase[] = [
 			"A routine task step is run by the task lane to its own end — a derived next state, not an ordinary chat response.",
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "route-checkpoint", { body: wakeBody("ROUTE-CHECK-1") }),
-		script: [{ kind: "syntheticTaskTurn", taskId: "route-checkpoint" }],
+		script: [
+			{
+				kind: "taskMessage",
+				taskId: "route-checkpoint",
+				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
+			},
+		],
 		graders: [
 			tracePredicate(
 				"step-ended-by-the-lane",
@@ -655,7 +679,13 @@ export const regressionCases: EvalCase[] = [
 					"## DoD\n- [ ] ROUTE-REPAIR-1 preserved\n",
 			);
 		},
-		script: [{ kind: "syntheticTaskTurn", taskId: "route-repair" }],
+		script: [
+			{
+				kind: "taskMessage",
+				taskId: "route-repair",
+				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
+			},
+		],
 		graders: [
 			tracePredicate(
 				"repaired-frontmatter-only",

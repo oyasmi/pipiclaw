@@ -131,11 +131,11 @@ export const coreRenovatedCases: EvalCase[] = [
 				body: `# Task\n\n## Goal\nCreate ${join(ctx.deskDir, "release-plan.txt")} only after the user supplies the environment and release window. These values cannot be guessed.\n\n## DoD\n- [ ] release-plan.txt records the user's latest environment and window\n`,
 			}),
 		script: [
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
+			{ kind: "runTaskLane" },
 			{ kind: "checkpoint", id: "parked-on-ask" },
 			{
 				kind: "user",
-				text: "/tasks reply release-plan 环境是 staging。窗口先定周三，修正为周四 22:00；以最后这个值为准。",
+				text: "/tasks msg release-plan 环境是 staging。窗口先定周三，修正为周四 22:00；以最后这个值为准。",
 			},
 			{
 				kind: "waitFor",
@@ -187,7 +187,7 @@ export const coreRenovatedCases: EvalCase[] = [
 			});
 		},
 		script: [
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
+			{ kind: "runTaskLane" },
 			{ kind: "checkpoint", id: "run-must-be-parked" },
 			{ kind: "environment", action: "writeFile", path: "desk-eval/.eval/run-release", content: "released\n" },
 			{

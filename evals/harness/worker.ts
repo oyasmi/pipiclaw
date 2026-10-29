@@ -8,7 +8,7 @@ import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import { trialSeed } from "./fixture-seed.js";
 import { traceIdentity, traceToolResultFailed } from "./identity.js";
-import { EVAL_CHANNEL_ID, evalConversationDir, evalDeskDir, prepareEvalDesk } from "./layout.js";
+import { EVAL_CHANNEL_ID, EVAL_DESK, evalConversationDir, evalDeskDir, prepareEvalDesk } from "./layout.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
 import { modelResultFields } from "./scoring.js";
 import { fallbackCostUsd, hash, tree } from "./util.js";
@@ -391,6 +391,20 @@ async function main(): Promise<void> {
 	const drain = async (): Promise<void> => {
 		while (!runtime.ingress.isIdle()) await new Promise((resolve) => setTimeout(resolve, 5));
 	};
+	async function driveLane(): Promise<void> {
+		const priorActor = currentActorId;
+		const priorSession = currentSessionId;
+		currentActorId = "task:lane";
+		currentSessionId = `${caseId}:${channelId}:task:lane`;
+		try {
+			await runtime.taskLane.runOnce();
+			await runtime.taskLane.drained();
+		} finally {
+			currentActorId = priorActor;
+			currentSessionId = priorSession;
+		}
+	}
+
 	const execute = async (step: Step): Promise<void> => {
 		stepIndex++;
 		trace({ kind: "step", fields: { kind: step.kind } });
@@ -444,23 +458,21 @@ async function main(): Promise<void> {
 			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, deskDir));
 			trace({ kind: "runtime-log", fields: { environment: step.action, path: rel }, ok: true });
 			currentPhase = "runtime";
-		} else if (step.kind === "syntheticTaskTurn" || step.kind === "runTaskDriver") {
+		} else if (step.kind === "taskMessage" || step.kind === "runTaskLane") {
 			// Task steps run in the task lane (spec 064), apart from the chat; everything that happens
-			// while the lane works is attributed to the task's actor, so the trace can tell its tool
-			// calls from the main agent's. The lane has no clock to inject: `at` is not honoured.
+			// while the lane works is attributed to its actor. One scan may run several steps;
+			// only explicit task messages wake a user/time wait. No simulated tick or ignored timestamp.
 			currentPhase = "scheduler";
-			const priorActor = currentActorId;
-			const priorSession = currentSessionId;
-			const taskId = step.kind === "syntheticTaskTurn" ? step.taskId : undefined;
-			currentActorId = `task:${taskId ?? "lane"}`;
-			currentSessionId = `${caseId}:${channelId}:task:${taskId ?? "lane"}`;
-			try {
-				await runtime.taskLane.runOnce();
-				await runtime.taskLane.drained();
-			} finally {
-				currentActorId = priorActor;
-				currentSessionId = priorSession;
+			if (step.kind === "taskMessage") {
+				const outcome = await runtime.taskLane.message(EVAL_DESK, step.taskId, {
+					from: "eval",
+					channel: channelId,
+					text: step.text,
+				});
+				if (outcome.kind === "not_found" || outcome.kind === "held_paused" || outcome.kind === "held_frozen")
+					throw new Error(`Task message could not wake ${step.taskId}: ${outcome.kind}`);
 			}
+			await driveLane();
 			await drain();
 			currentPhase = "runtime";
 		} else if (step.kind === "runMemoryMaintenance") {
@@ -475,6 +487,9 @@ async function main(): Promise<void> {
 			currentPhase = step.failureCategory ?? "fixture";
 			const deadline = Date.now() + step.timeoutMs;
 			while (true) {
+				// Services are intentionally off here; a checkpoint wait also drives pending
+				// task input so a settled producer can actually wake its leader.
+				await driveLane();
 				const context: TrialContext = {
 					seed,
 					homeDir,

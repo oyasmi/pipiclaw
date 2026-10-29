@@ -41,6 +41,8 @@ export interface TaskBudget {
 export type TaskArchiveOutcome = "completed" | "cancelled";
 
 export interface TaskFrontmatter {
+	/** Last state checkpoint applied from the loop log. Updated atomically with state and usage. */
+	revision?: number;
 	/** Meaningless once `outcome` is set: an archived task has no state. */
 	state: TaskState;
 	/** Present iff `state === "waiting"` (INV-3). */
@@ -71,7 +73,7 @@ export interface ParsedTaskFrontmatter {
 const STATES: readonly TaskState[] = ["queued", "running", "waiting", "paused"];
 
 /** Fixed render order, so a diff of a task file reads the same way every time. */
-const FIELD_ORDER = ["state", "waiting", "paused", "channel", "origin", "usage", "budget"] as const;
+const FIELD_ORDER = ["state", "waiting", "paused", "channel", "origin", "usage", "budget", "revision"] as const;
 
 /** `2026-10-12T09:00:00.000+08:00` → `10-12 09:00`, read off the stored wall-clock text. */
 function minuteOf(at: string): string {
@@ -184,6 +186,9 @@ export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
 		const key = line.slice(0, idx).trim();
 		const value = line.slice(idx + 1).trim();
 		switch (key) {
+			case "revision":
+				if (/^\d+$/.test(value)) fields.revision = Number(value);
+				break;
 			case "state":
 				if ((STATES as readonly string[]).includes(value)) {
 					fields.state = value as TaskState;

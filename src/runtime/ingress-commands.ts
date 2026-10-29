@@ -25,6 +25,7 @@ function lazyTaskControl(get: () => TaskControl | undefined): TaskControl {
 		return current;
 	};
 	return {
+		isRunning: (desk, id) => control().isRunning(desk, id),
 		created: (...args) => control().created(...args),
 		snapshot: (...args) => control().snapshot(...args),
 		message: (...args) => control().message(...args),

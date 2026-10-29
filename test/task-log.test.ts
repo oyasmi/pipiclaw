@@ -60,6 +60,12 @@ describe("loop log (spec 051, D5)", () => {
 			`${taskLogPath(dir, "T")}.1`,
 			`${JSON.stringify({ ts: "t2", kind: "step_end", seq: 2, result: "ok", next: "continue", note: "middle", tools: [] })}\n`,
 		);
+		// Rotation must defer while .2 still holds an unconsumed input (R1 retention).
+		await appendFile(
+			`${taskLogPath(dir, "T")}.2`,
+			`${JSON.stringify({ ts: "t1", kind: "message", id: "pending-id", from: "u", channel: "c", text: "PINNED_INPUT" })}\n`,
+		);
+		await writeFile(taskLogPath(dir, "T"), `${" ".repeat(4 * 1024 * 1024)}\n`);
 		await appendTaskLog(dir, "T", {
 			kind: "step_end",
 			seq: 3,
@@ -70,11 +76,11 @@ describe("loop log (spec 051, D5)", () => {
 		});
 		await resetTaskLogAppenders();
 
-		expect((await readTaskLog(dir, "T")).map((r) => (r.kind === "step_end" ? r.note : undefined))).toEqual([
-			"oldest",
-			"middle",
-			"newest",
-		]);
+		expect(
+			(await readTaskLog(dir, "T"))
+				.filter((r) => r.kind === "step_end")
+				.map((r) => (r.kind === "step_end" ? r.note : undefined)),
+		).toEqual(["oldest", "middle", "newest"]);
 		expect((await readTaskLog(dir, "T", { limit: 1 }))[0]).toMatchObject({ kind: "step_end", seq: 3 });
 		await archiveTask(dir, "T", "completed");
 
@@ -86,28 +92,34 @@ describe("loop log (spec 051, D5)", () => {
 		expect(existsSync(`${taskArchiveLogPath(dir, "T")}.2`)).toBe(true);
 
 		const records = await readTaskLog(dir, "T");
-		expect(records.map((r) => (r.kind === "step_end" ? r.note : undefined))).toEqual(["oldest", "middle", "newest"]);
+		expect(
+			records.filter((r) => r.kind === "step_end").map((r) => (r.kind === "step_end" ? r.note : undefined)),
+		).toEqual(["oldest", "middle", "newest"]);
+		expect(newInputs(records)).toEqual(expect.arrayContaining([expect.objectContaining({ text: "PINNED_INPUT" })]));
 	});
 });
 
 describe("new input (INV-6)", () => {
 	const at = (kind: string, extra: Record<string, unknown> = {}) => ({ ts: "t", kind, ...extra }) as never;
 
-	it("is what arrived after the last step began — not what was injected into it or returned inline", () => {
+	it("keeps unacknowledged inputs through new steps and queue acceptance, excluding persisted receipts and inline results", () => {
 		const records = [
-			at("settle", { ref: "old" }),
+			at("settle", { ref: "old", id: "old-id" }),
 			at("step", { seq: 1, reason: "start", brief: "full" }),
 			at("settle", { ref: "a" }),
 			at("settle", { ref: "inline", inline: true }),
-			at("message", { text: "mid-step", injected: 1 }),
+			at("message", { text: "mid-step", id: "mid-id" }),
 			at("message", { text: "later" }),
 			at("stall", { ref: "b", silentMinutes: 12 }),
 			at("pause", { by: "user", reason: "r" }),
 			at("resume"),
 			at("report", { seq: 1, text: "t", delivered: true }),
+			at("input_ack", { ids: ["old-id", "mid-id"] }),
 		];
 		expect(newInputs(records).map((input) => input.kind)).toEqual(["settle", "message", "stall", "resume"]);
-		expect(newInputs([...records, at("step", { seq: 2, reason: "input", brief: "delta" })])).toEqual([]);
+		expect(newInputs([...records, at("step", { seq: 2, reason: "input", brief: "delta" })])).toEqual(
+			newInputs(records),
+		);
 	});
 });
 
@@ -131,6 +143,7 @@ describe("work log (spec 052, D4)", () => {
 			{ usd: 2.5, estimated: true },
 		);
 
+		await logTaskSettlement(dir, "U", { ref: "run_1", status: "completed" }, { usd: 2.5, estimated: true });
 		const records = await readTaskLog(dir, "U");
 		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
 		expect(records[1]).toMatchObject({ ref: "run_1", status: "completed", usd: 2.5, usdEstimated: true });

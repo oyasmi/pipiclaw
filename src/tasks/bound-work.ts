@@ -1,13 +1,12 @@
-import { appendTaskLog, type TaskDispatchRecord, type TaskSettleRecord } from "./loop-log.js";
-import { readStoredTask, updateStoredTask } from "./store.js";
+import { appendTaskLog, readTaskLog, type TaskDispatchRecord, type TaskSettleRecord } from "./loop-log.js";
+import { withTaskMutation } from "./mutation-lock.js";
+import { commitTask, readStoredTask } from "./store.js";
 
 /**
  * The run and job managers' only way to tell a task about work bound to it (spec 052, D4).
  *
- * Both are best-effort by design: a task whose file has since been archived or hand-deleted must
- * not block a completion wake, and a failed log write must not fail a dispatch. Each caller guards
- * these with its own idempotency marker (`taskAccounted` for runs, `taskLogged` for jobs) so a
- * replayed settlement writes nothing twice.
+ * Dispatch logs may be best-effort. Settlement logs and cost are committed together; ref-based
+ * deduplication lets the owning managers retry a failed receipt without charging twice.
  */
 
 /** Record that a delegation or job was bound to the task. A task that no longer exists is skipped. */
@@ -37,25 +36,32 @@ export async function logTaskSettlement(
 	record: Omit<TaskSettleRecord, "ts" | "kind" | "usd" | "usdEstimated">,
 	cost: TaskSettlementCost = { usd: 0, estimated: false },
 ): Promise<boolean> {
-	if (cost.usd > 0 || cost.estimated) {
-		await updateStoredTask(deskDir, taskId, (task) => {
+	return withTaskMutation(deskDir, taskId, async () => {
+		const task = await readStoredTask(deskDir, taskId);
+		if (!task) return false;
+		if (
+			(await readTaskLog(deskDir, taskId, { strict: true })).some(
+				(entry) => entry.kind === "settle" && entry.ref === record.ref,
+			)
+		)
+			return true;
+		if (cost.usd > 0 || cost.estimated) {
 			const usage = task.fields.usage;
-			if (!usage) return;
-			task.fields.usage = {
-				...usage,
-				usd: usage.usd + Math.max(0, cost.usd),
-				usdEstimated: usage.usdEstimated || cost.estimated,
-			};
+			if (usage)
+				task.fields.usage = {
+					...usage,
+					usd: usage.usd + Math.max(0, cost.usd),
+					usdEstimated: usage.usdEstimated || cost.estimated,
+				};
+		}
+		await commitTask(task, deskDir, {
+			kind: "settle",
+			...record,
+			...(cost.usd > 0 ? { usd: cost.usd } : {}),
+			...(cost.estimated ? { usdEstimated: true } : {}),
 		});
-	}
-	if (!(await readStoredTask(deskDir, taskId))) return false;
-	await appendTaskLog(deskDir, taskId, {
-		kind: "settle",
-		...record,
-		...(cost.usd > 0 ? { usd: cost.usd } : {}),
-		...(cost.estimated ? { usdEstimated: true } : {}),
+		return true;
 	});
-	return true;
 }
 
 /** An external run bound to the task has been silent for `silentMinutes`: an input the leader judges (D16). */

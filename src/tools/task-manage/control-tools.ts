@@ -26,7 +26,7 @@ function notFound(id: string): RecoverableToolError {
 }
 
 const MESSAGE_NOTICES = {
-	injected: "已送进任务正在执行的这一步。",
+	injected: "消息已保存，并已排入当前步骤；未处理的内容会在后续继续转达。",
 	queued_for_next_step: "已记下，任务的下一步会看到。",
 	woke: "已记下，任务被叫醒并会继续推进。",
 	held_paused: "任务已暂停：已记下，恢复后下一步会看到。",
@@ -59,7 +59,7 @@ export async function pauseTask(options: TaskManageToolOptions, request: TaskPau
 		notice:
 			outcome.kind === "unchanged"
 				? `任务 \`${id}\` 已经是暂停状态。`
-				: `任务 \`${id}\` 已暂停：当前步骤已中止，在途的委派和作业继续运行，结果会记下。`,
+				: `任务 \`${id}\` 已暂停：已请求停止当前步骤，在途的委派和作业继续运行，结果会记下。`,
 	};
 }
 
@@ -73,6 +73,10 @@ export async function resumeTask(
 		...(request.usd ? { usd: request.usd } : {}),
 	});
 	if (outcome.kind === "not_found") throw notFound(id);
+	if (outcome.kind === "stopping")
+		throw new RecoverableToolError(
+			"The previous task step is still stopping. Check task_list later and retry task_resume only after its step has ended.",
+		);
 	return {
 		action: "resume",
 		id,

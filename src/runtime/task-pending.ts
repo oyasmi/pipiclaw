@@ -14,6 +14,7 @@ export async function listPendingWork(
 	withActivity = false,
 ): Promise<Map<string, TaskPendingWork[]>> {
 	const byTask = new Map<string, TaskPendingWork[]>();
+	await options.getRuns(desk).retryTaskSettlements?.();
 	const add = (taskId: string, work: TaskPendingWork) => {
 		const list = byTask.get(taskId);
 		if (list) list.push(work);
@@ -33,10 +34,7 @@ export async function listPendingWork(
 			stalled: run.runtime === "external" && withActivity && now - quietSince >= STALL_THRESHOLD_MS,
 		});
 	}
-	const jobs = await options
-		.getJobs(desk)
-		.list()
-		.catch(() => []);
+	const jobs = await options.getJobs(desk).list();
 	for (const job of jobs) {
 		if (!job.taskId || job.status !== "running") continue;
 		add(job.taskId, { ref: job.id, kind: "job", label: job.label, startedAt: job.startedAt, stalled: false });

@@ -11,7 +11,7 @@ import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contrac
 import type { TaskControl, TaskSessionContext, TaskStepIntent } from "../src/tasks/control.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
-import { readStoredTask } from "../src/tasks/store.js";
+import { beginStep, readStoredTask } from "../src/tasks/store.js";
 import { buildToolSet } from "../src/tools/registry.js";
 import { createTask } from "../src/tools/task-manage/create.js";
 import {
@@ -45,6 +45,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 	let sessionOptions: TaskManageToolOptions;
 
 	const control = {
+		isRunning: () => false,
 		created: vi.fn<TaskControl["created"]>(),
 		snapshot: vi.fn<TaskControl["snapshot"]>(async () => []),
 		message: vi.fn<TaskControl["message"]>(async () => ({ kind: "injected" })),
@@ -177,6 +178,20 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			await expect(closeTaskFromChat(options, { id: "busy", outcome: "complete", note: "x" })).rejects.toThrow(
 				/executing a step/,
 			);
+			// R7: admission during the async work check invalidates completion's earlier snapshot.
+			await writeTask("race");
+			const originalJobs = options.jobManager;
+			options.jobManager = {
+				list: async () => {
+					await beginStep(deskDir, "race", { brief: "full" });
+					return [];
+				},
+			} as never;
+			await expect(closeTaskFromChat(options, { id: "race", outcome: "complete", note: "done" })).rejects.toThrow(
+				/changed during completion/,
+			);
+			expect((await readStoredTask(deskDir, "race"))?.fields.state).toBe("running");
+			options.jobManager = originalJobs;
 			await writeTask("flying");
 			await startRun("flying");
 			await expect(closeTaskFromChat(options, { id: "flying", outcome: "complete", note: "x" })).rejects.toThrow(
@@ -286,7 +301,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 				channel: CHANNEL_ID,
 				text: "先跑 check",
 			});
-			expect((result.details as { notice: string }).notice).toContain("正在执行的这一步");
+			expect(result.details).toMatchObject({ action: "message", id: "work" });
 
 			control.message.mockResolvedValueOnce({ kind: "not_found" });
 			await expect(message.execute("c", { id: "nope", text: "hi" } as never)).rejects.toThrow(/task_list/);

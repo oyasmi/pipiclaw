@@ -1,9 +1,12 @@
 // A separate process is essential here: SIGKILL must remove all old callbacks and caches.
 // Only DingTalk delivery/socket I/O is replaced; bootstrap, queues, runs and storage are real.
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { DingTalkBot } from "../../dist/dingtalk/bot.js";
 import { DingTalkTransport } from "../../dist/dingtalk/transport.js";
 import { createRuntimeContext } from "../../dist/runtime/bootstrap.js";
+import { beginStep } from "../../dist/tasks/store.js";
 
 const homeDir = process.argv[2];
 const workspaceDir = join(homeDir, "workspace");
@@ -38,6 +41,18 @@ class CapturedBot extends DingTalkBot {
 		return true;
 	}
 }
+// A test-owned barrier at the snapshot commit point; no runtime hook or uid assumption.
+let heldTaskCommit;
+const rename = fs.promises.rename;
+fs.promises.rename = async (from, to) => {
+	if (to === heldTaskCommit) {
+		process.send({ value: "task-commit-held" });
+		await new Promise(() => {});
+	}
+	return rename(from, to);
+};
+syncBuiltinESMExports();
+
 const runtime = await createRuntimeContext({
 	paths,
 	transports: [
@@ -51,7 +66,7 @@ const runtime = await createRuntimeContext({
 	startServices: false,
 	createEventsWatcher: () => ({ start() {}, stop() {} }),
 });
-process.on("message", async ({ action, text, channelId, runId, desk = "e2e" }) => {
+process.on("message", async ({ action, text, channelId, runId, taskId, desk = "e2e" }) => {
 	try {
 		let value;
 		if (action === "send") {
@@ -67,6 +82,14 @@ process.on("message", async ({ action, text, channelId, runId, desk = "e2e" }) =
 			await runtime.ingress.handleEvent({
 				source: "human", channelId, text, ts: String(Date.now()), user: "e2e", userName: "E2E",
 			});
+		} else if (action === "task-hold-commit") {
+			heldTaskCommit = join(workspaceDir, `desk-${desk}`, "tasks", `${taskId}.md`);
+		} else if (action === "task-scan") {
+			await runtime.taskLane.runOnce();
+		} else if (action === "task-drain") {
+			await runtime.taskLane.drained();
+		} else if (action === "task-begin") {
+			await beginStep(join(workspaceDir, `desk-${desk}`), taskId, { brief: "full" });
 		} else if (action === "maintenance") {
 			await runtime.memoryMaintenance.runOnce();
 		} else if (action === "record") {

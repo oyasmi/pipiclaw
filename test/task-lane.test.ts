@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunner } from "../src/agent/types.js";
@@ -7,6 +7,7 @@ import { createUsage } from "../src/tasks/budget.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
 import { appendTaskLog, readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import { taskSessionPath } from "../src/tasks/session-path.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 import { createFakeRunner } from "./support/fake-runner.js";
@@ -48,6 +49,7 @@ interface Harness {
 	pending: Array<{ taskId: string; runId: string; startedAt?: number }>;
 	cancelledRuns: string[];
 	enabled: { value: boolean };
+	deliveryOk: { value: boolean };
 	/** Fast-forward the lane's clock. */
 	skew: { ms: number };
 	task(id: string, fields?: Partial<TaskFrontmatter>, desk?: string): Promise<void>;
@@ -55,7 +57,7 @@ interface Harness {
 	settle(): Promise<void>;
 }
 
-function makeHarness(overrides: { stepTimeLimitMs?: number } = {}): Harness {
+function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number } = {}): Harness {
 	// Time the lane sees: real time plus whatever a test fast-forwards (back-off, waits).
 	const skew = { ms: 0 };
 	const deskDirs = new Map<string, string>([
@@ -68,6 +70,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number } = {}): Harness {
 	const disposed: string[] = [];
 	const bound = { value: (_channelId: string, _desk: string) => true };
 	const enabled = { value: true };
+	const deliveryOk = { value: true };
 	const pending: Harness["pending"] = [];
 	const cancelledRuns: string[] = [];
 	const deliveries: Harness["deliveries"] = [];
@@ -84,14 +87,27 @@ function makeHarness(overrides: { stepTimeLimitMs?: number } = {}): Harness {
 		isBoundTo: (channelId, desk) => bound.value(channelId, desk),
 		isReachable: () => true,
 		createTaskRunner: (target) => {
+			const queued: string[] = [];
+			const persist = (text: string) => {
+				mkdirSync(join(target.deskDir, "tasks", ".sessions"), { recursive: true });
+				appendFileSync(
+					taskSessionPath(target.deskDir, target.taskId),
+					`${JSON.stringify({ type: "message", message: { role: "user", content: text } })}\n`,
+				);
+			};
 			let step: StepContext | undefined;
 			const runner = createFakeRunner({
+				queueSteer: vi.fn(async (text: string) => {
+					queued.push(text);
+				}),
 				run: vi.fn(async (info) => {
+					persist(info.text);
 					briefs[target.taskId] = [...(briefs[target.taskId] ?? []), info.text];
 					const queue = scripts.get(target.taskId) ?? [];
 					const script = queue.shift() ?? defaultStep;
 					step = { target, brief: info.text, runner };
 					const result = (await script(step)) ?? { text: "ok", tools: ["bash"] };
+					for (const text of queued.splice(0)) persist(text);
 					return {
 						stopReason: result.stopReason ?? "stop",
 						...(result.error ? { errorMessage: result.error } : {}),
@@ -135,13 +151,14 @@ function makeHarness(overrides: { stepTimeLimitMs?: number } = {}): Harness {
 		store: {} as never,
 		deliver: async (_desk, channelId, text) => {
 			deliveries.push({ channelId, text });
-			return true;
+			return deliveryOk.value;
 		},
 		isEnabled: () => enabled.value,
 		activeTasks,
 		now: () => Date.now() + skew.ms,
 		timing: {
 			stepTimeLimitMs: overrides.stepTimeLimitMs ?? 60_000,
+			stopGraceMs: overrides.stopGraceMs ?? 3_000,
 			notifyDebounceMs: 1,
 			errorBackoffMs: [60_000, 300_000],
 		},
@@ -161,6 +178,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number } = {}): Harness {
 		pending,
 		cancelledRuns,
 		enabled,
+		deliveryOk,
 		skew,
 		task: async (id, fields = {}, desk = "main") => {
 			const deskDir = deskDirs.get(desk) as string;
@@ -330,8 +348,20 @@ describe("a step's end (D8)", () => {
 		expect(texts.some((text) => text.includes("需要你的决定") && text.includes("要合并吗？"))).toBe(true);
 		expect(texts.some((text) => text.includes("已完成") && text.includes("`finisher`"))).toBe(true);
 		const log = await readTaskLog(harness.deskDir, "asker");
-		expect(log.map((record) => record.kind)).toEqual(["step", "step_end"]);
+		expect(log.map((record) => record.kind)).toEqual(["step", "step_end", "ask_delivered"]);
 		expect(log[1]).toMatchObject({ result: "ok", next: "user", note: "asked", tools: ["task_ask"] });
+		// R6: an archive collision preserves the active task without claiming success or running again.
+		await harness.task("blocked");
+		mkdirSync(join(harness.deskDir, "tasks", "archive"), { recursive: true });
+		writeFileSync(join(harness.deskDir, "tasks", "archive", "blocked.md"), "collision");
+		harness.script("blocked", close("complete"));
+		await harness.settle();
+		await harness.settle();
+		expect((await state("blocked"))?.state).toBe("paused");
+		expect(harness.briefs.blocked).toHaveLength(1);
+		expect(
+			harness.deliveries.some((delivery) => delivery.text.startsWith("✅") && delivery.text.includes("`blocked`")),
+		).toBe(false);
 	});
 
 	it("opens the next step at once when nothing is in flight, with the delta brief — and stops at the budget", async () => {
@@ -386,12 +416,25 @@ describe("results and messages wake the task (D9, INV-6)", () => {
 
 	it("leaves a task that asked the user waiting through a result, and wakes it for the user's message", async () => {
 		await harness.task("asker");
+		harness.deliveryOk.value = false;
 		harness.script("asker", ask("q?"), wait(in_(1)));
 		await harness.settle();
 		await appendTaskLog(harness.deskDir, "asker", { kind: "settle", ref: "run_x", status: "completed" });
 		await harness.settle();
 		expect((await state("asker"))?.state).toBe("waiting");
 		expect(harness.briefs.asker).toHaveLength(1);
+		expect((await readTaskLog(harness.deskDir, "asker")).some((record) => record.kind === "ask_delivered")).toBe(
+			false,
+		);
+		harness.deliveryOk.value = true;
+		harness.skew.ms += 61_000;
+		await harness.settle();
+		const delivered = harness.deliveries.length;
+		await harness.settle();
+		expect(harness.deliveries).toHaveLength(delivered);
+		expect(
+			(await readTaskLog(harness.deskDir, "asker")).filter((record) => record.kind === "ask_delivered"),
+		).toHaveLength(1);
 
 		await appendTaskLog(harness.deskDir, "asker", {
 			kind: "message",
@@ -444,12 +487,16 @@ describe("runtime guards (D16)", () => {
 
 	it("backs a failing task off, and stops it on the third error in a row", async () => {
 		await harness.task("flaky");
-		const fail: Script = () => ({ stopReason: "error", error: "provider down", text: "" });
+		harness.pending.push({ taskId: "flaky", runId: "run_flaky" });
+		const fail: Script = async () => {
+			await appendTaskLog(harness.deskDir, "flaky", { kind: "stall", ref: "run_flaky", silentMinutes: 10 });
+			return { stopReason: "error", error: "provider down", text: "" };
+		};
 		harness.script("flaky", fail, fail, fail);
 		await harness.settle();
 		// The first failure puts the task back in line with a pause before it is admitted again.
 		expect(harness.briefs.flaky).toHaveLength(1);
-		expect(await state("flaky")).toMatchObject({ state: "queued" });
+		expect(await state("flaky")).toMatchObject({ state: "waiting", waiting: { kind: "work" } });
 		await harness.settle();
 		expect(harness.briefs.flaky).toHaveLength(1);
 
@@ -473,7 +520,7 @@ describe("runtime guards (D16)", () => {
 	});
 
 	it("stops a step that outlives its time limit, and pauses the task on the second timeout", async () => {
-		harness = makeHarness({ stepTimeLimitMs: 20 });
+		harness = makeHarness({ stepTimeLimitMs: 20, stopGraceMs: 20 });
 		await harness.task("slow");
 		const hang: Script = ({ runner }) =>
 			new Promise((resolve) => {
@@ -487,6 +534,27 @@ describe("runtime guards (D16)", () => {
 		expect(ends.map((record) => (record.kind === "step_end" ? record.result : ""))).toEqual(["timeout", "timeout"]);
 		expect(await state("slow")).toMatchObject({ state: "paused", paused: { by: "runtime" } });
 		expect(harness.runners.slow?.requestStop).toBeDefined();
+		// R4: abort acknowledgment is not completion. Keep the old execution fenced until it exits.
+		await harness.task("stubborn");
+		const retired = deferred();
+		const release = deferred();
+		harness.script("stubborn", async ({ runner }) => {
+			runner.retireForRecovery = () => retired.resolve();
+			await release.promise;
+			return { text: "late", tools: ["read"] };
+		});
+		await harness.lane.runOnce();
+		await retired.promise;
+		expect(await harness.lane.resume("main", "stubborn", {})).toEqual({ kind: "stopping" });
+		expect((await readTaskLog(harness.deskDir, "stubborn")).some((record) => record.kind === "step_end")).toBe(false);
+		await expect(
+			harness.lane.cancel("main", "stubborn", { by: "user", note: "stop", channel: CHANNEL }),
+		).rejects.toThrow(/暂未归档/);
+		expect(await readStoredTask(harness.deskDir, "stubborn")).toBeDefined();
+		release.resolve();
+		await harness.lane.drained();
+		expect((await state("stubborn"))?.state).toBe("paused");
+		expect(harness.briefs.stubborn).toHaveLength(1);
 	});
 });
 
@@ -546,10 +614,28 @@ describe("control from the chat (D24)", () => {
 
 		// The injected message was seen by the step it joined: the next brief does not repeat it.
 		const records = await readTaskLog(harness.deskDir, "busy");
-		expect(records.find((record) => record.kind === "message")).toMatchObject({ injected: 1 });
+		const message = records.find((record) => record.kind === "message");
+		expect(records.some((record) => record.kind === "input_ack" && record.ids.includes(message!.id!))).toBe(true);
 		harness.script("busy", () => ({ text: "next", tools: ["bash"] }));
 		await harness.settle();
 		expect(harness.briefs.busy?.at(-1) ?? "").not.toContain("多做一点");
+		// R1: queue acceptance followed by abort must not consume an undelivered steer.
+		await harness.task("unsent");
+		const queued = deferred();
+		const finish = deferred();
+		harness.script("unsent", async ({ runner }) => {
+			vi.mocked(runner.queueSteer).mockImplementation(async () => {});
+			queued.resolve();
+			await finish.promise;
+			return { stopReason: "aborted", tools: [] };
+		});
+		await harness.lane.runOnce();
+		await queued.promise;
+		await harness.lane.message("main", "unsent", { from: "A", channel: CHANNEL, text: "UNCONSUMED_STEER" });
+		finish.resolve();
+		await harness.lane.drained();
+		await harness.settle();
+		expect(harness.briefs.unsent?.[1]).toContain("UNCONSUMED_STEER");
 		expect(await harness.lane.message("main", "ghost", { from: "A", channel: CHANNEL, text: "x" })).toEqual({
 			kind: "not_found",
 		});
@@ -575,12 +661,20 @@ describe("control from the chat (D24)", () => {
 describe("a task whose report channel cannot be reached (INV-7)", () => {
 	it("is frozen: no step, no slot, no runner — and carries on from where it was when the channel returns", async () => {
 		await harness.task("frozen");
+		harness.script("frozen", () => {
+			harness.bound.value = () => false;
+			return { text: "finished current step", tools: ["read"] };
+		});
+		await harness.settle();
+		expect(harness.briefs.frozen).toHaveLength(1);
 		await harness.task("free");
 		harness.bound.value = (channelId) => channelId !== "dingtalk:dm:gone";
-		await harness.task("orphan", { channel: "dingtalk:dm:gone" });
+		await harness.task("orphan", { channel: "dingtalk:dm:gone", state: "running" });
+		await appendTaskLog(harness.deskDir, "orphan", { kind: "step", seq: 1, reason: "start", brief: "full" });
 		await harness.settle();
 		expect(harness.briefs.orphan).toBeUndefined();
-		expect((await state("orphan"))?.state).toBe("queued");
+		expect((await state("orphan"))?.state).toBe("running");
+		expect((await readTaskLog(harness.deskDir, "orphan")).some((record) => record.kind === "step_end")).toBe(false);
 		// Inputs still land in the log while it is frozen.
 		const snapshot = await harness.lane.snapshot("main", "orphan");
 		expect(snapshot[0]).toMatchObject({ frozen: true });

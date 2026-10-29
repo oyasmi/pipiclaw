@@ -259,7 +259,14 @@ async function showTask(options: HandleTasksCommandOptions, idInput: string): Pr
 	const boardLines = board ? ["", "**工作项**", renderTaskBoardForUser(board, id, now)] : [];
 
 	const recent = records
-		.filter((record) => record.kind !== "step" && record.kind !== "dispatch" && record.kind !== "stall")
+		.filter(
+			(record) =>
+				record.kind !== "step" &&
+				record.kind !== "dispatch" &&
+				record.kind !== "stall" &&
+				record.kind !== "input_ack" &&
+				record.kind !== "checkpoint",
+		)
 		.slice(-SHOW_LOG_LINES);
 	const logLines = recent.length > 0 ? ["", "**最近记录**", ...recent.map(renderTaskLogLineForUser)] : [];
 
@@ -310,7 +317,9 @@ async function listArchive(deskDir: string): Promise<string> {
 
 async function showTaskLog(deskDir: string, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
-	const all = await readTaskLog(deskDir, id);
+	const all = (await readTaskLog(deskDir, id)).filter(
+		(record) => record.kind !== "input_ack" && record.kind !== "checkpoint",
+	);
 	if (all.length === 0) return `任务 \`${id}\` 暂无记录。\n任务执行第一步后会出现在这里。`;
 	const records = all.slice(-LOG_LINES);
 	const path = taskLogIsArchived(deskDir, id) ? taskArchiveLogPath(deskDir, id) : taskLogPath(deskDir, id);
@@ -330,7 +339,7 @@ async function pauseTask(options: HandleTasksCommandOptions, idInput: string): P
 	});
 	if (outcome.kind === "not_found") return notFound(id);
 	if (outcome.kind === "unchanged") return `任务 \`${id}\` 已经是暂停状态。`;
-	return `已暂停任务 \`${id}\`：当前这一步已中止，在途的委派和作业继续运行，结果会记下。继续用 \`/tasks resume ${id}\`。`;
+	return `已暂停任务 \`${id}\`：已请求停止当前步骤，在途的委派和作业继续运行，结果会记下。继续用 \`/tasks resume ${id}\`。`;
 }
 
 async function resumeTask(
@@ -342,6 +351,8 @@ async function resumeTask(
 	const outcome = await options.control.resume(options.desk, id, grants);
 	if (outcome.kind === "not_found") return notFound(id);
 	if (outcome.kind === "unchanged") return `任务 \`${id}\` 当前没有暂停，无需恢复。`;
+	if (outcome.kind === "stopping")
+		return `任务 \`${id}\` 的当前步骤尚未停止。请稍后再用 \`/tasks resume ${id}\` 重试；持续未停止时请联系部署者重启服务。`;
 	const granted: string[] = [];
 	if (grants.steps) granted.push(`${grants.steps} 步`);
 	if (grants.usd) granted.push(`$${grants.usd}`);
@@ -374,7 +385,7 @@ async function messageTask(options: HandleTasksCommandOptions, idInput: string, 
 		case "not_found":
 			return notFound(id);
 		case "injected":
-			return `已把这条消息交给任务 \`${id}\` 正在执行的这一步。`;
+			return `消息已保存，并已排入任务 \`${id}\` 当前步骤；未处理的内容会在后续继续转达。`;
 		case "woke":
 			return `已收到，任务 \`${id}\` 会继续推进。`;
 		case "queued_for_next_step":

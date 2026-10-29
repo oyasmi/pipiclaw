@@ -22,7 +22,7 @@ export function noteObservedEvidence(): CodeGrader {
 						.filter(Boolean)
 						.map((line) => JSON.parse(line) as { kind?: string; note?: string }),
 				)
-				.filter((entry) => entry.kind === "step");
+				.filter((entry) => entry.kind === "step_end");
 			const ok =
 				existsSync(file) &&
 				readFileSync(file, "utf8").trim() === "EVIDENCE-42" &&

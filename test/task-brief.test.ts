@@ -79,7 +79,13 @@ describe("task step brief (spec 064, D15)", () => {
 	it("shows results as data, stalls and resumes as events, and a failed previous step first", async () => {
 		const deskDir = tempDir();
 		await writeTask(deskDir, "work", "# Work\n");
-		await appendTaskLog(deskDir, "work", { kind: "settle", ref: "run_old", status: "completed", tail: "OLD_TAIL" });
+		const oldId = await appendTaskLog(deskDir, "work", {
+			kind: "settle",
+			ref: "run_old",
+			status: "completed",
+			tail: "OLD_TAIL",
+		});
+		await appendTaskLog(deskDir, "work", { kind: "input_ack", ids: [oldId] });
 		await appendTaskLog(deskDir, "work", step(1));
 		await appendTaskLog(deskDir, "work", { ...stepEnd(1), result: "timeout", error: "too slow" });
 		await appendTaskLog(deskDir, "work", step(2));
@@ -176,6 +182,13 @@ describe("team board (spec 052, D5)", () => {
 			item: "W1",
 			status: "completed",
 			output: "/o/a.md",
+		});
+		const oldInputs = (await readTaskLog(deskDir, "T")).filter(
+			(record) => record.kind === "settle" || record.kind === "message",
+		);
+		await appendTaskLog(deskDir, "T", {
+			kind: "input_ack",
+			ids: oldInputs.flatMap((record) => (record.id ? [record.id] : [])),
 		});
 		await appendTaskLog(deskDir, "T", step());
 		await appendTaskLog(deskDir, "T", { kind: "dispatch", ref: "run_b", item: "W2", agent: "builder" });

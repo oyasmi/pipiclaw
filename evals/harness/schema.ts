@@ -238,8 +238,8 @@ export type Step =
 	| { kind: "compact" }
 	| { kind: "checkpoint"; id: string }
 	| { kind: "environment"; action: "writeFile"; path: string; content: string }
-	| { kind: "syntheticTaskTurn"; taskId: string }
-	| { kind: "runTaskDriver"; at?: string }
+	| { kind: "taskMessage"; taskId: string; text: string }
+	| { kind: "runTaskLane" }
 	/** Drives one real `MemoryMaintenanceScheduler.runOnce(at)` pass: the reflect job (spec 050). */
 	| { kind: "runMemoryMaintenance"; at?: string }
 	| { kind: "restart" }

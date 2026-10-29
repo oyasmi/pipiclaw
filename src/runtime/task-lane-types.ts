@@ -65,6 +65,7 @@ export interface TaskLaneOptions {
 	/** Test overrides for the timing constants. */
 	timing?: Partial<{
 		stepTimeLimitMs: number;
+		stopGraceMs: number;
 		maxSleepMs: number;
 		notifyDebounceMs: number;
 		errorBackoffMs: readonly number[];
@@ -85,9 +86,17 @@ export interface LiveTask {
 	seq: number;
 	/** What the leader registered during the step that is running. */
 	intent: TaskStepIntent;
-	step?: { seq: number; startedAt: number; abort?: StepAbort; timer?: ReturnType<typeof setTimeout> };
+	step?: {
+		seq: number;
+		startedAt: number;
+		abort?: StepAbort;
+		timer?: ReturnType<typeof setTimeout>;
+		stopTimer?: ReturnType<typeof setTimeout>;
+	};
 	/** A drive loop is running for this task (a step may or may not be in flight at the moment). */
 	driving: boolean;
+	quarantined?: boolean;
+	done?: Promise<void>;
 }
 
 /** What the step, control and scan code share. The lane builds one and hands it around; nothing here is a collaborator of its own. */
@@ -95,7 +104,13 @@ export interface LaneContext {
 	options: TaskLaneOptions;
 	live: Map<string, LiveTask>;
 	now(): number;
-	timing: { stepTimeLimitMs: number; maxSleepMs: number; notifyDebounceMs: number; errorBackoffMs: readonly number[] };
+	timing: {
+		stepTimeLimitMs: number;
+		stopGraceMs: number;
+		maxSleepMs: number;
+		notifyDebounceMs: number;
+		errorBackoffMs: readonly number[];
+	};
 	/** Ask for a rescan soon (debounced). */
 	notify(): void;
 	/** Dispose a task's runner and forget its in-memory state, unless a drive loop still owns it. */

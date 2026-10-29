@@ -12,7 +12,8 @@ import type {
 	TaskStepIntent,
 } from "../tasks/control.js";
 import type { TaskBudget } from "../tasks/frontmatter.js";
-import { newInputs, readTaskLog } from "../tasks/loop-log.js";
+import { appendTaskLog, lastStep, newInputs, readTaskLog } from "../tasks/loop-log.js";
+import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { askReceipt, cancelledByLeaderReceipt, completedReceipt, pausedReceipt } from "../tasks/receipts.js";
 import { checkGuards, evaluateWaiting, type GuardVerdict } from "../tasks/state.js";
 import { closeTask, pauseTask, readStoredTask, reconcileTaskState, requeueWaiting } from "../tasks/store.js";
@@ -48,6 +49,7 @@ interface DeskScan {
 }
 
 function isExecuting(seen: Seen, live: LiveTask | undefined): boolean {
+	if (live?.driving) return true;
 	if (seen.frozen) return false;
 	const { fields } = seen.entry;
 	return (
@@ -78,8 +80,6 @@ export class TaskLane implements TaskControl {
 	private rescan = false;
 	private nextDeskIndex = 0;
 	private nextWakeMs: number | undefined;
-	/** Desks whose tasks were repaired once after this start (D10). */
-	private readonly reconciled = new Set<string>();
 	/** Tasks reported frozen, so the transition is logged once rather than every scan. */
 	private readonly frozenLogged = new Set<string>();
 	/** Consecutive step errors per task in this process, and when it may be admitted again (D16). Not persisted: a restart starts from zero. */
@@ -90,6 +90,7 @@ export class TaskLane implements TaskControl {
 	constructor(private readonly options: TaskLaneOptions) {
 		const timing = {
 			stepTimeLimitMs: options.timing?.stepTimeLimitMs ?? STEP_TIME_LIMIT_MS,
+			stopGraceMs: options.timing?.stopGraceMs ?? 3_000,
 			maxSleepMs: options.timing?.maxSleepMs ?? MAX_SLEEP_MS,
 			notifyDebounceMs: options.timing?.notifyDebounceMs ?? NOTIFY_DEBOUNCE_MS,
 			errorBackoffMs: options.timing?.errorBackoffMs ?? ERROR_BACKOFF_MS,
@@ -127,7 +128,7 @@ export class TaskLane implements TaskControl {
 		this.timer = null;
 		this.notifyTimer = null;
 		for (const live of this.ctx.live.values()) {
-			abortStep(live, "shutdown");
+			abortStep(this.ctx, live, "shutdown");
 			if (!live.driving) void this.dispose(live);
 		}
 	}
@@ -162,6 +163,9 @@ export class TaskLane implements TaskControl {
 	}
 
 	// === TaskControl ===
+	isRunning(desk: string, id: string): boolean {
+		return this.ctx.live.get(taskKey(desk, id))?.driving ?? false;
+	}
 
 	created(): void {
 		this.control.created();
@@ -235,13 +239,13 @@ export class TaskLane implements TaskControl {
 		const now = this.ctx.now();
 		let entries = (await readActiveTasks(join(deskDir, "tasks"))).filter((entry) => !entry.fields.outcome);
 		let pending = await listPendingWork(this.options, desk, now);
-		if (!this.reconciled.has(desk)) {
-			// D10: whatever state the previous process left becomes true to the facts before anything is decided.
-			this.reconciled.add(desk);
-			for (const entry of entries) await this.reconcile(desk, deskDir, entry, pending.get(entry.id)?.length ?? 0);
-			entries = (await readActiveTasks(join(deskDir, "tasks"))).filter((entry) => !entry.fields.outcome);
-			pending = await listPendingWork(this.options, desk, now);
+		// D10: whatever state the previous process left becomes true to the facts before anything is decided.
+		for (const entry of entries) {
+			if (!isFrozen(this.ctx, desk, entry.fields))
+				await this.reconcile(desk, deskDir, entry, pending.get(entry.id)?.length ?? 0);
 		}
+		entries = (await readActiveTasks(join(deskDir, "tasks"))).filter((entry) => !entry.fields.outcome);
+		pending = await listPendingWork(this.options, desk, now);
 		const seen: Seen[] = [];
 		for (const entry of entries) {
 			const key = taskKey(desk, entry.id);
@@ -383,6 +387,36 @@ export class TaskLane implements TaskControl {
 		const { fields } = item.entry;
 		const live = this.ctx.live.get(taskKey(scan.desk, item.entry.id));
 		if (live?.driving) return "idle";
+		if (fields.state !== "paused") {
+			const records = await readTaskLog(scan.deskDir, item.entry.id);
+			const closing = [...records].reverse().find((record) => record.kind === "step_end" || record.kind === "close");
+			const close =
+				closing?.kind === "close"
+					? {
+							outcome: closing.outcome === "done" ? ("complete" as const) : ("cancel" as const),
+							note: closing.note,
+						}
+					: closing?.kind === "step_end"
+						? closing.close
+						: undefined;
+			if (close) {
+				await this.closeForLeader(
+					{
+						key: taskKey(scan.desk, item.entry.id),
+						desk: scan.desk,
+						deskDir: scan.deskDir,
+						taskId: item.entry.id,
+						channelId: fields.channel ?? "",
+						seq: closing?.kind === "step_end" ? closing.seq : 0,
+						intent: { reports: 0 },
+						driving: false,
+					},
+					item.entry.title,
+					{ reports: 0, close },
+				);
+				return "idle";
+			}
+		}
 		if (fields.state === "queued") return "queued";
 		if (fields.state === "running") {
 			// Marked running with no step in this process: repaired like a restart would (D10).
@@ -399,7 +433,11 @@ export class TaskLane implements TaskControl {
 			now: this.ctx.now(),
 		});
 		if (fields.waiting.kind === "time") this.noteHorizon(parseLocalTime(fields.waiting.until));
-		if (decision === "stay") return "idle";
+		if (decision === "stay") {
+			if (fields.waiting.kind === "user")
+				await this.deliverQuestion(scan.desk, scan.deskDir, item.entry.id, fields.channel);
+			return "idle";
+		}
 		if (decision === "run") return "run";
 		const requeued = await requeueWaiting(scan.deskDir, item.entry.id);
 		return requeued ? "queued" : "idle";
@@ -446,6 +484,12 @@ export class TaskLane implements TaskControl {
 	// === Execution ===
 
 	private startDrive(scan: DeskScan, item: Seen): void {
+		const drives = [...this.ctx.live.values()].filter((task) => task.driving);
+		if (
+			drives.length >= MAX_EXECUTING_TASKS ||
+			drives.filter((task) => task.desk === scan.desk).length >= MAX_EXECUTING_TASKS_PER_DESK
+		)
+			return;
 		const key = taskKey(scan.desk, item.entry.id);
 		let live = this.ctx.live.get(key);
 		if (!live) {
@@ -479,12 +523,24 @@ export class TaskLane implements TaskControl {
 			else this.notify();
 		});
 		this.options.activeTasks.add(tracked);
+		live.done = tracked;
 		this.drives.add(tracked);
 	}
 
 	/** Steps in a row while the task has something to do and a slot (D8: `continue` opens the next at once). */
 	private async drive(live: LiveTask): Promise<void> {
 		while (!this.stopped) {
+			const document = await readStoredTask(live.deskDir, live.taskId);
+			if (
+				!document ||
+				isFrozen(this.ctx, live.desk, document.fields) ||
+				this.options.isEnabled?.() === false ||
+				this.isBackingOff(live.key) ||
+				(await this.guardLive(live))
+			) {
+				await this.dispose(live);
+				return;
+			}
 			const report = await executeStep(this.ctx, live);
 			if (report.kind === "interrupted") return;
 			if (report.kind === "skipped") {
@@ -518,8 +574,8 @@ export class TaskLane implements TaskControl {
 				await this.dispose(live);
 				return "done";
 			case "user":
+				await this.deliverQuestion(live.desk, live.deskDir, live.taskId, live.channelId);
 				await this.dispose(live);
-				if (report.intent.ask) await this.say(live, askReceipt(live.taskId, report.intent.ask.question));
 				return "done";
 			case "work":
 				// Results that arrived while the step ran wake the task at once instead of after a scan (D8).
@@ -541,6 +597,63 @@ export class TaskLane implements TaskControl {
 				}
 				return "again";
 		}
+	}
+
+	private isBackingOff(key: string): boolean {
+		const until = this.backoff.get(key)?.notBefore;
+		if (until === undefined || until <= this.ctx.now()) return false;
+		this.noteHorizon(until);
+		return true;
+	}
+
+	private readonly questionRetry = new Map<string, number>();
+	private async deliverQuestion(
+		desk: string,
+		deskDir: string,
+		id: string,
+		channel: string | undefined,
+	): Promise<void> {
+		const key = taskKey(desk, id);
+		if (!channel || (this.questionRetry.get(key) ?? 0) > this.ctx.now()) {
+			this.noteHorizon(this.questionRetry.get(key));
+			return;
+		}
+		const doc = await readStoredTask(deskDir, id);
+		if (
+			!doc ||
+			doc.fields.state !== "waiting" ||
+			doc.fields.waiting?.kind !== "user" ||
+			isFrozen(this.ctx, desk, doc.fields)
+		)
+			return;
+		const question = doc.fields.waiting.question;
+		const records = await readTaskLog(deskDir, id);
+		const seq = lastStep(records)?.step.seq ?? 0;
+		if (records.some((record) => record.kind === "ask_delivered" && record.seq === seq)) return;
+		this.questionRetry.set(key, this.ctx.now() + 60_000);
+		try {
+			if (await this.options.deliver(desk, doc.fields.channel ?? channel, askReceipt(id, question))) {
+				await withTaskMutation(deskDir, id, async () => {
+					const current = await readStoredTask(deskDir, id);
+					if (
+						current?.fields.state === "waiting" &&
+						current.fields.waiting?.kind === "user" &&
+						current.fields.waiting.question === question &&
+						current.fields.channel === doc.fields.channel &&
+						lastStep(await readTaskLog(deskDir, id))?.step.seq === seq
+					) {
+						await appendTaskLog(deskDir, id, { kind: "ask_delivered", seq });
+					}
+				});
+				this.questionRetry.delete(key);
+			}
+		} catch (error) {
+			log.logWarn("tasks.question.deliver_failed", "Task question delivery failed", {
+				reason: errorMessage(error),
+				fields: { taskId: id, desk },
+			});
+		}
+		this.noteHorizon(this.questionRetry.get(key));
 	}
 
 	private backoffUntil(errors: number): number | undefined {
@@ -596,13 +709,31 @@ export class TaskLane implements TaskControl {
 		if (!close) return;
 		try {
 			if (close.outcome === "cancel") await this.control.cancelBoundWork(live.desk, live.taskId);
-			await closeTask(live.deskDir, live.taskId, { outcome: close.outcome, by: "leader", note: close.note });
+			const closed = await closeTask(live.deskDir, live.taskId, {
+				outcome: close.outcome,
+				by: "leader",
+				note: close.note,
+			});
+			if (!closed) {
+				await this.dispose(live);
+				return;
+			}
 		} catch (error) {
 			log.logWarn("tasks.task.close_failed", "Closing a task failed", {
 				channelId: live.channelId,
 				reason: errorMessage(error),
 				fields: { taskId: live.taskId, desk: live.desk },
 			});
+			await pauseTask(live.deskDir, live.taskId, {
+				by: "runtime",
+				reason: "任务归档或取消未完成，请联系部署者检查服务器后重试关闭",
+			});
+			await this.dispose(live);
+			await this.say(
+				live,
+				`⚠️ 任务 \`${live.taskId}\` 未能关闭，已暂停。请联系部署者检查服务器，再发送消息重试关闭。`,
+			);
+			return;
 		}
 		await this.dispose(live);
 		await this.say(

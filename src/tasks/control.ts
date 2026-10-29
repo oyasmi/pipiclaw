@@ -43,7 +43,7 @@ export interface TaskLiveSnapshot {
 
 export type TaskMessageOutcome =
 	| { kind: "not_found" }
-	/** Delivered into the step that is running right now. */
+	/** Accepted into the current step queue; consumption still needs a transcript receipt. */
 	| { kind: "injected" }
 	/** Recorded; the next step starts with it. */
 	| { kind: "queued_for_next_step" }
@@ -52,11 +52,13 @@ export type TaskMessageOutcome =
 	| { kind: "held_paused" }
 	| { kind: "held_frozen" };
 
-export type TaskControlOutcome = { kind: "ok" } | { kind: "not_found" } | { kind: "unchanged" };
+export type TaskControlOutcome = { kind: "ok" } | { kind: "not_found" } | { kind: "unchanged" } | { kind: "stopping" };
 
 export type TaskCancelOutcome = { kind: "cancelled"; cancelled: string[] } | { kind: "not_found" };
 
 export interface TaskControl {
+	/** Synchronous check, safe while holding the task mutation lock. */
+	isRunning(desk: string, id: string): boolean;
 	/** A task was created outside the lane (`task_create`): look at the desk soon instead of at the next scan. */
 	created(desk: string, id: string): void;
 	/** One task, or every active task of the desk. */
@@ -91,6 +93,8 @@ export const MAX_REPORTS_PER_STEP = 3;
  * state is the lane's to derive (INV-2).
  */
 export interface TaskSessionContext {
+	/** Refuse new tool calls after stopping or retiring this step. */
+	assertActive?(): void;
 	taskId: string;
 	/** The sequence number of the step that is running. */
 	seq(): number;

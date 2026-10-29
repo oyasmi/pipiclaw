@@ -8,11 +8,11 @@ import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../share
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { logTaskDispatch, logTaskSettlement, logTaskStall } from "../tasks/bound-work.js";
+import { logTaskDispatch, logTaskStall } from "../tasks/bound-work.js";
 import { readStoredTask } from "../tasks/store.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
-import { buildRunCompletionWake, countWakeSiblings, WAKE_OUTPUT_TAIL_CHARS } from "./completion-wake.js";
+import { buildRunCompletionWake, countWakeSiblings } from "./completion-wake.js";
 import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
 import { finalizeExternalRun } from "./external/settlement.js";
 import { runArchiveEntry, runLedgerEntry } from "./run-archive.js";
@@ -36,6 +36,7 @@ import {
 	randomRunIdSuffix,
 	type SettleInput,
 } from "./run-record.js";
+import { creditTaskForRun } from "./task-settlement.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
 
 /**
@@ -565,14 +566,17 @@ export class SubAgentRunManager {
 			// is still around by the time the leader looks. Guarded by its own idempotency marker
 			// inside the same settlement lock, so a replay writes nothing twice.
 			if (!record.taskAccounted && record.taskId) {
-				record.taskAccounted = true;
-				await this.creditOwningTask(record, input, outputSaved, !options.announce).catch((error) => {
+				try {
+					await creditTaskForRun(this.target.deskDir, record, input, outputSaved, !options.announce);
+					record.taskAccounted = true;
+					await this.persist(record);
+				} catch (error) {
 					log.logWarn("subagent.task_settle.log_failed", "Task credit for run failed", {
 						reason: errorMessage(error),
 						fields: { runId: record.runId, taskId: record.taskId },
 					});
-				});
-				await this.persist(record);
+					return; // Keep the unacknowledged terminal record eligible for retry.
+				}
 			}
 
 			if (record.wakeEnqueued) return;
@@ -586,43 +590,23 @@ export class SubAgentRunManager {
 	}
 
 	/**
-	 * Credit one settled run to the task that owns it: cost onto its usage, outcome onto its log.
-	 * Best-effort by design: a task whose file has since been archived or hand-deleted must not
-	 * block the completion wake.
-	 */
-	private async creditOwningTask(
-		record: RunRecord,
-		input: SettleInput,
-		outputSaved: boolean,
-		inline: boolean,
-	): Promise<void> {
-		const taskId = record.taskId;
-		if (!taskId) return;
-		await logTaskSettlement(
-			this.target.deskDir,
-			taskId,
-			{
-				ref: record.runId,
-				item: record.item,
-				status: record.status,
-				verdict: record.purpose === "verify" ? record.verificationVerdict : undefined,
-				output: outputSaved ? join(record.artifactDir, "output.md") : undefined,
-				tail: input.outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim() || undefined,
-				changed: record.workspaceSummary,
-				durationMs: input.durationMs,
-				...(inline ? { inline: true } : {}),
-			},
-			{ usd: input.usage.cost.total, estimated: input.costKnown === false },
-		);
-	}
-
-	/**
 	 * Dispatch the completion wake. Durable-dispatch persists its own pending record before this
 	 * call can be interrupted (`DurableDispatchService.dispatch`), and `dispatch()` is idempotent on
 	 * `dispatchId`, so calling it again after a crash between here and marking `wakeEnqueued` is
 	 * harmless — this is the same fix as jobs/manager's `announce()` reordering (D7).
 	 */
 	private async announce(record: RunRecord, outputText: string, outputSaved: boolean): Promise<void> {
+		if (record.taskId && !record.taskAccounted) {
+			await creditTaskForRun(
+				this.target.deskDir,
+				record,
+				{ outputText, durationMs: record.durationMs ?? 0, usage: record.usage, costKnown: record.costKnown },
+				outputSaved,
+				false,
+			);
+			record.taskAccounted = true;
+			await this.persist(record);
+		}
 		// P0-1: a settled notice fires whenever this run actually needs a wake — i.e. whenever the
 		// caller was not already holding the result in the same tool call (`announce: true`, the same
 		// condition that gates the wake below). It reaches the channel in roughly the time the run
@@ -964,6 +948,18 @@ export class SubAgentRunManager {
 		return restored;
 	}
 
+	/** The lane retries task receipts before it decides a wait has no result. */
+	async retryTaskSettlements(): Promise<void> {
+		for (const record of this.runs.values()) {
+			if (!record.taskId || !record.settledAt || record.taskAccounted) continue;
+			await this.queue.run(record.runId, async () => {
+				if (record.taskAccounted) return;
+				const output = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => "");
+				await this.announce(record, output, Boolean(output));
+			});
+		}
+	}
+
 	/** Whether `record.pid` is still the same process that was launched, when that can be checked
 	 *  at all (D10.3). A missing `pidStartedAt` (an older record, or a `ps` that failed once at
 	 *  launch) means there is nothing to compare against — trust `isProcessAlive` alone rather
@@ -1135,7 +1131,7 @@ export class SubAgentRunManager {
 	 * not recursively removed from the artifact directory.
 	 */
 	private async collectGarbageIfExpired(record: RunRecord, now = Date.now()): Promise<void> {
-		if (!record.settledAt) return;
+		if (!record.settledAt || (record.taskId && !record.taskAccounted)) return;
 		if (now - record.settledAt >= RUN_RETENTION_MS) {
 			await this.forget(record);
 		}

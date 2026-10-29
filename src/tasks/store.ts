@@ -21,6 +21,7 @@ import {
 	newInputs,
 	readTaskLog,
 	type TaskInputRecord,
+	type TaskLogInput,
 	type TaskLogRecord,
 	type TaskStepReason,
 	type TaskStepResult,
@@ -34,6 +35,8 @@ export interface StoredTaskDocument {
 	path: string;
 	fields: TaskFrontmatter;
 	body: string;
+	/** Snapshot lagged its durable log; the next mutation/reconciliation persists it. */
+	recovered?: boolean;
 }
 
 /**
@@ -71,7 +74,17 @@ export async function readStoredTask(
 	if (!path) return undefined;
 	const content = await readFile(path, "utf-8");
 	const parsed = parseTaskFrontmatter(content);
-	return { id, path, fields: parsed.fields, body: taskBody(content) };
+	let fields = parsed.fields;
+	let recovered = false;
+	if (path === activePath) {
+		for (const record of await readTaskLog(deskDir, id, { strict: true })) {
+			if (record.checkpoint && (record.checkpoint.revision ?? 0) > (fields.revision ?? 0)) {
+				fields = normalizeTaskFrontmatter(record.checkpoint);
+				recovered = true;
+			}
+		}
+	}
+	return { id, path, fields, body: taskBody(content), ...(recovered ? { recovered } : {}) };
 }
 
 export async function writeStoredTask(document: StoredTaskDocument): Promise<void> {
@@ -86,6 +99,13 @@ export async function writeStoredTask(document: StoredTaskDocument): Promise<voi
 	await writeFileAtomically(document.path, rendered);
 }
 
+/** Caller holds the task lock. The log commits first; replay repairs a failed snapshot write. */
+export async function commitTask(document: StoredTaskDocument, deskDir: string, record: TaskLogInput): Promise<void> {
+	document.fields = normalizeTaskFrontmatter({ ...document.fields, revision: (document.fields.revision ?? 0) + 1 });
+	await appendTaskLog(deskDir, document.id, { ...record, checkpoint: document.fields });
+	await writeStoredTask(document);
+}
+
 export async function updateStoredTask(
 	deskDir: string,
 	id: string,
@@ -96,13 +116,15 @@ export async function updateStoredTask(
 		const document = await readStoredTask(deskDir, id, includeArchive);
 		if (!document) return undefined;
 		update(document);
-		await writeStoredTask(document);
+		await commitTask(document, deskDir, { kind: "checkpoint" });
 		return document;
 	});
 }
 
 export interface BeginStepInput {
 	brief: "full" | "delta";
+	/** Recheck the host's reachability/switch policy inside admission's mutation lock. */
+	allowed?: (fields: TaskFrontmatter) => boolean;
 }
 
 export interface BegunStep {
@@ -111,7 +133,7 @@ export interface BegunStep {
 	reason: TaskStepReason;
 	/** The log as it stood before this step's own record. */
 	records: TaskLogRecord[];
-	/** What arrived since the previous step began — read in the same lock hold that writes the `step` record, so nothing can slip between (INV-6). */
+	/** Unacknowledged inputs read in the same lock hold that admits this step (INV-6). */
 	inputs: TaskInputRecord[];
 }
 
@@ -132,15 +154,20 @@ function mayBeginStep(fields: TaskFrontmatter): boolean {
 export async function beginStep(deskDir: string, id: string, input: BeginStepInput): Promise<BegunStep | undefined> {
 	return withTaskMutation(deskDir, id, async () => {
 		const document = await readStoredTask(deskDir, id);
-		if (!document || document.fields.outcome || !mayBeginStep(document.fields)) return undefined;
-		const records = await readTaskLog(deskDir, id);
+		if (
+			!document ||
+			document.fields.outcome ||
+			!mayBeginStep(document.fields) ||
+			input.allowed?.(document.fields) === false
+		)
+			return undefined;
+		const records = await readTaskLog(deskDir, id, { strict: true });
 		const inputs = newInputs(records);
 		const seq = (lastStep(records)?.step.seq ?? 0) + 1;
 		const reason = deriveStepReason(records, inputs);
 		document.fields.state = "running";
 		document.fields.waiting = undefined;
-		await appendTaskLog(deskDir, id, { kind: "step", seq, reason, brief: input.brief });
-		await writeStoredTask(document);
+		await commitTask(document, deskDir, { kind: "step", seq, reason, brief: input.brief });
 		return { document, seq, reason, records, inputs };
 	});
 }
@@ -154,6 +181,7 @@ export interface EndStepInput {
 	usdEstimated?: boolean;
 	error?: string;
 	facts: StepFacts;
+	close?: { outcome: "complete" | "cancel"; note: string };
 }
 
 export interface EndedStep {
@@ -163,7 +191,7 @@ export interface EndedStep {
 
 /**
  * The step ended: its `step_end` record, the usage it spent, and the state D8 derives, written
- * together. A task the user paused mid-step stays paused (the pause already wrote its own state);
+ * through one replayable checkpoint. A task paused mid-step stays paused;
  * a closed task is left for the caller to archive. `undefined` when the task no longer exists —
  * the user cancelled it while the step ran.
  */
@@ -176,11 +204,30 @@ export async function endStep(
 	return withTaskMutation(deskDir, id, async () => {
 		const document = await readStoredTask(deskDir, id);
 		if (!document || document.fields.outcome) return undefined;
+		if (
+			(await readTaskLog(deskDir, id, { strict: true })).some(
+				(record) => record.kind === "step_end" && record.seq === input.seq,
+			)
+		)
+			return undefined;
 		const fields = document.fields;
 		const facts: StepFacts = { ...input.facts, pausedByUser: input.facts.pausedByUser || fields.state === "paused" };
 		const derivation = deriveAfterStep(facts, now);
-		await appendTaskLog(deskDir, id, {
+
+		const usage = fields.usage ?? createUsage(now);
+		fields.usage = {
+			...usage,
+			steps: usage.steps + 1,
+			usd: usage.usd + Math.max(0, input.usd ?? 0),
+			usdEstimated: usage.usdEstimated || input.usdEstimated === true,
+		};
+		if (derivation.next !== "paused") {
+			fields.state = derivation.state;
+			fields.waiting = derivation.waiting;
+		}
+		await commitTask(document, deskDir, {
 			kind: "step_end",
+			...(input.close ? { close: input.close } : {}),
 			seq: input.seq,
 			result: input.result,
 			next: derivation.next,
@@ -190,18 +237,6 @@ export async function endStep(
 			...(input.usdEstimated ? { usdEstimated: true } : {}),
 			...(input.error ? { error: input.error } : {}),
 		});
-		const usage = fields.usage ?? createUsage(now);
-		fields.usage = {
-			...usage,
-			steps: usage.steps + 1,
-			usd: usage.usd + Math.max(0, input.usd ?? 0),
-			usdEstimated: usage.usdEstimated || input.usdEstimated === true,
-		};
-		if (derivation.next !== "closed" && derivation.next !== "paused") {
-			fields.state = derivation.state;
-			fields.waiting = derivation.waiting;
-		}
-		await writeStoredTask(document);
 		return { document, derivation };
 	});
 }
@@ -220,11 +255,15 @@ export async function reconcileTaskState(
 	return withTaskMutation(deskDir, id, async () => {
 		const document = await readStoredTask(deskDir, id);
 		if (!document || document.fields.outcome) return false;
-		const records = await readTaskLog(deskDir, id);
+		const records = await readTaskLog(deskDir, id, { strict: true });
 		const reconciled = reconcileOnBoot(document.fields, records, pendingWork, now);
-		if (!reconciled) return false;
+		if (!reconciled) {
+			if (document.recovered) await writeStoredTask(document);
+			return document.recovered === true;
+		}
+		document.fields = reconciled.fields;
 		if (reconciled.appendStepEnd) {
-			await appendTaskLog(deskDir, id, {
+			await commitTask(document, deskDir, {
 				kind: "step_end",
 				seq: reconciled.appendStepEnd.seq,
 				result: "interrupted",
@@ -232,9 +271,7 @@ export async function reconcileTaskState(
 				note: "（服务重启时这一步被打断）",
 				tools: [],
 			});
-		}
-		document.fields = reconciled.fields;
-		await writeStoredTask(document);
+		} else await commitTask(document, deskDir, { kind: "checkpoint" });
 		return true;
 	});
 }
@@ -266,8 +303,7 @@ export async function pauseTask(
 		document.fields.state = "paused";
 		document.fields.waiting = undefined;
 		document.fields.paused = { ...paused, at: paused.at ?? formatLocalTime() };
-		await appendTaskLog(deskDir, id, { kind: "pause", by: paused.by, reason: paused.reason });
-		await writeStoredTask(document);
+		await commitTask(document, deskDir, { kind: "pause", by: paused.by, reason: paused.reason });
 		return document;
 	});
 }
@@ -297,11 +333,10 @@ export async function resumeTask(
 		document.fields.state = "queued";
 		document.fields.paused = undefined;
 		if (Object.keys(granted).length > 0) document.fields.budget = budget;
-		await appendTaskLog(deskDir, id, {
+		await commitTask(document, deskDir, {
 			kind: "resume",
 			...(Object.keys(granted).length > 0 ? { grants: granted } : {}),
 		});
-		await writeStoredTask(document);
 		return document;
 	});
 }
@@ -326,14 +361,22 @@ export async function closeTask(
 		const document = await readStoredTask(deskDir, id);
 		if (!document || document.fields.outcome) return undefined;
 		const usage = document.fields.usage;
-		await appendTaskLog(deskDir, id, {
-			kind: "close",
-			outcome: input.outcome === "complete" ? "done" : "cancelled",
-			by: input.by,
-			note: input.note,
-			steps: usage?.steps ?? 0,
-			usd: usage?.usd ?? 0,
-		});
+		const prior = [...(await readTaskLog(deskDir, id, { strict: true }))]
+			.reverse()
+			.find((record) => record.kind === "close");
+		if (
+			prior?.kind !== "close" ||
+			prior.outcome !== (input.outcome === "complete" ? "done" : "cancelled") ||
+			prior.note !== input.note
+		)
+			await appendTaskLog(deskDir, id, {
+				kind: "close",
+				outcome: input.outcome === "complete" ? "done" : "cancelled",
+				by: input.by,
+				note: input.note,
+				steps: usage?.steps ?? 0,
+				usd: usage?.usd ?? 0,
+			});
 		await archiveTask(deskDir, id, input.outcome === "complete" ? "completed" : "cancelled");
 		return document;
 	});

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { normalizeTaskId, readActiveTasks } from "../../tasks/contract.js";
 import type { TaskLiveSnapshot } from "../../tasks/control.js";
+import { withTaskMutation } from "../../tasks/mutation-lock.js";
 import { closeTask as closeStoredTask, readStoredTask } from "../../tasks/store.js";
 import { RecoverableToolError } from "../contract/details.js";
 import { assertCompletable, requiredField, tasksDir } from "./shared.js";
@@ -89,7 +90,6 @@ export async function closeTaskFromChat(
 ): Promise<TaskManageResult> {
 	const id = normalizeTaskId(request.id);
 	const note = requiredField(request.note, "note", `task_close outcome=${request.outcome}`);
-	const document = await requireTask(options, id);
 
 	if (request.outcome === "cancel") {
 		if (!options.control) {
@@ -108,12 +108,27 @@ export async function closeTaskFromChat(
 		};
 	}
 
-	if (document.fields.state === "running") {
+	const document = await requireTask(options, id);
+	if (document.fields.state === "running" || options.control?.isRunning(options.desk, id)) {
 		throw new RecoverableToolError(
 			`Task "${id}" is executing a step right now. Tell it with task_message to finish up, or pause it with task_pause first; the leader completes its own task.`,
 		);
 	}
 	await assertCompletable(options, document, id);
-	await closeStoredTask(options.deskDir, id, { outcome: "complete", by: "user", note });
-	return { action: "close", id, archived: true, notice: `任务 \`${id}\` 已完成并归档。` };
+	// Manager reads may themselves settle work into the task log, so never hold the task lock
+	// while awaiting them. Admission/edits in that window invalidate this validation.
+	return withTaskMutation(options.deskDir, id, async () => {
+		const current = await requireTask(options, id);
+		if (
+			options.control?.isRunning(options.desk, id) ||
+			JSON.stringify(current.fields) !== JSON.stringify(document.fields) ||
+			current.body !== document.body
+		) {
+			throw new RecoverableToolError(
+				`Task "${id}" changed during completion checks. Inspect it with task_list and retry closing once its step and work have stopped.`,
+			);
+		}
+		await closeStoredTask(options.deskDir, id, { outcome: "complete", by: "user", note });
+		return { action: "close", id, archived: true, notice: `任务 \`${id}\` 已完成并归档。` };
+	});
 }
