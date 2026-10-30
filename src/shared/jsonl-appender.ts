@@ -1,4 +1,4 @@
-import { appendFile, mkdir, rename, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const DEFAULT_MAX_PENDING_RECORDS = 2_000;
@@ -33,6 +33,9 @@ export interface JsonlAppenderOptions {
 	onRotate?: (filePath: string) => Promise<void>;
 	/** Defer rotation while the oldest shard still holds required recovery records. */
 	canRotate?: () => Promise<boolean>;
+	/** Isolate an interrupted last line before appending. Caller serializes cross-process writes. */
+	repairTail?: boolean;
+	onRepairTail?: (filePath: string, offset: number) => void;
 }
 
 export interface JsonlAppender {
@@ -145,6 +148,24 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 
 	const write = async (filePath: string, line: string, lineBytes: number): Promise<void> => {
 		await ensureDir(filePath);
+		if (options.repairTail) {
+			const handle = await open(filePath, "a+", mode);
+			try {
+				let size = (await handle.stat()).size;
+				if (size > 0) {
+					const tail = Buffer.alloc(1);
+					await handle.read(tail, 0, 1, size - 1);
+					if (tail[0] !== 10) {
+						await handle.writeFile("\n");
+						options.onRepairTail?.(filePath, size);
+						size++;
+					}
+				}
+				sizes.set(filePath, size);
+			} finally {
+				await handle.close();
+			}
+		}
 		const size = await currentSize(filePath);
 		if (
 			options.maxSizeBytes &&

@@ -110,11 +110,19 @@ describe("pause and resume", () => {
 
 describe("closing", () => {
 	it("records the close and archives the contract with its log", async () => {
-		await closeTask(dir, "T", { outcome: "complete", by: "leader", note: "done" });
+		await writeFile(
+			join(dir, "tasks", "T.md"),
+			renderTaskDocument({ state: "queued", usage: createUsage() }, "# T\n\n## DoD\n- [x] checked\n"),
+		);
+		const reportId = await appendTaskLog(dir, "T", { kind: "report", seq: 1, text: "delivered", delivered: true });
+		await closeTask(dir, "T", { outcome: "complete", by: "leader", note: "done", reportId });
 		expect(existsSync(join(dir, "tasks", "T.md"))).toBe(false);
 		expect(existsSync(archivedTaskPath(dir, "T"))).toBe(true);
 		expect((await readStoredTask(dir, "T", true))?.fields.outcome).toBe("completed");
-		expect(await readTaskLog(dir, "T")).toMatchObject([{ kind: "close", outcome: "done", by: "leader" }]);
+		expect(await readTaskLog(dir, "T")).toMatchObject([
+			{ kind: "report" },
+			{ kind: "close", outcome: "done", by: "leader" },
+		]);
 		expect(await closeTask(dir, "T", { outcome: "cancel", by: "user", note: "again" })).toBeUndefined();
 	});
 });
@@ -184,6 +192,15 @@ describe("cross-process task mutation (spec 058, D6)", () => {
 			},
 		);
 		expect((await readStoredTask(dir, "T"))?.fields.state).toBe("paused");
+		expect((await readStoredTask(dir, "T"))?.body).toContain("Revised.");
+		await mkdir(join(dir, "tasks", ".closing"));
+		await writeFile(join(dir, "tasks", ".closing", "T.json"), "{}");
+		await expect(
+			createEditTool(createFileStore(), { deskDir: dir, securityConfig: { enabled: false } as never }).execute(
+				"edit",
+				{ path: join(dir, "tasks", "T.md"), oldText: "Revised.", newText: "Lost." },
+			),
+		).rejects.toThrow(/committing its archive/);
 		expect((await readStoredTask(dir, "T"))?.body).toContain("Revised.");
 	});
 });

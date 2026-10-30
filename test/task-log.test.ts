@@ -11,6 +11,7 @@ import {
 	readTaskLog,
 	resetTaskLogAppenders,
 	taskArchiveLogPath,
+	taskLogIssues,
 	taskLogPath,
 } from "../src/tasks/loop-log.js";
 import { archiveTask } from "../src/tasks/store.js";
@@ -50,6 +51,17 @@ describe("loop log (spec 051, D5)", () => {
 		const records = await readTaskLog(dir, "T");
 		expect(records.map((record) => record.kind)).toEqual(["step"]);
 		expect(records[0]).toMatchObject({ seq: 1 });
+		// A process can die without a final newline. The next complete record must survive,
+		// both on reopening the writer and when a later write fails in the same process.
+		// Mutation check (2026-10-30): repairTail=false loses both following valid records; confirmed red.
+		await appendFile(taskLogPath(dir, "T"), '{"ts":"cut","kind":"message","text":"half');
+		await resetTaskLogAppenders();
+		await appendTaskLog(dir, "T", { kind: "resume" });
+		await appendFile(taskLogPath(dir, "T"), '{"cut":');
+		const id = await appendTaskLog(dir, "T", { kind: "message", from: "u", channel: "c", text: "intact" });
+		expect((await readTaskLog(dir, "T")).map((record) => record.kind)).toEqual(["step", "resume", "message"]);
+		expect(newInputs(await readTaskLog(dir, "T")).some((record) => record.id === id)).toBe(true);
+		expect(await taskLogIssues(dir, "T")).toEqual(expect.arrayContaining([{ path: taskLogPath(dir, "T"), line: 5 }]));
 	});
 
 	it("archiveTask moves rotated shards along with the current file, and readTaskLog still sees all of them", async () => {
@@ -150,6 +162,28 @@ describe("work log (spec 052, D4)", () => {
 		expect(records[1]).toMatchObject({ ref: "run_1", status: "completed", usd: 2.5, usdEstimated: true });
 		const { readStoredTask } = await import("../src/tasks/store.js");
 		expect((await readStoredTask(dir, "U"))?.fields.usage).toMatchObject({ usd: 3.5, usdEstimated: true });
+		// Unknown external pricing is not a zero-dollar estimate, and settlement retries cannot count it twice.
+		const { creditTaskForRun } = await import("../src/subagents/task-settlement.js");
+		const unknown = {
+			outputText: "done",
+			durationMs: 1,
+			costKnown: false,
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				total: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+		const run = { taskId: "U", runId: "run_unknown", status: "completed", artifactDir: dir } as never;
+		await creditTaskForRun(dir, run, unknown, false, false);
+		await creditTaskForRun(dir, run, unknown, false, false);
+		expect((await readStoredTask(dir, "U"))?.fields.usage).toMatchObject({ usd: 3.5, unknownCostCount: 1 });
+		expect(
+			(await readTaskLog(dir, "U")).find((record) => record.kind === "settle" && record.ref === "run_unknown"),
+		).toMatchObject({ usdKnown: false });
 	});
 
 	it("writes nothing for a task that no longer exists", async () => {

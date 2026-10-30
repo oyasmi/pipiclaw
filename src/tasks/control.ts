@@ -37,12 +37,15 @@ export interface TaskLiveSnapshot {
 	waiting?: TaskWaiting;
 	/** The delivery channel is missing, not bound to this desk, or its transport is off (INV-7). */
 	frozen: boolean;
+	/** A persisted close intent is being delivered/committed; it never starts another model step. */
+	closing?: boolean;
 	step?: TaskLiveStep;
 	pending: TaskPendingWork[];
 }
 
 export type TaskMessageOutcome =
 	| { kind: "not_found" }
+	| { kind: "closing" }
 	/** Accepted into the current step queue; consumption still needs a transcript receipt. */
 	| { kind: "injected" }
 	/** Recorded; the next step starts with it. */
@@ -80,7 +83,7 @@ export interface TaskStepIntent {
 	ask?: { question: string };
 	/** The moment `task_wait` registered, as stored local-time text. */
 	waitUntil?: string;
-	close?: { outcome: "complete" | "cancel"; note: string };
+	close?: { outcome: "complete" | "cancel"; note: string; reportId?: string };
 	/** `task_report` calls this step, capped at {@link MAX_REPORTS_PER_STEP}. */
 	reports: number;
 }
@@ -99,6 +102,6 @@ export interface TaskSessionContext {
 	/** The sequence number of the step that is running. */
 	seq(): number;
 	intent(): TaskStepIntent;
-	/** Push text to the task's report channel; resolves whether it was delivered. */
-	report(text: string): Promise<boolean>;
+	/** Persist and attempt a report; returns its durable identity and channel acceptance. */
+	report(text: string): Promise<{ id: string; delivered: boolean }>;
 }

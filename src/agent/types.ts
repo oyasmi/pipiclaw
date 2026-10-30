@@ -66,7 +66,7 @@ export interface AgentRunner {
 		/** Tools the turn completed successfully, in call order (a task step's idle evidence). */
 		toolsUsed?: string[];
 		/** The turn's own model cost: assistant usage only, sub-agents are accounted when they settle. */
-		assistantCost?: { usd: number; estimated: boolean };
+		assistantCost?: { usd: number; estimated: boolean; known?: boolean };
 	}>;
 	/** The reply to a runner-handled built-in command (`/help`, `/context`, …), failures included. */
 	handleBuiltinCommand(command: RunnerBuiltInCommand): Promise<string>;
@@ -164,6 +164,9 @@ export interface RunState {
 	/** True only while every observed assistant/sub-agent usage source has known model pricing. */
 	costKnown: boolean;
 	usageSources: number;
+	/** Assistant-only pricing, so an unknown delegation is not charged to the task twice. */
+	assistantCostKnown: boolean;
+	assistantUsageSources: number;
 	stopReason: string;
 	errorMessage: string | undefined;
 	lastCompactionError: string | undefined;
@@ -193,6 +196,8 @@ export function createEmptyRunState(): RunState {
 		assistantUsage: createEmptyUsageTotals(),
 		costKnown: true,
 		usageSources: 0,
+		assistantCostKnown: true,
+		assistantUsageSources: 0,
 		stopReason: "stop",
 		errorMessage: undefined,
 		lastCompactionError: undefined,

@@ -1,6 +1,8 @@
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { withTimeout } from "../shared/with-timeout.js";
+import { isTaskArchiving } from "../tasks/archive.js";
+import { pendingTaskClose } from "../tasks/completion.js";
 import { extractTaskTitle, readActiveTasks } from "../tasks/contract.js";
 import type {
 	TaskCancelOutcome,
@@ -9,9 +11,11 @@ import type {
 	TaskLiveSnapshot,
 	TaskMessageOutcome,
 } from "../tasks/control.js";
+import { drainTaskDeliveries } from "../tasks/delivery.js";
 import type { TaskBudget, TaskFrontmatter } from "../tasks/frontmatter.js";
 import { taskInputTag } from "../tasks/input-receipts.js";
-import { appendTaskLog } from "../tasks/loop-log.js";
+import { appendTaskLog, readTaskLog } from "../tasks/loop-log.js";
+import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { cancelledByUserReceipt } from "../tasks/receipts.js";
 import {
 	closeTask as closeStoredTask,
@@ -57,35 +61,40 @@ export class LaneControl implements TaskControl {
 		);
 		if (entries.length === 0) return [];
 		const pending = await listPendingWork(ctx.options, desk, now, true);
-		return entries.map((entry) => {
-			const live = ctx.live.get(taskKey(desk, entry.id));
-			const activity = live?.runner?.getActivity();
-			const current = activity?.pendingTools[0];
-			return {
-				id: entry.id,
-				state: entry.fields.state,
-				...(entry.fields.waiting ? { waiting: entry.fields.waiting } : {}),
-				frozen: isFrozen(ctx, desk, entry.fields),
-				...(live?.step
-					? {
-							step: {
-								seq: live.step.seq,
-								startedAt: live.step.startedAt,
-								toolsDone: activity?.toolsDone ?? 0,
-								...(current
-									? {
-											tool: {
-												summary: describeToolCall(current.toolName, current.args),
-												startedAt: current.startTime,
-											},
-										}
-									: {}),
-							},
-						}
-					: {}),
-				pending: pending.get(entry.id) ?? [],
-			};
-		});
+		return Promise.all(
+			entries.map(async (entry) => {
+				const live = ctx.live.get(taskKey(desk, entry.id));
+				const activity = live?.runner?.getActivity();
+				const current = activity?.pendingTools[0];
+				return {
+					id: entry.id,
+					state: entry.fields.state,
+					...(entry.fields.waiting ? { waiting: entry.fields.waiting } : {}),
+					frozen: isFrozen(ctx, desk, entry.fields),
+					closing:
+						isTaskArchiving(deskDir, entry.id) ||
+						(entry.fields.state !== "paused" && !!pendingTaskClose(await readTaskLog(deskDir, entry.id))),
+					...(live?.step
+						? {
+								step: {
+									seq: live.step.seq,
+									startedAt: live.step.startedAt,
+									toolsDone: activity?.toolsDone ?? 0,
+									...(current
+										? {
+												tool: {
+													summary: describeToolCall(current.toolName, current.args),
+													startedAt: current.startTime,
+												},
+											}
+										: {}),
+								},
+							}
+						: {}),
+					pending: pending.get(entry.id) ?? [],
+				};
+			}),
+		);
 	}
 
 	async message(
@@ -95,19 +104,29 @@ export class LaneControl implements TaskControl {
 	): Promise<TaskMessageOutcome> {
 		const { ctx } = this;
 		const deskDir = ctx.options.getDeskDir(desk);
-		const document = deskDir ? await readStoredTask(deskDir, id) : undefined;
-		if (!deskDir || !document || document.fields.outcome) return { kind: "not_found" };
+		if (!deskDir) return { kind: "not_found" };
+		let document: Awaited<ReturnType<typeof readStoredTask>>;
 		const live = ctx.live.get(taskKey(desk, id));
 		const text = input.text.trim();
 
 		// Durability precedes best-effort steering. A transcript receipt, never queue acceptance,
 		// consumes this input; an aborted/unconsumed steer remains eligible for the next brief.
-		const messageId = await appendTaskLog(deskDir, id, {
-			kind: "message",
-			from: input.from,
-			channel: input.channel,
-			text,
+		let messageId: string | undefined;
+		const accepted = await withTaskMutation(deskDir, id, async () => {
+			document = await readStoredTask(deskDir, id);
+			if (!document || document.fields.outcome) return "not_found" as const;
+			if (live?.intent.close || isTaskArchiving(deskDir, id) || pendingTaskClose(await readTaskLog(deskDir, id)))
+				return "closing" as const;
+			messageId = await appendTaskLog(deskDir, id, {
+				kind: "message",
+				from: input.from,
+				channel: input.channel,
+				text,
+			});
+			return "accepted" as const;
 		});
+		if (accepted !== "accepted") return { kind: accepted };
+		if (!document || !messageId) return { kind: "not_found" };
 		if (live?.step && live.runner && !live.step.abort) {
 			try {
 				await live.runner.queueSteer(`[用户对任务 ${id} 说] ${text}\n${taskInputTag(messageId)}`, input.from);
@@ -175,22 +194,32 @@ export class LaneControl implements TaskControl {
 			}
 		}
 		const cancelled = await this.cancelBoundWork(desk, id);
-		await closeStoredTask(deskDir, id, { outcome: "cancel", by: input.by, note: input.note });
+		const reportChannel = document.fields.channel;
+		await closeStoredTask(deskDir, id, {
+			outcome: "cancel",
+			by: input.by,
+			note: input.note,
+			receipt:
+				reportChannel && reportChannel !== input.channel
+					? () => cancelledByUserReceipt(id, extractTaskTitle(document.body, id))
+					: undefined,
+		});
 		if (live) await ctx.release(live);
 		ctx.notify();
 		// A cancel typed in another channel of the desk leaves the report channel told (D29); one typed
 		// there is answered by the command's own reply.
-		const reportChannel = document.fields.channel;
 		if (reportChannel && reportChannel !== input.channel) {
-			await ctx.options
-				.deliver(desk, reportChannel, cancelledByUserReceipt(id, extractTaskTitle(document.body, id)))
-				.catch((error: unknown) =>
-					log.logWarn("tasks.task.receipt_failed", "Task cancel receipt failed", {
-						channelId: reportChannel,
-						reason: errorMessage(error),
-						fields: { taskId: id },
-					}),
-				);
+			await drainTaskDeliveries(
+				deskDir,
+				(channel, text) => ctx.options.deliver(desk, channel, text),
+				(channel) => ctx.options.isBoundTo(channel, desk) && ctx.options.isReachable(channel),
+				ctx.now(),
+			).catch((error: unknown) =>
+				log.logWarn("tasks.delivery.drain_failed", "Task delivery drain failed", {
+					reason: errorMessage(error),
+					fields: { desk, taskId: id },
+				}),
+			);
 		}
 		return { kind: "cancelled", cancelled };
 	}

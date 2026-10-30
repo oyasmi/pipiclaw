@@ -114,7 +114,10 @@ describe("E2E deterministic: desks and bindings", () => {
 		harness.model.script.route({
 			name: "step",
 			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #2]`),
-			respond: [reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "digest sent" })],
+			respond: [
+				reply.toolCall("task_report", { text: "digest sent" }),
+				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "digest sent" }),
+			],
 		});
 
 		harness.model.script.route({

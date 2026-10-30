@@ -210,8 +210,9 @@ const wait =
 	};
 const close =
 	(outcome: "complete" | "cancel", note = "done"): Script =>
-	({ target }) => {
-		target.session.intent().close = { outcome, note };
+	async ({ target }) => {
+		const report = outcome === "complete" ? await target.session.report(note) : undefined;
+		target.session.intent().close = { outcome, note, ...(report ? { reportId: report.id } : {}) };
 		return { text: "finished", tools: ["task_close"] };
 	};
 
@@ -328,6 +329,35 @@ describe("execution slots (spec 064, D12)", () => {
 });
 
 describe("a step's end (D8)", () => {
+	it("rechecks completion at commit and lets the leader repair a contract changed after the tool check", async () => {
+		// Risk: the tool's acceptance snapshot can become stale before endStep/close; retrying the
+		// same close forever would strand the task, while skipping validation falsely completes it.
+		await harness.task("recheck");
+		harness.script(
+			"recheck",
+			async (ctx) => {
+				const result = await close("complete")(ctx);
+				const document = (await readStoredTask(harness.deskDir, "recheck"))!;
+				writeFileSync(document.path, renderTaskDocument(document.fields, BODY.replace("- [x]", "- [ ]")));
+				return result;
+			},
+			async (ctx) => {
+				const document = (await readStoredTask(harness.deskDir, "recheck"))!;
+				writeFileSync(document.path, renderTaskDocument(document.fields, BODY));
+				return close("complete")(ctx);
+			},
+		);
+		await harness.settle();
+		expect((await readStoredTask(harness.deskDir, "recheck"))?.fields.state).toBe("queued");
+		expect(
+			(await readTaskLog(harness.deskDir, "recheck")).filter((record) => record.kind === "close_rejected"),
+		).toHaveLength(1);
+		await harness.settle();
+		expect((await readStoredTask(harness.deskDir, "recheck", true))?.fields.outcome).toBe("completed");
+		expect(harness.briefs.recheck).toHaveLength(2);
+		expect(harness.briefs.recheck![1]).toContain("unmet acceptance items");
+	});
+
 	it("asks the user, waits for a moment, or closes — each by what the leader registered", async () => {
 		await harness.task("asker");
 		await harness.task("sleeper");

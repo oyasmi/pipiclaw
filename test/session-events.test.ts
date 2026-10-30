@@ -275,6 +275,34 @@ describe("usage accounting", () => {
 			handlerContext(createOutput().ctx, knownState, { isModelCostKnown: () => true }),
 		);
 		expect(knownState.costKnown).toBe(true);
+		// A delegation's unknown price belongs to its settlement, not the leader's own step cost.
+		await handleSessionEvent(
+			{
+				type: "tool_execution_end",
+				toolCallId: "unknown-run",
+				toolName: "subagent",
+				isError: false,
+				result: {
+					details: {
+						kind: "subagent",
+						agent: "reader",
+						source: "inline",
+						model: "custom/unpriced",
+						tools: [],
+						turns: 1,
+						toolCalls: 0,
+						durationMs: 1,
+						failed: false,
+						usage: unknownUsage,
+					},
+				},
+			},
+			handlerContext(createOutput().ctx, knownState, { isModelCostKnown: () => false }),
+		);
+		expect(knownState.costKnown).toBe(false);
+		expect(knownState.assistantCostKnown).toBe(true);
+		expect(knownState.assistantUsageSources).toBe(1);
+		expect(unknownState.assistantCostKnown).toBe(false);
 	});
 
 	it("folds sub-agent usage into the turn tally without double counting, and no longer writes the ledger itself (spec 040 D7)", async () => {

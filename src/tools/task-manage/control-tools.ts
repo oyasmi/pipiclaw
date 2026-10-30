@@ -26,6 +26,7 @@ function notFound(id: string): RecoverableToolError {
 }
 
 const MESSAGE_NOTICES = {
+	closing: "已进入交付与收尾，未接收新指示；如需改变目标，请先取消该任务，再提出新要求。",
 	injected: "消息已保存，并已排入当前步骤；未处理的内容会在后续继续转达。",
 	queued_for_next_step: "已记下，任务的下一步会看到。",
 	woke: "已记下，任务被叫醒并会继续推进。",

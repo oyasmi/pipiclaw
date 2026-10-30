@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { countPromptUnits } from "../../shared/prompt-units.js";
 import { truncate } from "../../shared/text-utils.js";
+import { taskCostSummary } from "../../tasks/budget.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../../tasks/contract.js";
 import type { TaskFrontmatter } from "../../tasks/frontmatter.js";
 
@@ -63,7 +64,7 @@ function renderLine(entry: TaskLedgerEntry, channelId: string | undefined): stri
 	}
 	const usage = entry.fields.usage;
 	if (usage) {
-		const cost = usage.usd > 0 ? ` · $${usage.usd.toFixed(2)}${usage.usdEstimated ? "≈" : ""}` : "";
+		const cost = usage.usd > 0 || usage.unknownCostCount ? ` · ${taskCostSummary(usage)}` : "";
 		parts.push(`${usage.steps} 步${cost}`);
 	}
 	return `- ${parts.join(" · ")}`;

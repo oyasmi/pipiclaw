@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import { clipText } from "../shared/text-utils.js";
 import { buildTaskBoard, renderTaskBoard } from "./board.js";
-import { effectiveBudget } from "./budget.js";
+import { effectiveBudget, taskCostSummary } from "./budget.js";
 import type { TaskFrontmatter } from "./frontmatter.js";
 import { taskInputTag } from "./input-receipts.js";
 import {
@@ -125,6 +125,8 @@ function renderInput(input: TaskInputRecord): string {
 			return `[用户消息 · ${input.from} · ${input.ts}]\n${input.text}`;
 		case "resume":
 			return `[恢复] 用户恢复了任务${input.grants ? `，追加预算 ${JSON.stringify(input.grants)}` : ""}。先核对真实状态（在途工作、产物、外部对象），再继续。`;
+		case "close_rejected":
+			return `[收尾检查未通过] ${input.reason}\nInspect the current contract and delivery evidence, correct the issue, then report and close again.`;
 	}
 }
 
@@ -168,9 +170,7 @@ function renderState(fields: TaskFrontmatter, seq: number, pending: readonly Pen
 	const lines = [`step: ${seq}`];
 	if (fields.origin) lines.push(`origin: ${fields.origin}`);
 	if (usage) {
-		lines.push(
-			`usage: ${usage.steps}/${budget.steps} 步 · $${usage.usd.toFixed(2)}/$${budget.usd}${usage.usdEstimated ? "（含估算）" : ""}`,
-		);
+		lines.push(`usage: ${usage.steps}/${budget.steps} 步 · ${taskCostSummary(usage)} / $${budget.usd}`);
 	}
 	lines.push(
 		pending.length > 0
@@ -205,6 +205,9 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<TaskBri
 
 	if (input.full) {
 		blocks.push(`${contractOpenTag(taskId, sha)}\n${document.body.trim()}\n</task_contract>`);
+		blocks.push(
+			`Task working files: ${join(input.deskDir, "work", taskId)}. Use this desk-local directory for intermediate files and command logs; do not reuse a shared absolute logs directory.`,
+		);
 		const isFirstStep = !records.some((record) => record.kind === "step");
 		if (isFirstStep && document.fields.origin) {
 			const previous = await findPreviousOccurrence(input.deskDir, document.fields.origin, taskId);

@@ -11,15 +11,19 @@ import { capReply, flattenMarkdownForChat } from "../commands/reply-limits.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isTaskArchiving } from "./archive.js";
 import { buildTaskBoard, renderTaskBoardForUser } from "./board.js";
+import { taskCostSummary } from "./budget.js";
 import { normalizeTaskId, readActiveTasks, type TaskLedgerEntry } from "./contract.js";
 import type { TaskControl, TaskLiveSnapshot } from "./control.js";
+import { readTaskDeliveries } from "./delivery.js";
 import { type TaskBudget, taskStateLabel } from "./frontmatter.js";
 import {
 	readTaskLog,
 	renderTaskLogLineForUser,
 	taskArchiveLogPath,
 	taskLogIsArchived,
+	taskLogIssues,
 	taskLogPath,
 } from "./loop-log.js";
 import { archivedTaskPath, readStoredTask, taskPath } from "./store.js";
@@ -122,7 +126,7 @@ function tasksDir(deskDir: string): string {
 function usageSummary(entry: TaskLedgerEntry): string | undefined {
 	const usage = entry.fields.usage;
 	if (!usage) return undefined;
-	const cost = usage.usd > 0 ? ` · 花费 $${usage.usd.toFixed(2)}${usage.usdEstimated ? "（含估算）" : ""}` : "";
+	const cost = usage.usd > 0 || usage.unknownCostCount ? ` · 花费 ${taskCostSummary(usage)}` : "";
 	return `已用 ${usage.steps} 步${cost}`;
 }
 
@@ -136,6 +140,7 @@ function deliveryNote(channel: string | undefined, options: HandleTasksCommandOp
 
 /** The state in the user's words, with how long it has been so and what is happening right now. */
 function describeLive(entry: TaskLedgerEntry, live: TaskLiveSnapshot | undefined, now: number): string {
+	if (live?.closing) return "交付与收尾中";
 	const label = taskStateLabel(entry.fields);
 	if (entry.fields.state === "running" && live?.step) {
 		const tool = live.step.tool ? `，正在${live.step.tool.summary}` : "";
@@ -317,14 +322,22 @@ async function listArchive(deskDir: string): Promise<string> {
 
 async function showTaskLog(deskDir: string, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
+	const issues = await taskLogIssues(deskDir, id);
 	const all = (await readTaskLog(deskDir, id)).filter(
-		(record) => record.kind !== "input_ack" && record.kind !== "checkpoint",
+		(record) => record.kind !== "input_ack" && record.kind !== "checkpoint" && record.kind !== "report_delivered",
 	);
+	if (issues.length > 0 && all.length === 0)
+		return `任务 \`${id}\` 的记录有损坏，暂无可读取记录。请部署者检查 \`${issues[0]!.path}:${issues[0]!.line}\`，并从任务会话核对丢失的内容。`;
 	if (all.length === 0) return `任务 \`${id}\` 暂无记录。\n任务执行第一步后会出现在这里。`;
 	const records = all.slice(-LOG_LINES);
 	const path = taskLogIsArchived(deskDir, id) ? taskArchiveLogPath(deskDir, id) : taskLogPath(deskDir, id);
 	const lines = [
 		`**任务 ${id} 的记录（最近 ${records.length} 条，共 ${all.length} 条）**`,
+		...(issues.length > 0
+			? [
+					`- ⚠️ 有 ${issues.length} 行记录损坏，请部署者检查 \`${issues[0]!.path}:${issues[0]!.line}\`；以下保留完整记录。`,
+				]
+			: []),
 		...records.map(renderTaskLogLineForUser),
 	];
 	if (all.length > records.length) lines.push("", `更早的记录在 \`${path}\``);
@@ -384,6 +397,8 @@ async function messageTask(options: HandleTasksCommandOptions, idInput: string, 
 	switch (outcome.kind) {
 		case "not_found":
 			return notFound(id);
+		case "closing":
+			return `任务 \`${id}\` 已进入交付与收尾，未接收新指示。如需改变目标，先用 \`/tasks cancel ${id}\` 取消，再提出新要求。`;
 		case "injected":
 			return `消息已保存，并已排入任务 \`${id}\` 当前步骤；未处理的内容会在后续继续转达。`;
 		case "woke":
@@ -412,6 +427,15 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	const problems: string[] = [];
 
 	for (const entry of entries) {
+		if (isTaskArchiving(options.deskDir, entry.id))
+			problems.push(issue(`\`${entry.id}\` 的归档尚未完成`, "运行时会自动恢复；持续未完成时请部署者检查磁盘和权限"));
+		for (const damaged of await taskLogIssues(options.deskDir, entry.id))
+			problems.push(
+				issue(
+					`\`${entry.id}\` 的任务记录有损坏：\`${damaged.path}:${damaged.line}\``,
+					"请部署者检查该行；后续完整记录仍会读取，已丢失的内容需从会话记录核对",
+				),
+			);
 		if (!entry.readable) {
 			problems.push(
 				issue(
@@ -447,6 +471,14 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			);
 		}
 	}
+	for (const message of await readTaskDeliveries(options.deskDir))
+		if (message.attempts > 0)
+			problems.push(
+				issue(
+					`\`${message.taskId}\` 有待确认的消息，已尝试 ${message.attempts} 次`,
+					"运行时会自动重试；持续未送达时请部署者检查投递频道和网络",
+				),
+			);
 
 	if (problems.length === 0) return `检查了 ${entries.length} 个任务，未发现问题。`;
 	return capReply([`**任务体检（${problems.length} 项）**`, ...problems].join("\n"), {
@@ -458,6 +490,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 function isExecuting(snapshot: TaskLiveSnapshot): boolean {
 	return (
 		!snapshot.frozen &&
+		!snapshot.closing &&
 		(snapshot.state === "running" || (snapshot.state === "waiting" && snapshot.waiting?.kind === "work"))
 	);
 }
@@ -474,11 +507,12 @@ export function renderStopTaskHint(snapshots: readonly TaskLiveSnapshot[]): stri
 export function renderTaskStatusLine(snapshots: readonly TaskLiveSnapshot[]): string | undefined {
 	if (snapshots.length === 0) return undefined;
 	const running = snapshots.filter(isExecuting).length;
-	const queued = snapshots.filter((snapshot) => snapshot.state === "queued").length;
+	const queued = snapshots.filter((snapshot) => snapshot.state === "queued" && !snapshot.closing).length;
+	const closing = snapshots.filter((snapshot) => snapshot.closing).length;
 	const asking = snapshots.filter(
 		(snapshot) => snapshot.state === "waiting" && snapshot.waiting?.kind === "user",
 	).length;
-	return `- 后台任务：执行中 ${running} · 排队 ${queued} · 等你回复 ${asking}`;
+	return `- 后台任务：执行中 ${running} · 排队 ${queued} · 等你回复 ${asking}${closing ? ` · 交付与收尾 ${closing}` : ""}`;
 }
 
 export async function handleTasksCommand(options: HandleTasksCommandOptions): Promise<string> {

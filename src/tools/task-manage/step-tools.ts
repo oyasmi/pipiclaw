@@ -1,6 +1,7 @@
+import { finalTaskReport } from "../../tasks/completion.js";
 import { normalizeTaskId } from "../../tasks/contract.js";
 import { MAX_REPORTS_PER_STEP, type TaskSessionContext } from "../../tasks/control.js";
-import { appendTaskLog } from "../../tasks/loop-log.js";
+import { appendTaskLog, readTaskLog } from "../../tasks/loop-log.js";
 import { parseWaitUntil } from "../../tasks/state.js";
 import { RecoverableToolError } from "../contract/details.js";
 import { requireTask } from "./lifecycle.js";
@@ -55,15 +56,19 @@ export async function closeTaskInSession(
 	const note = requiredField(request.note, "note", `task_close outcome=${request.outcome}`);
 	assertNoIntent(ctx, "task_close");
 	if (request.outcome === "complete") await assertCompletable(options, await requireTask(options, id), id);
+	const report =
+		request.outcome === "complete"
+			? finalTaskReport(await readTaskLog(options.deskDir, id, { strict: true }), { seq: ctx.seq() })
+			: undefined;
 	// The close itself happens when the step ends: the lane records the step first so the archived
 	// log is whole, and a cancel also cancels what this task still has in flight.
-	ctx.intent().close = { outcome: request.outcome, note };
+	ctx.intent().close = { outcome: request.outcome, note, ...(report ? { reportId: report.id } : {}) };
 	return {
 		action: "close",
 		id,
 		notice:
 			request.outcome === "complete"
-				? `任务 \`${id}\` 将在本步结束时完成并归档。`
+				? `任务 \`${id}\` 已登记收尾，最终汇报确认送达后完成并归档。`
 				: `任务 \`${id}\` 将在本步结束时取消并归档，在途的委派和作业会一并取消。`,
 	};
 }
@@ -74,6 +79,10 @@ export async function reportToUser(
 ): Promise<TaskManageResult> {
 	const ctx = session(options);
 	const text = requiredField(request.text, "text", "task_report");
+	if (text.length > 1_500)
+		throw new RecoverableToolError(
+			"task_report text exceeds 1500 characters. Shorten the report; put long content in an artifact and report its location. Send an attachment when the channel supports it.",
+		);
 	const intent = ctx.intent();
 	if (intent.reports >= MAX_REPORTS_PER_STEP) {
 		throw new RecoverableToolError(
@@ -81,14 +90,11 @@ export async function reportToUser(
 		);
 	}
 	intent.reports++;
-	const delivered = await ctx.report(text);
-	await appendTaskLog(options.deskDir, ctx.taskId, { kind: "report", seq: ctx.seq(), text, delivered });
+	const { delivered } = await ctx.report(text);
 	return {
 		action: "report",
 		id: ctx.taskId,
-		notice: delivered
-			? "已发送给用户。"
-			: "没有送达用户（汇报频道暂时不可用）；内容已记入任务记录，需要时在下一步用 task_ask 或再次 task_report。",
+		notice: delivered ? "已发送给用户。" : "汇报已保存，尚未确认送达；运行时会自动重试。不要重复发送，可以继续收尾。",
 	};
 }
 

@@ -19,7 +19,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 
 | 原则 | 体现 |
 |---|---|
-| **频道（channel）是隔离单元** | 每个频道（`dingtalk:dm:<staffId>` / `dingtalk:group:<conversationId>` / `webapi:conv_<id>`，格式 `<渠道>:<渠道内地址>`）拥有独立的 ChannelRunner、AgentSession、记忆文件、任务台账、串行队列 |
+| **工位组织共享工作，频道保留独立对话** | desk 拥有记忆、任务、事件和工作文件；每个频道（`<渠道>:<渠道内地址>`）保留独立的 ChannelRunner、AgentSession 和串行队列。自定义 cwd 与外部绝对路径不会自动按工位隔离 |
 | **一切串行化都显式建模** | 消息队列、投递队列、记忆写队列各司其职（见 §5），共享文件用 write-temp-then-rename 原子写 |
 | **传输层与 agent 层解耦** | 渠道（钉钉、Web API）实现 `Transport`，把入站消息交给 `runtime/ingress.ts` 这一条入口；Runner 只通过 `ChannelContext` 的结构化回合输出（`emit(TurnEvent)` / `finish(TurnOutcome)`）说话，不知道有哪些渠道；终端是 Web API 的客户端，不是渠道 |
 | **状态全部落在仓库外** | 配置、工作区、记忆、任务、日志都在 `APP_HOME_DIR`（`~/.pipiclaw`，可用 `PIPICLAW_HOME` 覆盖） |
@@ -36,7 +36,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 1 | `src/`（根目录 7 个文件） | 进程级基础设施：日志、路径，以及 `Executor`/`FileStore` 两个宿主 I/O 端口（spec 044） | `log.ts`、`paths.ts`、`executor.ts`、`file-store.ts` |
 | 2 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
 | 2 | `src/usage/` | 用量/成本账本（JSONL）与渲染 | `ledger.ts`、`render.ts`、`totals.ts` |
-| 2 | `src/tasks/` | 持久任务：任务说明、状态推导、任务记录、预算、`/tasks`，以及聊天侧控制端口 `TaskControl`。调度与执行在 `runtime/task-lane*.ts`，这样本目录保持叶子 | `contract.ts`、`state.ts`、`control.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`commands.ts` |
+| 2 | `src/tasks/` | 持久任务：任务说明、状态推导、任务记录、预算、可靠消息投递、可恢复归档、`/tasks`，以及聊天侧控制端口 `TaskControl`。调度与执行在 `runtime/task-lane*.ts`，这样本目录保持叶子 | `contract.ts`、`state.ts`、`control.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`delivery.ts`、`archive.ts`、`commands.ts` |
 | 2 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
 | 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-id.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts` |
 | 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、工具名单 | `details.ts`、`presentation.ts`、`names.ts` |

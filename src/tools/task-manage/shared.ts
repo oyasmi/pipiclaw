@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { uncheckedTaskAcceptanceItems } from "../../tasks/contract.js";
+import { assertTaskAcceptance } from "../../tasks/contract.js";
 import type { StoredTaskDocument } from "../../tasks/store.js";
 import { RecoverableToolError } from "../contract/details.js";
 import type { TaskManageToolOptions } from "./types.js";
@@ -38,12 +38,7 @@ export async function assertCompletable(
 	document: StoredTaskDocument,
 	id: string,
 ): Promise<void> {
-	const unchecked = uncheckedTaskAcceptanceItems(document.body);
-	if (unchecked.length > 0) {
-		throw new RecoverableToolError(
-			`Task "${id}" still has unmet acceptance items: ${unchecked.slice(0, 3).join("; ")}. Check them off with edit once the evidence holds.`,
-		);
-	}
+	assertTaskAcceptance(document.body);
 	const pending = await pendingWorkRefs(options, id);
 	if (pending.length > 0) {
 		throw new RecoverableToolError(

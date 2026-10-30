@@ -27,6 +27,6 @@ export async function creditTaskForRun(
 			durationMs: input.durationMs,
 			...(inline ? { inline: true } : {}),
 		},
-		{ usd: input.usage.cost.total, estimated: input.costKnown === false },
+		{ usd: input.usage.cost.total, estimated: false, known: input.costKnown },
 	);
 }

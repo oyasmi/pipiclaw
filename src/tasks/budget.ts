@@ -48,3 +48,11 @@ export function checkBudget(fields: TaskFrontmatter): BudgetStatus {
 export function createUsage(now: Date = new Date()): TaskUsage {
 	return { startedAt: formatLocalTime(now), steps: 0, usd: 0, usdEstimated: false };
 }
+
+/** One cost description for reports, model briefs and completion receipts. Never call an unknown price zero. */
+export function taskCostSummary(usage: TaskUsage): string {
+	const amount = `$${usage.usd.toFixed(2)}${usage.usdEstimated ? "（含估算）" : ""}`;
+	return usage.unknownCostCount
+		? `已知 ${amount} · ${usage.unknownCostCount} 次费用未知（美元预算无法完整核验）`
+		: amount;
+}

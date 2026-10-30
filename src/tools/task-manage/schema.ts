@@ -68,7 +68,11 @@ export const taskResumeSchema = Type.Object({
 });
 
 export const taskReportSchema = Type.Object({
-	text: Type.String({ description: "The message to send the user now: a deliverable, important progress, a risk." }),
+	text: Type.String({
+		maxLength: 1_500,
+		description:
+			"A concise result, progress or risk (up to 1500 characters). Saved before sending; retries are automatic. Put long content in an artifact.",
+	}),
 });
 
 export const taskAskSchema = Type.Object({

@@ -9,9 +9,10 @@ import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/contract.js";
 import type { TaskControl, TaskSessionContext, TaskStepIntent } from "../src/tasks/control.js";
+import { deliverTaskMessage, queueTaskReport } from "../src/tasks/delivery.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
-import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
-import { beginStep, readStoredTask } from "../src/tasks/store.js";
+import { appendTaskLog, readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import { beginStep, closeTask as closeStoredTask, readStoredTask } from "../src/tasks/store.js";
 import { buildToolSet } from "../src/tools/registry.js";
 import { createTask } from "../src/tools/task-manage/create.js";
 import {
@@ -31,7 +32,7 @@ const SATISFIED_BODY = renderStandardTaskBody({
 	goal: "Do the work.",
 	dod: "- [x] Result is ready",
 	items: [{ text: "Build it" }, { text: "Check it" }],
-});
+}).replaceAll("- [ ] W", "- [x] W");
 const OPEN_DOD_BODY = renderStandardTaskBody({ title: "W", goal: "G", dod: "- [ ] Not yet" });
 
 describe("task tool surfaces (spec 064, D21–D23)", () => {
@@ -70,7 +71,9 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			intent: () => intent,
 			report: async (text) => {
 				reports.push(text);
-				return deliver;
+				const message = await queueTaskReport(deskDir, "work", 2, CHANNEL_ID, text);
+				const delivered = await deliverTaskMessage(deskDir, message.id, async () => deliver);
+				return { id: message.id, delivered };
 			},
 		};
 		sessionOptions = { ...options, control: undefined, session };
@@ -86,6 +89,8 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			join(tasksDir, `${id}.md`),
 			renderTaskDocument({ state: "queued", usage: createUsage(), ...fields }, body),
 		);
+		await appendTaskLog(deskDir, id, { kind: "step", seq: 2, reason: "start", brief: "full" });
+		await appendTaskLog(deskDir, id, { kind: "report", seq: 2, text: "checked", delivered: true });
 	}
 
 	/** An unsettled delegation bound to `taskId`, as the run manager would hold it mid-flight. */
@@ -194,9 +199,23 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 		it("in a task session: registers the close as the step's intent — the lane archives it when the step ends", async () => {
 			await writeTask("work");
 			const tool = createTaskCloseTool(sessionOptions);
+			await rm(join(tasksDir, "work.jsonl"));
+			await expect(tool.execute("c", { id: "work", outcome: "complete", note: "done" } as never)).rejects.toThrow(
+				/final report/,
+			);
+			deliver = false;
+			await createTaskReportTool(sessionOptions).execute("r", { text: "final evidence" });
+			const report = (await readTaskLog(deskDir, "work", { kinds: ["report"] }))[0]!;
+			await expect(
+				closeStoredTask(deskDir, "work", { outcome: "complete", by: "leader", note: "done", reportId: report.id }),
+			).rejects.toThrow(/not confirmed delivered/);
 			const result = await tool.execute("c", { id: "work", outcome: "complete", note: "All checked." } as never);
 			expect(result.terminate).toBe(true);
-			expect(intent.close).toEqual({ outcome: "complete", note: "All checked." });
+			expect(intent.close).toMatchObject({
+				outcome: "complete",
+				note: "All checked.",
+				reportId: expect.any(String),
+			});
 			expect(existsSync(join(tasksDir, "work.md"))).toBe(true);
 
 			await expect(tool.execute("c", { id: "other", outcome: "cancel", note: "n" } as never)).rejects.toThrow(
@@ -209,6 +228,14 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			const tool = createTaskCloseTool(sessionOptions);
 			await expect(tool.execute("c", { id: "work", outcome: "complete", note: "n" } as never)).rejects.toThrow(
 				/unmet acceptance items/,
+			);
+			await writeTask("work", {}, SATISFIED_BODY.replace("- [x] W1", "- [ ] W1"));
+			await expect(tool.execute("c", { id: "work", outcome: "complete", note: "n" } as never)).rejects.toThrow(
+				/unfinished Work Items.*W1/,
+			);
+			await writeTask("work", {}, "# Work\n\n## DoD\n");
+			await expect(tool.execute("c", { id: "work", outcome: "complete", note: "n" } as never)).rejects.toThrow(
+				/no checklist items/,
 			);
 			await writeTask("work");
 			await startRun("work");
@@ -236,7 +263,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			expect((await ask.execute("c", { question: "merge?" } as never)).terminate).toBe(true);
 			await expect(wait.execute("c", { until: "+2h" } as never)).rejects.toThrow(/already registered task_ask/);
 			await expect(ask.execute("c", { question: "again?" } as never)).rejects.toThrow(/already registered/);
-			const records = await readTaskLog(deskDir, "work");
+			const records = await readTaskLog(deskDir, "work", { kinds: ["wait", "ask"] });
 			expect(records.map((record) => record.kind)).toEqual(["wait", "ask"]);
 			expect(records[1]).toMatchObject({ seq: 2, question: "merge?" });
 		});
@@ -264,7 +291,9 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			await expect(report.execute("c", { text: "four" } as never)).rejects.toThrow(/already sent 3 reports/);
 			expect(reports).toEqual(["one", "two", "three"]);
 			expect(
-				(await readTaskLog(deskDir, "work")).map((record) => (record.kind === "report" ? record.delivered : "-")),
+				(await readTaskLog(deskDir, "work", { kinds: ["report"] }))
+					.slice(-3)
+					.map((record) => record.kind === "report" && record.delivered),
 			).toEqual([false, true, true]);
 		});
 	});

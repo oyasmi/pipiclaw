@@ -32,6 +32,7 @@ export interface TaskManageResult {
 		deliversHere: boolean;
 		steps?: number;
 		usd?: number;
+		unknownCostCount?: number;
 		items?: string;
 		/** The step in progress and what the model is doing in it. */
 		activity?: string;

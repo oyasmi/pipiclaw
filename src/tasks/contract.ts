@@ -322,22 +322,37 @@ export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	const unchecked: string[] = [];
 	const lines = content.split("\n");
 	const sectionOf = classifyTaskSectionLines(lines, DOD_SECTION);
-	let dodHasContent = false;
 	let dodHasCheckbox = false;
 	for (let index = 0; index < lines.length; index++) {
 		if (!sectionOf[index]) continue;
 		const line = lines[index] ?? "";
-		if (line.trim()) dodHasContent = true;
 		const checkbox = /^\s*[-*]\s+\[([ xX])\]\s*(.+?)\s*$/.exec(line);
 		if (checkbox) {
 			dodHasCheckbox = true;
 			if (checkbox[1] === " ") unchecked.push(`DoD: ${checkbox[2]}`);
 		}
 	}
-	if (dodHasContent && !dodHasCheckbox) {
+	if (!dodHasCheckbox) {
 		unchecked.push('DoD has no checklist items — rewrite it as "- [ ] ..." acceptance items before finishing.');
 	}
 	return unchecked;
+}
+
+/** Closing checks structure, not the truth of the leader's evidence. Dropped items are explicit scope changes. */
+export function assertTaskAcceptance(content: string): void {
+	const unchecked = uncheckedTaskAcceptanceItems(content);
+	if (unchecked.length > 0) {
+		throw new RecoverableToolError(
+			`Task still has unmet acceptance items: ${unchecked.slice(0, 3).join("; ")}. Use edit to check them off only once the evidence holds.`,
+		);
+	}
+	const open =
+		parseTaskItems(content)?.items.filter((item) => item.status === "todo" || item.status === "blocked") ?? [];
+	if (open.length > 0) {
+		throw new RecoverableToolError(
+			`Task still has unfinished Work Items: ${open.map((item) => item.id).join(", ")}. Verify and finish them, or use edit to explicitly drop items outside the agreed scope before closing.`,
+		);
+	}
 }
 
 /**

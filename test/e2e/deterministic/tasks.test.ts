@@ -67,6 +67,7 @@ describe("E2E deterministic: the task lane", () => {
 			name: "step",
 			when: stepOf(1),
 			respond: [
+				reply.toolCall("task_report", { text: "done" }),
 				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "done" }),
 				reply.text("unused"),
 			],
@@ -110,7 +111,10 @@ describe("E2E deterministic: the task lane", () => {
 		harness.model.script.route({
 			name: "step-2",
 			when: stepOf(2),
-			respond: [reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "result checked" })],
+			respond: [
+				reply.toolCall("task_report", { text: "result checked" }),
+				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "result checked" }),
+			],
 		});
 
 		await waitFor("the task to be archived", () => existsSync(archived()), { intervalMs: 25 });
@@ -151,7 +155,10 @@ describe("E2E deterministic: the task lane", () => {
 		harness.model.script.route({
 			name: "step-3",
 			when: stepOf(3),
-			respond: [reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "done" })],
+			respond: [
+				reply.toolCall("task_report", { text: "done" }),
+				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "done" }),
+			],
 		});
 		const first = harness.model.script.hold({ when: stepOf(1) });
 		await lane().runOnce();
@@ -223,7 +230,15 @@ describe("E2E deterministic: the task lane", () => {
 			harness.model.script.route({
 				name: `step-${instance}`,
 				when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${instance} #1]`),
-				respond: [reply.toolCall("task_close", { id: instance, outcome: "complete", note: "周报已写" })],
+				respond: [
+					reply.toolCall("edit", {
+						path: join(tasksDir(), `${instance}.md`),
+						oldText: "- [ ] W1 整理",
+						newText: "- [x] W1 整理",
+					}),
+					reply.toolCall("task_report", { text: "周报已写" }),
+					reply.toolCall("task_close", { id: instance, outcome: "complete", note: "周报已写" }),
+				],
 			});
 		}
 		const gate = harness.model.script.hold({ when: (r) => r.lastUserText.includes(`[TASK_STEP:${id} #1]`) });

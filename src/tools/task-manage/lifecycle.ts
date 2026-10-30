@@ -1,7 +1,10 @@
 import { mkdir } from "node:fs/promises";
-import { normalizeTaskId, readActiveTasks } from "../../tasks/contract.js";
+import { finalTaskReport } from "../../tasks/completion.js";
+import { extractTaskTitle, normalizeTaskId, readActiveTasks } from "../../tasks/contract.js";
 import type { TaskLiveSnapshot } from "../../tasks/control.js";
+import { readTaskLog } from "../../tasks/loop-log.js";
 import { withTaskMutation } from "../../tasks/mutation-lock.js";
+import { completedReceipt } from "../../tasks/receipts.js";
 import { closeTask as closeStoredTask, readStoredTask } from "../../tasks/store.js";
 import { RecoverableToolError } from "../contract/details.js";
 import { assertCompletable, requiredField, tasksDir } from "./shared.js";
@@ -61,13 +64,14 @@ export async function listTasks(options: TaskManageToolOptions): Promise<TaskMan
 		return {
 			id: entry.id,
 			title: entry.title,
-			state: entry.readable ? entry.fields.state : "unreadable",
+			state: entry.readable ? (live?.closing ? "closing" : entry.fields.state) : "unreadable",
 			waiting: describeWaiting(entry),
 			frozen: live?.frozen,
 			channel: entry.fields.channel,
 			deliversHere: entry.fields.channel === options.channelId,
 			steps: entry.fields.usage?.steps,
 			usd: entry.fields.usage ? Number(entry.fields.usage.usd.toFixed(2)) : undefined,
+			unknownCostCount: entry.fields.usage?.unknownCostCount ?? 0,
 			items: entry.items ? `${entry.items.done}/${entry.items.total}` : undefined,
 			activity: describeActivity(live, now),
 			inFlight: describeInFlight(live, now),
@@ -128,7 +132,25 @@ export async function closeTaskFromChat(
 				`Task "${id}" changed during completion checks. Inspect it with task_list and retry closing once its step and work have stopped.`,
 			);
 		}
-		await closeStoredTask(options.deskDir, id, { outcome: "complete", by: "user", note });
-		return { action: "close", id, archived: true, notice: `任务 \`${id}\` 已完成并归档。` };
+		const finalReport = finalTaskReport(await readTaskLog(options.deskDir, id, { strict: true }), { fromChat: true });
+		const closed = await closeStoredTask(options.deskDir, id, {
+			outcome: "complete",
+			by: "user",
+			note,
+			reportId: finalReport.id,
+			receipt:
+				current.fields.channel !== options.channelId
+					? (document, closedAt) => completedReceipt(id, extractTaskTitle(document.body, id), document, closedAt)
+					: undefined,
+		});
+		options.control?.created(options.desk, id);
+		if (!closed?.fields.closedAt)
+			throw new RecoverableToolError(`Task "${id}" changed during closing. Inspect task_list before retrying.`);
+		return {
+			action: "close",
+			id,
+			archived: true,
+			notice: completedReceipt(id, extractTaskTitle(closed.body, id), closed, closed.fields.closedAt),
+		};
 	});
 }

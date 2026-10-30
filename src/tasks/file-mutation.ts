@@ -1,5 +1,7 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { isTaskArchiving } from "./archive.js";
 import { renderTaskDocument, taskBody } from "./contract.js";
 import { withTaskMutation } from "./mutation-lock.js";
 import { readStoredTask, type StoredTaskDocument, writeStoredTask } from "./store.js";
@@ -23,6 +25,10 @@ export function withTaskFileMutation<T>(
 	if (parent !== taskDir) return mutate();
 	const id = basename(path, ".md");
 	return withTaskMutation(deskDir, id, async () => {
+		if (isTaskArchiving(deskDir, id))
+			throw new RecoverableToolError(
+				`Task "${id}" is committing its archive. Wait for recovery to finish; use task_log to inspect its history.`,
+			);
 		const document = await readStoredTask(deskDir, id);
 		if (document?.recovered) await writeStoredTask(document);
 		return mutate(document);

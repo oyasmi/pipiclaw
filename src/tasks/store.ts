@@ -1,12 +1,15 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { errorMessage } from "../shared/text-utils.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { commitTaskArchive, isTaskArchiving } from "./archive.js";
 import { createUsage } from "./budget.js";
-import { normalizeTaskId, renderTaskDocument, taskBody } from "./contract.js";
+import { pendingTaskClose, taskReportDelivered } from "./completion.js";
+import { assertTaskAcceptance, normalizeTaskId, renderTaskDocument, taskBody } from "./contract.js";
+import { queueTaskReceipt } from "./delivery.js";
 import {
 	normalizeTaskFrontmatter,
 	parseTaskFrontmatter,
@@ -25,7 +28,6 @@ import {
 	type TaskLogRecord,
 	type TaskStepReason,
 	type TaskStepResult,
-	taskLogPath,
 } from "./loop-log.js";
 import { withTaskMutation } from "./mutation-lock.js";
 import { deriveAfterStep, deriveStepReason, reconcileOnBoot, type StepDerivation, type StepFacts } from "./state.js";
@@ -101,6 +103,10 @@ export async function writeStoredTask(document: StoredTaskDocument): Promise<voi
 
 /** Caller holds the task lock. The log commits first; replay repairs a failed snapshot write. */
 export async function commitTask(document: StoredTaskDocument, deskDir: string, record: TaskLogInput): Promise<void> {
+	if (isTaskArchiving(deskDir, document.id))
+		throw new RecoverableToolError(
+			`Task "${document.id}" is committing its archive. Retry after archive recovery completes.`,
+		);
 	document.fields = normalizeTaskFrontmatter({ ...document.fields, revision: (document.fields.revision ?? 0) + 1 });
 	await appendTaskLog(deskDir, document.id, { ...record, checkpoint: document.fields });
 	await writeStoredTask(document);
@@ -161,7 +167,9 @@ export async function beginStep(deskDir: string, id: string, input: BeginStepInp
 			input.allowed?.(document.fields) === false
 		)
 			return undefined;
+		if (isTaskArchiving(deskDir, id)) return undefined;
 		const records = await readTaskLog(deskDir, id, { strict: true });
+		if (pendingTaskClose(records)) return undefined;
 		const inputs = newInputs(records);
 		const seq = (lastStep(records)?.step.seq ?? 0) + 1;
 		const reason = deriveStepReason(records, inputs);
@@ -179,9 +187,10 @@ export interface EndStepInput {
 	tools: string[];
 	usd?: number;
 	usdEstimated?: boolean;
+	usdKnown?: boolean;
 	error?: string;
 	facts: StepFacts;
-	close?: { outcome: "complete" | "cancel"; note: string };
+	close?: { outcome: "complete" | "cancel"; note: string; reportId?: string };
 }
 
 export interface EndedStep {
@@ -220,6 +229,7 @@ export async function endStep(
 			steps: usage.steps + 1,
 			usd: usage.usd + Math.max(0, input.usd ?? 0),
 			usdEstimated: usage.usdEstimated || input.usdEstimated === true,
+			...(input.usdKnown === false ? { unknownCostCount: (usage.unknownCostCount ?? 0) + 1 } : {}),
 		};
 		if (derivation.next !== "paused") {
 			fields.state = derivation.state;
@@ -235,6 +245,7 @@ export async function endStep(
 			tools: input.tools,
 			...(input.usd && input.usd > 0 ? { usd: input.usd } : {}),
 			...(input.usdEstimated ? { usdEstimated: true } : {}),
+			...(input.usdKnown === false ? { usdKnown: false } : {}),
 			...(input.error ? { error: input.error } : {}),
 		});
 		return { document, derivation };
@@ -253,9 +264,11 @@ export async function reconcileTaskState(
 	now = new Date(),
 ): Promise<boolean> {
 	return withTaskMutation(deskDir, id, async () => {
+		if (isTaskArchiving(deskDir, id)) return false;
 		const document = await readStoredTask(deskDir, id);
 		if (!document || document.fields.outcome) return false;
 		const records = await readTaskLog(deskDir, id, { strict: true });
+		if (pendingTaskClose(records)) return false;
 		const reconciled = reconcileOnBoot(document.fields, records, pendingWork, now);
 		if (!reconciled) {
 			if (document.recovered) await writeStoredTask(document);
@@ -270,6 +283,7 @@ export async function reconcileTaskState(
 				next: reconciled.appendStepEnd.next,
 				note: "（服务重启时这一步被打断）",
 				tools: [],
+				usdKnown: false,
 			});
 		} else await commitTask(document, deskDir, { kind: "checkpoint" });
 		return true;
@@ -345,6 +359,9 @@ export interface CloseTaskInput {
 	outcome: "complete" | "cancel";
 	by: "leader" | "user";
 	note: string;
+	reportId?: string;
+	/** Prepared durably before archiving; the delivery queue sends it only after archive completion. */
+	receipt?: (document: StoredTaskDocument, closedAt: string) => string;
 }
 
 /**
@@ -359,106 +376,65 @@ export async function closeTask(
 ): Promise<StoredTaskDocument | undefined> {
 	return withTaskMutation(deskDir, id, async () => {
 		const document = await readStoredTask(deskDir, id);
+		if (isTaskArchiving(deskDir, id)) {
+			await archiveTask(deskDir, id, input.outcome === "complete" ? "completed" : "cancelled");
+			return document;
+		}
 		if (!document || document.fields.outcome) return undefined;
+		const records = await readTaskLog(deskDir, id, { strict: true });
+		if (input.outcome === "complete") {
+			assertTaskAcceptance(document.body);
+			if (!taskReportDelivered(records, input.reportId, document.fields.channel))
+				throw new RecoverableToolError(
+					"The final task report is not confirmed delivered. Wait for the runtime's delivery retry before completing this task.",
+				);
+		}
 		const usage = document.fields.usage;
-		const prior = [...(await readTaskLog(deskDir, id, { strict: true }))]
-			.reverse()
-			.find((record) => record.kind === "close");
-		if (
-			prior?.kind !== "close" ||
-			prior.outcome !== (input.outcome === "complete" ? "done" : "cancelled") ||
-			prior.note !== input.note
-		)
-			await appendTaskLog(deskDir, id, {
+		let prior = [...records].reverse().find((record) => record.kind === "close");
+		if (prior && prior.outcome !== (input.outcome === "complete" ? "done" : "cancelled"))
+			throw new RecoverableToolError(
+				`Task "${id}" already committed a different close outcome. Let archive recovery finish before starting other work.`,
+			);
+		if (!prior) {
+			const ts = formatLocalTime();
+			const close = {
 				kind: "close",
 				outcome: input.outcome === "complete" ? "done" : "cancelled",
 				by: input.by,
 				note: input.note,
 				steps: usage?.steps ?? 0,
 				usd: usage?.usd ?? 0,
-			});
+				...(usage?.usdEstimated ? { usdEstimated: true } : {}),
+				...(usage?.unknownCostCount ? { unknownCostCount: usage.unknownCostCount } : {}),
+				...(input.reportId ? { reportId: input.reportId } : {}),
+				ts,
+			} as const;
+			const recordId = await appendTaskLog(deskDir, id, close);
+			prior = { ...close, id: recordId };
+		}
+		if (input.receipt && document.fields.channel && prior.id) {
+			await queueTaskReceipt(deskDir, id, prior.id, document.fields.channel, input.receipt(document, prior.ts));
+		}
 		await archiveTask(deskDir, id, input.outcome === "complete" ? "completed" : "cancelled");
+		document.fields = {
+			...document.fields,
+			outcome: input.outcome === "complete" ? "completed" : "cancelled",
+			closedAt: prior.ts,
+		};
 		return document;
 	});
 }
 
-const LOG_SUFFIXES = ["", ".1", ".2"] as const;
-
-/**
- * `archiveTask` failed and could not fully put things back: `stranded` lists files that now live
- * only at the archive path (`<archive path> -> <original path>`), plus any archive contract it
- * could not remove. Callers must not delete anything archive-side on seeing this.
- */
-export class ArchiveUndoError extends Error {
-	constructor(
-		readonly cause: unknown,
-		readonly stranded: string[],
-		readonly undoFailures: string[],
-	) {
-		super(
-			`${errorMessage(cause)} (undo of partial archive failed: ${undoFailures.join("; ")}${
-				stranded.length > 0 ? `; still at archive path, move back by hand: ${stranded.join(", ")}` : ""
-			})`,
-		);
-	}
-}
-
-/**
- * Move a closed task (and its log) into `tasks/archive/`. It never overwrites an existing archive
- * entry (it throws before touching anything), and any failure after the first write undoes what it
- * did so the task stays fully active: a caller can trust "resolved" to mean the contract and every
- * log shard are in the archive, and "rejected" to mean the pre-call state still stands (or, if the
- * undo itself failed, the error says so).
- */
-export function archiveTask(deskDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
-	return withTaskMutation(deskDir, id, () => moveToArchive(deskDir, id, outcome));
-}
-
-async function moveToArchive(deskDir: string, id: string, outcome: TaskArchiveOutcome): Promise<void> {
-	const normalized = normalizeTaskId(id);
-	const archiveDir = join(tasksDir(deskDir), "archive");
-	await mkdir(archiveDir, { recursive: true });
-	const document = await readStoredTask(deskDir, normalized);
-	if (!document) return;
-	const archiveMd = archivedTaskPath(deskDir, normalized);
-	const archiveLog = join(archiveDir, `${normalized}.jsonl`);
-	for (const target of [archiveMd, ...LOG_SUFFIXES.map((suffix) => `${archiveLog}${suffix}`)]) {
-		if (existsSync(target)) throw new Error(`archive entry already exists, refusing to overwrite: ${target}`);
-	}
-	document.fields.outcome = outcome;
-	document.fields.closedAt = formatLocalTime();
-
-	// The loop log travels with its contract so an archived task stays inspectable — including
-	// whatever has already rotated into `.1`/`.2` (R9). Moving only the current file stranded
-	// those shards in the now-empty active `tasks/` dir, permanently split from the record they
-	// belong to and outside anywhere `readTaskLog` looks for an archived task.
-	const logFrom = taskLogPath(deskDir, normalized);
-	const movedLogs: Array<[string, string]> = [];
-	let wroteArchive = false;
-	try {
-		for (const suffix of LOG_SUFFIXES) {
-			const from = `${logFrom}${suffix}`;
-			if (!existsSync(from)) continue;
-			const to = `${archiveLog}${suffix}`;
-			await rename(from, to);
-			movedLogs.push([from, to]);
-		}
-		await writeStoredTask({ ...document, path: archiveMd });
-		wroteArchive = true;
-		await rm(taskPath(deskDir, normalized), { force: true });
-	} catch (error) {
-		const undoFailures: string[] = [];
-		if (wroteArchive || existsSync(archiveMd)) {
-			await rm(archiveMd, { force: true }).catch((e) => undoFailures.push(errorMessage(e)));
-		}
-		const stranded: string[] = [];
-		for (const [from, to] of movedLogs.reverse()) {
-			await rename(to, from).catch((e) => {
-				undoFailures.push(errorMessage(e));
-				stranded.push(`${to} -> ${from}`);
-			});
-		}
-		if (undoFailures.length > 0) throw new ArchiveUndoError(error, stranded, undoFailures);
-		throw error;
-	}
+/** The active handle and all log shards are removed only after a durable archive commit. */
+export function archiveTask(deskDir: string, idInput: string, outcome: TaskArchiveOutcome): Promise<void> {
+	const id = normalizeTaskId(idInput);
+	return withTaskMutation(deskDir, id, async () => {
+		if (isTaskArchiving(deskDir, id)) return commitTaskArchive(deskDir, id);
+		const document = await readStoredTask(deskDir, id);
+		if (!document) return;
+		const close = [...(await readTaskLog(deskDir, id, { strict: true }))]
+			.reverse()
+			.find((record) => record.kind === "close");
+		await commitTaskArchive(deskDir, id, document, outcome, close?.ts ?? formatLocalTime());
+	});
 }

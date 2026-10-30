@@ -31,6 +31,8 @@ export interface TaskUsage {
 	usd: number;
 	/** True once any cost came from an estimate rather than reported usage. */
 	usdEstimated: boolean;
+	/** Contributions whose price is unavailable; usd is only the known subtotal in that case. */
+	unknownCostCount?: number;
 }
 
 export interface TaskBudget {
@@ -156,6 +158,9 @@ function parseUsage(raw: string): TaskUsage | undefined {
 		steps: nonNegativeNumber(value.steps, 0),
 		usd: nonNegativeNumber(value.usd, 0),
 		usdEstimated: value.usdEstimated === true,
+		...(nonNegativeNumber(value.unknownCostCount, 0) > 0
+			? { unknownCostCount: Math.floor(nonNegativeNumber(value.unknownCostCount, 0)) }
+			: {}),
 	};
 }
 

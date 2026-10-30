@@ -5,9 +5,11 @@ import * as log from "../log.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { buildTaskStepBrief, contractOpenTag, contractSha, type PendingWorkView } from "../tasks/brief.js";
+import { taskReportDelivered } from "../tasks/completion.js";
 import type { TaskSessionContext, TaskStepIntent } from "../tasks/control.js";
+import { drainTaskDeliveries, queueTaskReport } from "../tasks/delivery.js";
 import { acknowledgeTaskInputs } from "../tasks/input-receipts.js";
-import type { TaskStepResult } from "../tasks/loop-log.js";
+import { readTaskLog, type TaskStepResult } from "../tasks/loop-log.js";
 import type { StepDerivation } from "../tasks/state.js";
 import { beginStep, type EndedStep, endStep, pauseTask, readStoredTask } from "../tasks/store.js";
 import type { LaneContext, LiveTask, StepAbort, TaskStepEvent } from "./task-lane-types.js";
@@ -37,16 +39,18 @@ function sessionContextOf(ctx: LaneContext, live: LiveTask): TaskSessionContext 
 		},
 		report: async (text) => {
 			assertActive();
-			try {
-				return await ctx.options.deliver(live.desk, live.channelId, text);
-			} catch (error) {
-				log.logWarn("tasks.step.report_failed", "Task report delivery failed", {
-					channelId: live.channelId,
-					reason: errorMessage(error),
-					fields: { taskId: live.taskId, desk: live.desk },
-				});
-				return false;
-			}
+			const message = await queueTaskReport(live.deskDir, live.taskId, live.seq, live.channelId, text);
+			await drainTaskDeliveries(
+				live.deskDir,
+				(channel, text) => ctx.options.deliver(live.desk, channel, text),
+				(channel) => ctx.options.isBoundTo(channel, live.desk) && ctx.options.isReachable(channel),
+				ctx.now(),
+			);
+			ctx.notify();
+			return {
+				id: message.id,
+				delivered: taskReportDelivered(await readTaskLog(live.deskDir, live.taskId), message.id),
+			};
 		},
 	};
 }
@@ -203,12 +207,14 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	let toolsUsed: string[] = [];
 	let usd = 0;
 	let usdEstimated = false;
+	let usdKnown = false;
 	try {
 		const run = await runner.run(info, SILENT_CONTEXT, options.store);
 		finalText = run.finalText ?? "";
 		toolsUsed = run.toolsUsed ?? [];
 		usd = run.assistantCost?.usd ?? 0;
 		usdEstimated = run.assistantCost?.estimated === true;
+		usdKnown = run.assistantCost?.known ?? run.costKnown ?? run.assistantCost !== undefined;
 		if (run.stopReason === "error") {
 			result = "error";
 			error = run.errorMessage;
@@ -251,6 +257,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 		tools: toolsUsed,
 		usd,
 		usdEstimated,
+		usdKnown,
 		...(error ? { error } : {}),
 		...(honoured && intent.close ? { close: intent.close } : {}),
 		facts: {

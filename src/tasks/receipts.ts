@@ -1,4 +1,10 @@
+import { capReply } from "../commands/reply-limits.js";
+import { formatElapsedZh } from "../shared/format.js";
+import { parseLocalTime } from "../shared/local-time.js";
 import { truncate } from "../shared/text-utils.js";
+import { taskCostSummary } from "./budget.js";
+import { parseTaskItems } from "./contract.js";
+import type { TaskFrontmatter } from "./frontmatter.js";
 import type { GuardBreach } from "./state.js";
 
 /**
@@ -23,8 +29,30 @@ export function pausedReceipt(id: string, title: string, reason: string, breach?
 	);
 }
 
-export function completedReceipt(id: string, title: string): string {
-	return `✅ 任务 \`${id}\`（${title}）已完成。`;
+export function completedReceipt(
+	id: string,
+	title: string,
+	document: { fields: TaskFrontmatter; body: string },
+	closedAt: string,
+): string {
+	const usage = document.fields.usage;
+	const since = usage ? parseLocalTime(usage.startedAt) : undefined;
+	const end = parseLocalTime(closedAt);
+	const items = parseTaskItems(document.body);
+	const dropped = items?.items.filter((item) => item.status === "dropped").map((item) => item.id) ?? [];
+	return capReply(
+		[
+			`**✅ 任务 \`${id}\`（${title}）已完成**`,
+			...(since !== undefined && end !== undefined
+				? [`- 历时：${formatElapsedZh(end - since)}（含排队和等待）`]
+				: []),
+			...(usage ? [`- 用量：${usage.steps} 步 · ${taskCostSummary(usage)}`] : []),
+			...(items
+				? [`- 工作项：${items.done}/${items.total}${dropped.length > 0 ? `；已放弃：${dropped.join("、")}` : ""}`]
+				: []),
+		].join("\n"),
+		{ nextStepHint: `用 \`/tasks show ${id}\` 查看详情` },
+	).text;
 }
 
 /** The leader cancelled its own task. */

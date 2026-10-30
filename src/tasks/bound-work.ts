@@ -22,6 +22,7 @@ export async function logTaskDispatch(
 export interface TaskSettlementCost {
 	usd: number;
 	estimated: boolean;
+	known?: boolean;
 }
 
 /**
@@ -45,13 +46,14 @@ export async function logTaskSettlement(
 			)
 		)
 			return true;
-		if (cost.usd > 0 || cost.estimated) {
+		if (cost.usd > 0 || cost.estimated || cost.known === false) {
 			const usage = task.fields.usage;
 			if (usage)
 				task.fields.usage = {
 					...usage,
 					usd: usage.usd + Math.max(0, cost.usd),
 					usdEstimated: usage.usdEstimated || cost.estimated,
+					...(cost.known === false ? { unknownCostCount: (usage.unknownCostCount ?? 0) + 1 } : {}),
 				};
 		}
 		await commitTask(task, deskDir, {
@@ -59,6 +61,7 @@ export async function logTaskSettlement(
 			...record,
 			...(cost.usd > 0 ? { usd: cost.usd } : {}),
 			...(cost.estimated ? { usdEstimated: true } : {}),
+			...(cost.known === false ? { usdKnown: false } : {}),
 		});
 		return true;
 	});

@@ -26,7 +26,7 @@ describe("task frontmatter contract (spec 064, D2)", () => {
 			// A real group id is base64: `/`, `+` and `=` must survive as plain text (spec 058, D13).
 			channel: "dingtalk:group:cidL1/dcU8u+SV7I9YuUXLeXg==",
 			origin: "weekly-report",
-			usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 3, usd: 1.5, usdEstimated: true },
+			usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 3, usd: 1.5, usdEstimated: true, unknownCostCount: 2 },
 			budget: { steps: 10, usd: 5 },
 		};
 		const rendered = renderTaskFrontmatter(fields);

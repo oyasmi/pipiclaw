@@ -257,13 +257,16 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			if (assistantMsg.usage) {
 				mergeAssistantUsage(runState, assistantMsg.usage);
 				runState.usageSources++;
+				runState.assistantUsageSources++;
 				const modelReference =
 					assistantMsg.provider && assistantMsg.model
 						? `${assistantMsg.provider}/${assistantMsg.model}`
 						: assistantMsg.model;
-				runState.costKnown &&=
+				const costKnown =
 					assistantMsg.usage.cost.total > 0 ||
 					(modelReference ? (context.isModelCostKnown?.(modelReference) ?? false) : false);
+				runState.costKnown &&= costKnown;
+				runState.assistantCostKnown &&= costKnown;
 			}
 
 			const thinkingParts: string[] = [];

@@ -1,5 +1,5 @@
 import { normalizeTaskId } from "../../tasks/contract.js";
-import { readTaskLog, renderTaskLogLine, taskLogIsArchived } from "../../tasks/loop-log.js";
+import { readTaskLog, renderTaskLogLine, taskLogIsArchived, taskLogIssues } from "../../tasks/loop-log.js";
 import type { TaskLogRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 const DEFAULT_LIMIT = 20;
@@ -19,6 +19,7 @@ export async function readTaskLogTool(
 	const id = normalizeTaskId(request.id);
 	const limit = Math.min(Math.max(1, Math.trunc(request.limit ?? DEFAULT_LIMIT)), MAX_LIMIT);
 	const archived = taskLogIsArchived(options.deskDir, id);
+	const issues = await taskLogIssues(options.deskDir, id);
 	const records = await readTaskLog(options.deskDir, id, { limit });
 	const entries = records.map(renderTaskLogLine).filter(Boolean);
 	const archivedTag = archived ? "（已归档任务）" : "";
@@ -27,8 +28,10 @@ export async function readTaskLogTool(
 		id,
 		entries,
 		notice:
-			entries.length === 0
-				? `任务 \`${id}\` 暂无循环日志${archivedTag}。`
-				: `任务 \`${id}\` 最近 ${entries.length} 条记录${archivedTag}。`,
+			issues.length > 0
+				? `Task history has ${issues.length} damaged lines. Inspect ${issues[0]!.path}:${issues[0]!.line}; use the task session to corroborate missing history before acting on it.`
+				: entries.length === 0
+					? `任务 \`${id}\` 暂无循环日志${archivedTag}。`
+					: `任务 \`${id}\` 最近 ${entries.length} 条记录${archivedTag}。`,
 	};
 }

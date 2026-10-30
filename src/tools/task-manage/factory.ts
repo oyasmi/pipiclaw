@@ -80,8 +80,8 @@ export function createTaskCloseTool(options: TaskManageToolOptions): AgentTool<t
 		name: "task_close",
 		label: "task_close",
 		description: options.session
-			? "Finish this task: complete (DoD all checked, nothing in flight) or cancel. The step ends and the task is archived; cancel also stops the delegations and jobs in flight."
-			: "Close a task from chat: complete (DoD all checked, nothing in flight, not mid-step) or cancel (stops its running step, delegations and jobs).",
+			? "Complete after checked DoD, closed Work Items, no in-flight work and this step's task_report; delivery retries before archive. Cancel stops task work."
+			: "Complete an idle task with checked DoD, closed Work Items and the last step's delivered report; otherwise ask its leader to finish. Cancel stops task work.",
 		parameters: taskCloseSchema,
 		execute: async (_toolCallId, args: TaskCloseRequest) => {
 			if (options.session) return asResult(await closeTaskInSession(options, args), true);

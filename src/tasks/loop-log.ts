@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import * as log from "../log.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime } from "../shared/local-time.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, truncate } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { normalizeTaskId } from "./contract.js";
@@ -45,8 +47,9 @@ export interface TaskStepEndRecord {
 	tools: string[];
 	usd?: number;
 	usdEstimated?: boolean;
+	usdKnown?: boolean;
 	error?: string;
-	close?: { outcome: "complete" | "cancel"; note: string };
+	close?: { outcome: "complete" | "cancel"; note: string; reportId?: string };
 }
 
 export interface TaskInputAckRecord {
@@ -93,6 +96,7 @@ export interface TaskSettleRecord {
 	verdict?: "pass" | "fail";
 	usd?: number;
 	usdEstimated?: boolean;
+	usdKnown?: boolean;
 	/** Where the full output lives (a run's `output.md`, a job's output file). */
 	output?: string;
 	/** The output's tail, as the completion wake shows it. Untrusted executor text, not instructions. */
@@ -145,6 +149,13 @@ export interface TaskReportRecord {
 	seq: number;
 	text: string;
 	delivered: boolean;
+	channel?: string;
+}
+
+export interface TaskReportDeliveredRecord {
+	ts: string;
+	kind: "report_delivered";
+	reportId: string;
 }
 
 export interface TaskPauseRecord {
@@ -168,6 +179,15 @@ export interface TaskCloseRecord {
 	note: string;
 	steps: number;
 	usd: number;
+	usdEstimated?: boolean;
+	unknownCostCount?: number;
+	reportId?: string;
+}
+
+export interface TaskCloseRejectedRecord {
+	ts: string;
+	kind: "close_rejected";
+	reason: string;
 }
 
 export type TaskLogRecord = (
@@ -183,9 +203,11 @@ export type TaskLogRecord = (
 	| TaskAskRecord
 	| TaskWaitRecord
 	| TaskReportRecord
+	| TaskReportDeliveredRecord
 	| TaskPauseRecord
 	| TaskResumeRecord
 	| TaskCloseRecord
+	| TaskCloseRejectedRecord
 ) & { id?: string; checkpoint?: TaskFrontmatter };
 
 /** Same rotation shape as the channel archive: the log is working history, not an audit trail. */
@@ -213,6 +235,12 @@ function appenderFor(path: string, deskDir: string, id: string): JsonlAppender {
 	if (existing) return existing;
 	const appender = createJsonlAppender({
 		path,
+		repairTail: true,
+		onRepairTail: (path, offset) =>
+			log.logWarn("tasks.log.integrity_failed", "Task log integrity check failed", {
+				reason: "Unterminated record isolated before append",
+				fields: { taskId: id, path, offset },
+			}),
 		maxSizeBytes: MAX_LOG_BYTES,
 		maxRotations: 2,
 		canRotate: async () => {
@@ -226,6 +254,12 @@ function appenderFor(path: string, deskDir: string, id: string): JsonlAppender {
 				latest("resume"),
 				latest("ask_delivered"),
 				latest("close"),
+				latest("close_rejected"),
+				latest("report"),
+				...records.filter((record) => record.kind === "report" && !record.delivered),
+				...records.filter(
+					(record) => record.kind === "report_delivered" && record.reportId === latest("report")?.id,
+				),
 				...stepEndsSinceResume(records).slice(-3),
 				[...records].reverse().find((record) => record.checkpoint),
 			];
@@ -264,7 +298,22 @@ export async function appendTaskLog(
 	if (withTs.kind === "report" || withTs.kind === "message") withTs.text = clipText(withTs.text, NOTE_MAX_CHARS);
 	// Under the task's mutation lock: the appender rotates by size, and two processes rotating
 	// one log at once would each move the other's fresh records aside.
-	await withTaskMutation(deskDir, id, () => appenderFor(taskLogPath(deskDir, id), deskDir, id).appendStrict(withTs));
+	await withTaskMutation(deskDir, id, () => {
+		if (
+			!existsSync(join(deskDir, "tasks", `${normalizeTaskId(id)}.md`)) &&
+			existsSync(join(deskDir, "tasks", "archive", `${normalizeTaskId(id)}.md`))
+		) {
+			throw new RecoverableToolError(
+				`Task "${id}" is archived. Use task_log to inspect it or create a new task for further work.`,
+			);
+		}
+		if (existsSync(join(deskDir, "tasks", ".closing", `${normalizeTaskId(id)}.json`))) {
+			throw new RecoverableToolError(
+				`Task "${id}" is committing its archive. Retry after archive recovery completes.`,
+			);
+		}
+		return appenderFor(taskLogPath(deskDir, id), deskDir, id).appendStrict(withTs);
+	});
 	return withTs.id;
 }
 
@@ -281,9 +330,11 @@ const RECORD_KINDS: readonly TaskLogRecord["kind"][] = [
 	"ask",
 	"wait",
 	"report",
+	"report_delivered",
 	"pause",
 	"resume",
 	"close",
+	"close_rejected",
 ];
 
 /** Only the current record shapes are read: a `step` without `reason` is a pre-064 record. */
@@ -307,6 +358,44 @@ export interface ReadTaskLogOptions {
  * order records were actually written in. Only shards that exist are returned. */
 function shardPaths(basePath: string): string[] {
 	return [`${basePath}.2`, `${basePath}.1`, basePath].filter((path) => existsSync(path));
+}
+
+function readableShards(deskDir: string, id: string): string[] {
+	const active = taskLogPath(deskDir, id);
+	const archive = taskArchiveLogPath(deskDir, id);
+	if (existsSync(join(deskDir, "tasks", ".closing", `${normalizeTaskId(id)}.json`))) {
+		return [".2", ".1", ""]
+			.map((suffix) => (existsSync(`${active}${suffix}`) ? `${active}${suffix}` : `${archive}${suffix}`))
+			.filter((path) => existsSync(path));
+	}
+	return shardPaths(existsSync(active) ? active : archive);
+}
+
+/** Explicit diagnostics are cold-path work: normal reads stay tolerant, doctor exposes damaged history. */
+export async function taskLogIssues(deskDir: string, id: string): Promise<Array<{ path: string; line: number }>> {
+	const issues: Array<{ path: string; line: number }> = [];
+	for (const path of readableShards(deskDir, id)) {
+		const content = await readFile(path, "utf-8");
+		const lines = content.split("\n");
+		for (let index = 0; index < lines.length; index++) {
+			const line = lines[index]!;
+			if (!line.trim()) continue;
+			try {
+				if (toRecord(JSON.parse(line))) continue;
+			} catch {
+				/* Report the line without discarding other history. */
+			}
+			issues.push({ path, line: index + 1 });
+		}
+		if (
+			content &&
+			!content.endsWith("\n") &&
+			!issues.some((issue) => issue.path === path && issue.line === lines.length)
+		) {
+			issues.push({ path, line: lines.length });
+		}
+	}
+	return issues;
 }
 
 function parseLogLines(content: string, options: ReadTaskLogOptions, into: TaskLogRecord[]): void {
@@ -341,8 +430,7 @@ export async function readTaskLog(
 ): Promise<TaskLogRecord[]> {
 	// Fall back to the archived copy so `task_log` on a completed task returns its history rather
 	// than "暂无日志" — a task that finished still has a loop log worth reading.
-	const basePath = existsSync(taskLogPath(deskDir, id)) ? taskLogPath(deskDir, id) : taskArchiveLogPath(deskDir, id);
-	const paths = shardPaths(basePath);
+	const paths = readableShards(deskDir, id);
 	if (paths.length === 0) return [];
 	const records: TaskLogRecord[] = [];
 	for (const path of paths) {
@@ -353,9 +441,16 @@ export async function readTaskLog(
 			if (options.strict) throw error;
 			continue;
 		}
-		parseLogLines(content, options, records);
+		parseLogLines(content, {}, records);
 	}
-	return options.limit !== undefined && records.length > options.limit ? records.slice(-options.limit) : records;
+	// Delivery receipts may sit in another shard. Apply them before filtering or limiting.
+	const delivered = new Set(
+		records.flatMap((record) => (record.kind === "report_delivered" ? [record.reportId] : [])),
+	);
+	for (const record of records)
+		if (record.kind === "report" && record.id && delivered.has(record.id)) record.delivered = true;
+	const selected = options.kinds ? records.filter((record) => options.kinds!.includes(record.kind)) : records;
+	return options.limit !== undefined && selected.length > options.limit ? selected.slice(-options.limit) : selected;
 }
 
 /** One line per record, for the step brief and `task_log` (model-facing; `/tasks` uses `renderTaskLogLineForUser`). */
@@ -364,6 +459,7 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 	switch (record.kind) {
 		case "input_ack":
 		case "checkpoint":
+		case "report_delivered":
 			return "";
 		case "ask_delivered":
 			return `- ${at} step ${record.seq} 提问已送达`;
@@ -391,6 +487,8 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 			return `- ${at} 恢复${record.grants ? `，追加预算 ${JSON.stringify(record.grants)}` : ""}`;
 		case "close":
 			return `- ${at} ${record.outcome === "done" ? "完成" : "取消"}（${record.by}）：${record.note}`;
+		case "close_rejected":
+			return `- ${at} close rejected: ${record.reason}`;
 	}
 }
 
@@ -435,6 +533,7 @@ export function renderTaskLogLineForUser(record: TaskLogRecord): string {
 	switch (record.kind) {
 		case "input_ack":
 		case "checkpoint":
+		case "report_delivered":
 			return "";
 		case "ask_delivered":
 			return `- ${at} 提问已送达`;
@@ -478,6 +577,8 @@ export function renderTaskLogLineForUser(record: TaskLogRecord): string {
 			return `- ${at} 任务已恢复`;
 		case "close":
 			return `- ${at} ${record.outcome === "done" ? "任务完成" : "任务取消"}：${oneLine(record.note, 160)}`;
+		case "close_rejected":
+			return `- ${at} 收尾检查未通过，需补充检查后继续`;
 	}
 }
 
@@ -495,7 +596,13 @@ export function lastStep(records: readonly TaskLogRecord[]): { step: TaskStepRec
 }
 
 /** A record that wakes a waiting task and is shown to the next step. */
-export type TaskInputRecord = (TaskSettleRecord | TaskStallRecord | TaskMessageRecord | TaskResumeRecord) & {
+export type TaskInputRecord = (
+	| TaskSettleRecord
+	| TaskStallRecord
+	| TaskMessageRecord
+	| TaskResumeRecord
+	| TaskCloseRejectedRecord
+) & {
 	id?: string;
 };
 
@@ -510,7 +617,7 @@ export function newInputs(records: readonly TaskLogRecord[]): TaskInputRecord[] 
 	for (const record of records) {
 		if (record.id && (consumed.has(record.id) || seen.has(record.id))) continue;
 		if (record.id) seen.add(record.id);
-		if (record.kind === "stall" || record.kind === "resume") inputs.push(record);
+		if (record.kind === "stall" || record.kind === "resume" || record.kind === "close_rejected") inputs.push(record);
 		else if (record.kind === "settle" && !record.inline) inputs.push(record);
 		else if (record.kind === "message") inputs.push(record);
 	}

@@ -2,6 +2,8 @@ import { join } from "node:path";
 import * as log from "../log.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isTaskArchiving, recoverTaskArchives } from "../tasks/archive.js";
+import { pendingTaskClose } from "../tasks/completion.js";
 import { extractTaskTitle, readActiveTasks, type TaskLedgerEntry } from "../tasks/contract.js";
 import type {
 	TaskCancelOutcome,
@@ -11,12 +13,14 @@ import type {
 	TaskMessageOutcome,
 	TaskStepIntent,
 } from "../tasks/control.js";
+import { drainTaskDeliveries } from "../tasks/delivery.js";
 import type { TaskBudget } from "../tasks/frontmatter.js";
 import { appendTaskLog, lastStep, newInputs, readTaskLog } from "../tasks/loop-log.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
-import { askReceipt, cancelledByLeaderReceipt, completedReceipt, pausedReceipt } from "../tasks/receipts.js";
+import { askReceipt, pausedReceipt } from "../tasks/receipts.js";
 import { checkGuards, evaluateWaiting, type GuardVerdict } from "../tasks/state.js";
-import { closeTask, pauseTask, readStoredTask, reconcileTaskState, requeueWaiting } from "../tasks/store.js";
+import { pauseTask, readStoredTask, reconcileTaskState, requeueWaiting } from "../tasks/store.js";
+import { finishTaskClose } from "./task-close.js";
 import { isFrozen, LaneControl } from "./task-control.js";
 import {
 	ERROR_BACKOFF_MS,
@@ -236,6 +240,8 @@ export class TaskLane implements TaskControl {
 
 	/** Read every active desk's tasks and note which are reachable (INV-7) and how much work each has in flight. */
 	private async readDesk(desk: string, deskDir: string): Promise<DeskScan> {
+		await recoverTaskArchives(deskDir);
+		await this.flushDeliveries(desk, deskDir);
 		const now = this.ctx.now();
 		let entries = (await readActiveTasks(join(deskDir, "tasks"))).filter((entry) => !entry.fields.outcome);
 		let pending = await listPendingWork(this.options, desk, now);
@@ -387,18 +393,18 @@ export class TaskLane implements TaskControl {
 		const { fields } = item.entry;
 		const live = this.ctx.live.get(taskKey(scan.desk, item.entry.id));
 		if (live?.driving) return "idle";
-		if (fields.state !== "paused") {
-			const records = await readTaskLog(scan.deskDir, item.entry.id);
-			const closing = [...records].reverse().find((record) => record.kind === "step_end" || record.kind === "close");
-			const close =
-				closing?.kind === "close"
-					? {
-							outcome: closing.outcome === "done" ? ("complete" as const) : ("cancel" as const),
-							note: closing.note,
-						}
-					: closing?.kind === "step_end"
-						? closing.close
-						: undefined;
+		if (isTaskArchiving(scan.deskDir, item.entry.id)) {
+			this.noteHorizon(this.ctx.now() + 60_000);
+			return "idle";
+		}
+		const history = await readTaskLog(scan.deskDir, item.entry.id);
+		// A user's cancel pauses before writing close. A crash in between close and archive
+		// preparation must finish that close; a later explicit/error pause still takes precedence.
+		const lastBoundary = [...history].reverse().find((record) => record.kind === "close" || record.kind === "pause");
+		const committedAfterPause = lastBoundary?.kind === "close";
+		if (fields.state !== "paused" || committedAfterPause) {
+			const records = history;
+			const close = pendingTaskClose(records);
 			if (close) {
 				await this.closeForLeader(
 					{
@@ -407,7 +413,7 @@ export class TaskLane implements TaskControl {
 						deskDir: scan.deskDir,
 						taskId: item.entry.id,
 						channelId: fields.channel ?? "",
-						seq: closing?.kind === "step_end" ? closing.seq : 0,
+						seq: lastStep(records)?.step.seq ?? 0,
 						intent: { reports: 0 },
 						driving: false,
 					},
@@ -703,57 +709,35 @@ export class TaskLane implements TaskControl {
 		return "run";
 	}
 
-	/** The leader called `task_close`: close and archive, cancel what a cancel leaves in flight, and say so (D22). */
 	private async closeForLeader(live: LiveTask, title: string, intent: TaskStepIntent): Promise<void> {
-		const close = intent.close;
-		if (!close) return;
-		try {
-			if (close.outcome === "cancel") await this.control.cancelBoundWork(live.desk, live.taskId);
-			const closed = await closeTask(live.deskDir, live.taskId, {
-				outcome: close.outcome,
-				by: "leader",
-				note: close.note,
-			});
-			if (!closed) {
-				await this.dispose(live);
-				return;
-			}
-		} catch (error) {
-			log.logWarn("tasks.task.close_failed", "Closing a task failed", {
-				channelId: live.channelId,
-				reason: errorMessage(error),
-				fields: { taskId: live.taskId, desk: live.desk },
-			});
-			await pauseTask(live.deskDir, live.taskId, {
-				by: "runtime",
-				reason: "任务归档或取消未完成，请联系部署者检查服务器后重试关闭",
-			});
-			await this.dispose(live);
-			await this.say(
+		this.noteHorizon(
+			await finishTaskClose(
+				this.ctx,
 				live,
-				`⚠️ 任务 \`${live.taskId}\` 未能关闭，已暂停。请联系部署者检查服务器，再发送消息重试关闭。`,
-			);
-			return;
-		}
-		await this.dispose(live);
-		await this.say(
-			live,
-			close.outcome === "complete"
-				? completedReceipt(live.taskId, title)
-				: cancelledByLeaderReceipt(live.taskId, title, close.note),
+				title,
+				intent,
+				(desk, id) => this.control.cancelBoundWork(desk, id),
+				(live) => this.dispose(live),
+			),
 		);
 	}
 
-	private async say(live: LiveTask, text: string): Promise<void> {
-		if (!live.channelId) return;
+	private async flushDeliveries(desk: string, deskDir: string): Promise<void> {
 		try {
-			await this.options.deliver(live.desk, live.channelId, text);
+			this.noteHorizon(
+				await drainTaskDeliveries(
+					deskDir,
+					(channel, text) => this.options.deliver(desk, channel, text),
+					(channel) => this.options.isBoundTo(channel, desk) && this.options.isReachable(channel),
+					this.ctx.now(),
+				),
+			);
 		} catch (error) {
-			log.logWarn("tasks.task.receipt_failed", "Task receipt delivery failed", {
-				channelId: live.channelId,
+			log.logWarn("tasks.delivery.drain_failed", "Task delivery drain failed", {
 				reason: errorMessage(error),
-				fields: { taskId: live.taskId, desk: live.desk },
+				fields: { desk },
 			});
+			this.noteHorizon(this.ctx.now() + 60_000);
 		}
 	}
 

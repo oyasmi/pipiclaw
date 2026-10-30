@@ -511,7 +511,26 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		}
 		for (const [label, text] of [
 			["ask", askReceipt("weekly", "要合并到 master 吗？推荐：合并。")],
-			["completed", completedReceipt("weekly", "周报")],
+			[
+				"completed",
+				completedReceipt(
+					"weekly",
+					"周报",
+					{
+						fields: {
+							state: "queued",
+							usage: {
+								...createUsage(new Date("2026-10-01T10:00:00+08:00")),
+								steps: 5,
+								usd: 2,
+								unknownCostCount: 1,
+							},
+						},
+						body: "## Work Items\n- [x] W1 已检查\n- [~] W2 范围外\n",
+					},
+					"2026-10-01T10:39:28+08:00",
+				),
+			],
 			["cancelled by leader", cancelledByLeaderReceipt("weekly", "周报", "目标已不可行\n换方案")],
 			["cancelled by user", cancelledByUserReceipt("weekly", "周报")],
 		] as const) {

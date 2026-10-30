@@ -192,6 +192,7 @@ export class TurnFinisher {
 					total: this.runState.assistantUsage.total,
 				},
 				cost: { ...this.runState.assistantUsage.cost },
+				costKnown: this.runState.assistantCostKnown,
 			});
 			if (
 				responseModel &&

@@ -156,7 +156,8 @@ export function reconcileOnBoot(
 		};
 		if (last && !last.ended) {
 			const usage = fields.usage;
-			if (usage) next.usage = { ...usage, steps: usage.steps + 1 };
+			if (usage)
+				next.usage = { ...usage, steps: usage.steps + 1, unknownCostCount: (usage.unknownCostCount ?? 0) + 1 };
 			return { fields: next, appendStepEnd: { seq: last.step.seq, next: derivation.next } };
 		}
 		return { fields: next };

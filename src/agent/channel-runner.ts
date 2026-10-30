@@ -380,7 +380,11 @@ export class ChannelRunner implements AgentRunner {
 			silent: this.runState.finalOutcome.kind === "silent",
 			finalText: this.runState.lastAssistantText,
 			toolsUsed: [...this.runState.toolsUsed],
-			assistantCost: { usd: this.runState.assistantUsage.cost.total, estimated: !this.runState.costKnown },
+			assistantCost: {
+				usd: this.runState.assistantUsage.cost.total,
+				estimated: false,
+				known: this.runState.assistantUsageSources > 0 && this.runState.assistantCostKnown,
+			},
 		};
 	}
 
