@@ -1,4 +1,5 @@
-import { mkdir, readFile, utimes, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
 	applyMemoryOps,
@@ -9,6 +10,7 @@ import {
 	isValidMemoryName,
 	listMemoryEntries,
 	parseMemoryFile,
+	readMemoryEntry,
 	renderMemoryIndex,
 	serializeMemoryEntry,
 	slugifyMemoryName,
@@ -30,6 +32,28 @@ describe("memory store — names", () => {
 		expect(isValidMemoryName("Deploy_Window")).toBe(false);
 		expect(isValidMemoryName("-lead")).toBe(false);
 		expect(isValidMemoryName("../escape")).toBe(false);
+	});
+
+	it("terminates a maximum-length collision in an isolated process", () => {
+		// Risk: a valid conflicting name used to synchronously freeze the entire daemon.
+		// Mutation 2026-10-31: truncating after the suffix causes the isolated child to time out.
+		const moduleUrl = new URL("../src/memory/store.ts", import.meta.url).href;
+		const script = `import { registerHooks } from 'node:module';
+		registerHooks({ resolve(s, c, next) {
+			return next(s.startsWith('.') && s.endsWith('.js') ? s.slice(0, -3) + '.ts' : s, c);
+		} });
+		const { dedupeMemoryName, isValidMemoryName } = await import(${JSON.stringify(moduleUrl)});
+		const base = 'a'.repeat(60);
+		const taken = [base, ...Array.from({length: 8}, (_, i) => 'a'.repeat(58) + '-' + (i + 2))];
+		const result = dedupeMemoryName(base, taken);
+		console.log(JSON.stringify({ result, valid: isValidMemoryName(result), taken: taken.includes(result) }));`;
+		const child = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], {
+			encoding: "utf8",
+			timeout: 10_000,
+		});
+		expect(child.error).toBeUndefined();
+		expect(child.status, child.stderr).toBe(0);
+		expect(JSON.parse(child.stdout)).toMatchObject({ result: `${"a".repeat(57)}-10`, valid: true, taken: false });
 	});
 
 	it("slugifies free text and falls back to a hash", () => {
@@ -138,6 +162,17 @@ describe("memory store — mtime cache", () => {
 });
 
 describe("memory store — applyMemoryOps", () => {
+	it("confines memory reads to valid regular entry files", async () => {
+		const deskDir = createTempDir();
+		await mkdir(getMemoryDir(deskDir), { recursive: true });
+		const external = createTempDir();
+		await seed(external, "private", "PRIVATE-DATA");
+		await symlink(getMemoryEntryPath(external, "private"), getMemoryEntryPath(deskDir, "alias"));
+		expect(await readMemoryEntry(deskDir, "alias")).toBeUndefined();
+		expect((await listMemoryEntries(deskDir)).map((entry) => entry.name)).not.toContain("alias");
+		await expect(readMemoryEntry(deskDir, "../private")).rejects.toThrow();
+	});
+
 	it("adds, dedupes the name, and rebuilds the index", async () => {
 		const deskDir = createTempDir();
 		await applyMemoryOps(deskDir, [
@@ -200,6 +235,15 @@ describe("memory store — applyMemoryOps", () => {
 
 		// The explicit save revokes the tombstone for later background reflection too.
 		const { isDescriptionTombstoned } = await import("../src/memory/store.js");
+		expect(await isDescriptionTombstoned(deskDir, "obsolete fact")).toBe(false);
+		await applyMemoryOps(deskDir, [
+			{ op: "delete", name: "back" },
+			{ op: "add", name: "target", description: "another fact", source: "user" },
+		]);
+		const blocked = await applyMemoryOps(deskDir, [{ op: "update", name: "target", description: "obsolete fact" }]);
+		expect(blocked.skippedTombstone).toBe(1);
+		expect((await readMemoryEntry(deskDir, "target"))?.description).toBe("another fact");
+		await applyMemoryOps(deskDir, [{ op: "update", name: "target", source: "user", description: "obsolete fact" }]);
 		expect(await isDescriptionTombstoned(deskDir, "obsolete fact")).toBe(false);
 	});
 

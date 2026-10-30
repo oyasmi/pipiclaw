@@ -1,6 +1,6 @@
 /** Durable pre-compaction reflect snapshots. Inference never holds up the compaction hook. */
 import { createHash } from "node:crypto";
-import { access, readdir, readFile, unlink } from "node:fs/promises";
+import { access, link, readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -8,7 +8,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { getMemoryWorkDir } from "../desk/paths.js";
 import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
-import { writeFileAtomically } from "../shared/atomic-file.js";
+import { createAtomicTempPath, syncDirectoryBestEffort, writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { isNodeError } from "../shared/os.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -16,14 +16,15 @@ import { isRecord } from "../shared/type-guards.js";
 import { type DeskMemoryQueue, getDeskMemoryQueue } from "./desk-memory-queue.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
 import { runReflect } from "./reflect.js";
-import { appendMemoryReviewLog } from "./review-log.js";
+import { reviewLogEntryFor, tryAppendMemoryReviewLog } from "./review-log.js";
+import { selectMemorySourceBatch } from "./source-window.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
 
 interface BoundaryWork {
 	version: 1;
 	id: string;
 	createdAt: number;
-	/** The fixed prefix includes metadata ids so checkpoints can only advance, never regress. */
+	/** Remaining source ids, including metadata; the work id stays stable while batches drain. */
 	entryIds: string[];
 	messages: Array<{ entryId: string; message: AgentMessage }>;
 }
@@ -65,27 +66,47 @@ export async function enqueueBoundaryReflectWork(
 	signal.throwIfAborted();
 	const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
 	if (cut < 0) throw new Error("Cannot preserve compaction memory: kept entry is missing. Use /new to recover.");
-	const prefix = entries.slice(0, cut);
-	if (prefix.length === 0) return;
+	await enqueueBoundaryReflectEntries(conversation, entries.slice(0, cut), signal);
+}
+
+/** Also used by /new: publishing a snapshot never takes the inference/desk-memory lock. */
+export async function enqueueBoundaryReflectEntries(
+	conversation: DeskConversation,
+	entries: SessionEntry[],
+	signal?: AbortSignal,
+): Promise<void> {
+	signal?.throwIfAborted();
+	if (entries.length === 0) return;
 	const id = createHash("sha256")
-		.update(prefix.map((entry) => entry.id).join("\0"))
+		.update(entries.map((entry) => entry.id).join("\0"))
 		.digest("hex")
 		.slice(0, 32);
 	if (await completed(conversation, id)) return;
-	signal.throwIfAborted();
 	const work: BoundaryWork = {
 		version: 1,
 		id,
 		createdAt: Date.now(),
-		entryIds: prefix.map((entry) => entry.id),
-		messages: prefix.flatMap((entry) =>
+		entryIds: entries.map((entry) => entry.id),
+		messages: entries.flatMap((entry) =>
 			entry.type === "message"
 				? sanitizeMessagesForMemory([entry.message]).map((message) => ({ entryId: entry.id, message }))
 				: [],
 		),
 	};
-	await writeFileAtomically(join(workDir(conversation), `${id}.json`), `${JSON.stringify(work)}\n`);
-	signal.throwIfAborted();
+	const path = join(workDir(conversation), `${id}.json`);
+	const temporary = createAtomicTempPath(path);
+	try {
+		await writeFileAtomically(temporary, `${JSON.stringify(work)}\n`);
+		signal?.throwIfAborted();
+		// Publish once: a duplicate enqueue must never restore already-processed batches.
+		await link(temporary, path).catch((error) => {
+			if (!isNodeError(error) || error.code !== "EEXIST") throw error;
+		});
+		syncDirectoryBestEffort(workDir(conversation));
+	} finally {
+		await unlink(temporary).catch(() => undefined);
+	}
+	signal?.throwIfAborted();
 }
 
 export interface BoundaryReflectOptions {
@@ -141,43 +162,68 @@ export async function drainBoundaryReflectWork(options: BoundaryReflectOptions):
 			for (const item of work) {
 				const state = await readMemoryMaintenanceState(appHomeDir, conversation);
 				const cursor = state.lastReflectedEntryId ? item.entryIds.indexOf(state.lastReflectedEntryId) : -1;
-				const remaining = new Set(item.entryIds.slice(cursor + 1));
-				const messages = item.messages
-					.filter((entry) => remaining.has(entry.entryId))
-					.map((entry) => entry.message);
-				// A crash after checkpointing but before removing the work must not repeat inference.
-				if (cursor !== item.entryIds.length - 1) {
-					const result = await runReflect({
-						channelId: conversation.channelId,
-						deskDir: conversation.deskDir,
-						workspaceDir: options.workspaceDir,
-						model: options.model,
-						resolveApiKey: options.resolveApiKey,
-						messages,
-						usageContext: { channelId: conversation.channelId, desk: conversation.desk, correlationId: item.id },
-					});
-					await appendMemoryReviewLog(conversation.deskDir, {
+				const byId = new Map(item.messages.map((entry) => [entry.entryId, entry.message]));
+				const remaining = item.entryIds.slice(cursor + 1).map((id) => ({ id, message: byId.get(id) }));
+				const batch = selectMemorySourceBatch(remaining, true);
+				const throughEntryId = batch.entries.at(-1)?.id;
+				// A crash after checkpointing but before removing work need not repeat inference.
+				const result = batch.entries.length
+					? await runReflect({
+							channelId: conversation.channelId,
+							deskDir: conversation.deskDir,
+							workspaceDir: options.workspaceDir,
+							model: options.model,
+							resolveApiKey: options.resolveApiKey,
+							messages: batch.messages,
+							sourceClosed: true,
+							usageContext: {
+								channelId: conversation.channelId,
+								desk: conversation.desk,
+								correlationId: item.id,
+							},
+						})
+					: undefined;
+				if (throughEntryId) {
+					await updateMemoryMaintenanceState(appHomeDir, conversation, (current) => ({
+						...current,
+						lastReflectedEntryId:
+							!current.lastReflectedEntryId || item.entryIds.includes(current.lastReflectedEntryId)
+								? throughEntryId
+								: current.lastReflectedEntryId,
+						failureBackoffUntil: null,
+						lastReflectAt: batch.hasMore ? current.lastReflectAt : formatLocalTime(),
+					}));
+				}
+				if (batch.hasMore) {
+					const ids = remaining.slice(batch.entries.length).map((entry) => entry.id);
+					const pending = new Set(ids);
+					await writeFileAtomically(
+						join(workDir(conversation), `${item.id}.json`),
+						`${JSON.stringify({
+							...item,
+							entryIds: ids,
+							messages: item.messages.filter((entry) => pending.has(entry.entryId)),
+						})}\n`,
+					);
+				} else {
+					await writeFileAtomically(join(workDir(conversation), `${item.id}.done`), `${item.id}\n`);
+					await unlink(join(workDir(conversation), `${item.id}.json`));
+				}
+				if (result)
+					await tryAppendMemoryReviewLog(conversation.deskDir, {
 						timestamp: formatLocalTime(),
 						channelId: conversation.channelId,
 						reason: "reflect-boundary",
 						correlationId: item.id,
-						actions: [{ target: "memory", action: "reflect", added: result.added, updated: result.updated }],
+						...reviewLogEntryFor(result, {
+							hasMore: batch.hasMore,
+							sampledChars: batch.sampledChars,
+							throughEntryId,
+							fromEntryId: state.lastReflectedEntryId,
+						}),
 					});
-				}
-				await updateMemoryMaintenanceState(appHomeDir, conversation, (current) => ({
-					...current,
-					// A later session/idle pass may already be ahead of this snapshot.
-					lastReflectedEntryId:
-						!current.lastReflectedEntryId || item.entryIds.includes(current.lastReflectedEntryId)
-							? item.entryIds.at(-1)
-							: current.lastReflectedEntryId,
-				}));
-				await updateMemoryMaintenanceState(appHomeDir, conversation, (current) => ({
-					...current,
-					failureBackoffUntil: null,
-				}));
-				await writeFileAtomically(join(workDir(conversation), `${item.id}.done`), `${item.id}\n`);
-				await unlink(join(workDir(conversation), `${item.id}.json`));
+				// At most one model call per drain, including across queued snapshots.
+				if (result) return;
 			}
 		});
 	} catch (error: unknown) {

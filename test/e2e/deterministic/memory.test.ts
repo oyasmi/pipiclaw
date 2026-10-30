@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDeskMemoryQueue } from "../../../src/memory/desk-memory-queue.js";
 import { localDayKey } from "../../../src/shared/local-time.js";
@@ -193,8 +194,38 @@ describe("E2E deterministic: memory (spec 050)", () => {
 
 	it("M3: the boundary reflect pass writes memory + journal and does not reprocess an empty window", async () => {
 		// Regression: reflecting an empty session wastes a model call and can duplicate durable facts.
-		// Mutation verified: bypass runReflect's hasMeaningfulExchange guard; the final count is 2, not 1.
-		harness = await createDeterministicHarness();
+		// Mutation verified: bypass runReflect's hasMeaningfulExchange guard; the empty reset adds a request.
+		// Mutation 2026-10-31: consuming the full source window makes the batch assertions fail;
+		// the provider then receives a head/tail sample instead of every seeded exchange.
+		harness = await createDeterministicHarness({
+			seed: ({ deskDir, conversationDir }) => {
+				const session = SessionManager.open(join(conversationDir, "context.jsonl"), conversationDir, deskDir);
+				for (let index = 0; index < 4; index++) {
+					session.appendMessage({
+						role: "user",
+						content: `MEMORY-BATCH-FACT-${index} ${"中".repeat(7500)}`,
+						timestamp: index * 2,
+					});
+					session.appendMessage({
+						role: "assistant",
+						content: [{ type: "text", text: "文".repeat(7500) }],
+						timestamp: index * 2 + 1,
+						api: "openai-completions",
+						provider: "e2e-mock",
+						model: "mock-main",
+						stopReason: "stop",
+						usage: {
+							input: 1,
+							output: 1,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 2,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+					});
+				}
+			},
+		});
 		harness.model.script.route({
 			name: "ack",
 			when: (r) => r.isMainTurn,
@@ -226,6 +257,21 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("部署脚本在哪？");
 		await harness.sendUserMessage("/new"); // boundary reflect, runs detached in the background
 
+		// Settle each real producer -> durable worker -> checkpoint batch, not just provider arrival.
+		const pending = () =>
+			readdirSync(join(harness.deskDir, ".memory-work", basename(harness.conversationDir))).filter((name) =>
+				name.endsWith(".json"),
+			);
+		await getDeskMemoryQueue().run(harness, async () => {});
+		for (let batch = 0; batch < 8 && pending().length; batch++) await harness.runtime.memoryMaintenance.runOnce?.();
+		expect(pending()).toHaveLength(0);
+		const reflected = harness.model.requests.filter((request) => request.matchedRoute === "reflect-once");
+		expect(reflected.length).toBeGreaterThan(1);
+		for (let index = 0; index < 4; index++) {
+			expect(
+				reflected.filter((request) => request.lastUserText.includes(`MEMORY-BATCH-FACT-${index}`)),
+			).toHaveLength(1);
+		}
 		const indexPath = join(harness.deskDir, "MEMORY.md");
 		await waitForFileContent(indexPath, (c) => c.includes("部署脚本是 scripts/deploy.sh"), {
 			timeoutMs: 10_000,
@@ -248,7 +294,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.sendUserMessage("/new");
 		// Drain the queue used by the detached boundary reflect; no observation-time guess.
 		await getDeskMemoryQueue().run(harness, async () => {});
-		expect(harness.model.requests.filter((r) => r.matchedRoute === "reflect-once")).toHaveLength(1);
+		expect(harness.model.requests.filter((r) => r.matchedRoute === "reflect-once")).toHaveLength(reflected.length);
 	});
 
 	it("M4: a source:user memory survives a reflect delete attempt, logged as skipped", async () => {

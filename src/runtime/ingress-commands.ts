@@ -3,6 +3,7 @@
  * stateless report commands (`/status`, `/tasks`, …), shared by the busy and the idle path of
  * `ingress.ts`.
  */
+import { preserveMemoryBeforeNewSession } from "../agent/maintenance-context.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
 import { type ChannelEvent, type HumanEvent, senderOf } from "../channel/channel-event.js";
 import { formatNewSessionReply, type RuntimeCommandName } from "../commands/catalog.js";
@@ -94,6 +95,7 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 					// generation is touched. A filesystem failure therefore leaves the live
 					// session authoritative and retryable. `/new` resets only this channel's
 					// conversation in the desk.
+					await preserveMemoryBeforeNewSession(conversation);
 					const result = await createFreshActiveSession(conversation.conversationDir, conversation.cwd);
 					const oldRunner = channelRunners.get(event.channelId);
 					if (oldRunner) {

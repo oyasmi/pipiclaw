@@ -1,5 +1,4 @@
 import { parseLocalTime } from "../shared/local-time.js";
-import { splitH2Sections } from "../shared/markdown-sections.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
 import type { MemoryEntry } from "./store.js";
@@ -333,10 +332,13 @@ export function searchMemory(input: MemorySearchInput): MemorySearchHit[] {
 	}
 
 	if (input.workspaceMemory) {
-		for (const section of splitH2Sections(input.workspaceMemory)) {
-			const { score, line } = scoreText(queryTokens, section.content);
+		// Keep the preamble and empty headings searchable without changing the shared parser.
+		for (const block of input.workspaceMemory.split(/(?=^## )/m)) {
+			if (!block.trim()) continue;
+			const heading = /^## ([^\n]+)/.exec(block)?.[1]?.trim() ?? "Background";
+			const { score, line } = scoreText(queryTokens, block);
 			if (score > 0) {
-				hits.push({ kind: "workspace", label: section.heading, line, score });
+				hits.push({ kind: "workspace", label: heading, line, score });
 			}
 		}
 	}

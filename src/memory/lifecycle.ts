@@ -12,7 +12,12 @@ import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { drainBoundaryReflectWork, enqueueBoundaryReflectWork } from "./boundary-work.js";
+import {
+	drainBoundaryReflectWork,
+	enqueueBoundaryReflectEntries,
+	enqueueBoundaryReflectWork,
+	hasBoundaryReflectWork,
+} from "./boundary-work.js";
 import { type DeskMemoryQueue, getDeskMemoryQueue } from "./desk-memory-queue.js";
 import {
 	type MemoryActivityEvent,
@@ -20,12 +25,11 @@ import {
 	updateMemoryMaintenanceState,
 } from "./maintenance-state.js";
 import { type ReflectRunResult, runReflect } from "./reflect.js";
-import { reviewLogEntryFor } from "./reflect-job.js";
-import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
+import { appendMemoryReviewLog, type MemoryReviewReason, reviewLogEntryFor } from "./review-log.js";
 import { buildIncrementalMemorySourceWindow } from "./source-window.js";
 
 /** Boundaries `MemoryLifecycle` reflects on directly, outside the scheduled idle job (spec 050, D7). */
-export type ConsolidationReason = "new-session" | "shutdown";
+export type ConsolidationReason = "shutdown";
 
 export interface MemoryLifecycleOptions {
 	/** Request-owned sessions must never reflect imported client history. */
@@ -47,8 +51,8 @@ export class MemoryLifecycle {
 	private durableRevision = 0;
 	private lastDurableConsolidationRevision = 0;
 	private readonly memoryQueue: DeskMemoryQueue;
-	// Tracks the detached new-session reflect run so shutdown/tests can await it.
-	private backgroundNewSessionReflect: Promise<void> = Promise.resolve();
+	// Tracks the current durable-boundary drain so shutdown can await it.
+	private boundaryReflect: Promise<void> = Promise.resolve();
 
 	constructor(private options: MemoryLifecycleOptions) {
 		this.memoryQueue = options.memoryQueue ?? getDeskMemoryQueue();
@@ -63,8 +67,8 @@ export class MemoryLifecycle {
 			pi.on("session_compact_failed", () => {
 				this.startBoundaryReflect();
 			});
-			pi.on("session_before_switch", (event: SessionBeforeSwitchEvent) => {
-				this.handleSessionBeforeSwitch(event);
+			pi.on("session_before_switch", async (event: SessionBeforeSwitchEvent) => {
+				if (event.reason === "new") await this.prepareNewSession();
 			});
 			pi.on("session_start", async (event: SessionStartEvent) => {
 				this.handleSessionStart(event);
@@ -93,10 +97,8 @@ export class MemoryLifecycle {
 	async flushForShutdown(): Promise<void> {
 		if (this.options.enabled === false) return;
 		await this.resumeBoundaryReflect();
-		// Let any detached new-session reflect run finish (and update the durable checkpoint)
-		// before deciding whether a final flush is still needed.
-		await this.whenNewSessionReflectSettled();
 		await this.runDurableMemoryJobSerial(async () => {
+			if (await hasBoundaryReflectWork(this.options.conversation)) return;
 			// Shutdown is the last chance to persist, so use a looser gate than the
 			// idle/compaction path: reflect on any unconsolidated durable activity, including a
 			// session that only produced tool output with no final assistant turn.
@@ -160,20 +162,6 @@ export class MemoryLifecycle {
 		}
 	}
 
-	private async runBoundaryReflect(
-		reason: ConsolidationReason,
-		messages?: AgentMessage[],
-		sessionEntries?: SessionEntry[],
-	): Promise<void> {
-		const messageSnapshot = [...(messages ?? this.options.getMessages())];
-		const sessionEntrySnapshot = sessionEntries ? [...sessionEntries] : [...this.options.getSessionEntries()];
-		const revisionSnapshot = this.durableRevision;
-
-		await this.runDurableMemoryJobSerial(async () => {
-			await this.runBoundaryReflectNow(reason, messageSnapshot, sessionEntrySnapshot, revisionSnapshot);
-		});
-	}
-
 	private async runBoundaryReflectNow(
 		reason: ConsolidationReason,
 		messageSnapshot: AgentMessage[],
@@ -189,6 +177,7 @@ export class MemoryLifecycle {
 				entries: sessionEntrySnapshot,
 				lastEntryId,
 				sourceKind: reason,
+				closed: true,
 				fallbackMessages: messageSnapshot,
 			});
 			log.logInfo(`[${this.options.conversation.channelId}] Memory reflect starting (${reason})`);
@@ -199,6 +188,7 @@ export class MemoryLifecycle {
 				model: this.options.getModel(),
 				resolveApiKey: this.options.resolveApiKey,
 				messages: sourceWindow.messages,
+				sourceClosed: true,
 				usageContext: {
 					channelId: this.options.conversation.channelId,
 					desk: this.options.conversation.desk,
@@ -209,16 +199,16 @@ export class MemoryLifecycle {
 				await updateMemoryMaintenanceState(this.options.appHomeDir, this.options.conversation, (current) => ({
 					...current,
 					lastReflectedEntryId: sourceWindow.throughEntryId,
-					lastReflectAt: formatLocalTime(),
+					lastReflectAt: sourceWindow.hasMore ? current.lastReflectAt : formatLocalTime(),
 					failureBackoffUntil: null,
 				}));
 			}
-			this.markDurableConsolidationCheckpoint(revisionSnapshot);
+			if (!sourceWindow.hasMore) this.markDurableConsolidationCheckpoint(revisionSnapshot);
 			this.logReflectResult(reason, result);
 			await this.appendReviewLog({
 				reason: "reflect-boundary",
 				correlationId: sourceWindow.windowId,
-				...reviewLogEntryFor(result),
+				...reviewLogEntryFor(result, sourceWindow),
 			});
 		} catch (error) {
 			const message = errorMessage(error);
@@ -248,13 +238,13 @@ export class MemoryLifecycle {
 
 	resumeBoundaryReflect(): Promise<void> {
 		this.startBoundaryReflect();
-		return this.backgroundNewSessionReflect;
+		return this.boundaryReflect;
 	}
 
 	private startBoundaryReflect(): void {
 		if (this.options.enabled === false) return;
 		if (!this.options.appHomeDir) return;
-		this.backgroundNewSessionReflect = drainBoundaryReflectWork({
+		this.boundaryReflect = drainBoundaryReflectWork({
 			conversation: this.options.conversation,
 			workspaceDir: this.options.workspaceDir,
 			appHomeDir: this.options.appHomeDir,
@@ -269,43 +259,11 @@ export class MemoryLifecycle {
 		this.startBoundaryReflect();
 	}
 
-	private handleSessionBeforeSwitch(event: SessionBeforeSwitchEvent): void {
-		if (event.reason !== "new") {
-			return;
-		}
-		this.noteNewSessionBoundary();
-	}
-
-	/** Snapshot the outgoing state for an out-of-band `/new` before its runner is retired. */
-	noteNewSessionBoundary(): void {
+	/** Persist the outgoing branch before a switch; never wait for inference or the desk queue. */
+	async prepareNewSession(): Promise<void> {
 		if (this.options.enabled === false) return;
-		// Snapshot the outgoing session synchronously: the switch has not happened yet, so
-		// getMessages()/getSessionEntries() still reference the session about to be replaced.
-		// Once we yield, this.session is rebound to the new (empty) session and the snapshot
-		// would be lost.
-		const messageSnapshot = [...this.options.getMessages()];
-		const sessionEntrySnapshot = [...this.options.getSessionEntries()];
-
-		// Run the LLM-backed reflect pass in the background so /new returns immediately.
-		// Failures are tolerated: runBoundaryReflectNow catches and logs its own errors, and the
-		// serial queue keeps this from racing with idle/maintenance work on the same channel.
-		this.backgroundNewSessionReflect = this.runBoundaryReflect(
-			"new-session",
-			messageSnapshot,
-			sessionEntrySnapshot,
-		).catch((error) => {
-			const message = errorMessage(error);
-			log.logWarn("memory.reflect.rejected", "Background new-session reflect rejected", {
-				channelId: this.options.conversation.channelId,
-				reason: message,
-			});
-		});
+		await enqueueBoundaryReflectEntries(this.options.conversation, [...this.options.getSessionEntries()]);
 		this.recordActivity("boundary");
-	}
-
-	/** Await any in-flight detached new-session reflect run (shutdown/tests). */
-	async whenNewSessionReflectSettled(): Promise<void> {
-		await this.backgroundNewSessionReflect;
 	}
 
 	private handleSessionStart(event: SessionStartEvent): void {
@@ -314,6 +272,7 @@ export class MemoryLifecycle {
 		}
 
 		this.recordActivity("boundary");
+		this.startBoundaryReflect();
 	}
 
 	private recordActivity(kind: MemoryActivityEvent["kind"]): void {

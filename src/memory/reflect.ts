@@ -9,6 +9,7 @@ import { buildMemoryIndexForBootstrap, MEMORY_INDEX_MAX_UNITS } from "./index-bu
 import { appendJournalEntries } from "./journal.js";
 import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runRetriedSidecarTask } from "./sidecar-worker.js";
+import { MEMORY_TRANSCRIPT_MAX_CHARS } from "./source-window.js";
 import {
 	applyMemoryOps,
 	expireProbationaryEntries,
@@ -18,7 +19,7 @@ import {
 	type MemoryType,
 	renderMemoryIndex,
 } from "./store.js";
-import { hasMeaningfulExchange, sanitizeMessagesForMemory } from "./transcript.js";
+import { hasMeaningfulExchange, messageText, sanitizeMessagesForMemory } from "./transcript.js";
 
 /**
  * Spec 050, D7: the single background pass that replaces session-refresh, memory-checkpoint,
@@ -35,7 +36,6 @@ const MAX_ADD_PER_RUN = 8;
 const MAX_PROBATIONARY_ADD_PER_RUN = 5;
 const MAX_DELETE_PER_RUN = 3;
 const MAX_DELETE_PER_RUN_CONDENSE = 8;
-const TRANSCRIPT_MAX_CHARS = 28_000;
 const WORKSPACE_MEMORY_MAX_CHARS = 3_000;
 const JOURNAL_TAIL_MAX_CHARS = 3_000;
 
@@ -93,6 +93,8 @@ export interface ReflectRunOptions {
 	/** The conversation window to reflect on (already extracted by the caller's source window). */
 	messages: AgentMessage[];
 	timeoutMs?: number;
+	/** Closed boundary snapshots cannot wait for an answer from the outgoing session. */
+	sourceClosed?: boolean;
 	usageContext?: { channelId: string; desk?: string; correlationId?: string };
 	/** Injectable for tests; defaults to today. */
 	today?: string;
@@ -120,6 +122,8 @@ export interface ReflectRunResult {
 	/** Ops the model proposed but a deterministic invariant rejected — surfaced for the review log. */
 	rejected: ReflectOpOutcome[];
 	discarded: Array<{ content: string; reason: string }>;
+	/** Accepted destructive operations, for the review log. */
+	decisions?: ReflectOpOutcome[];
 }
 
 const REFLECT_DEFAULT_TIMEOUT_MS = 45_000;
@@ -195,7 +199,7 @@ async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{
 	const tiered = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS);
 	const transcript = clipText(
 		serializeConversation(sanitizeMessagesForMemory(options.messages)),
-		TRANSCRIPT_MAX_CHARS,
+		MEMORY_TRANSCRIPT_MAX_CHARS,
 		{ headRatio: 0.35 },
 	);
 
@@ -237,7 +241,10 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	const expiredProbation = await expireProbationaryEntries(options.deskDir, today);
 
 	const sanitized = sanitizeMessagesForMemory(options.messages);
-	if (!hasMeaningfulExchange(sanitized)) {
+	if (
+		!hasMeaningfulExchange(sanitized) &&
+		!(options.sourceClosed && sanitized.some((message) => message.role === "user" && messageText(message).trim()))
+	) {
 		return { ...empty, skipped: true, expiredProbation };
 	}
 
@@ -386,7 +393,34 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 		storeOps.push({ op: "touch", names: touchNames });
 	}
 
-	const applied = await applyMemoryOps(options.deskDir, storeOps, { today });
+	// Apply replacements before deleting originals. Any rejected content write makes the
+	// entire automatic deletion phase unsafe; delaying unrelated cleanup is intentional.
+	const writes = storeOps.filter((op) => op.op !== "delete");
+	const deletes = storeOps.filter((op) => op.op === "delete");
+	const updatedTargets = new Set(writes.flatMap((op) => (op.op === "update" ? [op.name] : [])));
+	const applied = await applyMemoryOps(options.deskDir, writes, { today });
+	const unsafe =
+		rejected.some((op) => op.op === "add" || op.op === "update") ||
+		applied.skippedSecret > 0 ||
+		applied.skippedTombstone > 0 ||
+		applied.missingTarget > 0 ||
+		deletes.some((op) => updatedTargets.has(op.name));
+	if (unsafe) {
+		rejected.push(
+			...deletes.map((op) => ({
+				op: "delete" as const,
+				name: op.name,
+				reason: "deletion deferred: a replacement failed or targets conflict",
+			})),
+		);
+	} else {
+		const removed = await applyMemoryOps(options.deskDir, deletes, { today });
+		applied.deleted.push(...removed.deleted);
+	}
+	// Keep the accepted destructive decisions inspectable, not just a list of names.
+	const decisions = deletes
+		.filter((op) => applied.deleted.includes(op.name))
+		.map((op) => ({ op: "delete" as const, name: op.name, reason: op.reason ?? "reflect" }));
 	const journalResult = await appendJournalEntries(options.deskDir, today, parsed.journal);
 
 	return {
@@ -410,5 +444,6 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 				: []),
 		],
 		discarded: parsed.discarded,
+		decisions,
 	};
 }

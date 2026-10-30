@@ -77,5 +77,15 @@ describe("memory search — searchMemory", () => {
 		});
 		expect(hits.some((h) => h.kind === "journal" && h.date === "2026-09-04")).toBe(true);
 		expect(hits.some((h) => h.kind === "workspace" && h.label === "Briefing")).toBe(true);
+		for (const workspaceMemory of [
+			"UNIQUEPROBE is the team convention",
+			"UNIQUEPROBE is in the preamble\n\n## Other\nOther details",
+			"## UNIQUEPROBE\nOnly here",
+			"## UNIQUEPROBE",
+		]) {
+			expect(searchMemory({ query: "UNIQUEPROBE", entries: [], workspaceMemory })).toEqual([
+				expect.objectContaining({ kind: "workspace", line: expect.stringContaining("UNIQUEPROBE") }),
+			]);
+		}
 	});
 });

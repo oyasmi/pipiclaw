@@ -181,7 +181,7 @@ describe("memory tools", () => {
 		expect(replaced.details).toMatchObject({ saved: true, name: "pkg-manager" });
 		const entries = await listMemoryEntries(deskDir);
 		expect(entries).toHaveLength(1);
-		expect(entries[0].description).toContain("pnpm");
+		expect(entries[0]).toMatchObject({ description: expect.stringContaining("pnpm"), source: "user" });
 
 		const waived = await run(makeSave(deskDir), {
 			content: "The team default package manager for installs is now pnpm",

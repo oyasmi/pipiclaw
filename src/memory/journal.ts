@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { localDayKey } from "../shared/local-time.js";
 import { isNodeError, readOptionalTextFile } from "../shared/os.js";
+import { redactSecrets } from "./secret-redaction.js";
 
 /**
  * Spec 050, D5: `journal/YYYY-MM-DD.md`, append-only, one file per local day — never folded or
@@ -105,7 +106,7 @@ export async function appendJournalEntries(
 	date: string,
 	lines: string[],
 ): Promise<JournalAppendResult> {
-	const trimmedLines = lines.map((line) => line.trim()).filter(Boolean);
+	const trimmedLines = lines.map((line) => redactSecrets(line).trim()).filter(Boolean);
 	if (trimmedLines.length === 0) {
 		return { appended: 0, skippedDuplicate: 0 };
 	}

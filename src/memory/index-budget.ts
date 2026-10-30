@@ -79,31 +79,33 @@ export function clipWorkspaceMemoryForBootstrap(
 		return text;
 	}
 	const sections = splitH2Sections(text);
+	const notice = "[... background omitted; read workspace/MEMORY.md ...]";
 	if (sections.length === 0) {
 		return clipTextByPromptUnits(text, maxUnits, {
 			headRatio: 1,
 			maxChars: WORKSPACE_MEMORY_MAX_CHARS,
-			marker: "\n\n[... omitted for length ...]\n",
+			marker: `\n\n${notice}`,
 		}).text;
 	}
-	const head = text.slice(0, text.indexOf("## ") === -1 ? 0 : text.indexOf("## ")).trim();
-	const kept: string[] = head ? [head] : [];
-	let used = countPromptUnits(kept.join("\n\n"));
-	let omitted = 0;
+	if (countPromptUnits(notice) > maxUnits) return "";
+	const head = text.slice(0, /^## /m.exec(text)?.index ?? 0).trim();
+	const kept: string[] = [];
+	if (head) {
+		const clipped = clipTextByPromptUnits(head, maxUnits - countPromptUnits(notice), {
+			headRatio: 1,
+			maxChars: WORKSPACE_MEMORY_MAX_CHARS - notice.length - 2,
+			marker: "\n[... omitted ...]",
+		}).text;
+		if (clipped) kept.push(clipped);
+	}
 	for (const section of sections) {
 		const block = `## ${section.heading}\n\n${section.content}`;
-		const cost = countPromptUnits(block);
-		if (used + cost <= maxUnits && kept.join("\n\n").length + block.length <= WORKSPACE_MEMORY_MAX_CHARS) {
+		const candidate = [...kept, block, notice].join("\n\n");
+		if (countPromptUnits(candidate) <= maxUnits && candidate.length <= WORKSPACE_MEMORY_MAX_CHARS) {
 			kept.push(block);
-			used += cost;
-		} else {
-			omitted++;
 		}
 	}
-	if (omitted > 0) {
-		kept.push(`[... ${omitted} more section(s) omitted; read workspace/MEMORY.md ...]`);
-	}
-	return kept.join("\n\n");
+	return [...kept, notice].join("\n\n");
 }
 
 /** Tail of a journal day, clipped to the injection budget (head dropped, newest kept). */

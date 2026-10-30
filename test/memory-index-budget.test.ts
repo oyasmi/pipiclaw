@@ -5,6 +5,7 @@ import {
 	clipWorkspaceMemoryForBootstrap,
 } from "../src/memory/index-budget.js";
 import type { MemoryEntry } from "../src/memory/store.js";
+import { countPromptUnits } from "../src/shared/prompt-units.js";
 
 function entry(name: string, type: MemoryEntry["type"], updated: string): MemoryEntry {
 	return {
@@ -52,8 +53,14 @@ describe("index-budget — workspace clip", () => {
 		).join("\n\n")}`;
 		const clipped = clipWorkspaceMemoryForBootstrap(workspace, 200);
 		expect(clipped).toContain("## Section 0");
-		expect(clipped).toContain("more section(s) omitted");
+		expect(clipped).toMatch(/read.*MEMORY\.md/);
 		expect(clipped).not.toContain("## Section 29");
+		for (const text of [workspace, `${"很长的前言".repeat(1500)}\n\n## Rules\nUse pnpm`]) {
+			const result = clipWorkspaceMemoryForBootstrap(text, 200);
+			expect(countPromptUnits(result)).toBeLessThanOrEqual(200);
+			expect(result.length).toBeLessThanOrEqual(4000);
+			expect(result).toMatch(/read.*MEMORY\.md/);
+		}
 	});
 });
 

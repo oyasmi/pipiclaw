@@ -500,8 +500,8 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	retireForNewSession(): void {
-		if (!this.retired && this.session) this.memoryLifecycle.noteNewSessionBoundary();
 		this.retireForRecovery();
+		if (this.host.sessionInitialized) void this.memoryLifecycle.resumeBoundaryReflect();
 	}
 
 	retireForRecovery(): void {

@@ -129,6 +129,61 @@ describe("runReflectJob", () => {
 		expect(lastSkip.skipped).toEqual([{ target: "reflect", reason: "no-new-entry" }]);
 	});
 
+	it("processes bounded complete exchanges in order and retains an unanswered tail", async () => {
+		const { appHomeDir, deskDir, workspaceDir } = await harness();
+		const entries = Array.from({ length: 4 }, (_, index) => [
+			{
+				id: `u-${index}`,
+				type: "message",
+				message: { role: "user", content: `FACT-${index} ${"中".repeat(8000)}`, timestamp: 1 },
+			},
+			{
+				id: `a-${index}`,
+				type: "message",
+				message: { role: "assistant", content: [{ type: "text", text: "文".repeat(8000) }], timestamp: 2 },
+			},
+		]).flat();
+		entries.push({
+			id: "unanswered",
+			type: "message",
+			message: { role: "user", content: "Do not lose this question", timestamp: 3 },
+		});
+		await updateMemoryMaintenanceState(appHomeDir, REF, (state) => ({ ...state, dirty: true }));
+		vi.mocked(runReflect).mockResolvedValue(reflectResult() as never);
+		const input = {
+			appHomeDir,
+			conversation: testConversation(deskDir),
+			workspaceDir,
+			channelActive: false,
+			settings: { memoryMaintenance: maintenanceSettings() },
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages: () => [],
+			sessionEntries: () => entries as never[],
+		};
+		for (let index = 0; index < 4; index++) {
+			await runReflectJob({ ...input, now: new Date(`2026-04-19T12:0${index}:00Z`) });
+			expect(vi.mocked(runReflect).mock.calls[index][0].messages).toEqual(
+				entries.slice(index * 2, index * 2 + 2).map((entry) => entry.message),
+			);
+			const state = await readMemoryMaintenanceState(appHomeDir, REF);
+			expect(state.lastReflectedEntryId).toBe(`a-${index}`);
+			expect(state.lastReflectAt).toBeUndefined();
+		}
+		await runReflectJob({ ...input, now: new Date("2026-04-19T12:05:00Z") });
+		expect(runReflect).toHaveBeenCalledTimes(4);
+		entries.push({
+			id: "answered",
+			type: "message",
+			message: { role: "assistant", content: [{ type: "text", text: "Now confirmed" }], timestamp: 4 },
+		});
+		await runReflectJob({ ...input, now: new Date("2026-04-19T12:06:00Z") });
+		expect(await readMemoryMaintenanceState(appHomeDir, REF)).toMatchObject({
+			lastReflectedEntryId: "answered",
+			lastReflectAt: expect.any(String),
+		});
+	});
+
 	it("sets a failure backoff and logs the error when reflect throws", async () => {
 		const { appHomeDir, deskDir, workspaceDir } = await harness();
 		await updateMemoryMaintenanceState(appHomeDir, REF, (state) => ({ ...state, dirty: true }));

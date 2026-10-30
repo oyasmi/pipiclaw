@@ -9,6 +9,7 @@ import { readMemoryMaintenanceState } from "./maintenance-state.js";
 import { appendMemoryReviewLog } from "./review-log.js";
 import {
 	applyMemoryOps,
+	isValidMemoryName,
 	listMemoryEntries,
 	MEMORY_TYPE_ORDER,
 	type MemoryEntry,
@@ -147,6 +148,9 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 
 	if (action === "status") return handleStatus(options);
 	if (action === "list") return handleList(options, argument);
+	if ((action === "show" || action === "forget") && argument && !isValidMemoryName(argument)) {
+		return "记忆名称格式不正确。请用 `/memory list` 查找名称，再查看或删除对应记忆。";
+	}
 	if (action === "show") return handleShow(options, argument);
 	if (action === "forget") return handleForget(options, argument);
 	if (action === "journal") return handleJournal(options, argument);

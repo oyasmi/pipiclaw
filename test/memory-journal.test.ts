@@ -30,6 +30,8 @@ describe("journal", () => {
 		expect(result).toEqual({ appended: 1, skippedDuplicate: 1 });
 		const content = await readJournalDay(deskDir, "2026-09-04");
 		expect(content.split("\n").filter((l) => l.startsWith("-"))).toHaveLength(2);
+		await appendJournalEntries(deskDir, "2026-09-04", ["api_key = abcdef1234567890"]);
+		expect(await readJournalDay(deskDir, "2026-09-04")).not.toContain("abcdef1234567890");
 	});
 
 	it("keeps separate days in separate files and lists them sorted", async () => {

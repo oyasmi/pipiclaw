@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { localDayKey } from "../shared/local-time.js";
 import { readOptionalTextFile } from "../shared/os.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { containsSecret } from "./secret-redaction.js";
 import { hashMemoryContent } from "./tombstones.js";
 
@@ -70,6 +71,9 @@ export function getMemoryIndexPath(deskDir: string): string {
 }
 
 export function getMemoryEntryPath(deskDir: string, name: string): string {
+	if (!isValidMemoryName(name)) {
+		throw new RecoverableToolError("Invalid memory name. Use a lowercase kebab-case name from memory_search.");
+	}
 	return join(getMemoryDir(deskDir), `${name}.md`);
 }
 
@@ -110,7 +114,8 @@ export function dedupeMemoryName(name: string, existing: Iterable<string>): stri
 		return name;
 	}
 	for (let suffix = 2; ; suffix++) {
-		const candidate = `${name}-${suffix}`.slice(0, MAX_NAME_LENGTH);
+		const tail = `-${suffix}`;
+		const candidate = `${name.slice(0, MAX_NAME_LENGTH - tail.length).replace(/-+$/g, "")}${tail}`;
 		if (!taken.has(candidate)) {
 			return candidate;
 		}
@@ -245,13 +250,13 @@ export async function listMemoryEntries(deskDir: string): Promise<MemoryEntry[]>
 	}
 	const entries: MemoryEntry[] = [];
 	for (const fileName of names) {
-		if (!fileName.endsWith(".md") || fileName.startsWith(".")) {
+		if (!fileName.endsWith(".md") || !isValidMemoryName(fileName.slice(0, -3))) {
 			continue;
 		}
 		const path = join(dir, fileName);
-		let info: Awaited<ReturnType<typeof stat>>;
+		let info: Awaited<ReturnType<typeof lstat>>;
 		try {
-			info = await stat(path);
+			info = await lstat(path);
 		} catch {
 			continue;
 		}
@@ -264,7 +269,13 @@ export async function listMemoryEntries(deskDir: string): Promise<MemoryEntry[]>
 			entries.push(cached.entry);
 			continue;
 		}
-		const raw = await readFile(path, "utf-8");
+		let raw: string;
+		try {
+			raw = await readFile(path, "utf-8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw error;
+		}
 		const entry = parseMemoryFile(name, raw, localDayKey(info.mtime));
 		fileCache.set(path, { mtimeMs: info.mtimeMs, entry });
 		entries.push(entry);
@@ -275,17 +286,19 @@ export async function listMemoryEntries(deskDir: string): Promise<MemoryEntry[]>
 
 export async function readMemoryEntry(deskDir: string, name: string): Promise<MemoryEntry | undefined> {
 	const path = getMemoryEntryPath(deskDir, name);
+	let info: Awaited<ReturnType<typeof lstat>>;
+	try {
+		info = await lstat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+	if (!info.isFile()) return undefined;
 	const raw = await readOptionalTextFile(path);
 	if (!raw) {
 		return undefined;
 	}
-	let fallback = localDayKey();
-	try {
-		fallback = localDayKey((await stat(path)).mtime);
-	} catch {
-		/* use today */
-	}
-	return parseMemoryFile(name, raw, fallback);
+	return parseMemoryFile(name, raw, localDayKey(info.mtime));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -401,6 +414,8 @@ export type MemoryStoreOp =
 	| {
 			op: "update";
 			name: string;
+			/** Explicit saves set user; automatic updates omit this even for a user-owned target. */
+			source?: MemorySource;
 			description?: string;
 			type?: MemoryType;
 			details?: string;
@@ -502,9 +517,15 @@ export async function applyMemoryOps(
 				result.skippedSecret++;
 				continue;
 			}
+			const tombstoned = await isDescriptionTombstoned(deskDir, description);
+			if (tombstoned && op.source !== "user") {
+				result.skippedTombstone++;
+				continue;
+			}
 			const next: MemoryEntry = {
 				...entry,
 				description,
+				source: op.source ?? entry.source,
 				type: op.type ?? entry.type,
 				body: op.details !== undefined ? op.details.trim() : entry.body,
 				updated: today,
@@ -512,6 +533,7 @@ export async function applyMemoryOps(
 				malformed: false,
 			};
 			await writeEntryFile(deskDir, next);
+			if (tombstoned && op.source === "user") await revokeMemoryTombstone(deskDir, description, today);
 			byName.set(op.name, next);
 			result.updated.push(op.name);
 			continue;
@@ -535,6 +557,18 @@ export async function applyMemoryOps(
 			result.skippedTombstone++;
 			continue;
 		}
+		// Background retries may revisit an already-applied add. Preserve the existing entry,
+		// including its source/expiry; a replay is not independent confirmation or a touch.
+		if (
+			op.source === "agent" &&
+			[...byName.values()].some(
+				(entry) =>
+					hashMemoryContent(entry.description) === hashMemoryContent(description) &&
+					entry.type === (op.type ?? "project") &&
+					entry.body.trim() === (op.details?.trim() ?? ""),
+			)
+		)
+			continue;
 		const requested = op.name && isValidMemoryName(op.name) ? op.name : slugifyMemoryName(op.name || description);
 		const name = dedupeMemoryName(requested, liveNames);
 		if (name !== requested) {

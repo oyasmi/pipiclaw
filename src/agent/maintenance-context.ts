@@ -5,9 +5,23 @@ import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-age
 import { peekActiveSessionFile } from "../channel/active-session-store.js";
 import type { PipiclawSettingsManager } from "../config/settings.js";
 import type { DeskConversation } from "../desk/types.js";
+import { enqueueBoundaryReflectEntries } from "../memory/boundary-work.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
+
+/** /new's local persistence path: no runner, credentials, inference, or memory queue. */
+export async function preserveMemoryBeforeNewSession(conversation: DeskConversation): Promise<void> {
+	const file = join(conversation.conversationDir, peekActiveSessionFile(conversation.conversationDir));
+	try {
+		statSync(file);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+	const session = SessionManager.open(file, conversation.conversationDir, conversation.cwd);
+	await enqueueBoundaryReflectEntries(conversation, session.getBranch());
+}
 
 export interface DetachedMaintenanceContextOptions {
 	conversation: DeskConversation;

@@ -219,7 +219,7 @@ sequenceDiagram
 
 ## 6. 记忆子系统（`src/memory/`，spec 050）
 
-三件东西，每件只有一个真相：工位记忆（一条事实一个文件，工位的所有频道共享）、按天的日志、以及由管理员拥有的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不做检索打分——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
+三件东西，每件只有一个真相：工位记忆（一条事实一个文件，工位的所有频道共享）、按天的日志、以及由管理员拥有的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不在每轮检索打分挑选注入内容——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
 
 ### 6.1 每个工位的记忆文件
 
@@ -262,9 +262,9 @@ flowchart LR
 
     BOOT -->|注入 memory_bootstrap| PROMPT[本轮 prompt]
     SAVE --> STORE
-    LC -->|compact 前仅落盘| BW["boundary-work.ts<br/>.memory-work/&lt;conversation&gt;/&lt;id&gt;.json"]
+    LC -->|compact / new 前仅落盘| BW["boundary-work.ts<br/>.memory-work/&lt;conversation&gt;/&lt;id&gt;.json"]
     BW -->|压缩结束 / 启动恢复 / 调度器| REFLECT
-    LC -->|new session 前异步 / shutdown| REFLECT
+    LC -->|shutdown：没有旧工作时| REFLECT
     GATES --> JOB --> REFLECT
     REFLECT --> STORE
     REFLECT --> SIDE
@@ -273,11 +273,14 @@ flowchart LR
 
 - **入口（读）**只有一条：会话首轮（`firstTurnMemoryBootstrapPending`，压缩后重新置位）把 `store.listMemoryEntries` 的结果交给 `index-budget.ts` 分层，和 workspace `MEMORY.md`、当天 journal 尾部一起用 `render.ts` 包成 `<memory_bootstrap>`。之后整个会话都不再重复注入——同一份索引反复出现在历史里既浪费 token 也会干扰模型读历史。中途新增/更新的记忆要到下一次首轮才可见，这是刻意接受的延迟：模型怀疑"以前可能记过"时用 `memory_search`。
 - **索引超预算时的分层**（`index-budget.ts`，装不下才触发，约 70–100 条以后）：`user`/`feedback` 类型永远全给（它们决定行为，条数天然少），`project`/`reference` 按 `updated` 降序填充直到预算，末尾补一行"还有 N 条，用 memory_search"。**没有相关性排序**——首轮的用户消息往往只是一句问候，拿它给几十条记忆打分没有意义。
-- **`memory_save` 的冲突检测**：写入前用 `search.ts` 的 Jaccard 相似度（`descriptionSimilarity`，阈值 0.6）在内存里比一遍频道已有记忆的 description；命中就报 `RecoverableToolError` 列出候选 `name`，要求模型带上 `replaces`（目标 name 或 `"none"`）重新调用。带 `replaces` 可越过相似性提示；目标不存在、疑似凭据等其他校验仍可能拒绝写入。`memory_forget` 按 `name` 精确删除，不再做模糊文本匹配。
-- **反思是记忆模块唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。压缩前只持久化待整理的原始消息范围，不等待记忆队列或模型；`boundary-work.ts` 在压缩结束后异步整理，并由启动和调度器恢复未完成工作，关闭空闲维护也不取消已持久化的边界工作。`/new` 前（后台异步）、关机 flush 和空闲 tick 仍调用同一个 `reflect.ts`。
-- **试用期转正信号从"被召回"改成"被 touch"**：v1 靠每轮召回记录使用次数；v2 索引首轮整份给出，"被注入"不再是有效信号。改为反思 pass 输出里的 `touch: [names]`——模型读窗口时判断"这段对话依赖或印证了哪些既有记忆"，被 touch 一次即转正（清除 `expires`）。30 天内没有任何一次 pass 认为它相关，`store.expireProbationaryEntries`（反思开始前的确定性前置步骤）直接删除——不留墓碑，之后仍可被重新学到。
-- **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。
+- **`memory_save` 的冲突检测**：写入前用 `search.ts` 的 Jaccard 相似度（`descriptionSimilarity`，阈值 0.6）在内存里比一遍频道已有记忆的 description；命中就报 `RecoverableToolError` 列出候选 `name`，要求模型带上 `replaces`（目标 name 或 `"none"`）重新调用。带 `replaces` 可越过相似性提示，成功替换后 source 提升为 user；目标不存在、疑似凭据等其他校验仍可能拒绝写入。`memory_forget` 按 `name` 精确删除，不再做模糊文本匹配。
+- **反思是记忆模块唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。压缩和冷热 `/new` 切换前先持久化待整理的原始消息范围，不等待记忆队列、会话初始化或模型；`boundary-work.ts` 在压缩结束后异步整理，并由启动和调度器恢复未完成工作，关闭空闲维护也不取消已持久化的边界工作。关机 flush 和空闲 tick 仍调用同一个 `reflect.ts`；同会话的旧边界工作未完成时，不先反思新会话。
+- **试用期转正信号从"被召回"改成"被 touch"**：v1 靠每轮召回记录使用次数；v2 索引首轮整份给出，"被注入"不再是有效信号。改为反思 pass 输出里的 `touch: [names]`——模型读窗口时判断"这段对话依赖或印证了哪些既有记忆"，被 touch 一次即转正（清除 `expires`）。观察期到期后仍未转正的条目，在下一次反思前由 `store.expireProbationaryEntries`（反思开始前的确定性前置步骤）删除——不留墓碑，之后仍可被重新学到；到期本身不构成读取 TTL。
+- **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。新增/更新先执行；有任何内容写入被拒绝、未落盘或与删除目标冲突时，本次自动删除全部延后。
 - **调度器**（`scheduler.ts`）每 tick 轮转选取一个不活跃且到期的频道，单一 job（`reflect-job.ts`）先过确定性 gate（`shouldRunReflect`：`dirty`、空闲时长、距上次反思间隔、增量窗口是否有实质对话），gate 不放行则零 LLM 成本。频道上下文的取法不变：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的磁盘冷上下文。
+- **分批与恢复**：`source-window.ts` 按清洗后的实际序列化体积选择连续的完整交流前缀（28,000 chars），每次调度处理一批，游标只提交已选范围。未完成增量不刷新 `lastReflectAt`，让后续 tick 继续；孤立用户输入等回答，已关闭边界中的用户事实可单独整理。单个超大交流仍采样，审查日志只记范围和大小，不复制全文。
+- **边界工作进度**：`.memory-work` 沿用相同字段，稳定 id 对应最初快照，部分完成后原子保存剩余 entryIds/messages；初次快照用临时文件加独占发布，重复入队不能覆盖进度。全局游标已属于其他范围时保留它，旧快照靠自身剩余素材继续；完成后写 `.done` 再删除素材。
+- **有限重放保护**：store 对后台 add 的归一化 description、type、正文全相同的条目跳过新增，不修改来源、日期或观察期；显式允许并存的保存不受此限制。自动 add/update 都检查精确遗忘哈希，只有显式用户写入成功后才能撤销对应阻挡。审计错误单独告警，不回退已提交进度；这不是跨文件事务，也不保证不同措辞的重试不重复。
 - **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、最多 2 次尝试、JSON 解析校验、用量记入账本（kind=`sidecar`）。反思的 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次结果。
 - **子代理的 `memory: index`**（spec 050 D12）注入与主 agent 首轮相同的三段（workspace 背景 + 工位记忆索引 + 当天 journal），预算减半，不做每次调用的 LLM 召回；旧的 `memory: session|relevant` 仍可加载，discovery 时映射为 `index` 并给出警告。
 

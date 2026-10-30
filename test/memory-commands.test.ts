@@ -41,6 +41,11 @@ describe("/memory show", () => {
 		const missing = await run(deskDir, "show ghost");
 		expect(missing).toContain("ghost");
 		expect(missing).toContain("/memory list");
+		const indexBefore = await listMemoryEntries(deskDir);
+		for (const action of ["show", "forget"]) {
+			expect(await run(deskDir, `${action} ../../MEMORY`)).toContain("/memory list");
+		}
+		expect(await listMemoryEntries(deskDir)).toEqual(indexBefore);
 	});
 });
 

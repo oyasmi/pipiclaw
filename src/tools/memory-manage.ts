@@ -127,6 +127,9 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		}
 
 		const replaces = args.replaces && args.replaces !== "none" ? args.replaces : undefined;
+		if (replaces && !isValidMemoryName(replaces)) {
+			throw new RecoverableToolError("Invalid replaces name. Use a lowercase kebab-case name from memory_search.");
+		}
 
 		// The near-duplicate judgment ("read existing facts → decide → write") has to run inside the
 		// same per-desk critical section as the write, or two concurrent saves of the same fact
@@ -149,6 +152,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 					? {
 							op: "update",
 							name: replaces,
+							source: "user",
 							description: content,
 							type: args.type,
 							details: args.details,
@@ -182,7 +186,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		// Report what actually landed on disk — never a name for an entry that was not written.
 		// The old code read `replaces ?? result.added[0]` unconditionally, so a skipped add
 		// rendered "Saved ... as `undefined`." and told the user a lie the model could not see.
-		if (replaces) {
+		if (replaces && result.updated.includes(replaces)) {
 			await logMemorySave(options, replaces, "update");
 			return textResult(`Replaced desk memory \`${replaces}\`.`, { saved: true, name: replaces });
 		}
@@ -266,6 +270,9 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		const trimmed = name.trim();
 		if (!trimmed) {
 			throw new RecoverableToolError("memory_forget requires a non-empty name.");
+		}
+		if (!isValidMemoryName(trimmed)) {
+			throw new RecoverableToolError("Invalid memory name. Use a lowercase kebab-case name from memory_search.");
 		}
 		const entry = await readMemoryEntry(options.deskDir, trimmed);
 		if (!entry) {

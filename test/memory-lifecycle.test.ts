@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainBoundaryReflectWork, hasBoundaryReflectWork } from "../src/memory/boundary-work.js";
@@ -6,7 +6,10 @@ import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "../src
 import { useTempDirs } from "./helpers/fixtures.js";
 
 vi.mock("../src/memory/reflect.js", () => ({ runReflect: vi.fn() }));
-vi.mock("../src/memory/review-log.js", () => ({ appendMemoryReviewLog: vi.fn() }));
+vi.mock("../src/memory/review-log.js", async (original) => ({
+	...(await original<typeof import("../src/memory/review-log.js")>()),
+	appendMemoryReviewLog: vi.fn(),
+}));
 
 import { reduceSummaryPayloads, splitSummaryInput } from "../src/agent/session/compaction-input.js";
 import { MemoryLifecycle } from "../src/memory/lifecycle.js";
@@ -48,20 +51,6 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.resetAllMocks();
 });
-
-async function waitForAssertion(assertion: () => void): Promise<void> {
-	let lastError: unknown;
-	for (let attempt = 0; attempt < 40; attempt++) {
-		try {
-			assertion();
-			return;
-		} catch (error) {
-			lastError = error;
-			await new Promise((resolve) => setTimeout(resolve, 0));
-		}
-	}
-	throw lastError;
-}
 
 function createFakePi() {
 	const handlers = new Map<string, (event: any) => Promise<void> | void>();
@@ -152,13 +141,29 @@ describe("MemoryLifecycle", () => {
 			{
 				type: "message",
 				id: "u1",
-				message: { role: "user", content: "remember the deployment decision", timestamp: 1 },
+				message: { role: "user", content: `remember the deployment decision ${"中".repeat(16000)}`, timestamp: 1 },
 			},
 			{
 				type: "message",
 				id: "a1",
-				message: { role: "assistant", content: [{ type: "text", text: "confirmed" }], timestamp: 2 },
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: `confirmed ${"文".repeat(1000)}` }],
+					timestamp: 2,
+				},
 			},
+			...Array.from({ length: 3 }, (_, index) => [
+				{
+					type: "message",
+					id: `extra-u-${index}`,
+					message: { role: "user", content: `BATCH-${index} ${"中".repeat(16000)}`, timestamp: 2 },
+				},
+				{
+					type: "message",
+					id: `extra-a-${index}`,
+					message: { role: "assistant", content: [{ type: "text", text: "文".repeat(1000) }], timestamp: 2 },
+				},
+			]).flat(),
 			{ type: "message", id: "keep", message: { role: "user", content: "continue", timestamp: 3 } },
 		] as never[];
 		const options = {
@@ -170,6 +175,7 @@ describe("MemoryLifecycle", () => {
 			getModel: () => ({ provider: "test", id: "noop" }) as never,
 			resolveApiKey: async () => "",
 		};
+		await mkdir(join(root, "memory-review.jsonl")); // Audit I/O must not make committed work fail.
 		const lifecycle = new MemoryLifecycle(options);
 		await lifecycle.prepareCompaction({
 			branchEntries: entries,
@@ -194,60 +200,81 @@ describe("MemoryLifecycle", () => {
 		await new MemoryLifecycle(options).resumeBoundaryReflect();
 		expect(runReflect).toHaveBeenCalledTimes(2);
 		expect(vi.mocked(runReflect).mock.calls[0]![0].messages).toHaveLength(2);
+		expect(await hasBoundaryReflectWork(conversation)).toBe(true);
+		expect((await readMemoryMaintenanceState(options.appHomeDir, conversation)).failureBackoffUntil).toBeNull();
+		await rm(join(root, "memory-review.jsonl"), { recursive: true });
+		const progressed = await readFile(join(dir, file), "utf8");
+		// A late enqueue cannot replace a partially consumed snapshot; a newer global cursor
+		// must neither erase its remaining batches nor be regressed by this older work.
+		await lifecycle.prepareCompaction({
+			branchEntries: entries,
+			preparation: { firstKeptEntryId: "keep" },
+			signal: new AbortController().signal,
+		} as never);
+		expect(await readFile(join(dir, file), "utf8")).toBe(progressed);
+		await updateMemoryMaintenanceState(options.appHomeDir, conversation, (state) => ({
+			...state,
+			lastReflectedEntryId: "later-session-entry",
+		}));
+		for (let index = 0; index < 3; index++) await new MemoryLifecycle(options).resumeBoundaryReflect();
+		expect(runReflect).toHaveBeenCalledTimes(5);
 		expect(await hasBoundaryReflectWork(conversation)).toBe(false);
+		expect((await readMemoryMaintenanceState(options.appHomeDir, conversation)).lastReflectedEntryId).toBe(
+			"later-session-entry",
+		);
+		const audit = await readFile(join(root, "memory-review.jsonl"), "utf8");
+		expect(audit).not.toContain("BATCH-");
 		// A late/replayed enqueue cannot resurrect a completed operation.
 		await writeFile(join(dir, file), snapshot);
 		await new MemoryLifecycle(options).resumeBoundaryReflect();
-		expect(runReflect).toHaveBeenCalledTimes(2);
+		expect(runReflect).toHaveBeenCalledTimes(5);
 	});
 
-	it("returns immediately from new-session switch and reflects in the background", async () => {
-		let resolveReflect: (() => void) | undefined;
+	it("persists a new-session switch before returning, without waiting for inference", async () => {
+		const root = tempDir();
+		const conversation = { ...CONVERSATION, deskDir: root };
+		let release!: () => void;
+		let arrived!: () => void;
+		const called = new Promise<void>((resolve) => {
+			arrived = resolve;
+		});
 		vi.mocked(runReflect).mockImplementation(
 			() =>
 				new Promise((resolve) => {
-					resolveReflect = () =>
-						resolve({
-							skipped: false,
-							condensed: false,
-							journalAppended: 0,
-							journalSkippedDuplicate: 0,
-							added: [],
-							updated: [],
-							deleted: [],
-							touched: [],
-							renamed: [],
-							expiredProbation: [],
-							rejected: [],
-							discarded: [],
-						} as never);
+					release = () => resolve(DEFAULT_REFLECT_RESULT);
+					arrived();
 				}),
 		);
-
-		const liveMessages = [{ role: "assistant", content: "current state" }] as never[];
+		const entries = [
+			{ type: "message", id: "u", message: { role: "user", content: "Remember the release window", timestamp: 1 } },
+			{
+				type: "message",
+				id: "a",
+				message: { role: "assistant", content: [{ type: "text", text: "Confirmed" }], timestamp: 2 },
+			},
+		] as never[];
 		const lifecycle = new MemoryLifecycle({
-			conversation: CONVERSATION,
-			workspaceDir: "/tmp",
-			getMessages: () => liveMessages,
-			getSessionEntries: () => [],
+			conversation,
+			workspaceDir: root,
+			appHomeDir: join(root, "app"),
+			getMessages: () => [],
+			getSessionEntries: () => entries,
 			getModel: () => ({ provider: "test", id: "noop" }) as never,
 			resolveApiKey: async () => "",
 		});
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);
-
-		// The handler must not block on the LLM-backed reflect pass: it returns synchronously so
-		// /new can create the new session immediately.
-		const beforeSwitch = fakePi.handlers.get("session_before_switch")?.({ reason: "new" });
-		expect(beforeSwitch).toBeUndefined();
-
-		await waitForAssertion(() => {
-			expect(runReflect).toHaveBeenCalledTimes(1);
-		});
-
-		resolveReflect?.();
-		await lifecycle.whenNewSessionReflectSettled();
-		expect(vi.mocked(runReflect)).toHaveBeenCalledWith(expect.objectContaining({ messages: liveMessages }));
+		await fakePi.handlers.get("session_before_switch")?.({ reason: "new" });
+		expect(runReflect).not.toHaveBeenCalled();
+		expect(await hasBoundaryReflectWork(conversation)).toBe(true);
+		entries.length = 0; // The outgoing SDK session can now be discarded.
+		const drain = lifecycle.resumeBoundaryReflect();
+		await called;
+		expect(await hasBoundaryReflectWork(conversation)).toBe(true);
+		release();
+		await drain;
+		expect(await hasBoundaryReflectWork(conversation)).toBe(false);
+		expect(vi.mocked(runReflect).mock.calls[0][0].messages).toHaveLength(2);
 	});
 
 	it("records assistant turns for scheduled maintenance without running reflect inline", async () => {

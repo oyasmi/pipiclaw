@@ -6,9 +6,13 @@ vi.mock("../src/memory/sidecar-worker.js", () => ({
 	SidecarParseError: class SidecarParseError extends Error {},
 }));
 
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import * as journal from "../src/memory/journal.js";
 import { runReflect } from "../src/memory/reflect.js";
 import { runRetriedSidecarTask } from "../src/memory/sidecar-worker.js";
 import { applyMemoryOps, listMemoryEntries } from "../src/memory/store.js";
+import { createMemorySaveTool } from "../src/tools/memory-manage.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-reflect-");
@@ -39,6 +43,7 @@ async function run(deskDir: string, workspaceDir = deskDir, today = "2026-09-04"
 }
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.clearAllMocks();
 });
 
@@ -55,6 +60,17 @@ describe("reflect — skip conditions", () => {
 		});
 		expect(result.skipped).toBe(true);
 		expect(runRetriedSidecarTask).not.toHaveBeenCalled();
+		// A closed outgoing session cannot wait for an answer: preserve the user's fact.
+		const closed = await runReflect({
+			deskDir,
+			workspaceDir: deskDir,
+			model: fakeModel,
+			resolveApiKey,
+			messages: [{ role: "user", content: "Remember the release window", timestamp: 1 }] as never[],
+			sourceClosed: true,
+		});
+		expect(closed.skipped).toBe(false);
+		expect(runRetriedSidecarTask).toHaveBeenCalledOnce();
 	});
 });
 
@@ -135,7 +151,7 @@ describe("reflect — write tier (D6)", () => {
 });
 
 describe("reflect — per-run caps", () => {
-	it("caps add at 8 and delete at 3", async () => {
+	it("caps additions and defers deletions when replacement writes are rejected", async () => {
 		const deskDir = createTempDir();
 		for (let i = 0; i < 5; i++) {
 			await applyMemoryOps(deskDir, [{ op: "add", name: `d${i}`, description: `old fact ${i}`, source: "agent" }]);
@@ -153,7 +169,11 @@ describe("reflect — per-run caps", () => {
 		scripted({ journal: [], ops, discarded: [] });
 		const result = await run(deskDir);
 		expect(result.added).toHaveLength(8);
-		expect(result.deleted).toHaveLength(3);
+		expect(result.deleted).toHaveLength(0);
+		expect((await listMemoryEntries(deskDir)).filter((entry) => entry.name.startsWith("d"))).toHaveLength(5);
+		// An independent deletion pass still observes the ordinary cap of 3.
+		scripted({ journal: [], ops: ops.filter((op) => op.op === "delete") });
+		expect((await run(deskDir)).deleted).toHaveLength(3);
 		expect(result.rejected.length).toBeGreaterThanOrEqual(4);
 	});
 
@@ -183,10 +203,83 @@ describe("reflect — per-run caps", () => {
 	});
 });
 
+describe("reflect — recovery and safe deletion", () => {
+	it("retries a partially written reflection without duplicating identical content or losing distinct details", async () => {
+		// Mutation 2026-10-31: removing background exact dedupe leaves two files after retry.
+		const deskDir = createTempDir();
+		const op = {
+			op: "add",
+			name: "deploy",
+			description: "Thursday release window",
+			details: "Keep the rollback owner",
+			confidence: 0.99,
+			necessity: "high",
+		};
+		scripted({ journal: ["01:00 deployment agreed"], ops: [op] });
+		const fault = vi.spyOn(journal, "appendJournalEntries").mockRejectedValueOnce(new Error("journal unavailable"));
+		await expect(run(deskDir)).rejects.toThrow("journal unavailable");
+		expect(await listMemoryEntries(deskDir)).toHaveLength(1);
+		fault.mockRestore();
+		await run(deskDir);
+		expect(await listMemoryEntries(deskDir)).toHaveLength(1);
+		// A different body is new content, while replaying a user-owned fact grants no touch.
+		scripted({ journal: [], ops: [{ ...op, details: "Different rollback evidence" }] });
+		await run(deskDir);
+		expect((await listMemoryEntries(deskDir)).map((entry) => entry.body)).toEqual([
+			"Keep the rollback owner",
+			"Different rollback evidence",
+		]);
+		await applyMemoryOps(deskDir, [{ op: "update", name: "deploy", source: "user", expires: "2026-12-01" }]);
+		const before = (await listMemoryEntries(deskDir))[0];
+		scripted({ journal: [], ops: [op] });
+		await run(deskDir);
+		expect((await listMemoryEntries(deskDir))[0]).toEqual(before);
+	});
+
+	it("keeps originals when replacement writes are blocked, fail, or conflict with deletion", async () => {
+		// Mutation 2026-10-31: bypassing the unsafe-write guard deletes the original in secret mode.
+		for (const mode of ["secret", "tombstone", "io", "conflict"]) {
+			const deskDir = createTempDir();
+			await applyMemoryOps(deskDir, [
+				{ op: "add", name: "original", description: "Original constraint", source: "agent" },
+			]);
+			const replacement = {
+				op: "add",
+				name: "merged",
+				description: "Merged constraint",
+				confidence: 0.99,
+				necessity: "high",
+			};
+			if (mode === "secret") replacement.description = "api_key = abcdef1234567890";
+			if (mode === "tombstone")
+				await applyMemoryOps(deskDir, [
+					{ op: "add", name: "forgotten", description: replacement.description, source: "user" },
+					{ op: "delete", name: "forgotten" },
+				]);
+			if (mode === "io") await mkdir(join(deskDir, "memory", "merged.md"));
+			if (mode === "conflict") {
+				replacement.op = "update";
+				replacement.name = "original";
+			}
+			scripted({ journal: [], ops: [{ op: "delete", name: "original", confidence: 0.99 }, replacement] });
+			if (mode === "io") await expect(run(deskDir)).rejects.toThrow();
+			else expect((await run(deskDir)).deleted, mode).toEqual([]);
+			expect(
+				(await listMemoryEntries(deskDir)).some((entry) => entry.name === "original"),
+				mode,
+			).toBe(true);
+		}
+	});
+});
+
 describe("reflect — user-source protection", () => {
 	it("never deletes a user-saved entry, regardless of confidence", async () => {
 		const deskDir = createTempDir();
-		await applyMemoryOps(deskDir, [{ op: "add", name: "u", description: "user fact", source: "user" }]);
+		await applyMemoryOps(deskDir, [{ op: "add", name: "u", description: "initial agent fact", source: "agent" }]);
+		await createMemorySaveTool({ desk: "news", deskDir, workspaceDir: deskDir, channelId: "dingtalk:dm:1" }).execute(
+			"save",
+			{ content: "user fact", replaces: "u" },
+		);
 		scripted({
 			journal: [],
 			ops: [{ op: "delete", name: "u", confidence: 0.99, reason: "seems wrong now" }],

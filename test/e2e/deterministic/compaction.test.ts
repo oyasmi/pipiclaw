@@ -265,6 +265,7 @@ describe("E2E deterministic: compaction", () => {
 	it("recovers pending boundary memory after SIGKILL with idle maintenance disabled", async () => {
 		// Catches lost detached reflect closures: only the real compaction producer may create the recovered work.
 		// Mutation (2026-10-22): restore scheduler enabled-only gating; pending work remains and this case fails.
+		// Mutation 2026-10-31: remove runtime /new snapshot persistence; the cold reset creates no work.
 		const model = await startMockProvider();
 		const home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
 		const channelId = "dingtalk:dm:e2e_user";
@@ -297,6 +298,43 @@ describe("E2E deterministic: compaction", () => {
 			expect(model.requests.filter(reflectRequest).length).toBeGreaterThanOrEqual(2);
 			const state = JSON.parse(readFileSync(join(home.homeDir, "state/memory/e2e/dm-1.json"), "utf8"));
 			expect(state.lastReflectedEntryId).toBeTruthy();
+			// This restarted daemon has no live runner. /new must preserve its old branch too,
+			// and a second crash must leave work recoverable with no old closures in memory.
+			const cold = SessionManager.open(
+				join(conversation.conversationDir, "context.jsonl"),
+				conversation.conversationDir,
+				conversation.deskDir,
+			);
+			cold.appendMessage({ role: "user", content: "COLD_NEW_UNREFLECTED_FACT", timestamp: 5 });
+			cold.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: "confirmed" }],
+				timestamp: 6,
+				api: "openai-completions",
+				provider: "e2e-mock",
+				model: "mock-main",
+				stopReason: "stop",
+				usage: {
+					input: 1,
+					output: 1,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			});
+			const beforeReset = model.requests.filter(reflectRequest).length;
+			await daemon.call("send", { channelId, text: "/new" });
+			expect(model.requests.filter(reflectRequest)).toHaveLength(beforeReset);
+			expect(readdirSync(dir).filter((file) => file.endsWith(".json"))).toHaveLength(1);
+			await crash(daemon.child);
+			daemon = await startDaemon(home.homeDir);
+			for (let batch = 0; batch < 8 && readdirSync(dir).some((file) => file.endsWith(".json")); batch++) {
+				await daemon.call("maintenance");
+			}
+			expect(readdirSync(dir).filter((file) => file.endsWith(".json"))).toHaveLength(0);
+			expect(model.requests.filter(reflectRequest).length).toBeGreaterThan(beforeReset);
+			expect(model.requests.filter(reflectRequest).at(-1)?.lastUserText).toContain("COLD_NEW_UNREFLECTED_FACT");
 			expect(model.unmatched()).toHaveLength(0);
 		} finally {
 			memory.release();
