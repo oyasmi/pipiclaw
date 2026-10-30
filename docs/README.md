@@ -9,7 +9,7 @@
 | 在终端或钉钉中完成第一次对话 | [项目 README：快速开始](../README.md#快速开始) |
 | 理解私聊、群聊、AI Card、忙时消息和斜杠命令 | [交互与命令](./interaction-and-commands.md) |
 | 配置钉钉、模型、Web 工具或代理 | [配置速查](./configuration.md) |
-| 用官方 OpenAI SDK 从脚本或其他服务使用 Pipiclaw | [Web API](./webapi.md) |
+| 用官方 OpenAI SDK 从脚本或客户端连接自己的助手（已实现子集） | [Web API](./webapi.md) |
 | 查某个配置字段的准确取值和默认值 | [配置字段参考](./configuration-reference.md) |
 
 ## 我想让它完成实际工作
@@ -20,7 +20,7 @@
 | 了解它能读写什么、能调用哪些能力 | [工具总览](./tools.md) |
 | 让它记住约定、找回历史或忘掉旧信息 | [记忆](./memory.md) |
 | 建立提醒、周期检查或跨会话长期任务 | [事件与任务](./events-and-tasks.md) |
-| 把团队流程沉淀成可复用 skill | [Skills：工作区与用户共享](./skills.md) |
+| 把个人或项目方法沉淀成可复用 skill | [Skills：工作区与用户共享](./skills.md) |
 | 想让它持续产出、而不是每次等你动一下 | [使用杠杆](./leverage/README.md) |
 
 ## 我要长期运行和治理它

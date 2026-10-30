@@ -179,7 +179,11 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		controlEvent(ctx, "step", undefined, { kind: "checkpoint" });
 		controlEvent(ctx, "runtime-log", undefined, { checkpoint: "parked-on-ask", fileTree: "[]" });
 		controlEvent(ctx, "step", undefined, { kind: "user" });
-		ctx.trace.at(-1)!.stepIndex = 2;
+		ctx.trace.at(-1)!.stepIndex = 3;
+		controlEvent(ctx, "tool-call", "task_message", {
+			argsJson: JSON.stringify({ id: "release-plan", text: "staging 周四 22:00" }),
+		});
+		ctx.trace.at(-1)!.stepIndex = 3;
 		controlEvent(ctx, "tool-call", "write", { path: "release-plan.txt" });
 	} else if (id === "T-horizon-01") {
 		controlFile(

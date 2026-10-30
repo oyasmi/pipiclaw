@@ -99,7 +99,7 @@ export const SWEEP_INTERVAL_MS = 10_000;
  * How long a finished job's record, spill file, and exit file are kept. The model has to be able
  * to read the output after the completion wake, so they cannot be deleted the moment the job ends.
  */
-export const FINISHED_JOB_RETENTION_MS = 24 * 60 * 60_000;
+export const FINISHED_JOB_RETENTION_MS = 7 * 24 * 60 * 60_000;
 /** Bytes of captured output carried inline in the completion wake. */
 const WAKE_OUTPUT_TAIL_BYTES = 2_000;
 /** Upper bound on how much of a spill file's tail `readOutput` reads (spec 044, D8). */

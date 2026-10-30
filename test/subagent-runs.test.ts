@@ -704,11 +704,11 @@ describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
 });
 
 // Retention GC is independent of the process-reconciliation sweep: one daily host-wide pass drops
-// a settled run and all runtime-managed artifacts together after seven days.
+// a settled run and all runtime-managed artifacts together after 30 days.
 describe("SubAgentRunManager daily GC", () => {
 	const createTempWorkspace = useTempDirs("pipiclaw-subagent-runs-gc-");
 
-	it("keeps every managed artifact for seven days, then drops the artifacts and durable record together", async () => {
+	it("keeps every managed artifact for 30 days, then drops the artifacts and durable record together", async () => {
 		const workspaceDir = createTempWorkspace();
 		const stateDir = join(workspaceDir, "state");
 		const channelId = "dingtalk:dm:gc";
@@ -742,20 +742,20 @@ describe("SubAgentRunManager daily GC", () => {
 		expect(settledAt).toBeDefined();
 		if (!settledAt) throw new Error("unreachable");
 
-		// The old 24h boundary no longer has any cleanup behavior.
-		await manager.collectGarbage(settledAt + 25 * 60 * 60_000);
+		// The old 7d boundary no longer has any cleanup behavior.
+		await manager.collectGarbage(settledAt + 8 * 24 * 60 * 60_000);
 		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
 			expect(existsSync(join(artifactDir, name))).toBe(true);
 		}
 		expect(manager.get("run-gc")).toBeDefined();
 
-		// Just under 7d: record still present (guards against an off-by-window regression).
-		await manager.collectGarbage(settledAt + 7 * 24 * 60 * 60_000 - 1);
+		// Just under 30d: record still present (guards against an off-by-window regression).
+		await manager.collectGarbage(settledAt + 30 * 24 * 60 * 60_000 - 1);
 		expect(manager.get("run-gc")).toBeDefined();
 
-		// Past 7d: managed artifacts and both in-memory/durable records are gone. A delegated task's
+		// At 30d: managed artifacts and both in-memory/durable records are gone. A delegated task's
 		// own files are not recursively deleted merely because they share the artifact directory.
-		await manager.collectGarbage(settledAt + 7 * 24 * 60 * 60_000);
+		await manager.collectGarbage(settledAt + 30 * 24 * 60 * 60_000);
 		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
 			expect(existsSync(join(artifactDir, name))).toBe(false);
 		}
@@ -789,7 +789,7 @@ describe("SubAgentRunManager daily GC", () => {
 		const settledAt = manager.get("run-gc-retry")?.settledAt;
 		if (!settledAt) throw new Error("unreachable");
 
-		await manager.collectGarbage(settledAt + 7 * 24 * 60 * 60_000);
+		await manager.collectGarbage(settledAt + 30 * 24 * 60 * 60_000);
 		expect(manager.get("run-gc-retry")).toBeDefined();
 		expect(existsSync(join(stateDir, "news", "run-gc-retry.json"))).toBe(true);
 	});

@@ -5,7 +5,7 @@
 - [`agents/`](./agents/) — **推荐**。按能力与成本组织：把 agent、模型和推理档直接交给 Pipiclaw，由它按需选择。
 - [`roles/`](./roles/) — 早期的岗位角色（planner / builder / reviewer / verifier …），保留作参考和迁移对照。
 
-两套**不要同时装**：同一件事有两种选法，只会让主代理多做一次无意义的判断，还会一起占用系统提示词里子代理目录的预算。
+以能力条目为基础，只安装自己需要的一两个；岗位模板在提供真实执行边界或操作纪律时按需选用，也可以与个别能力条目一起使用。
 
 ## 为什么从「角色」改成「能力条目」
 
@@ -18,12 +18,13 @@
 ## 安装 `agents/`
 
 ```bash
-# 源码 checkout：
-cp examples/sub-agents/agents/*.md ~/.pipiclaw/workspace/sub-agents/
+# 源码 checkout（先创建目标目录）：
+mkdir -p ~/.pipiclaw/workspace/sub-agents
+cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 
 # npm 全局安装：
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/*.md ~/.pipiclaw/workspace/sub-agents/
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
 只装你真的有账号的那几个：条目里的 CLI 不在 PATH 上时不会被丢弃，而是标成 `unavailable` 并在调用时才报错。
@@ -32,12 +33,12 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/*.md ~/.pipiclaw/workspace
 |---|---|---|---|---|---|
 | `claude-high` | claude-code | `opus` | high | 否 | 代码与推理最强，成本最高：设计、取舍分析、根因不明的疑难 |
 | `claude-main` | claude-code | `sonnet` | medium | 否 | 代码能力最强的主力档：实现、修改、文档、排查 |
-| `codex-high` | codex-cli | `gpt-6-astra` | high | 是 | 高智能档，可读图片：设计、方案权衡、复杂分析 |
-| `codex-main` | codex-cli | `gpt-6-astra` | medium | 是 | 主力档，可读图片：常规实现、排查、文档 |
-| `codex-flash` | codex-cli | `gpt-5.6-luna` | medium | 是 | 最快最便宜，可读图片：明确、简单、重复的工作 |
+| `codex-high` | codex-cli | `gpt-6.1-sol` | high | 是 | 高智能档，可读图片：设计、方案权衡、复杂分析 |
+| `codex-main` | codex-cli | `gpt-6.1-sol` | medium | 是 | 主力档，可读图片：常规实现、排查、文档 |
+| `codex-flash` | codex-cli | `gpt-6-luna` | high | 是 | 最快最便宜，可读图片：明确、简单、重复的工作 |
 | `glm-high` | claude-code | `glm-5.3` | high | 否 | 高智能档，额度宽松：高频使用不挤占 claude/codex 配额 |
 | `glm-flash` | claude-code | `glm-5.3-flash` | medium | 是 | 最便宜，可读图片：大批量简单重复工作的首选 |
-| `codex-review` | codex-cli | `gpt-6-astra` | high | 是 | 只读检查档：独立审查与 `purpose=verify`，在 CLI 的 read-only sandbox 中运行 |
+| `codex-review` | codex-cli | `gpt-6.1-sol` | high | 是 | 只读检查档：独立审查与 `purpose=verify`，在 CLI 的 read-only sandbox 中运行 |
 
 三档的分工是这套配置的主要内容：**flash** 用于「做什么和怎么做都已清楚，只差有人去做」，可以大量派发；**main** 是主力，绝大多数实现、排查、文档都在这里，也包括 token 消耗很大的长任务；**high** 只留给这一轮真正需要新判断或取舍的工作。对已经定好的活派 high，只是更贵，不会更对。
 
@@ -84,12 +85,11 @@ exec claude --dangerously-skip-permissions "$@"
 
 ## 从早期模板迁移
 
-已经复制到工作区的旧角色文件不会被自动删除，需要手动处理：
+已经复制到工作区的旧角色文件不会被自动删除，可以按需选择新条目；保留旧条目可继续使用其执行边界和续接能力：
 
 ```bash
 cd ~/.pipiclaw/workspace/sub-agents
-rm -f builder.md builder-hard.md worker.md planner.md reviewer.md verifier.md
-cp /path/to/pipiclaw/examples/sub-agents/agents/*.md .
+cp /path/to/pipiclaw/examples/sub-agents/agents/codex-main.md .
 ```
 
 迁移期间历史 task 的委派记录里仍会出现旧角色名；`subagent_run op=follow_up` 只能续接条目仍然存在且 `command`/`model`/`shell` 未变的 run，删掉旧文件后这些 run 需要重新委派。

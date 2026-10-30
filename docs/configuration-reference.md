@@ -260,7 +260,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 `bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道轮次；`job` 工具用来 list/poll/cancel。核心能力，无开关、始终注册。
 
 - 作业进程活在 host 上，通过 shell 命令管理（`nohup` 启动、`kill -0` 探活、退出码写入 `.exit` 文件）；每频道最多 5 个并发运行作业，超时沿用 bash 的 `timeout` 预算。
-- 作业状态持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`：重启后 runtime 会认领仍在运行的作业，已结束作业保留 24 小时供查看。
+- 作业状态持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`：重启后 runtime 会认领仍在运行的作业，已结束作业保留 7 天供查看。
 - runtime sweeper 约每 30 秒检查一次后台作业；作业完成后会自动唤醒对应 channel 并带上输出尾部，不需要再排 check-in event。
 - 只发给主 agent；子代理不能起后台作业，也不能使用 `job` 工具。
 

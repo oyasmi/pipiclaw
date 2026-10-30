@@ -224,6 +224,23 @@ const cases: Record<string, OracleControl[]> = {
 		),
 	],
 	"T-ask-01": [
+		reject(
+			"answer-not-relayed",
+			"Writing the eventual file alone does not prove chat relayed the answer",
+			["chat-relays-answer"],
+			(ctx) => {
+				ctx.trace = ctx.trace.filter((event) => event.tool !== "task_message");
+			},
+		),
+		reject(
+			"unrelated-advances",
+			"An unrelated acknowledgement must not advance the project",
+			["unrelated-chat-does-not-advance"],
+			(ctx) => {
+				controlEvent(ctx, "tool-call", "task_resume");
+				ctx.trace.at(-1)!.stepIndex = 1;
+			},
+		),
 		pass("shell-write-plan", "Correct final plans may be written through shell rather than the write tool", (ctx) => {
 			const write = ctx.trace.find((entry) => entry.tool === "write")!;
 			write.tool = "bash";

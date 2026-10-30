@@ -4,9 +4,7 @@
 
 **把钉钉变成一个能持续工作的 AI 工程入口。**
 
-Pipiclaw 是一个面向个人和团队的 AI coding assistant runtime。它让 AI 助手不只回答一轮问题，而是能留在你的钉钉里理解上下文、操作工作区、记住长期约定、按计划继续任务，还能把重活委派给 Claude Code、Codex CLI 或你自己的执行器。
-
-你看到的是一个助手，背后可以是一支分工明确的 AI 工程团队：主智能体负责理解目标和交付结果，轻量子智能体负责检索与整理，外部智能体负责跨文件实现、独立评审和运行验收。所有工作都有状态、有产物、有控制入口，而不是散落在几个终端窗口里的临时对话。
+Pipiclaw 是面向个人开发者、以钉钉为主要入口的 AI 编程助手运行时。你可以在钉钉或终端交办目标，让它保留工作上下文、在后台持续推进，并按需要调用你已有的模型、Claude Code、Codex CLI 或自定义执行器；过程中可查看进展、补充要求、暂停或取消，最终取得成果和检查依据。
 
 - npm：[`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw)
 - 运行环境：Node.js `>= 22.19.0`，Linux / macOS；Windows 请使用 WSL2
@@ -14,7 +12,7 @@ Pipiclaw 是一个面向个人和团队的 AI coding assistant runtime。它让 
 
 ## 为什么用 Pipiclaw
 
-### 一个入口，协调多个智能体
+### 按需使用已有执行器
 
 Pipiclaw 同时支持两类委派：内置子智能体在进程内完成检索、日志筛查等轻量工作；外部智能体则启动真实的 Claude Code、Codex CLI 或任意脚本，处理需要长时间运行、跨多个文件和反复自测的重型任务。
 
@@ -36,17 +34,17 @@ Pipiclaw 使用钉钉 Stream Mode，不需要自建消息中转服务或公网 I
 
 ### 配置、数据和工作方式归你所有
 
-模型支持内置 provider、OpenAI-compatible 网关、API key 和订阅登录。记忆、任务、角色、事件与团队规则都保存在本机可阅读文件中。Pipiclaw 提供命令、路径和网络守卫以及审计记录；需要更强隔离时，可把整个进程放进独立账号或容器。
+模型支持内置 provider、OpenAI-compatible 网关、API key 和订阅登录。记忆、任务、角色、事件与工作规则都保存在本机可阅读文件中。Pipiclaw 提供命令、路径和网络守卫以及审计记录；需要更强隔离时，可把整个进程放进独立账号或容器。
 
 ## 适合做什么
 
 - 在钉钉中提供长期在线的研发助手、内部技术支持或运维协作入口
-- 把需求分析、实现、评审、验证、文档整理交给不同 AI 智能体协作完成
+- 交付包含实现、测试、文档和必要检查的完整改动，按风险安排独立检查
 - 跟进跨小时或跨天的编码、调查、迁移、报告和周期性工作
 - 在多个群和私聊中保留各自独立的对话；默认共享同一份积累，需要分开时再用工位
-- 复用现有模型网关、Claude Code / Codex CLI 账号和团队工作规范
+- 复用现有模型网关、Claude Code / Codex CLI 账号和个人或项目工作规范
 
-Pipiclaw 当前定位是个人与小团队、自托管、单实例运行。它不是强多租户 SaaS，也不提供 OS 级沙箱；外部智能体拥有的真实权限由目标 CLI 的 sandbox 参数、运行账号和宿主环境共同决定。
+Pipiclaw 面向个人开发者，支持自托管和单实例运行。它不是强多租户 SaaS，也不提供 OS 级沙箱；外部智能体拥有的真实权限由目标 CLI 的 sandbox 参数、运行账号和宿主环境共同决定。
 
 ## 快速开始
 
@@ -126,7 +124,7 @@ pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
 }
 ```
 
-- `dingtalk` 和 `webapi` 两段各有 `enabled` 开关，至少打开一个；`webapi` 让脚本和其他服务用官方 OpenAI SDK 使用 Pipiclaw（见 [Web API](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md)）。
+- `dingtalk` 和 `webapi` 两段各有 `enabled` 开关，至少打开一个；`webapi` 让脚本和其他客户端通过官方 OpenAI SDK 连接自己的助手（支持已实现的 Responses 子集）（见 [Web API](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md)）。
 - 硬性必填只有 `clientId` 和 `clientSecret`。
 - `robotCode` 留空时回退到 `clientId`。
 - `cardTemplateId` 可暂时留空；正式使用建议配置 AI Card。

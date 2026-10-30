@@ -4,9 +4,7 @@
 
 **Turn DingTalk into an AI engineering entry point that keeps working.**
 
-Pipiclaw is an AI coding assistant runtime for individuals and teams. It lets an AI assistant do more than answer a single question: it stays in your DingTalk, understands context, operates your workspace, remembers long-term conventions, keeps tasks moving on a plan, and delegates the heavy lifting to Claude Code, Codex CLI, or your own executor.
-
-What you see is one assistant, but behind it can be a well-divided AI engineering team: the main agent owns understanding goals and delivering results, lightweight sub-agents handle retrieval and triage, and external agents handle cross-file implementation, independent review, and verification runs. All work has state, artifacts, and control entry points, instead of being scattered across a few terminal windows as throwaway conversations.
+Pipiclaw is a DingTalk-first AI coding assistant runtime for individual developers. Assign a goal from DingTalk or the terminal, keep its working context, and let it progress in the background using your existing models, Claude Code, Codex CLI, or custom executors. Follow progress, add instructions, pause or cancel work, and retrieve the result with its verification evidence.
 
 - npm: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw)
 - Runtime: Node.js `>= 22.19.0`, Linux / macOS; on Windows use WSL2
@@ -14,7 +12,7 @@ What you see is one assistant, but behind it can be a well-divided AI engineerin
 
 ## Why Pipiclaw
 
-### One entry point, coordinating multiple agents
+### Use your existing executors as needed
 
 Pipiclaw supports two kinds of delegation at once: built-in sub-agents do lightweight work in-process such as retrieval and log triage; external agents launch real Claude Code, Codex CLI, or any script to handle heavy tasks that need long runs, many files, and repeated self-testing.
 
@@ -36,17 +34,17 @@ Scheduled events are good for reminders, periodic checks, and zero-token conditi
 
 ### Your config, data, and way of working
 
-Models support built-in providers, OpenAI-compatible gateways, API keys, and subscription login. Memory, tasks, roles, events, and team rules are all stored in human-readable files on your machine. Pipiclaw provides command, path, and network guards plus an audit log; when you need stronger isolation, you can put the whole process in its own account or container.
+Models support built-in providers, OpenAI-compatible gateways, API keys, and subscription login. Memory, tasks, roles, events, and working rules are all stored in human-readable files on your machine. Pipiclaw provides command, path, and network guards plus an audit log; when you need stronger isolation, you can put the whole process in its own account or container.
 
 ## What it's good for
 
 - Providing an always-online dev assistant, internal tech support, or ops collaboration entry point in DingTalk
-- Handing requirement analysis, implementation, review, verification, and documentation to different AI agents working together
+- Delivering complete changes with code, tests, documentation, and appropriate checks, with independent review based on risk
 - Following up on coding, investigation, migration, reporting, and periodic work that spans hours or days
 - Keeping a separate conversation per group and direct chat, sharing one body of memory by default and splitting it with desks when needed
-- Reusing existing model gateways, Claude Code / Codex CLI accounts, and team working conventions
+- Reusing existing model gateways, Claude Code / Codex CLI accounts, and personal or project conventions
 
-Pipiclaw today targets individuals and small teams, self-hosted, single-instance. It is not a hard multi-tenant SaaS, and it does not provide an OS-level sandbox; the real permissions an external agent holds are determined together by the target CLI's sandbox parameters, the run account, and the host environment.
+Pipiclaw targets individual developers and supports self-hosted, single-instance operation. It is not a hard multi-tenant SaaS, and it does not provide an OS-level sandbox; the real permissions an external agent holds are determined together by the target CLI's sandbox parameters, the run account, and the host environment.
 
 ## Quick start
 
@@ -126,7 +124,7 @@ Edit `~/.pipiclaw/channel.json`:
 }
 ```
 
-- The `dingtalk` and `webapi` sections each have an `enabled` switch; turn on at least one. `webapi` lets scripts and other services use Pipiclaw through the official OpenAI SDK (see [Web API](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md)).
+- The `dingtalk` and `webapi` sections each have an `enabled` switch; turn on at least one. `webapi` lets scripts and other clients connect to your assistant through the official OpenAI SDK using the implemented Responses subset (see [Web API](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md)).
 - The only hard-required DingTalk fields are `clientId` and `clientSecret`.
 - When `robotCode` is empty it falls back to `clientId`.
 - `cardTemplateId` can be left empty for now; configuring an AI Card is recommended for real use.

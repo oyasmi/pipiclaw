@@ -61,10 +61,10 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.
 - `roles/` — 早期的 8 个岗位角色（explorer、git-committer、planner、builder、builder-hard、reviewer、verifier、worker），保留作参考、迁移对照，以及仍然需要真只读执行边界（`--permission-mode plan` / `--sandbox read-only`）的场景。
 
 ```bash
-cp examples/sub-agents/agents/*.md ~/.pipiclaw/workspace/sub-agents/
+cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
-`agents/` 的三档分工是：**flash** 做已经清楚怎么做的简单重复工作、**main** 承担绝大多数实现与排查、**high** 只留给真正需要新判断或取舍的一轮。逐条目取舍、GLM 包装脚本和这套配置的代价见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值——`agents/` 全部使用放开权限的参数且声明 `mutates: write`，使用前必须按本机账号和风险边界审阅。
+`agents/` 的三档分工是：**flash** 做已经清楚怎么做的简单重复工作、**main** 承担绝大多数实现与排查、**high** 只留给真正需要新判断或取舍的一轮。逐条目取舍、GLM 包装脚本和这套配置的代价见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值——除只读的 `codex-review` 外，`agents/` 条目使用放开权限的参数且声明 `mutates: write`，使用前必须按本机账号和风险边界审阅。
 
 不复制模板也完全可以使用 inline `systemPrompt` 委派——但 inline 委派永远是 `runtime: internal`，外部角色必须以配置文件的形式存在（需要 `harness`/`command`，无法通过调用参数临时拼出）。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
 
@@ -87,12 +87,35 @@ cp examples/sub-agents/agents/*.md ~/.pipiclaw/workspace/sub-agents/
 - 只需要主代理顺手完成的一步小事
 - 需要继续递归创建下级代理的复杂代理树（子代理没有 `subagent` 工具，外部 agent 是否会自己 spawn 子代理不受 pipiclaw 控制或约束，见下文"明确不可控的部分"）
 
+已结算的委派记录与运行时管理产物从结算时起保留 30 天，由每日批次清理；执行器自建文件不在此清理范围。长期交付物应写入任务指定的位置。延长保留期会增加磁盘占用。
+
+小事可直接完成；明确的代码工作可一次交付代码、测试、文档和必要检查。同一执行器可以承担不同阶段，按风险安排独立检查，无需固定岗位流水线。
+
 ## 文件结构（File Structure）
 
 一个子代理文件由两部分组成：
 
 1. **YAML frontmatter**：定义名字、描述、runtime，以及内置或外部各自的字段。
 2. **Markdown 正文**：作为这个子代理的系统提示词（system prompt）。内置角色直接使用；外部角色里，claude-code 通过 `--append-system-prompt-file` 引用它，其余 harness 会把它拼进发给 CLI 的 stdin 最前面。
+
+最小外部示例（`~/.pipiclaw/workspace/sub-agents/claude-main.md`）：
+
+```md
+---
+name: claude-main
+description: 主力档，成本中等；适合实现、排查和文档，按任务要求交付完整结果。
+runtime: external
+harness: claude-code
+command: claude --dangerously-skip-permissions
+model: sonnet
+thinkingLevel: medium
+workload: heavy
+mutates: write
+maxWallTimeSec: 5400
+---
+
+（正文即 system prompt，通过 `--append-system-prompt-file` 传入 claude）
+```
 
 最小内置示例（`~/.pipiclaw/workspace/sub-agents/reviewer.md`）：
 
@@ -116,25 +139,6 @@ bashTimeoutSec: 180
 你是专注于正确性和回归风险的代码审查子代理。
 
 只审查任务指定的改动，不修改文件。优先报告正确性缺陷、行为回归、危险假设和缺失测试，并为每条发现提供 `path:line` 证据。没有发现时明确说明已检查的范围和剩余风险。
-```
-
-最小外部示例（`~/.pipiclaw/workspace/sub-agents/builder.md`）：
-
-```md
----
-name: builder
-description: 重型实现者（外部 claude-code，异步）。用于边界清楚但跨多文件、需要自测的编码任务；返回 runId，完成时唤醒。不要用于只读定位或单点事实查询。
-runtime: external
-harness: claude-code
-command: claude --dangerously-skip-permissions
-model: sonnet
-thinkingLevel: medium
-workload: heavy
-mutates: write
-maxWallTimeSec: 5400
----
-
-（正文即 system prompt，通过 `--append-system-prompt-file` 传入 claude）
 ```
 
 ## Frontmatter 字段说明（Frontmatter Reference）

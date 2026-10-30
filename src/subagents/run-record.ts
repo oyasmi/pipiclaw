@@ -237,9 +237,9 @@ export function normalizeRunIdQuery(query: string): string {
 	return lower.startsWith(RUN_ID_PREFIX) ? lower.slice(RUN_ID_PREFIX.length) : lower;
 }
 
-/** Settled runs and every runtime-managed artifact are retained together for one week. GC runs
+/** Settled runs and every runtime-managed artifact are retained together for 30 days. GC runs
  *  daily, so an item can remain for up to one additional sweep interval after this age. */
-export const RUN_RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const RUN_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const RUN_ARTIFACT_FILENAMES = [
 	"prompt.txt",
 	"system-prompt.txt",

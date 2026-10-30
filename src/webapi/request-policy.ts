@@ -48,7 +48,7 @@ const POLICY: Record<string, Rule> = {
 	tool_choice: { reject: NOT_NEGOTIABLE },
 	parallel_tool_calls: { reject: NOT_NEGOTIABLE },
 	max_tool_calls: { reject: NOT_NEGOTIABLE },
-	prompt: { reject: "Prompt templates are not supported; put durable instructions in the desk's AGENTS.md." },
+	prompt: { reject: "Prompt templates are not supported; put durable instructions in the workspace root AGENTS.md." },
 	text: { reject: "Output formats are not supported; the agent replies in text." },
 	reasoning: { reject: "Reasoning effort is set with /model, not per request." },
 	temperature: { reject: NOT_NEGOTIABLE },

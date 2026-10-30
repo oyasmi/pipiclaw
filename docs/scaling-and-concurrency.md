@@ -4,7 +4,7 @@
 > **前置**：已经在运行 Pipiclaw（[deployment-and-operations.md](./deployment-and-operations.md)）。
 > **读完你能**：说出哪里串行、哪里并行、真正的瓶颈是什么，以及何时该拆成多个实例。
 
-Pipiclaw 是单进程 Node.js 应用，定位是个人与小团队助手。一个机器人实例不是“一次只能回答一个人”：它可以同时推进多个私聊和群聊中的工作。本页说明它的隔离与并发模型、共享资源边界，以及什么时候应该拆分实例。可调参数见 [configuration.md](./configuration.md)。
+Pipiclaw 是单进程 Node.js 应用，定位是个人助手。一个用户可以从多个入口交办工作，多个任务和执行器并行消耗资源；私聊与群聊仍保留各自的共享语义。本页说明它的隔离与并发模型、共享资源边界，以及什么时候应该拆分实例。可调参数见 [configuration.md](./configuration.md)。
 
 ## 会话隔离模型（Session Isolation Model）
 
@@ -75,13 +75,13 @@ Pipiclaw 区分两样东西：**频道（channel）**是消息的地址，**工�
 
 - 约定同一时刻只有一个频道对共享 checkout 做写操作；
 - 为并行任务创建独立 Git worktree，让各频道用绝对路径（委派时用 `workingDirectory`）在各自的 worktree 里工作；
-- 按团队或项目拆分 Pipiclaw 实例，并使用彼此独立的 workspace 和 checkout。
+- 按隔离需要或项目拆分 Pipiclaw 实例，并使用彼此独立的 workspace 和 checkout。
 
 ## 资源占用与已知瓶颈（Footprint and Known Bottlenecks）
 
 **通常最先遇到的约束是模型 API 和外部 CLI 配额。** 一个活跃通道的一轮对话可能产生多次模型请求；多个频道、内置子智能体和记忆 sidecar 同时活跃时容易触发 provider rate limit。外部 Claude Code / Codex CLI 使用各自账号和限额，Pipiclaw 的主模型限流不会替它们做统一配额管理。
 
-CPU、磁盘 I/O 在个人与小团队规模下通常不是主瓶颈；内存上每个通道常驻约几 MB 到几十 MB，随对话长度增长。重型外部角色会额外启动完整 coding-agent 进程，其 CPU、内存、子进程和网络占用由目标 CLI 决定。成本可用 `/usage` 查看，但 Codex CLI 不报告成本、`exec` 不报告 token 或成本，报告中的 unknown 不能当成 0。
+CPU、磁盘 I/O 在个人使用规模下通常不是主瓶颈；内存上每个通道常驻约几 MB 到几十 MB，随对话长度增长。重型外部角色会额外启动完整 coding-agent 进程，其 CPU、内存、子进程和网络占用由目标 CLI 决定。成本可用 `/usage` 查看，但 Codex CLI 不报告成本、`exec` 不报告 token 或成本，报告中的 unknown 不能当成 0。
 
 **通道 Runner 有空闲 LRU 驱逐。** 单个 daemon 的 Runner 缓存目标上限是 50；创建新 channel 的 Runner 并超过上限时，会优先释放最久未使用且当前空闲的 Runner，忙碌 Runner 不会被中途销毁。释放只清理内存中的 session、订阅和维护状态，持久化的会话、`memory/*.md`、`journal/` 等不受影响。若同时忙碌的通道很多，缓存可暂时超过 50；它们空闲后，会在后续创建新 channel Runner 时再次参与回收。
 
@@ -91,9 +91,9 @@ CPU、磁盘 I/O 在个人与小团队规模下通常不是主瓶颈；内存上
 
 ## 部署与监控建议（Recommendations）
 
-- 个人与小团队（约 10 人以内）：单实例足够，2C4G 级别机器即可；用 `allowFrom` 控制范围，关注模型提供方 API 配额。
+- 个人使用：单实例足够，2C4G 级别机器即可；用 `allowFrom` 控制范围，关注模型提供方 API 配额。
 - 使用量上来后：监控 Node.js RSS 与日志中的 rate limit / timeout 报错；Runner 会自动驱逐，但后台进程、长会话和其他缓存仍可能推高内存。
-- 如果同时活跃对话的通道经常超过 10–30 个（取决于 API 速率配额）：按群或团队拆分多个实例，各自绑定不同的钉钉应用、独立管理工作区。
+- 如果同时活跃对话的通道经常超过 10–30 个（取决于 API 速率配额）：按入口或项目拆分多个实例，各自绑定不同的钉钉应用、独立管理工作区。
 
 | 监控指标 | 获取方式 | 关注点 |
 |----------|---------|--------|

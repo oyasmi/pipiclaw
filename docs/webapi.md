@@ -4,6 +4,8 @@
 > **前置阅读**：[配置指南](./configuration.md)（`channel.json`）、[安全模型](./security.md)。
 > **读完你会得到**：如何打开 Web API、如何鉴权、每个端点和字段的取舍、与 OpenAI Responses 规范的映射，以及能直接运行的 Python / JS 示例。
 
+Web API 连接自己的个人助手，供终端、脚本和实际客户端使用。它提供 OpenAI Responses-shaped 的已实现子集，不承诺完整实现或持续追齐上游协议。新增能力应说明真实客户端的需要、现有子集为何不足及维护成本。
+
 Web API 是 Pipiclaw 的第二个渠道（与钉钉并列）。它的形状是 **OpenAI Responses API**：用官方 `openai` SDK（Python、JS 等）就能连上，一次请求生成一个 Response。支持客户端重放历史、用 `previous_response_id` 接续响应，以及用 `conversation` 维护服务端会话。显式会话是一个频道，绑定工位并使用其记忆、任务和文件；不带会话标识的请求使用独立内存会话。
 
 终端界面（`pipiclaw tui`）也是这个 API 的客户端，用的是同一个本机 socket。
@@ -219,11 +221,11 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 | `stream`、`background`、`stream_options` | 支持；WebSocket 上不能出现 |
 | `metadata`、`store` | 支持；store 默认 true，false 不保存可检索的响应资源；显式会话仍保存 items |
 | `user`、`safety_identifier`、`prompt_cache_key`、`service_tier` | 接受并忽略（只是提示） |
-| `instructions` | 支持字符串，仅作用于本次生成；不修改工位 AGENTS.md |
+| `instructions` | 支持字符串，仅作用于本次生成；不修改工作区根目录 AGENTS.md |
 | `tools`、`tool_choice`、`parallel_tool_calls`、`max_tool_calls`、`prompt`、`text`、`reasoning`、`temperature`、`top_p`、`top_logprobs`、`max_output_tokens`、`truncation`、`context_management`、`include`、`moderation`、`access_programs`、`prompt_cache_options`、`prompt_cache_retention` | 不传或 `null` 可以，其他值拒绝：由 Pipiclaw 的 agent 配置决定 |
 | 其他字段 | 拒绝（`unknown_parameter`） |
 
-`input` 可包含历史 assistant 消息、system/developer 指令，以及 Pipiclaw 自己输出的 reasoning 摘要和 mcp_call。历史工具记录作为观察信息提供给模型，不会执行。客户端工具闭环（function_call_output）、item_reference 和加密 reasoning 等仍未实现，明确返回 400。
+`input` 可包含历史 assistant 消息、system/developer 指令，以及 Pipiclaw 自己输出的 reasoning 摘要和 mcp_call。历史工具记录作为观察信息提供给模型，不会执行。客户端工具闭环（function_call_output）、item_reference 和加密 reasoning 等当前不支持，明确返回 400。
 
 **图片和文件**只接受请求里带的数据：`input_image` 的 `image_url` 必须是 `data:…;base64,…`（≤10 MiB，最多 10 张），`input_file` 用 `file_data` 加 `filename`（≤10 MiB）；一个请求里所有附件解码后合计不超过 20 MiB，超出返回 400（`input_too_large`），其余的放到下一条消息里。`file_id` 和 http(s) 地址会被拒绝——前者需要 Files API，后者会让服务端替调用方去抓取任意地址。base64 在解码前先按长度估算，过大直接拒绝。文本里图片和文件的位置会被写成 `[图片N]`、`[文件N]`，和钉钉一致。作为上下文导入的 input（独立请求、响应链、含其他角色的会话 input）里，文件以 UTF-8 文本内联；PDF、Office 文档等二进制文件返回 400（`param` 指向该 `file_data`），请放在只含 user 消息的 conversation 里发送，文件会保存到工位供工具读取。
 

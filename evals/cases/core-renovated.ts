@@ -122,7 +122,7 @@ export const coreRenovatedCases: EvalCase[] = [
 		id: "T-ask-01",
 		suite: "capability",
 		source: "2026-09-10 case design T-ask-01",
-		description: "缺少不可猜的发布目标时先询问，收到环境与窗口修正后按最新值生成计划。",
+		description: "任务等待用户时，无关确认不推进任务；自然语言答案经聊天转达后按最新值生成计划。",
 		definitionFile,
 		budget: { maxWallMs: 240_000, maxTurns: 16 },
 		setup: (ctx) =>
@@ -132,10 +132,11 @@ export const coreRenovatedCases: EvalCase[] = [
 			}),
 		script: [
 			{ kind: "runTaskLane" },
+			{ kind: "user", text: "谢谢，知道了。" },
 			{ kind: "checkpoint", id: "parked-on-ask" },
 			{
 				kind: "user",
-				text: "/tasks msg release-plan 环境是 staging。窗口先定周三，修正为周四 22:00；以最后这个值为准。",
+				text: "请转告 release-plan 任务：环境是 staging。窗口先定周三，修正为周四 22:00；以最后这个值为准。",
 			},
 			{
 				kind: "waitFor",
@@ -145,6 +146,33 @@ export const coreRenovatedCases: EvalCase[] = [
 			},
 		],
 		graders: [
+			tracePredicate(
+				"chat-relays-answer",
+				(ctx) =>
+					ctx.trace.some(
+						(event) =>
+							event.kind === "tool-call" &&
+							event.tool === "task_message" &&
+							event.stepIndex === 3 &&
+							/release-plan/.test(event.fields?.argsJson ?? "") &&
+							/staging/.test(event.fields?.argsJson ?? "") &&
+							/22:00/.test(event.fields?.argsJson ?? ""),
+					),
+				"the chat must pass the user's answer to the task",
+			),
+			tracePredicate(
+				"unrelated-chat-does-not-advance",
+				(ctx) =>
+					!ctx.trace.some(
+						(event) =>
+							event.stepIndex === 1 &&
+							event.kind === "tool-call" &&
+							["task_message", "task_resume", "task_create", "subagent", "subagent_inline"].includes(
+								event.tool ?? "",
+							),
+					),
+				"an unrelated acknowledgement does not dispatch or advance the task",
+			),
 			fileContains("environment-written", "release-plan.txt", /staging/i),
 			fileContains("latest-window-written", "release-plan.txt", /周四|Thursday/i),
 			fileContains("latest-time-written", "release-plan.txt", /22:00/i),

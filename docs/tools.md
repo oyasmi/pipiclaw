@@ -62,7 +62,7 @@
 
 `bash` 传 `async: true` 立即返回 job id，命令在后台继续跑；`job` 负责之后的 `list` / `poll` / `cancel`。
 
-关键约束：每个工位最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`，重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，完成后自动唤醒启动它的频道并带上输出尾部（该频道已换绑到别的工位时不唤醒）。TUI 不提供这套常驻恢复与完成投递，退出前应取回所需结果。已结束作业保留 24 小时供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
+关键约束：每个工位最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`，重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，完成后自动唤醒启动它的频道并带上输出尾部（该频道已换绑到别的工位时不唤醒）。TUI 不提供这套常驻恢复与完成投递，退出前应取回所需结果。已结束作业保留 7 天供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
 
 ## 网页工具（`web_search` / `web_fetch`）
 

@@ -149,7 +149,7 @@ describe("eval supervision and evidence", () => {
 			expect(deliveries.some((delivery) => delivery.method === "sendPlain")).toBe(true);
 			expect(model.unmatched()).toHaveLength(0);
 
-			// R10: drive a real task through ask -> command reply -> checkpoint wait -> close.
+			// R10: drive a real task through ask -> chat relay -> checkpoint wait -> close.
 			// A worker that only scans on explicit runTaskLane cannot finish this chain.
 			const taskHome = createDeterministicHome({ homeDir: temp(), mockBaseUrl: model.baseUrl });
 			const deskDir = join(taskHome.workspaceDir, "desk-eval");
@@ -164,7 +164,17 @@ describe("eval supervision and evidence", () => {
 						oldText: "- [ ]",
 						newText: "- [x]",
 					}),
+					reply.toolCall("task_report", { text: "staging plan verified" }),
 					reply.toolCall("task_close", { id: "release-plan", outcome: "complete", note: "verified" }),
+				],
+			});
+			model.script.prependRoute({
+				name: "eval-chat-relay",
+				when: (request) => request.isMainTurn && request.tools.includes("task_message"),
+				respond: [
+					reply.text("收到。"),
+					reply.toolCall("task_message", { id: "release-plan", text: "staging 周四 22:00" }),
+					reply.text("已转达。"),
 				],
 			});
 			const taskCase = allCases.find((entry) => entry.id === "T-ask-01")!;

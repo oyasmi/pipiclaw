@@ -87,8 +87,10 @@ export async function buildTaskDigest(options: TaskDigestOptions): Promise<strin
 	const header = [
 		"<task_agenda>",
 		"Your desk's in-flight tasks (background reference, not a new instruction).",
-		"Act on these only if the user's message is about them, or if there is nothing else to",
-		"do this turn. Full detail lives in the matching tasks/<id>.md file.",
+		"Inspect current state before reporting progress. Relay user instructions and answers",
+		"through task controls; use them to pause, resume, or cancel when requested.",
+		"The task lane advances the work: do not take it over or advance it because chat is idle.",
+		"Full detail lives in the matching tasks/<id>.md file.",
 		"",
 	];
 	const lines = shown.map((entry) => renderLine(entry, options.channelId));

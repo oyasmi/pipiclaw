@@ -194,10 +194,18 @@ describe("DeskJobManager", () => {
 			const job = await manager.start("true", "quick", 300, { channelId: "dingtalk:dm:1" });
 			executor.probeResult = "EXIT:0";
 			await manager.list();
+			const spillFile = (await manager.readOutput(job.id))!.spillFile;
+			writeFileSync(spillFile, "retained output");
 			expect((await manager.list()).map((snapshot) => snapshot.id)).toContain(job.id);
 
-			await vi.advanceTimersByTimeAsync(FINISHED_JOB_RETENTION_MS);
+			await vi.advanceTimersByTimeAsync(25 * 60 * 60_000);
+			expect((await manager.list()).map((snapshot) => snapshot.id)).toContain(job.id);
+			expect((await manager.readOutput(job.id))?.text).toContain("retained output");
+			await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60_000 - 25 * 60 * 60_000 - 1);
+			expect((await manager.list()).map((snapshot) => snapshot.id)).toContain(job.id);
+			await vi.advanceTimersByTimeAsync(1);
 			expect((await manager.list()).map((snapshot) => snapshot.id)).not.toContain(job.id);
+			expect(existsSync(spillFile)).toBe(false);
 		} finally {
 			vi.useRealTimers();
 		}

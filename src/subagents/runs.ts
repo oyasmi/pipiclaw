@@ -1127,7 +1127,7 @@ export class SubAgentRunManager {
 
 	/**
 	 * Daily retention GC. A settled run and all runtime-managed artifacts are deleted together once
-	 * they are at least seven days old. Other files deliberately created by the delegated task are
+	 * they are at least 30 days old. Other files deliberately created by the delegated task are
 	 * not recursively removed from the artifact directory.
 	 */
 	private async collectGarbageIfExpired(record: RunRecord, now = Date.now()): Promise<void> {
