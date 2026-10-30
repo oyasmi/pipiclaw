@@ -160,19 +160,30 @@ describe("sub-agent discovery", () => {
 
 		// A capability entry is an executor binding, not a persona: every one of them must declare
 		// the harness, the pass-through model and the reasoning level the deployer picked, because
-		// after the persona is gone that declaration is the only thing the file carries.
+		// after the persona is gone that declaration is the only thing the file carries. The one
+		// internal entry carries the internal runtime's equivalent binding instead: a tool
+		// whitelist and budgets, never a CLI.
 		for (const agent of discovery.agents) {
+			expect(agent.thinkingLevel).toBeTruthy();
+			if (agent.runtime === "internal") {
+				expect(agent).toMatchObject({ workload: "light", mutates: "read" });
+				expect(agent.tools).not.toContain("write");
+				expect(agent.tools).not.toContain("edit");
+				continue;
+			}
 			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
 			expect(["claude-code", "codex-cli"]).toContain(agent.harness);
 			expect(agent.externalModelRef).toBeTruthy();
-			expect(agent.thinkingLevel).toBeTruthy();
 		}
 		// A write entry runs with approvals/sandbox off, so its `mutates: write` lease is the only
-		// guard there is. A read entry must be backed by the CLI's own read-only sandbox, because
-		// `mutates: read` by itself is a declaration, not a boundary. At least one checker exists.
+		// guard there is. A read entry must be backed by a real boundary, not just the declaration:
+		// the external checker by the CLI's own read-only sandbox, the internal one by the
+		// write/edit-free tool whitelist asserted above. At least one checker exists.
 		for (const agent of discovery.agents) {
 			if (agent.mutates === "read") {
-				expect(agent.command).toContain("--sandbox read-only");
+				if (agent.runtime === "external") {
+					expect(agent.command).toContain("--sandbox read-only");
+				}
 			} else {
 				expect(agent.mutates).toBe("write");
 				if (agent.harness === "codex-cli") {
