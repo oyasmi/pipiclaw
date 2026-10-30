@@ -1,7 +1,7 @@
 ---
 name: codex-flash
 description: >-
-  最快最便宜的一档，成本远低于 high/main，可接受图片输入。适合明确、简单、重复的工作，可大量派发；额度紧张时优先 glm-flash。
+  最快最便宜的一档，成本远低于 high/main，可接受图片输入。适合明确、简单、重复的工作，可大量派发；适合简单、明确的任务。
 runtime: external
 harness: codex-cli
 command: codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check

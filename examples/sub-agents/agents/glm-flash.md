@@ -1,7 +1,7 @@
 ---
 name: glm-flash
 description: >-
-  最便宜的一档，可接受图片输入；5 小时滚动限额、无周/月上限。简单、重复、可大批量派发的工作优先用它，把 claude/codex 额度留给难题。
+  最便宜的一档，可接受图片输入。简单、重复、可大批量派发的工作优先用它，把 claude/codex 额度留给难题。
 runtime: external
 harness: claude-code
 command: claude-zai.sh

@@ -1,7 +1,7 @@
 ---
 name: glm-high
 description: >-
-  高智能档，代码能力与 codex 相当、逊于 claude；订阅只有 5 小时滚动限额，无周/月上限，适合高频使用而不挤占 claude/codex 额度。只接受文本。
+  高智能档，代码能力与 codex 相当、逊于 claude，适合高频使用而不挤占 claude/codex 额度。只接受文本。
 runtime: external
 harness: claude-code
 command: claude-zai.sh
@@ -9,7 +9,7 @@ model: glm-5.3
 thinkingLevel: high
 workload: heavy
 mutates: write
-maxWallTimeSec: 5400
+maxWallTimeSec: 3600
 ---
 
 - task 没有授权的动作不做：提交、推送、部署、发消息、写入外部系统或真实数据。

@@ -1,15 +1,15 @@
 ---
 name: codex-main
 description: >-
-  主力档，成本中等，可接受图片等多模态输入。常规实现、排查和文档产出；代码能力略逊 claude-main，与 glm 相当。
+  主力档，成本中等，可接受图片等多模态输入。常规实现、排查和文档产出；代码能力略逊 claude-main。
 runtime: external
 harness: codex-cli
 command: codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
-model: gpt-6.1-sol
-thinkingLevel: medium
+model: gpt-6.1-terra
+thinkingLevel: high
 workload: heavy
 mutates: write
-maxWallTimeSec: 5400
+maxWallTimeSec: 3600
 ---
 
 - task 没有授权的动作不做：提交、推送、部署、发消息、写入外部系统或真实数据。

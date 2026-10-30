@@ -9,7 +9,7 @@ model: opus
 thinkingLevel: high
 workload: heavy
 mutates: write
-maxWallTimeSec: 5400
+maxWallTimeSec: 3600
 ---
 
 - task 没有授权的动作不做：提交、推送、部署、发消息、写入外部系统或真实数据。
