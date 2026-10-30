@@ -1,6 +1,6 @@
 **会话压缩第三批：后台准备与安全采用**
 
-实现与验证截至 2026-10-23（UTC+8）。承接 [第一、二批交付](2026-10-22-compaction-implementation.md) 及 [机制审查](2026-10-22-session-compaction.md)。基于当前安装的 pi SDK 1.2.0 公开接口实现，没有在后台调用会中止主任务的 `session.compact()`，没有新增 SDK 私有字段依赖。
+实现与验证截至 2026-10-23（UTC+8）。承接 [第一、二批交付](2026-10-22-compaction-implementation.md)。基于当前安装的 pi SDK 1.2.0 公开接口实现，没有在后台调用会中止主任务的 `session.compact()`，没有新增 SDK 私有字段依赖。
 
 **执行与预算**
 
