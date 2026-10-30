@@ -66,7 +66,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 
 普通聊天负责建档和管理，task 步骤使用任务自己的独立会话，且不提供 `task_create`、`memory_save`、`event_manage`。工具缺失是执行边界，不能通过文件写入绕过。每份手册先说明适用环境，再给合法操作和恢复分支。
 
-任务机制只占一份 `task-lead.md`，写的是负责人的工作法：每一步的 brief 已经带上契约、团队看板、最近日志和预算，playbook 只留这些数字之外需要判断的部分。这些是开发时沉淀、随包发布的知识，运行时不能改写；模型在运行中自己学到的流程仍按 `memory-and-learning.md` 沉淀为 workspace skill。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
+任务机制只占一份 `task-lead.md`，写的是负责人的工作法：任务可以自行实施，也可按收益委派，工作项可选；需要拆分时仍要求产出明确、可独立派发和检查。brief 按需提供完整契约、新输入、团队看板和最近记录，每步都有预算状态；playbook 解释这些数据之外的判断。步骤末尾回复只进任务记录，主动汇报用 `task_report`，提问等待用户用 `task_ask`。这些知识随包发布，运行时不能改写；模型自己学到的流程仍按 `memory-and-learning.md` 沉淀为 workspace skill。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
 
 `runtime-orientation.md` 和 `agent-delegation.md` 不设 `requires-tools`：前者描述的分层与文件位置在任何工具组合下都成立，后者的委派能力也可能来自用户提供的 skill，门控掉反而会让它在最需要的实例上消失。
 

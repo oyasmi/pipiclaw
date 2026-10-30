@@ -139,7 +139,7 @@ export function createTaskReportTool(options: TaskManageToolOptions): AgentTool<
 		name: "task_report",
 		label: "task_report",
 		description:
-			"Send the user a message now: a deliverable, important progress, a risk. The only text of a task step that reaches the user; at most 3 per step.",
+			"Report a deliverable, important progress or a risk to the user; at most 3 per step. Ordinary step replies stay in the task log; use task_ask for a question that needs the user's answer.",
 		parameters: taskReportSchema,
 		execute: async (_toolCallId, args: TaskReportRequest) => asResult(await reportToUser(options, args)),
 	};
