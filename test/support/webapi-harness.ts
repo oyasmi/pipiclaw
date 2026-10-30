@@ -116,8 +116,13 @@ export async function createWebApiHarness(options?: {
 	try {
 		await boot();
 	} catch (error) {
-		await model.close();
-		cleanupE2ETestHome(homeDir);
+		try {
+			await model.close();
+		} finally {
+			if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+			else process.env.PI_OFFLINE = previousOffline;
+			cleanupE2ETestHome(homeDir);
+		}
 		throw error;
 	}
 
@@ -158,12 +163,24 @@ export async function createWebApiHarness(options?: {
 			await boot();
 		},
 		async shutdown() {
-			await runtime.shutdown("manual");
-			dispatcher.close().catch(() => undefined);
-			await model.close();
-			if (previousOffline === undefined) delete process.env.PI_OFFLINE;
-			else process.env.PI_OFFLINE = previousOffline;
-			cleanupE2ETestHome(homeDir);
+			try {
+				await runtime.shutdown("manual");
+				// Shutdown may issue the last reflect request. Include it in the offline oracle,
+				// as the DingTalk harness does, instead of silently accepting a background 502.
+				const unmatched = model.unmatched();
+				if (unmatched.length > 0) {
+					throw new Error(`Web API mock provider received ${unmatched.length} unmatched request(s)`);
+				}
+			} finally {
+				await dispatcher.close().catch(() => undefined);
+				try {
+					await model.close();
+				} finally {
+					if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+					else process.env.PI_OFFLINE = previousOffline;
+					cleanupE2ETestHome(homeDir);
+				}
+			}
 		},
 	};
 }

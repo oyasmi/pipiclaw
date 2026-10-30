@@ -38,6 +38,7 @@ describe("PipiclawSettingsManager", () => {
 	// keeps the file working, but the values no longer take effect.
 	it("keeps the enabled switch configurable while ignoring retired numeric keys", () => {
 		const baseDir = createTempDir();
+		const defaults = new PipiclawSettingsManager(createTempDir());
 		writeFileSync(
 			join(baseDir, "settings.json"),
 			JSON.stringify({
@@ -54,16 +55,19 @@ describe("PipiclawSettingsManager", () => {
 		const manager = new PipiclawSettingsManager(baseDir);
 
 		expect(manager.getCompactionSettings()).toEqual({
+			...defaults.getCompactionSettings(),
 			enabled: false,
-			reserveTokens: 16384,
-			keepRecentTokens: 20000,
 		});
-		expect(manager.getRetrySettings()).toEqual({ enabled: false, maxRetries: 3, baseDelayMs: 2000 });
+		expect(manager.getRetrySettings()).toEqual({ ...defaults.getRetrySettings(), enabled: false });
 		expect(manager.getMemoryMaintenanceSettings()).toEqual({ enabled: false });
-		expect(manager.getSessionSearchSettings()).toMatchObject({ summarizeWithModel: true, maxFiles: 12 });
+		expect(manager.getSessionSearchSettings()).toEqual({
+			...defaults.getSessionSearchSettings(),
+			summarizeWithModel: true,
+		});
 		expect(manager.getLoggingSettings()).toEqual({
+			...defaults.getLoggingSettings(),
 			level: "debug",
-			file: { enabled: false, maxSizeBytes: 5_000_000, maxFiles: 3 },
+			file: { ...defaults.getLoggingSettings().file, enabled: false },
 		});
 	});
 

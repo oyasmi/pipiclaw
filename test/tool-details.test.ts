@@ -9,9 +9,14 @@ import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
+import { validateToolNames } from "../src/subagents/discovery.js";
+import { createBashTool } from "../src/tools/bash.js";
 import { isRecoverableRejection, toolResultDetails, withToolDetails } from "../src/tools/contract/details.js";
-import { buildToolSet, type ToolBuildContext } from "../src/tools/registry.js";
+import { REQUEST_SCOPED_TOOL_NAMES, SUBAGENT_TOOL_NAMES } from "../src/tools/contract/names.js";
+import { createEditTool } from "../src/tools/edit.js";
+import { buildToolSet, TOOL_REGISTRY, type ToolBuildContext } from "../src/tools/registry.js";
 import { createSubAgentTool } from "../src/tools/subagent.js";
+import { createWriteTool } from "../src/tools/write.js";
 import { testManagers } from "./helpers/background-runtime.js";
 
 function registryContext(): ToolBuildContext {
@@ -263,5 +268,39 @@ describe("registry wiring", () => {
 
 		expect(isRecoverableRejection(result)).toBe(true);
 		expect(JSON.stringify(result.content[0])).toContain("Unknown sub-agent");
+	});
+});
+
+describe("sub-agent tool names — single source of truth (batch 3.1)", () => {
+	it("accepts implemented allowlist entries and rejects unknown tools", () => {
+		expect(SUBAGENT_TOOL_NAMES.every((name) => TOOL_REGISTRY.some((r) => r.name === name))).toBe(true);
+		// A renamed tool would silently fall out of the request-scoped set rather than fail.
+		expect(REQUEST_SCOPED_TOOL_NAMES.every((name) => TOOL_REGISTRY.some((r) => r.name === name))).toBe(true);
+		expect(validateToolNames([...SUBAGENT_TOOL_NAMES]).error).toBeUndefined();
+		expect(validateToolNames([...SUBAGENT_TOOL_NAMES]).tools).toEqual(SUBAGENT_TOOL_NAMES);
+		expect(validateToolNames(["read", "not_a_tool"]).error).toBeDefined();
+	});
+});
+
+/**
+ * batch 1.3: the SDK agent loop serializes a whole tool batch when *any* tool in it declares
+ * `executionMode: "sequential"` (`agent-loop.js`: `hasSequentialToolCall`). `edit`/`write`/`bash`
+ * can each rewrite a file, and `checkFingerprintUnchanged` runs *before* the write, so two of them
+ * in one parallel batch can both pass the check and then clobber each other. Declaring the flag is
+ * the whole mechanism that closes that window in-process.
+ *
+ * Mutation check: remove `executionMode: "sequential"` from any of the three and its case fails.
+ */
+describe("mutating tools declare sequential execution", () => {
+	const fileStore = createFileStore();
+	const disabledSecurity = { ...DEFAULT_SECURITY_CONFIG, enabled: false };
+
+	it("every mutating tool declares sequential execution", () => {
+		const executor = { exec: async () => ({ stdout: "", stderr: "", code: 0 }) };
+		expect({
+			edit: createEditTool(fileStore, { securityConfig: disabledSecurity }).executionMode,
+			write: createWriteTool(fileStore, { securityConfig: disabledSecurity }).executionMode,
+			bash: createBashTool(executor, { securityConfig: disabledSecurity }).executionMode,
+		}).toEqual({ edit: "sequential", write: "sequential", bash: "sequential" });
 	});
 });

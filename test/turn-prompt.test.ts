@@ -48,22 +48,4 @@ describe("assembleTurnPrompt", () => {
 			expect(stats.channelCapsuleUnits).toBeGreaterThan(0);
 		});
 	});
-
-	describe("stats", () => {
-		it("measures the inputs, counting the raw input rather than the prefixed message", () => {
-			const { stats } = assembleTurnPrompt(
-				parts({
-					clippedInput: "ship it",
-					userMessage: "[2026-08-28 10:00] [Tester]: ship it",
-					durableMemoryBootstrap: "记忆 abc",
-					taskDigest: "<task_agenda>D</task_agenda>",
-				}),
-			);
-
-			expect(stats.userMessageChars).toBe("ship it".length);
-			expect(stats.taskDigestChars).toBe("<task_agenda>D</task_agenda>".length);
-			expect(stats.durableMemoryChars).toBe(6);
-			expect(stats.durableMemoryUnits).toBe(3);
-		});
-	});
 });

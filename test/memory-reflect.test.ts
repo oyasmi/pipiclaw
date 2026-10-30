@@ -160,17 +160,16 @@ describe("reflect — per-run caps", () => {
 	it("relaxes the delete cap to 8 in condense mode", async () => {
 		const deskDir = createTempDir();
 		// Seed enough entries with long descriptions that the index exceeds its 1,400-unit budget.
-		for (let i = 0; i < 150; i++) {
-			await applyMemoryOps(deskDir, [
-				{
-					op: "add",
-					name: `bulk-${i}`,
-					type: "project",
-					description: `Bulk seeded fact number ${i} with plenty of extra words so this entry costs a realistic number of prompt units on its own, the way an actual durable memory line would`,
-					source: "agent",
-				},
-			]);
-		}
+		await applyMemoryOps(
+			deskDir,
+			Array.from({ length: 150 }, (_, i) => ({
+				op: "add",
+				name: `bulk-${i}`,
+				type: "project",
+				description: `Bulk seeded fact number ${i} with plenty of extra words so this entry costs a realistic number of prompt units on its own, the way an actual durable memory line would`,
+				source: "agent",
+			})),
+		);
 		const ops = Array.from({ length: 8 }, (_, i) => ({
 			op: "delete",
 			name: `bulk-${i}`,

@@ -139,7 +139,7 @@ describe("eval fingerprints and controlled comparisons", () => {
 		expect(caseHash(item, root)).not.toBe(first);
 	});
 
-	it("does not mistake staged changes for a clean worktree", () => {
+	it("fingerprints staged and untracked contents rather than just file names", () => {
 		const root = temp();
 		const git = (args: string[]) => {
 			const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -155,6 +155,10 @@ describe("eval fingerprints and controlled comparisons", () => {
 		git(["add", "tracked"]);
 		expect(gitDirtyFingerprint(root)).toBe(modified);
 		expect(gitDirtyFingerprint(root)).not.toBe(clean);
+		writeFileSync(join(root, "new-file.txt"), "first");
+		const untracked = gitDirtyFingerprint(root);
+		writeFileSync(join(root, "new-file.txt"), "second");
+		expect(gitDirtyFingerprint(root)).not.toBe(untracked);
 	});
 
 	it("normalizes trial mounts without dropping real security policy differences", () => {

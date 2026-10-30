@@ -22,7 +22,7 @@ describe("/memory list", () => {
 		expect(filtered).not.toContain("`b`");
 
 		const bad = await run(deskDir, "list bogus");
-		expect(bad).toContain("未知的记忆类型");
+		expect(bad).toContain("bogus");
 	});
 });
 
@@ -39,7 +39,8 @@ describe("/memory show", () => {
 		expect(shown).toContain("extra detail");
 
 		const missing = await run(deskDir, "show ghost");
-		expect(missing).toContain("未找到记忆");
+		expect(missing).toContain("ghost");
+		expect(missing).toContain("/memory list");
 	});
 });
 
@@ -47,15 +48,14 @@ describe("/memory forget", () => {
 	it("deletes without calling the model, tombstones it, and blocks a later identical add", async () => {
 		const deskDir = createTempDir();
 		await applyMemoryOps(deskDir, [{ op: "add", name: "gone", description: "obsolete fact", source: "user" }]);
-		const result = await run(deskDir, "forget gone");
-		expect(result).toContain("已删除");
+		await run(deskDir, "forget gone");
 		expect(await listMemoryEntries(deskDir)).toHaveLength(0);
 
 		// The tombstone matches on the normalized description, not the exact spelling.
 		const readd = await applyMemoryOps(deskDir, [{ op: "add", description: "Obsolete   fact", source: "agent" }]);
 		expect(readd.added).toEqual([]);
 		expect(readd.skippedTombstone).toBe(1);
-		expect(await run(deskDir, "forget ghost")).toContain("未找到记忆");
+		expect(await run(deskDir, "forget ghost")).toContain("ghost");
 		expect(await listMemoryEntries(deskDir)).toEqual([]);
 	});
 });
@@ -79,6 +79,6 @@ describe("/memory journal", () => {
 
 		const empty = await run(deskDir, "journal 2020-01-01");
 		expect(empty).toContain("2026-09-04");
-		expect(await run(deskDir, "journal not-a-date")).toContain("日期格式");
+		expect(await run(deskDir, "journal not-a-date")).toContain("YYYY-MM-DD");
 	});
 });

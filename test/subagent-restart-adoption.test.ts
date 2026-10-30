@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as hostProcess from "../src/shared/host-process.js";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
@@ -68,6 +70,7 @@ afterEach(async () => {
 	}
 	childGroups.clear();
 	await resetTaskLogAppenders();
+	vi.restoreAllMocks();
 });
 
 function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<void> {
@@ -91,19 +94,23 @@ function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000):
 
 describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 	it("rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once", async () => {
+		// Keep real process identity, signals and termination; the host-process tests own the
+		// kill grace itself. Adoption must not spend the production 5s grace on every run.
+		const killGroup = hostProcess.killProcessGroup;
+		vi.spyOn(hostProcess, "killProcessGroup").mockImplementation((pid) => killGroup(pid, 10));
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dingtalk:dm:adopt";
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-adopt");
 		mkdirSync(artifactDir, { recursive: true });
 
-		// A long-lived detached process that writes a marker file after 1s if left alone.
-		const marker = join(workspaceDir, "late-write.txt");
+		// Keep the process alive until the adopted deadline kills it; no elapsed-time guess
+		// about whether a delayed write had a chance to run can prove termination.
 		const ready = join(workspaceDir, "ready.txt");
 		const script = join(workspaceDir, "leader.cjs");
 		writeFileSync(
 			script,
-			`require("node:fs").writeFileSync(${JSON.stringify(ready)},"ready");setTimeout(()=>require("node:fs").writeFileSync(${JSON.stringify(marker)},"late"),1000);setInterval(()=>{},1000);`,
+			`require("node:fs").writeFileSync(${JSON.stringify(ready)},"ready");setInterval(()=>{},1000);`,
 		);
 		const child = spawn(process.execPath, [script], { detached: true, stdio: "ignore" });
 		child.unref();
@@ -190,9 +197,8 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		} finally {
 			timerSpy.mockRestore();
 		}
-		// The deadline kill is killProcessGroup's TERM, then an unconditional 5s grace before KILL
-		// (host-process.ts KILL_GRACE_MS) — only then does settlement start. Allow headroom for
-		// instrumented runs; the earlier coverage timeout's root cause was not conclusively reproduced.
+		// Wait for the persisted wake receipt as well as the terminal state: observing the
+		// in-memory status alone could pass before settlement's durable effects finished.
 		await waitFor(() => {
 			if (swept.get("run-adopt")?.status === "running" || dispatched.length !== 1) return false;
 			try {
@@ -204,7 +210,10 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 
 		expect(swept.get("run-adopt")?.status).toBe("failed");
 		expect(swept.get("run-adopt")?.failureReason).toContain("Wall time budget exceeded");
-		expect(existsSync(marker)).toBe(false); // killed before it could write
+		if (child.exitCode === null && child.signalCode === null) {
+			await once(child, "exit", { signal: AbortSignal.timeout(5_000) });
+		}
+		expect(hostProcess.isProcessGroupAlive(pid)).toBe(false);
 		expect(dispatched).toHaveLength(1);
 
 		// Another restart must not double-kill or re-announce the already-settled run.
@@ -222,8 +231,6 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const afterLease = claimWorkspaceLease({ runId: "after", channelId, workingDirectory: workspaceDir });
 		expect(afterLease.ok).toBe(true);
 		if (afterLease.ok) releaseWorkspaceLease(afterLease.leaseKey, "after");
-		// killProcessGroup's spec-042-D8 flush grace (5s) dominates this test's wall time; the
-		// generous per-test budget keeps it stable when the whole suite runs in parallel.
 	}, 30_000);
 
 	it("settles an adopted write run when its lease cannot be rebuilt, without releasing another holder", async () => {

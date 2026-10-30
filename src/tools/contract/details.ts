@@ -91,7 +91,7 @@ export function isRecoverableRejection(result: unknown): boolean {
  * arguments — the same class as a `RecoverableToolError` — so the runtime treats it as a
  * recoverable rejection rather than a user-visible tool error.
  *
- * This is a deliberate coupling to a string the SDK emits; `test/tool-error-contract.test.ts`
+ * This is a deliberate coupling to a string the SDK emits; `test/tool-validation-downgrade.test.ts`
  * drives a real schema-invalid call through the SDK and asserts this still matches, so a
  * wording change upstream fails loudly there rather than silently regressing progress-card
  * behavior.

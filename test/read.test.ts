@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createReadTool } from "../src/tools/read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 
@@ -28,7 +29,7 @@ const cleanExecutor: Executor = {
 
 const dirs: string[] = [];
 afterEach(() => {
-	dirs.length = 0;
+	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 function tempDir(): string {
@@ -81,9 +82,9 @@ describe("read tool", () => {
 		]);
 
 		const shortPath = tempFile("only\ntwo\n");
-		await expect(makeTool().execute("call", { path: shortPath, offset: 5 })).rejects.toThrow(
-			"Offset 5 is beyond end of file (2 lines total)",
-		);
+		const rejected = makeTool().execute("call", { path: shortPath, offset: 5 });
+		await expect(rejected).rejects.toBeInstanceOf(RecoverableToolError);
+		await expect(rejected).rejects.toThrow("Offset 5 is beyond end of file (2 lines total)");
 	});
 
 	it("reads empty files without inventing a line", async () => {

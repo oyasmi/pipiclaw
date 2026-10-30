@@ -41,6 +41,7 @@ describeE2E("E2E: basic conversation", () => {
 		const contextPath = getConversationFile(harness, "context.jsonl");
 		expect(existsSync(logPath)).toBe(true);
 		expect(existsSync(contextPath)).toBe(true);
-		expect(readFileSync(logPath, "utf-8")).toContain("已经收到");
+		// The provider's wording is unconstrained; prove the delivered answer was persisted.
+		expect(readFileSync(logPath, "utf-8")).toContain(JSON.stringify(finalDelivery!.text!.trim()).slice(1, -1));
 	});
 });

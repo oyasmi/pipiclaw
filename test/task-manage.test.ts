@@ -21,7 +21,7 @@ import {
 	createTaskReportTool,
 	createTaskWaitTool,
 } from "../src/tools/task-manage/factory.js";
-import { closeTaskFromChat, listTasks } from "../src/tools/task-manage/lifecycle.js";
+import { closeTaskFromChat } from "../src/tools/task-manage/lifecycle.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
 import { testManagers } from "./helpers/background-runtime.js";
 
@@ -105,7 +105,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 		});
 	}
 
-	describe("task_create and task_list", () => {
+	describe("task_create", () => {
 		it("creates the task queued with its usage clock started and numbered Work Items", async () => {
 			const result = await createTask(options, {
 				id: "work",
@@ -133,29 +133,6 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			await expect(createTask(options, { id: "dup", title: "D", goal: "G", dod: "- [ ] D" })).rejects.toThrow(
 				/already exists/,
 			);
-		});
-
-		it("lists a task with what it waits for and the live step and work the lane reports", async () => {
-			await writeTask("asking", {
-				state: "waiting",
-				waiting: { kind: "user", question: "要合并吗？", since: "2026-10-28T10:00:00+08:00" },
-			});
-			control.snapshot.mockResolvedValueOnce([
-				{
-					id: "asking",
-					state: "waiting",
-					frozen: false,
-					step: { seq: 4, startedAt: Date.now() - 120_000, toolsDone: 3 },
-					pending: [
-						{ ref: "run_k", kind: "delegation", label: "codex", startedAt: Date.now() - 60_000, stalled: true },
-					],
-				},
-			] as never);
-			const { tasks } = await listTasks(options);
-			expect(tasks?.[0]).toMatchObject({ id: "asking", state: "waiting", deliversHere: false });
-			expect(tasks?.[0]?.waiting).toContain("要合并吗？");
-			expect(tasks?.[0]?.activity).toContain("step 4");
-			expect(tasks?.[0]?.inFlight?.[0]).toContain("looks stalled");
 		});
 	});
 

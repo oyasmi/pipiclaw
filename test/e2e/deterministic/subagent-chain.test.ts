@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import { SUBAGENT_TOOL_NAMES } from "../../../src/tools/contract/names.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 describe("E2E deterministic: internal sub-agent chain", () => {
@@ -30,6 +31,7 @@ describe("E2E deterministic: internal sub-agent chain", () => {
 					task: `Do work for ${marker}.`,
 					systemPrompt: `E2E_A16_HELPER for ${marker}.`,
 					mutates: "write",
+					tools: [...SUBAGENT_TOOL_NAMES],
 				}),
 				reply.text(`${marker} 子代理已结束。`),
 			],
@@ -40,6 +42,15 @@ describe("E2E deterministic: internal sub-agent chain", () => {
 
 		await harness.sendUserMessage("A16_FIRST 派个写子代理");
 		expect(harness.deliveries.some((d) => (d.text ?? "").includes("A16_FIRST 子代理已结束"))).toBe(true);
+		// A21 shares this exact delegation path: inspect the child's actual provider request,
+		// rather than starting a second runtime just to check the same child's capabilities.
+		// Exercise the widest supported role, not just the default subset.
+		// Mutation check: injecting job at the worker's final SDK tool assignment fails here.
+		const child = harness.model.requests.find((request) => request.matchedRoute === "child");
+		expect(child?.tools).toContain("read");
+		for (const forbidden of ["send_media", "job", "subagent", "subagent_inline"]) {
+			expect(child!.tools, `child must not have ${forbidden}`).not.toContain(forbidden);
+		}
 
 		// Run record persisted and marked settled.
 		const runsDir = join(harness.homeDir, "state", "subagent-runs", harness.desk);

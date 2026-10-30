@@ -33,30 +33,6 @@ vi.mock("../src/subagents/external/run.js", () => ({ launchExternalRun: launchEx
  *  `/subagents`. `follow_up` on an internal run must reject with a clear, non-misleading reason. */
 
 describe("subagent_manage tool", () => {
-	it("lists this channel's runs", async () => {
-		configureSubAgentRuntime({});
-		const channelId = `dingtalk:dm:manage_list_${Date.now()}`;
-		const manager = getSubAgentRunManager(channelId);
-		await manager.register({
-			runId: "run-1",
-			channelId,
-			runtime: "internal",
-			agent: "explorer",
-			label: "explore",
-			source: "predefined",
-			tools: ["read"],
-			purpose: "work",
-			workingDirectory: "/tmp",
-			artifactDir: "/tmp/artifacts/run-1",
-		});
-
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", desk: "news", deskDir: "/tmp/channel" });
-		const result = await tool.execute("call-1", { op: "list" });
-		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
-		expect(text).toContain("run-1");
-		expect(text).toContain("explorer");
-	});
-
 	// Spec 042, D9: op=list used to return every run on the channel unbounded, in both the text and
 	// `details.runs`. Running runs are always shown in full; only the terminal tail is capped.
 	it("caps a long history with a truncation note, without dropping running runs", async () => {

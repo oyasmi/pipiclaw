@@ -1,14 +1,12 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFileStore } from "../src/file-store.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 const fileStore = createFileStore();
 
-function tempDir(): string {
-	return mkdtempSync(join(tmpdir(), "pipiclaw-filestore-test-"));
-}
+const tempDir = useTempDirs("pipiclaw-filestore-test-");
 
 describe("FileStore", () => {
 	it("stat resolves ENOENT to undefined instead of throwing", async () => {

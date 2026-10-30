@@ -1,18 +1,19 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileStore } from "../src/file-store.js";
 import { clearLineIndexCacheForTests, resolveLineOffset } from "../src/tools/line-index.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 const fileStore = createFileStore();
+const tempDir = useTempDirs("pipiclaw-line-index-test-");
 
 afterEach(() => {
 	clearLineIndexCacheForTests();
 });
 
 function tempFile(content: string): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-line-index-test-"));
+	const dir = tempDir();
 	const path = join(dir, "file.txt");
 	writeFileSync(path, content);
 	return path;

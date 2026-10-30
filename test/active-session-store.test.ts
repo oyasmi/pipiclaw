@@ -83,23 +83,12 @@ describe("commitActiveSessionRef", () => {
 		const result = await createFreshActiveSession(deskDir, deskDir);
 
 		const ref = readRef(deskDir);
-		expect(ref.sessionId).toBe(result.sessionId);
+		expect(ref).toMatchObject({ version: 1, sessionId: result.sessionId });
+		expect(resolveActiveSessionFile(deskDir)).toBe(ref.file);
 		const sessionFile = join(deskDir, ref.file);
 		expect(existsSync(sessionFile)).toBe(true);
 		const header = JSON.parse(readFileSync(sessionFile, "utf-8").split("\n")[0] as string);
 		expect(header).toMatchObject({ type: "session", id: result.sessionId });
-	});
-
-	it("writes a ref pointing at the session's own file, atomically", async () => {
-		const deskDir = makeTempDir();
-		const manager = SessionManager.open(join(deskDir, "next.jsonl"), deskDir);
-
-		await commitActiveSessionRef(deskDir, manager);
-
-		const ref = readRef(deskDir);
-		expect(ref).toMatchObject({ version: 1, file: "next.jsonl", sessionId: manager.getSessionId() });
-		expect(resolveActiveSessionFile(deskDir)).toBe("next.jsonl");
-		expect(typeof ref.updatedAt).toBe("string");
 	});
 
 	it("rejects an unusable session (outside the channel dir or with no backing file) and writes nothing", async () => {
@@ -117,7 +106,7 @@ describe("commitActiveSessionRef", () => {
 });
 
 describe("F4: durable header materialization unblocks synchronous first-message persistence", () => {
-	it("lets a freshly materialized session's first user message be read back by another process's SessionManager", () => {
+	it("lets a freshly materialized session's first user message be read back by a reopened SessionManager", () => {
 		const deskDir = makeTempDir();
 		mkdirSync(deskDir, { recursive: true });
 

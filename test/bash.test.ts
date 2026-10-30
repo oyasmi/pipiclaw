@@ -1,12 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandTerminatedError, createExecutor } from "../src/executor.js";
 import { DeskJobManager } from "../src/jobs/manager.js";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
+import { createJobTool } from "../src/tools/job.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 import { RecordingExecutor } from "./helpers/recording-executor.js";
+
+const tempDir = useTempDirs("pipiclaw-bash-chan-");
 
 // The spill file is now written by the executor itself as output streams in (`ExecOptions.spillTo`,
 // spec 044 D6.3), and bash.ts deletes it via `unlink` when it turns out not to be needed. The test
@@ -62,7 +66,9 @@ describe("bash tool", () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
 		const gated = createBashTool(executor, { interceptorEnabled: true });
 
-		await expect(gated.execute("call", { command: "cat notes.txt" })).rejects.toThrow(/use the read tool/);
+		const rejected = gated.execute("call", { command: "cat notes.txt" });
+		await expect(rejected).rejects.toBeInstanceOf(RecoverableToolError);
+		await expect(rejected).rejects.toThrow(/use the read tool/);
 		await expect(gated.execute("call", { command: "grep -rn foo ." })).rejects.toThrow(/use the grep tool/);
 		await expect(gated.execute("call", { command: "sed -i 's/a/b/' f" })).rejects.toThrow(/use the edit tool/);
 
@@ -116,6 +122,11 @@ describe("bash tool", () => {
 		expect(text).toContain("npm install");
 		expect(result.details).toMatchObject({ async: { state: "running" } });
 		expect(jobManager.runningCount()).toBe(1);
+		// A model-fixable cancel with no target must leave the running job alone.
+		const jobTool = createJobTool({ jobManager, channelId: "dingtalk:dm:1" });
+		await expect(jobTool.execute("cancel", { op: "cancel" })).rejects.toBeInstanceOf(RecoverableToolError);
+		expect(jobManager.runningCount()).toBe(1);
+		jobManager.stop();
 	});
 
 	it("preserves timeout semantics in async mode and refuses task jobs without a completion wake", async () => {
@@ -260,7 +271,7 @@ describe("bash tool", () => {
 describe("bash tool spill location and tail (batch 2.2 / 2.3, real executor)", () => {
 	it("writes the full-output spill under <deskDir>/logs/ so the model can read it back", async () => {
 		// Mutation check: revert getSpillFilePath to always use tmpdir() and fullOutputPath is /tmp/...
-		const deskDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
+		const deskDir = tempDir();
 		const tool = createBashTool(createExecutor(), { deskDir });
 
 		// >50KB across many lines -> tail truncation, but well under the 10MB capture cap.
@@ -279,7 +290,7 @@ describe("bash tool spill location and tail (batch 2.2 / 2.3, real executor)", (
 		// The executor's in-memory capture stops at 10MB; the naive path would tail *that head* and
 		// label it the end. Mutation check: drop the `captureTruncated` branch in buildOutputText
 		// and the assertion for "row 900000" fails (you get numbers near the 10MB mark instead).
-		const deskDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
+		const deskDir = tempDir();
 		const tool = createBashTool(createExecutor(), { deskDir });
 
 		const result = await tool.execute("call", {

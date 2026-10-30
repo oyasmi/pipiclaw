@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach } from "vitest";
@@ -36,26 +36,6 @@ export function useTempDirs(prefix: string = "pipiclaw-test-"): () => string {
 		dirs.push(dir);
 		return dir;
 	};
-}
-
-export function setupChannelFiles(
-	dir: string,
-	content: {
-		memory?: string;
-		session?: string;
-		history?: string;
-	} = {},
-): void {
-	mkdirSync(dir, { recursive: true });
-	if (content.memory !== undefined) {
-		writeFileSync(join(dir, "MEMORY.md"), content.memory, "utf-8");
-	}
-	if (content.session !== undefined) {
-		writeFileSync(join(dir, "SESSION.md"), content.session, "utf-8");
-	}
-	if (content.history !== undefined) {
-		writeFileSync(join(dir, "HISTORY.md"), content.history, "utf-8");
-	}
 }
 
 /**

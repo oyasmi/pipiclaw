@@ -1,41 +1,23 @@
-import { utimesSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startExternalProgressTail } from "../src/subagents/external/progress-tail.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
-/**
- * P1a: polling/pacing contract for `startExternalProgressTail` — the first-notice delay, the
- * minimum gap between notices, and label-unchanged suppression. `codex-cli-harness.test.ts` and
- * `claude-code-harness.test.ts` cover the label mapping itself; this file only exercises the
- * poller wrapped around it.
- *
- * The tail does real `fs/promises` reads on every tick, which resolve through Node's actual I/O
- * poll phase — a phase fake timers do not drive. `vi.advanceTimersByTimeAsync` alone can return
- * before that real read (and the tick's continuation) has actually completed, so every advance
- * here is followed by `flushIO()`, which yields through the real event loop long enough for
- * already-pending real I/O to finish and its promise continuation to run.
- */
+// Pacing is the subject here. Keep real file contents and mtimes, but resolve the fs port
+// in the microtask queue so advancing a fake timer also finishes its read. The old fixture
+// waited 50 real milliseconds after every clock advance and still depended on host I/O load.
+vi.mock("node:fs/promises", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:fs/promises")>()),
+	readFile: async (path: string, encoding: BufferEncoding) => readFileSync(path, encoding),
+	stat: async (path: string) => statSync(path),
+}));
 
 const realSetImmediate = globalThis.setImmediate;
-const realSetTimeout = globalThis.setTimeout;
-
-/** A handful of real event-loop turns plus one short real timer, so a real (if tiny) fs read has
- *  room to complete even under a loaded CI box — a fixed pair of `setImmediate` hops was not
- *  reliably enough under full-suite parallel load. */
-async function flushIO(): Promise<void> {
-	for (let i = 0; i < 5; i++) {
-		await new Promise<void>((resolve) => realSetImmediate(resolve));
-	}
-	await new Promise<void>((resolve) => realSetTimeout(resolve, 50));
-	for (let i = 0; i < 5; i++) {
-		await new Promise<void>((resolve) => realSetImmediate(resolve));
-	}
-}
-
 async function advance(ms: number): Promise<void> {
 	await vi.advanceTimersByTimeAsync(ms);
-	await flushIO();
+	// Give Node one real turn to publish any unhandled rejection from a discarded tick.
+	await new Promise<void>((resolve) => realSetImmediate(resolve));
 }
 
 const tempDir = useTempDirs("pipiclaw-progress-tail-");
@@ -128,18 +110,6 @@ describe("startExternalProgressTail", () => {
 		expect(labels).toEqual([]);
 	});
 
-	it("is a safe no-op for a harness with no progress labeling (exec)", () => {
-		const tail = startExternalProgressTail({
-			artifactDir: tempDir(),
-			harnessId: "exec",
-			startedAt: Date.now(),
-			onProgress: () => {
-				throw new Error("must never fire for exec");
-			},
-		});
-		expect(() => tail.stop()).not.toThrow();
-	});
-
 	it("a throwing onProgress callback never surfaces as an unhandled rejection", async () => {
 		const artifactDir = tempDir();
 		const eventsPath = join(artifactDir, "events.jsonl");
@@ -185,11 +155,12 @@ describe("startExternalProgressTail", () => {
 		const stderrPath = join(artifactDir, "stderr.log");
 		writeFileSync(stderrPath, "starting\n");
 		const stalls: number[] = [];
+		const progress = vi.fn();
 		const tail = startExternalProgressTail({
 			artifactDir,
 			harnessId: "exec",
 			startedAt: Date.now(),
-			onProgress: () => undefined,
+			onProgress: progress,
 			onStall: (silentMs) => stalls.push(silentMs),
 		});
 
@@ -208,19 +179,20 @@ describe("startExternalProgressTail", () => {
 		expect(stalls).toHaveLength(1);
 		await advance(11 * 60_000);
 		expect(stalls).toHaveLength(2);
+		expect(progress).not.toHaveBeenCalled();
 		tail.stop();
 	});
 
-	it("tolerates a missing artifact file instead of throwing", async () => {
+	it("tolerates a missing artifact file without inventing progress", async () => {
+		const progress = vi.fn();
 		const tail = startExternalProgressTail({
 			artifactDir: join(tempDir(), "never-created"),
 			harnessId: "codex-cli",
 			startedAt: Date.now(),
-			onProgress: () => {
-				throw new Error("must never fire");
-			},
+			onProgress: progress,
 		});
 		await advance(600_000);
+		expect(progress).not.toHaveBeenCalled();
 		tail.stop();
 	});
 });

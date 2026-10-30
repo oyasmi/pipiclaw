@@ -1,9 +1,10 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createEditTool } from "../src/tools/edit.js";
 
 const fileStore = createFileStore();
@@ -11,7 +12,7 @@ const disabledSecurity = { enabled: false } as never;
 
 const dirs: string[] = [];
 afterEach(() => {
-	dirs.length = 0;
+	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 function tempFile(name: string, content: string | Buffer): string {
@@ -80,13 +81,13 @@ describe("edit tool", () => {
 	it("fails when the old text does not exist, is duplicated, or makes no change", async () => {
 		const tool = makeTool();
 
-		await expect(
-			tool.execute("call", {
-				path: tempFile("a.txt", "alpha\nbeta\n"),
-				oldText: "omega",
-				newText: "delta",
-			}),
-		).rejects.toThrow("Could not find the exact text");
+		const missingAnchor = tool.execute("call", {
+			path: tempFile("a.txt", "alpha\nbeta\n"),
+			oldText: "omega",
+			newText: "delta",
+		});
+		await expect(missingAnchor).rejects.toBeInstanceOf(RecoverableToolError);
+		await expect(missingAnchor).rejects.toThrow("Could not find the exact text");
 
 		await expect(
 			tool.execute("call", {

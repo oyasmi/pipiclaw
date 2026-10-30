@@ -31,7 +31,7 @@ describeE2E("E2E: task lifecycle", () => {
 	function archivedTaskPath(): string {
 		return join(harness.deskDir, "tasks", "archive", `${taskId}.md`);
 	}
-	it("creates a governed task from natural language", async () => {
+	it("creates a task from natural language and runs it to a durable completion", async () => {
 		await harness.sendUserMessage(
 			`帮我建一个任务台账，id 用 ${taskId}，标题随意，目标是记录一个数字。` +
 				"DoD 只写一条 checkbox：把数字 42 记录下来。" +
@@ -42,21 +42,17 @@ describeE2E("E2E: task lifecycle", () => {
 		expect(existsSync(path), getE2ESkipReason() ?? undefined).toBe(true);
 		const frontmatter = parseTaskFrontmatter(readFileSync(path, "utf-8"));
 		expect(frontmatter.readable).toBe(true);
-		expect(frontmatter.fields.outcome).toBeUndefined();
 		// DoD must be real checklist items, not prose/numbered text — see the
 		// `uncheckedTaskAcceptanceItems` regression coverage in task-ledger.test.ts
 		// for the parser contract this depends on.
 		expect(readFileSync(path, "utf-8")).toMatch(/-\s+\[[ xX]\]/);
-	});
-
-	it("runs the task in the background: the lane drives it to its end and leaves the evidence in the log", async () => {
 		await waitFor("the task to be archived", () => existsSync(archivedTaskPath()), {
 			timeoutMs: 240_000,
 			intervalMs: 2_000,
 		});
-		const frontmatter = parseTaskFrontmatter(readFileSync(archivedTaskPath(), "utf-8"));
-		expect(frontmatter.readable).toBe(true);
-		expect(frontmatter.fields.outcome).toBe("completed");
+		const archived = parseTaskFrontmatter(readFileSync(archivedTaskPath(), "utf-8"));
+		expect(archived.readable).toBe(true);
+		expect(archived.fields.outcome).toBe("completed");
 		// The evidence lives in the task's log, not inline in the contract.
 		expect(readFileSync(join(harness.deskDir, "tasks", "archive", `${taskId}.jsonl`), "utf-8")).toContain("42");
 	});

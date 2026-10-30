@@ -60,7 +60,7 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 - `npm run test:coverage`
 - `npm run test:evals` — offline eval-tooling checks, including the actual worker with a mock provider
 - `npm run eval` — read-only daily evaluation plan; `npm run eval -- cycle` executes autonomous real-model probes
-- `npm run test:e2e` — deterministic full-stack layer (scripted mock provider, no network, no API cost; runs in well under 90s)
+- `npm run test:e2e` — deterministic full-stack layer (scripted mock provider, offline, no API cost; builds the current daemon first)
 - `npm run test:e2e:live` — the 5-ish real-model smoke cases (follows `~/.pipiclaw/settings.json`; manual / nightly)
 - `npm run build`
 - `npm run check`

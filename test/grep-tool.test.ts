@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createExecutor, type ExecOptions, type Executor } from "../src/executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createGrepTool } from "../src/tools/grep.js";
 
 function fakeExecutor(
@@ -122,7 +123,9 @@ describe("grep tool", () => {
 
 	it("validates the pattern and passes ERE plus the pattern safely to grep", async () => {
 		const empty = makeTool("");
-		await expect(run(empty.tool, { pattern: "   " })).rejects.toThrow(/must not be empty/);
+		const rejected = run(empty.tool, { pattern: "   " });
+		await expect(rejected).rejects.toBeInstanceOf(RecoverableToolError);
+		await expect(rejected).rejects.toThrow(/must not be empty/);
 
 		const { tool, commands } = makeTool("a.txt:1:hit");
 		await run(tool, { pattern: "foo|bar", caseSensitive: false });

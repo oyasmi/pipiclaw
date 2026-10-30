@@ -1,14 +1,14 @@
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { defineConfig } from "vitest/config";
+import { createSuiteHome } from "./test/suite-home.js";
 
 export default defineConfig({
 	test: {
 		environment: "node",
+		globalSetup: ["test/suite-home.ts"],
 		setupFiles: ["test/skills-isolation.ts"],
 		// paths.ts freezes PIPICLAW_HOME at import time, before a harness can set it; without this
 		// default, module-level state (the usage ledger, logs) lands in the developer's real home.
-		env: { TZ: "Asia/Shanghai", PIPICLAW_HOME: join(tmpdir(), "pipiclaw-vitest-home") },
+		env: { TZ: "Asia/Shanghai", PIPICLAW_HOME: createSuiteHome() },
 		include: ["test/e2e/**/*.test.ts"],
 		testTimeout: 120_000,
 		// afterAll runs the runtime shutdown, whose memory flush may use its full

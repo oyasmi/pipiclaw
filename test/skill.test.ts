@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { loadSkillFile } from "../src/skills/catalog.js";
 import { handleSkillsCommand } from "../src/skills/commands.js";
 import { loadPipiclawSkills } from "../src/skills/loader.js";
@@ -76,6 +77,10 @@ describe("skill tool", () => {
 		const read = await tool.execute("read", { action: "read", name: "shared" });
 		expect(read.details).toMatchObject({ path: sharedFile, source: "user" });
 		expect(read.content).toContainEqual({ type: "text", text: expect.stringContaining(safetyTable) });
+		const text = read.content[0]?.type === "text" ? read.content[0].text : "";
+		expect(text).toContain('<skill name="shared"');
+		expect(text).toContain(sharedFile);
+		expect(text).toContain("</skill>");
 		const appHomeDir = createWorkspace();
 		expect(await handleSkillsCommand({ ...options, appHomeDir, args: "show shared" })).toContain(sharedFile);
 		writeFileSync(join(appHomeDir, "security.json"), JSON.stringify({ pathGuard: { readDeny: [sharedRoot] } }));
@@ -84,23 +89,12 @@ describe("skill tool", () => {
 		expect(guarded).not.toContain("shared");
 	});
 
-	it("reads a skill wrapped in the skill envelope", async () => {
-		const workspaceDir = createWorkspace();
-		await writeSkill(workspaceDir, "collection/release-checklist", skillMarkdown("release-checklist"));
-
-		const tool = makeTool(workspaceDir);
-		const result = await tool.execute("call", { action: "read", name: "release-checklist" });
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-		expect(text).toContain('<skill name="release-checklist"');
-		expect(text).toContain("References are relative to");
-		expect(text).toContain("Follow the workflow.");
-		expect(text).toContain("</skill>");
-	});
-
 	it("rejects read of a nonexistent skill", async () => {
 		const workspaceDir = createWorkspace();
 		const tool = makeTool(workspaceDir);
+		// Error classification belongs with the adapter's invalid-call branch; the wrapper's
+		// conversion and registry wiring are covered once in tool-details.test.ts.
+		await expect(tool.execute("call", { action: "read" })).rejects.toBeInstanceOf(RecoverableToolError);
 		await expect(tool.execute("call", { action: "read", name: "nope" })).rejects.toThrow(/does not exist/);
 	});
 

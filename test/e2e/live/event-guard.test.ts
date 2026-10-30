@@ -27,7 +27,7 @@ describeE2E("E2E live: event_manage immediate guard", () => {
 			"用 event_manage 工具创建一个 immediate 类型的事件，名字随意，文本随意，现在就触发。",
 		);
 
-		const eventsDir = join(harness.workspaceDir, "events");
+		const eventsDir = join(harness.deskDir, "events");
 		const files = existsSync(eventsDir) ? readdirSync(eventsDir) : [];
 		expect(files, getE2ESkipReason() ?? undefined).toEqual([]);
 	});

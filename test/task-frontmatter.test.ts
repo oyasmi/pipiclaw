@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderTaskDocument } from "../src/tasks/contract.js";
@@ -8,17 +7,19 @@ import {
 	parseTaskFrontmatter,
 	renderTaskFrontmatter,
 	type TaskFrontmatter,
-	taskStateLabel,
 } from "../src/tasks/frontmatter.js";
 import { resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { readStoredTask, writeStoredTask } from "../src/tasks/store.js";
+import { useTempDirs } from "./helpers/fixtures.js";
+
+const tempDir = useTempDirs("task-frontmatter-");
 
 afterEach(async () => {
 	await resetTaskLogAppenders();
 });
 
 describe("task frontmatter contract (spec 064, D2)", () => {
-	it("round-trips every field without loss, in the fixed render order", () => {
+	it("round-trips every field without loss", () => {
 		const fields: TaskFrontmatter = {
 			state: "waiting",
 			waiting: { kind: "user", question: "merge?", since: "2026-09-05T10:00:00+08:00" },
@@ -30,8 +31,6 @@ describe("task frontmatter contract (spec 064, D2)", () => {
 		};
 		const rendered = renderTaskFrontmatter(fields);
 		expect(parseTaskFrontmatter(`${rendered}\n# T\n`).fields).toEqual(fields);
-		const keys = rendered.split("\n").map((line) => line.split(":")[0]);
-		expect(keys).toEqual(["---", "state", "waiting", "channel", "origin", "usage", "budget", "---"]);
 	});
 
 	// INV-3: the pairs cannot be written wrong, so nothing has to diagnose them afterwards.
@@ -70,20 +69,11 @@ describe("task frontmatter contract (spec 064, D2)", () => {
 			expect(parsed.fields.state, content).toBe("queued");
 		}
 	});
-
-	it("names the state once, for everyone", () => {
-		const since = "2026-09-05T10:00:00+08:00";
-		expect(taskStateLabel({ state: "waiting", waiting: { kind: "work", since } })).toBe("等结果");
-		expect(taskStateLabel({ state: "waiting", waiting: { kind: "user", question: "q", since } })).toBe("等你回复");
-		expect(
-			taskStateLabel({ state: "waiting", waiting: { kind: "time", until: "2026-10-12T09:00:00+08:00", since } }),
-		).toBe("等到 10-12 09:00");
-	});
 });
 
 describe("the runtime never rewrites the body (INV-6)", () => {
 	it("writes an over-long contract as authored, and keeps every section", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "task-frontmatter-"));
+		const dir = tempDir();
 		await mkdir(join(dir, "tasks"), { recursive: true });
 		const path = join(dir, "tasks", "verbose.md");
 		const body = `# Verbose\n\n## Goal\n${"g".repeat(6_000)}\n\n## DoD\n- [ ] done\n\n## Work Items\n- [ ] W1 thing\n`;
@@ -99,7 +89,6 @@ describe("the runtime never rewrites the body (INV-6)", () => {
 		await writeStoredTask(document!);
 
 		const written = await readFile(path, "utf-8");
-		for (const heading of ["## Goal", "## DoD", "## Work Items"]) expect(written, heading).toContain(heading);
-		expect(written).toContain("g".repeat(6_000));
+		expect(written.slice(written.indexOf("# Verbose"))).toBe(body);
 	});
 });

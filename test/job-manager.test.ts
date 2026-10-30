@@ -5,14 +5,16 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WakeEvent } from "../src/channel/channel-event.js";
 import { createExecutor, type ExecOptions, type ExecResult, type Executor } from "../src/executor.js";
+import { jobArtifacts } from "../src/jobs/launch.js";
 import { createJobRuntime, DeskJobManager, FINISHED_JOB_RETENTION_MS, MAX_RUNNING_JOBS } from "../src/jobs/manager.js";
 import * as log from "../src/log.js";
 import { isProcessAlive } from "../src/shared/host-process.js";
@@ -20,6 +22,25 @@ import { createUsage } from "../src/tasks/budget.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+
+const managers = new Set<DeskJobManager>();
+const fakeSpillFiles = new Set<string>();
+
+function managedJobManager(...args: ConstructorParameters<typeof DeskJobManager>): DeskJobManager {
+	const manager = new DeskJobManager(...args);
+	managers.add(manager);
+	return manager;
+}
+
+afterEach(async () => {
+	for (const manager of managers) manager.stop();
+	managers.clear();
+	await resetTaskLogAppenders();
+	for (const path of fakeSpillFiles) {
+		for (const artifact of Object.values(jobArtifacts(path))) rmSync(artifact, { force: true });
+	}
+	fakeSpillFiles.clear();
+});
 
 /**
  * A command-aware fake executor. Real jobs are managed by shelling out; this fake recognizes the
@@ -53,6 +74,7 @@ class FakeJobExecutor implements Executor {
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		this.commands.push(command);
 		const spillMatch = command.match(/> '([^']*)' 2>&1/);
+		if (spillMatch) fakeSpillFiles.add(spillMatch[1]);
 		if (command.includes("command -v setsid")) {
 			// `readOutput` reads the spill straight off disk via `FileStore`, so put `this.output`
 			// at the spill path the real launch names (extracted from the command string).
@@ -119,7 +141,7 @@ describe("DeskJobManager", () => {
 	it("sweeps and reaps a finished job even when nobody polls it", async () => {
 		const executor = new FakeJobExecutor();
 		// Tiny sweep interval so the background sweeper fires within the test window.
-		const manager = new DeskJobManager({ desk: "news" }, executor, 5);
+		const manager = managedJobManager({ desk: "news" }, executor, 5);
 		await manager.start("true", "quick", 300, { channelId: "dingtalk:dm:1" });
 		expect(manager.runningCount()).toBe(1);
 		executor.probeResult = "EXIT:0"; // the job has finished on its own
@@ -133,7 +155,7 @@ describe("DeskJobManager", () => {
 		// The sweeper is timer-driven, so nothing above it can catch: an unhandled rejection here
 		// exits the daemon, and one job's bad tick would take every channel with it.
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor, 5);
+		const manager = managedJobManager({ desk: "news" }, executor, 5);
 		await manager.start("sleep 100", "wait", 300, { channelId: "dingtalk:dm:1" });
 		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation(() => undefined);
 		const rejections: unknown[] = [];
@@ -168,7 +190,7 @@ describe("DeskJobManager", () => {
 			const executor = new FakeJobExecutor();
 			// Keep the running-job sweeper beyond the retention window: after list() finishes the
 			// job it stops, so only the independent GC timeout can remove this record.
-			const manager = new DeskJobManager({ desk: "news" }, executor, FINISHED_JOB_RETENTION_MS + 1);
+			const manager = managedJobManager({ desk: "news" }, executor, FINISHED_JOB_RETENTION_MS + 1);
 			const job = await manager.start("true", "quick", 300, { channelId: "dingtalk:dm:1" });
 			executor.probeResult = "EXIT:0";
 			await manager.list();
@@ -194,7 +216,7 @@ describe("DeskJobManager", () => {
 		const told: boolean[] = [];
 		const wakes: unknown[] = [];
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news", deskDir }, executor, {
+		const manager = managedJobManager({ desk: "news", deskDir }, executor, {
 			dispatch: async (event) => {
 				wakes.push(event);
 				return true;
@@ -224,7 +246,7 @@ describe("DeskJobManager", () => {
 
 	it("caps the number of concurrent running jobs", async () => {
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		for (let i = 0; i < MAX_RUNNING_JOBS; i++) {
 			await manager.start("sleep 100", `job${i}`, 300, { channelId: "dingtalk:dm:1" });
 		}
@@ -240,7 +262,7 @@ describe("DeskJobManager", () => {
 			{ probeResult: "GONE", expectedStatus: "lost", expectedExitCode: undefined },
 		]) {
 			const executor = new FakeJobExecutor();
-			const manager = new DeskJobManager({ desk: "news" }, executor);
+			const manager = managedJobManager({ desk: "news" }, executor);
 			const job = await manager.start("cmd", "job", 300, { channelId: "dingtalk:dm:1" });
 			executor.probeResult = probeResult;
 
@@ -253,7 +275,7 @@ describe("DeskJobManager", () => {
 
 	it("kills and fails a job that overruns its timeout", async () => {
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		await manager.start("sleep 100", "slow", 0, { channelId: "dingtalk:dm:1" }); // 0s budget: any elapsed time overruns
 		executor.probeResult = "ALIVE";
 		await new Promise((resolve) => setTimeout(resolve, 5)); // ensure elapsed > 0
@@ -267,7 +289,7 @@ describe("DeskJobManager", () => {
 	it("keeps a timed-out job running until its kill is confirmed", async () => {
 		const executor = new FakeJobExecutor();
 		executor.killResult = "UNCONFIRMED";
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		await manager.start("sleep 100", "slow", 0, { channelId: "dingtalk:dm:1" });
 		executor.probeResult = "ALIVE";
 		await new Promise((resolve) => setTimeout(resolve, 5));
@@ -283,7 +305,7 @@ describe("DeskJobManager", () => {
 
 	it("cancels a running job and reports outcomes for unknown/finished ids", async () => {
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		const running = await manager.start("sleep 100", "run", 300, { channelId: "dingtalk:dm:1" });
 		const done = await manager.start("true", "done", 300, { channelId: "dingtalk:dm:1" });
 		executor.probeResult = "ALIVE"; // running stays alive on refresh
@@ -300,7 +322,7 @@ describe("DeskJobManager", () => {
 		const executor = new FakeJobExecutor();
 		executor.probeResult = "ALIVE";
 		executor.killResult = "UNCONFIRMED";
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		const job = await manager.start("sleep 100", "stubborn", 300, { channelId: "dingtalk:dm:1" });
 
 		// Unconfirmed kill -> reported as still running, not a false `cancelled`.
@@ -319,7 +341,7 @@ describe("DeskJobManager", () => {
 			executor.emitIdentity = true;
 			executor.probeResult = "ALIVE";
 			executor.killResult = "UNCONFIRMED";
-			const manager = new DeskJobManager({ desk: "news" }, executor);
+			const manager = managedJobManager({ desk: "news" }, executor);
 			const job = await manager.start("sleep 100", "stubborn", 300, { channelId: "dingtalk:dm:1" });
 			expect((await manager.cancel([job.id]))[0]?.status).toBe("running");
 
@@ -337,7 +359,7 @@ describe("DeskJobManager", () => {
 			executor.emitIdentity = true;
 			executor.probeResult = "ALIVE";
 			executor.killResult = "UNCONFIRMED";
-			const manager = new DeskJobManager({ desk: "news" }, executor);
+			const manager = managedJobManager({ desk: "news" }, executor);
 			await manager.start("sleep 100", "slow", 0, { channelId: "dingtalk:dm:1" }); // 0s budget: overruns immediately
 			await new Promise((resolve) => setTimeout(resolve, 5));
 			expect((await manager.list())[0]?.status).toBe("running"); // kill unconfirmed -> pending
@@ -354,7 +376,7 @@ describe("DeskJobManager", () => {
 		executor.emitIdentity = true;
 		executor.probeResult = "ALIVE";
 		executor.killResult = "UNCONFIRMED";
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		const job = await manager.start("sleep 100", "slow", 0, { channelId: "dingtalk:dm:1" }); // overruns immediately
 		await new Promise((resolve) => setTimeout(resolve, 5));
 		await manager.list(); // timeout kill unconfirmed -> pendingKill = "failed"
@@ -373,7 +395,7 @@ describe("DeskJobManager", () => {
 		executor.emitIdentity = true;
 		executor.probeResult = "ALIVE";
 		executor.killResult = "UNCONFIRMED";
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		const job = await manager.start("sleep 100", "slow", 0, { channelId: "dingtalk:dm:1" });
 		await new Promise((resolve) => setTimeout(resolve, 5));
 		await manager.list(); // pendingKill = "failed"
@@ -397,7 +419,7 @@ describe("DeskJobManager", () => {
 			const executor = new FakeJobExecutor();
 			executor.probeResult = "ALIVE";
 			executor.killResult = "UNCONFIRMED";
-			const manager = new DeskJobManager({ desk: "news" }, executor);
+			const manager = managedJobManager({ desk: "news" }, executor);
 			const job = await manager.start("cmd", "job", pending === "timeout" ? 0 : 300, { channelId: "dingtalk:dm:1" });
 			if (pending === "cancel") {
 				expect((await manager.cancel([job.id]))[0]?.status).toBe("running");
@@ -419,7 +441,7 @@ describe("DeskJobManager", () => {
 			const executor = new FakeJobExecutor();
 			executor.probeResult = "ALIVE";
 			executor.killResult = "UNCONFIRMED";
-			const manager = new DeskJobManager({ desk: "news" }, executor, 5); // tiny sweep interval
+			const manager = managedJobManager({ desk: "news" }, executor, 5); // tiny sweep interval
 			const job = await manager.start("sleep 100", "racy", 300, { channelId: "dingtalk:dm:1" });
 			expect((await manager.cancel([job.id]))[0]?.status).toBe("running"); // pendingKill = cancelled
 
@@ -441,7 +463,7 @@ describe("DeskJobManager", () => {
 			executor.emitIdentity = true;
 			executor.probeResult = "ALIVE";
 			executor.killResult = "UNCONFIRMED";
-			const manager = new DeskJobManager({ desk: "news" }, executor);
+			const manager = managedJobManager({ desk: "news" }, executor);
 			const job = await manager.start("sleep 100", "racy2", 300, { channelId: "dingtalk:dm:1" });
 			expect((await manager.cancel([job.id]))[0]?.status).toBe("running");
 
@@ -453,7 +475,7 @@ describe("DeskJobManager", () => {
 
 	it("poll returns immediately for an already-finished job or an already-aborted signal", async () => {
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 
 		const finished = await manager.start("true", "quick", 300, { channelId: "dingtalk:dm:1" });
 		executor.probeResult = "EXIT:0";
@@ -482,7 +504,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 
 	it("creates the spill file with a restrictive umask", async () => {
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
 
 		await manager.start("echo secret", "leaky", 300, { channelId: "dingtalk:dm:1" });
 
@@ -496,7 +518,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		const jobsStateDir = tempDir();
 		const stateDir = join(jobsStateDir, "news");
 		const executor = new FakeJobExecutor();
-		const job = await new DeskJobManager({ desk: "news" }, executor, { stateDir }).start(
+		const job = await managedJobManager({ desk: "news" }, executor, { stateDir }).start(
 			"sleep 100",
 			"long build",
 			300,
@@ -523,7 +545,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		const { events, dispatch } = collectingDispatch();
 		const executor = new FakeJobExecutor();
 		executor.output = "build succeeded";
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
 		const job = await manager.start("make", "build", 300, { channelId: "dingtalk:dm:1" });
 
 		executor.probeResult = "EXIT:0";
@@ -546,12 +568,12 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 	it("announces a job that finished while the daemon was down", async () => {
 		const stateDir = tempDir();
 		const executor = new FakeJobExecutor();
-		await new DeskJobManager({ desk: "news" }, executor, { stateDir }).start("make", "build", 300, {
+		await managedJobManager({ desk: "news" }, executor, { stateDir }).start("make", "build", 300, {
 			channelId: "dingtalk:dm:1",
 		});
 
 		const { events, dispatch } = collectingDispatch();
-		const restarted = new DeskJobManager({ desk: "news" }, executor, { stateDir, dispatch });
+		const restarted = managedJobManager({ desk: "news" }, executor, { stateDir, dispatch });
 		executor.probeResult = "EXIT:1";
 		await restarted.restore();
 
@@ -563,7 +585,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 	it("never wakes for suppressed jobs: notify:false, explicit cancels, and inline polls", async () => {
 		const { events, dispatch } = collectingDispatch();
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
 
 		const quiet = await manager.start("sleep 100", "quiet", 300, { channelId: "dingtalk:dm:1", notify: false });
 		executor.probeResult = "EXIT:0";
@@ -588,7 +610,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 
 		// Spec 058, D8: the starting channel was rebound to another desk. The job still settles, but
 		// its wake is dropped for good — it must not reach a channel that now belongs elsewhere.
-		const moved = new DeskJobManager({ desk: "news" }, executor, {
+		const moved = managedJobManager({ desk: "news" }, executor, {
 			stateDir: tempDir(),
 			dispatch,
 			isBoundTo: () => false,
@@ -612,7 +634,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 			const { events, dispatch } = collectingDispatch();
 			const executor = new FakeJobExecutor();
 			executor.output = "poll result body";
-			const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
+			const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
 			const job = await manager.start("make", "build", 300, { channelId: "dingtalk:dm:1" });
 			executor.probeResult = "EXIT:0"; // finishes on the first refresh inside poll
 
@@ -633,7 +655,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 	it("discards an unreadable record instead of failing the whole restore", async () => {
 		const stateDir = tempDir();
 		writeFileSync(join(stateDir, "broken.json"), "{not json");
-		const restored = await new DeskJobManager({ desk: "news" }, new FakeJobExecutor(), { stateDir }).restore();
+		const restored = await managedJobManager({ desk: "news" }, new FakeJobExecutor(), { stateDir }).restore();
 
 		expect(restored).toBe(0);
 		expect(existsSync(join(stateDir, "broken.json"))).toBe(false);
@@ -645,7 +667,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		const fileAsParent = join(tempDir(), "occupied");
 		writeFileSync(fileAsParent, "x"); // stateDir's parent is a file -> mkdir/rename inside it throws
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: join(fileAsParent, "jobs") });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: join(fileAsParent, "jobs") });
 
 		await expect(manager.start("sleep 100", "doomed", 300, { channelId: "dingtalk:dm:1" })).rejects.toThrow(
 			/its process was terminated\. No job was created/,
@@ -663,7 +685,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		writeFileSync(fileAsParent, "x");
 		const executor = new FakeJobExecutor();
 		executor.killThrows = true;
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: join(fileAsParent, "jobs") });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: join(fileAsParent, "jobs") });
 
 		await expect(
 			manager.start("sleep 100", "doomed", 300, { channelId: "dingtalk:dm:1", signal: AbortSignal.abort() }),
@@ -679,7 +701,7 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		const fileAsParent = join(tempDir(), "occupied3");
 		writeFileSync(fileAsParent, "x");
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: join(fileAsParent, "jobs") });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: join(fileAsParent, "jobs") });
 
 		await expect(
 			manager.start("sleep 100", "doomed", 300, { channelId: "dingtalk:dm:1", signal: AbortSignal.abort() }),
@@ -718,7 +740,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 		const stateDir = tempDir();
 		const id = writeRecord(stateDir, { pid: 4242, pgid: 4242, pidStartedAt: "Mon Jan  1 00:00:00 2024" });
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir });
 		await manager.restore();
 
 		await manager.cancel([id]);
@@ -733,7 +755,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 		const id = writeRecord(stateDir, {});
 		const executor = new FakeJobExecutor();
 		executor.probeResult = "ALIVE";
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir });
 		await manager.restore();
 
 		await manager.cancel([id]);
@@ -747,7 +769,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 		const stateDir = tempDir();
 		const id = writeRecord(stateDir, { pid: 4242, pgid: 999, pidStartedAt: "Mon Jan  1 00:00:00 2024" });
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir });
 		await manager.restore();
 
 		await manager.cancel([id]);
@@ -768,7 +790,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 				return { code: 0, stdout: "", stderr: "" };
 			},
 		};
-		const job = await new DeskJobManager({ desk: "news" }, executor, { stateDir }).start("x", "x", 300, {
+		const job = await managedJobManager({ desk: "news" }, executor, { stateDir }).start("x", "x", 300, {
 			channelId: "dingtalk:dm:1",
 		});
 		expect(job.status).toBe("running");
@@ -781,7 +803,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 	it("identity probe is three-state: SAME/UNKNOWN keep running, only DIFFERENT/GONE is lost", async () => {
 		const executor = new FakeJobExecutor();
 		executor.emitIdentity = true;
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		await manager.start("cmd", "job", 300, { channelId: "dingtalk:dm:1" });
 
 		executor.probeResult = "ALIVE"; // identity holds
@@ -798,7 +820,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 		const executor = new FakeJobExecutor();
 		executor.emitIdentity = true;
 		executor.probeResult = "UNKNOWN";
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		await manager.start("cmd", "job", 0, { channelId: "dingtalk:dm:1" }); // 0s budget
 		await new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -812,7 +834,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 		it("cancel terminates the whole process group, not just the leader", async () => {
 			const dir = tempDir();
 			const marker = join(dir, "child.pid");
-			const manager = new DeskJobManager({ desk: "news" }, createExecutor(), { stateDir: dir });
+			const manager = managedJobManager({ desk: "news" }, createExecutor(), { stateDir: dir });
 			// The job leader backgrounds a long sleep (a child of its own group) and then waits.
 			const job = await manager.start(`sleep 30 & echo $! > ${marker}; wait`, "grouped", 300, {
 				channelId: "dingtalk:dm:1",
@@ -832,7 +854,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 			const stateDir = tempDir();
 			const roDir = join(tempDir(), "readonly");
 			mkdirSync(roDir);
-			const manager = new DeskJobManager({ desk: "news" }, createExecutor(), { stateDir });
+			const manager = managedJobManager({ desk: "news" }, createExecutor(), { stateDir });
 			chmodSync(roDir, 0o500); // no write: the inner `sh -c ... > spill` redirection fails
 			const previousTmp = process.env.TMPDIR;
 			process.env.TMPDIR = roDir; // jobSpillPath() resolves under os.tmpdir()
@@ -854,7 +876,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 			let record: { pid: number; pgid?: number; pidStartedAt?: string } | undefined;
 			for (let attempt = 0; attempt < 3 && !record?.pidStartedAt; attempt++) {
 				const dir = tempDir();
-				const manager = new DeskJobManager({ desk: "news" }, createExecutor(), { stateDir: dir });
+				const manager = managedJobManager({ desk: "news" }, createExecutor(), { stateDir: dir });
 				const job = await manager.start("sleep 5", "identity", 300, { channelId: "dingtalk:dm:1" });
 				record = JSON.parse(readFileSync(join(dir, `${job.id}.json`), "utf-8"));
 				await manager.cancel([job.id]);
@@ -867,7 +889,7 @@ describe("DeskJobManager process identity and group termination (T2-T4)", () => 
 
 	it("keeps a job running on an empty or non-numeric exit file instead of failing it (T4)", async () => {
 		const executor = new FakeJobExecutor();
-		const manager = new DeskJobManager({ desk: "news" }, executor);
+		const manager = managedJobManager({ desk: "news" }, executor);
 		await manager.start("cmd", "job", 300, { channelId: "dingtalk:dm:1" });
 
 		executor.probeResult = "EXIT:"; // .exit present but not yet written
@@ -888,7 +910,7 @@ describe("DeskJobManager launch handshake and interrupted-launch recovery (A/B)"
 	it("rejects and creates no job when the launch handshake fails", async () => {
 		const executor = new FakeJobExecutor();
 		executor.handshakeFails = true;
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
 
 		await expect(manager.start("sleep 100", "doomed", 300, { channelId: "dingtalk:dm:1" })).rejects.toThrow(
 			/Failed to start background job/,
@@ -900,7 +922,7 @@ describe("DeskJobManager launch handshake and interrupted-launch recovery (A/B)"
 	it("recovers the pid from the launch metadata file and cleans up with no caller signal", async () => {
 		const executor = new FakeJobExecutor();
 		executor.abortMidLaunch = true; // detached child + metadata exist, then launch rejects
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
 
 		await expect(
 			manager.start("sleep 100", "raced", 300, { channelId: "dingtalk:dm:1", signal: AbortSignal.abort() }),
@@ -918,7 +940,7 @@ describe("DeskJobManager launch handshake and interrupted-launch recovery (A/B)"
 				return { code: 0, stdout: "", stderr: "" };
 			},
 		};
-		const manager = new DeskJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir() });
 
 		await expect(
 			manager.start("sleep 100", "lost-to-race", 300, { channelId: "dingtalk:dm:1", signal: AbortSignal.abort() }),

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +16,7 @@ import {
 	renderReport as renderSummary,
 } from "../../evals/harness/report-render.js";
 import { humanReviewCalibration } from "../../evals/harness/review-history.js";
-import { exceededBudgetReason, gitDirtyFingerprint, runWorkerSegment, segmentScript } from "../../evals/harness/run.js";
+import { exceededBudgetReason, runWorkerSegment, segmentScript } from "../../evals/harness/run.js";
 import type {
 	CaseSummary,
 	EvalCase,
@@ -642,16 +641,6 @@ if (process.env.PROBE_HANG === "1") {
 });
 
 describe("behavior eval artifacts", () => {
-	it("hashes untracked contents, not only their file names", () => {
-		const root = temp();
-		const { status } = spawnSync("git", ["init"], { cwd: root });
-		expect(status).toBe(0);
-		writeFileSync(join(root, "new-file.txt"), "first");
-		const first = gitDirtyFingerprint(root);
-		writeFileSync(join(root, "new-file.txt"), "second");
-		expect(gitDirtyFingerprint(root)).not.toBe(first);
-	});
-
 	it("archives reviewable text evidence before the trial home is deleted", () => {
 		const root = temp();
 		const channel = join(root, "channel");
