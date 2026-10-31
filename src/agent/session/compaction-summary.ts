@@ -20,7 +20,7 @@ import { reduceSummaryPayloads, splitSummaryInput } from "./compaction-input.js"
 
 export const COMPACTION_TIMEOUT_MS = 60_000;
 export const COMPACTION_IDLE_TIMEOUT_MS = 20_000;
-const SUMMARY_RESERVE_TOKENS = 5_120; // SDK's 0.8 multiplier gives a 4096-token output cap.
+const SUMMARY_RESERVE_TOKENS = 5_120; // Input headroom; the summary stream caps output separately.
 const SUMMARY_INSTRUCTIONS = `Write a concise working checkpoint, aiming for 1500-2500 tokens.
 Preserve the current goal, user constraints and prohibitions, verified results versus assumptions,
 unresolved errors, exact paths/identifiers and the next concrete actions. Remove superseded and
@@ -99,7 +99,15 @@ export class CompactionSummary {
 				);
 				const stream: StreamFn = async (target, context, options) => {
 					signal.throwIfAborted();
-					const response = await session.agent.streamFunction(target, context, options);
+					// Preserve our 4096-token ceiling (lower for small models); Pi 1.4 ignores reserveTokens here.
+					const response = await session.agent.streamFunction(target, context, {
+						...options,
+						maxTokens: Math.min(
+							Math.floor(reserveTokens * 0.8),
+							target.maxTokens > 0 ? target.maxTokens : Number.POSITIVE_INFINITY,
+							options?.maxTokens ?? Number.POSITIVE_INFINITY,
+						),
+					});
 					// The SDK awaits result(); consuming deltas here does not change the result promise.
 					void (async () => {
 						for await (const item of response) {

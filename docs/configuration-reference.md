@@ -1305,3 +1305,15 @@ API 标识 `azure-openai-responses` 和 `AZURE_OPENAI_*` 环境变量保持原�
 同名自定义 provider 不自动改名；新旧 key 冲突须由部署者核对后处理。
 无 Azure 配置无需迁移，不提供永久运行时别名。离线样本证明旧 metadata 与显式
 新 provider 配置可共存，真实 Azure endpoint/认证须由使用 Azure 的部署验收。
+
+## pi 1.4.0 升级注意事项
+
+以下针对 Pi SDK 1.2.0 → 1.4.0 的依赖升级；Pipiclaw 其他数据格式变更仍按对应迁移说明处理。
+
+- 内置 `kimi-coding` 从 Anthropic Messages 改为 OpenAI Chat Completions，默认地址为 `https://api.kimi.com/coding/v1`。若 `models.json` 覆盖了 `baseUrl`，核对地址中的 `/v1` 和代理支持的协议；显式配置的 `api` 也要与端点一致。
+- 核对 `settings.json` 的默认、备用和子代理模型，以及 `workspace/sub-agents/` 中的模型引用。新目录移除了部分旧模型，例如 `openai-codex/gpt-5.5`、`openai-codex/gpt-5.3-codex-spark` 和 `github-copilot/gpt-5.4`；改用提供方当前支持的模型。
+- 默认 `User-Agent` 改为带版本和运行环境的 `pi/<version> (…)`；按客户端身份过滤请求的自建网关需核对规则。
+- Pi 的 `compaction.reserveTokens` 不再限制摘要输出长度。Pipiclaw 在摘要请求中显式保留最多 4096 tokens 的输出预算，小上下文窗口或模型输出上限更低时继续收紧。
+
+此次 Pi 依赖升级无需重写历史会话文件；配置调整由部署者离线完成，运行时不提供旧协议或旧模型名称的兼容别名。
+上游变更见 [Pi 1.3.0](https://github.com/earendil-works/pi/releases/tag/v1.3.0) 和 [Pi 1.4.0](https://github.com/earendil-works/pi/releases/tag/v1.4.0)。

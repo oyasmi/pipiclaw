@@ -84,15 +84,15 @@ export function isRecoverableRejection(result: unknown): boolean {
 /**
  * True when a tool result is the SDK's own argument-validation failure (spec 047, D4.2).
  *
- * pi validates tool arguments against the schema *before* `execute` runs (`agent-loop.js`'s
+ * pi rejects malformed JSON and schema-invalid arguments *before* `execute` runs (`agent-loop.js`'s
  * `validateToolArguments` → `createErrorToolResult`), so this rejection never passes through
- * `withToolDetails`: it carries no `details.kind`, and its text begins with a fixed prefix.
- * A schema-invalid call is by definition something the model can fix by re-issuing correct
+ * `withToolDetails`: it carries no `details.kind`, and its text begins with one of two fixed prefixes.
+ * An invalid call is by definition something the model can fix by re-issuing correct
  * arguments — the same class as a `RecoverableToolError` — so the runtime treats it as a
  * recoverable rejection rather than a user-visible tool error.
  *
- * This is a deliberate coupling to a string the SDK emits; `test/tool-validation-downgrade.test.ts`
- * drives a real schema-invalid call through the SDK and asserts this still matches, so a
+ * This is a deliberate coupling to strings the SDK emits; `test/tool-validation-downgrade.test.ts`
+ * drives malformed and schema-invalid calls through the SDK and asserts this still matches, so a
  * wording change upstream fails loudly there rather than silently regressing progress-card
  * behavior.
  */
@@ -103,7 +103,7 @@ export function isArgumentValidationFailure(result: unknown, isError: boolean): 
 	const text = Array.isArray(result.content)
 		? result.content.map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : "")).join("")
 		: "";
-	return text.startsWith('Validation failed for tool "');
+	return text.startsWith('Validation failed for tool "') || text.startsWith('Invalid arguments for tool "');
 }
 
 /**

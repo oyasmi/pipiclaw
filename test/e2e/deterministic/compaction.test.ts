@@ -211,6 +211,7 @@ describe("E2E deterministic: compaction", () => {
 
 	it("compacts once with its own budget while a blocked memory worker leaves the channel usable", async () => {
 		// Catches double /compact and synchronous reflect. Mutation (2026-10-22): remove the slash-command guard in turn-pipeline; custom instructions are lost and this case fails.
+		// Pi 1.4 mutation checked 2026-10-31: without our explicit maxTokens, the request cap is 8192 and the budget assertion fails.
 		const harness = await createDeterministicHarness({
 			seed: (paths) => seed(paths.conversationDir, paths.deskDir, paths.homeDir),
 		});

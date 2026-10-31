@@ -6,6 +6,7 @@
 
 ### 不兼容变更
 
+- **Pi SDK 1.4.0。** 内置 `kimi-coding` 提供方改用 OpenAI Chat Completions，自定义地址必须包含 `/v1`。升级前按新模型目录核对配置中的模型引用，见 [Pi 升级说明](docs/configuration-reference.md#pi-140-升级注意事项)。
 - **任务在后台的任务车道里执行（spec 064）。** 任务步骤不再借用频道的回合与队列：任务干活时聊天照常回应，任务也不等聊天。每个执行中的任务有自己的 runner 和会话；每个工位最多 3 个、整个运行时最多 5 个任务同时执行，单步最长 20 分钟；外部委派卡住时会叫醒负责人，不再干等到 wall time。
 - **任务状态由运行时按事实写下。** 等待票、`task_step_end`、`task_update`、`/tasks steer` 与 `/tasks reply` 全部删除。任务文件使用 `state: queued | running | waiting | paused`，`waiting` / `paused` 说明原因；回合结束即一步结束。新增聊天工具 `task_message`、`task_pause`、`task_resume`，任务会话工具 `task_report`、`task_ask`、`task_wait`；新增命令 `/tasks msg` 与 `/tasks cancel`。等用户回答不设超时。`subagent`、`subagent_inline` 与 `bash` 的 `taskId` 参数删除：任务步骤里发起的工作自动绑定该任务，聊天里发起的不绑定任何任务。
 - **绑定任务的结果直接回到任务。** 绑定的委派与作业把结果写进任务记录并通知车道，不再唤醒频道。
@@ -13,6 +14,7 @@
 
 ### 变更
 
+- 四个直接 Pi SDK 依赖从 1.2.0 同步升级到 1.4.0，获得提供方重试、模型切换和终端渲染等修复。Pipiclaw 显式保留最多 4096 tokens 的摘要输出预算（小模型继续收紧），并将损坏的工具调用参数识别为可恢复拒绝，不再显示为用户侧错误。
 - `/stop` 只停聊天回合；暂停任务用 `/tasks pause`。`/status` 增加一行本工位后台任务概况。
 
 ## [0.9.5-beta.3] - 2026-10-28
