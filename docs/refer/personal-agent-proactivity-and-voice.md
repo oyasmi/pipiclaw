@@ -4,11 +4,12 @@
 | --- | --- |
 | 调研与核对日期 | 2026-10-31 |
 | Pipiclaw 代码基线 | `e3393a8` |
+| 模型选型补充 | 同日补充 Qwen-Audio、Qwen3.8-Omni、GPT-Live、Ming 与 Fun 系列；原调研存档提交为 `4ed5741` |
 | 状态 | 参考调研；候选方案未实施，未做真实通话测量 |
 | 用途 | 为后续主动工作与语音客户端设计提供证据、边界及验证方法 |
 | 与现有设计的关系 | 不替代已接受的 spec；实现前重新核对代码和上游能力 |
 
-本次查阅 Grok Bot、Muse、Dots 的官方产品材料，以及 OpenAI、xAI 的语音 API 文档。AIHOT 的当周检索未提供直接回答本题的产品资料，下面的产品事实以逐页核对的官方材料为依据。厂商描述不等于独立体验测评；公开文档未披露的调度算法、内部语音模型和端到端延迟不作推断。
+本次查阅 Grok Bot、Muse、Dots 的官方产品材料，以及 OpenAI、xAI、阿里云/Qwen 的语音 API 文档、技术报告和 inclusionAI、QwenAudio 等官方仓库。AIHOT 的当周检索未提供直接回答本题的产品资料，下面的产品事实以逐页核对的官方材料为依据。厂商描述不等于独立体验测评；公开文档未披露的调度算法、内部语音模型和端到端延迟不作推断。
 
 **核心判断**
 
@@ -28,11 +29,12 @@ Pipiclaw 可以沿两条相互补充的路径发展：持续替用户留意变�
 | 延迟的定义、目标与优化方法 | [性能验证](#5-延迟怎么解决怎么测) |
 | 已有底座、接入缺口和恢复边界 | [Pipiclaw 接线分析](#6-对当前-pipiclaw-的具体影响) |
 | 原型顺序与验收场景 | [验证计划](#7-建议的验证顺序) |
+| Qwen、GPT-Live、Ming、Fun 的区别与选型 | [模型与组件比较](#10-持续语音模型与-asrtts-组件补充调研) |
 | 尚未证实的事项与重新核对入口 | [待验证项](#8-仍需实测或补充证据的事项)、[信源索引](#9-信源与存档说明) |
 
 ## 0. 阅读口径与建议范围
 
-本文区分三种材料：第 1 节记录官方材料描述的产品能力；第 6 节记录代码基线上的现有机制与缺口；其余章节主要是据此提出的候选设计与验证方法。文中的价格是当日快照，延迟数字是原型目标，都不能作为已通过的性能或成本承诺。
+本文区分三种材料：第 1 节记录官方材料描述的产品能力，第 10 节进一步区分模型、API 和客户端框架；第 6 节记录代码基线上的现有机制与缺口；其余章节主要是据此提出的候选设计与验证方法。文中的价格是当日快照，延迟数字是原型目标，都不能作为已通过的性能或成本承诺。
 
 建议先验证一个用户、一个 desk、一个持久会话中的实时通话，再验证一个有截止时间的主动工作场景。语音体验可以先独立成立，主动发现也可以先复用事件与任务模板；不以新建职责平台、通知中心、电话网络接入或替换 agent runtime 为前置工程。
 
@@ -216,7 +218,7 @@ Pipiclaw → 文字与状态 → 语音合成 → 用户听到声音
 | 单个 speech-to-speech 会话调用 Pipiclaw 的能力 | 语音理解与生成链路直接，减少中间串行步骤 | 避免把所有编码工具和长工作塞进通话模型；处理工具等待与工作状态 |
 | 持续语音模型 + 独立工作后端 | 语音保持交互，原有 agent 继续推理与执行 | 上下文选择、授权、委托映射、结果播报和生命周期桥接 |
 
-OpenAI 当前文档将 GPT-Live、Realtime API、串联管线列为不同架构。GPT-Live 支持全双工，并允许用 client delegation 接入自己的后端模型或 agent。因此它是 Pipiclaw 值得优先验证的一条路线，不代表已经测得中文或网络体验最优。[架构指南](https://developers.openai.com/api/docs/guides/voice-agents)、[GPT-Live 入门](https://developers.openai.com/api/docs/guides/live)
+OpenAI 当前文档将 GPT-Live、Realtime API、串联管线列为不同架构。GPT-Live 支持全双工，并允许用 client delegation 接入自己的后端模型或 agent，适合作为“语音交谈与原有后端分离”的验证基准；中文语音候选还应同时比较 Qwen-Audio-Realtime，细分见[第 10 节](#10-持续语音模型与-asrtts-组件补充调研)。这不是已测得某个供应商中文或网络体验最优的结论。[架构指南](https://developers.openai.com/api/docs/guides/voice-agents)、[GPT-Live 入门](https://developers.openai.com/api/docs/guides/live)
 
 Grok Voice 是另一条可比较的 speech-to-speech 路线，公开 API 支持双向音频流、函数及其他工具，文档还提供语音与工具返回重叠的处理建议。API 的“亚秒级”宣传不能作为 Grok Bot 的实测数据，也不能代表调用 Pipiclaw 完成真实任务的延迟。[API 文档](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech)、[语音概览](https://docs.x.ai/developers/model-capabilities/audio/voice)
 
@@ -371,7 +373,7 @@ PSTN/SIP 电话号码、系统来电界面、Bot 主动呼叫和呼叫第三方�
 ## 8. 仍需实测或补充证据的事项
 
 - Grok Bot、Muse、Dots 的内部主动调度算法和端到端通话性能没有足够公开证据。
-- GPT-Live 与 Grok Voice 在用户实际部署网络、中文技术语境和所用设备上的体验尚未比较。
+- GPT-Live、Qwen-Audio-Realtime、Qwen3.8-Omni-Realtime、Grok Voice 与 ASR/TTS 管线在用户实际部署网络、中文技术语境和所用设备上的体验尚未比较。
 - 钉钉内置 WebView 的麦克风、锁屏和后台音频表现需要真机验证；平台原生 Bot 通话入口尚未确认。
 - 跨钉钉/Web API 的显式交付关联需要设计，不等于使用同一 desk 就自动共享会话或转投通知。
 - 语音原型应实际测量持久交办、挂断、纠正和重新接入，之后再确定生产接口与模块落点。
@@ -393,7 +395,163 @@ PSTN/SIP 电话号码、系统来电界面、Bot 主动呼叫和呼叫第三方�
 | GPT-Live 成本 | [模型价格](https://developers.openai.com/api/docs/models/gpt-live-1)、[计费口径](https://developers.openai.com/api/docs/guides/voice-latency-cost?api=live) |
 | Grok 公开语音 API | [Speech to Speech](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech) |
 | 真实语音评测 | [Voice evaluation](https://developers.openai.com/cookbook/examples/audio/voice_agent_evaluation) |
+| Qwen 实时语音与 Omni 的接口差异 | [Qwen-Audio-Realtime](https://docs.qwencloud.com/developer-guides/speech/qwen-audio-realtime)、[Omni 型号](https://docs.qwencloud.com/developer-guides/speech/omni-models)、[Omni-Realtime](https://docs.qwencloud.com/developer-guides/speech/realtime-multimodal-speech) |
+| Fun 的历史命名与当前识别服务 | [通义实验室周报](https://tongyilab.substack.com/p/may-29-2026-the-tongyi-weekly)、[Fun-ASR-Realtime](https://help.aliyun.com/zh/model-studio/fun-asr-realtime) |
+| Ming 的原生推理与流式服务 | [模型仓库](https://github.com/inclusionAI/Ming-3.0-tts)、[vLLM-Omni 服务配方](https://github.com/vllm-project/vllm-omni/blob/1bf6a1b15825a676b3c4181ca691c225c9c2beff/recipes/inclusionAI/Ming-3.0-TTS.md) |
+| 已有语音客户端和后端适配边界 | [Qwen Audio Agent](https://github.com/QwenAudio/qwen-audio-agent)、[Backend Adapter SDK](https://qwenaudio.github.io/qwen-audio-agent/reference/backend-adapter-sdk) |
 
 仓库中的 [2026-10-12 Grok Bot 对比](./grok-bot-comparison.md)是基于第三方材料的历史快照，保留作追溯；其中模型限制、旧任务术语和功能范围不能作为当前事实。本文对本次核对范围内的信息作补充，不重写该历史快照。
 
 后续如采用本报告，应在新设计或实验记录中写明采用了哪些建议、实际接口及偏离、运行环境、测量结果和仍未解决的问题；本文继续保留为当日调研，不直接改标为“已实施”。
+
+## 10. 持续语音模型与 ASR/TTS 组件补充调研
+
+本节核对日期仍为 2026-10-31。下文“已确认”表示官方文档、论文或仓库提供了相应证据，不表示在 Pipiclaw 上测试通过。没有下载运行模型、调用付费接口、试听真实通话或验证账号可用性。
+
+### 10.1 先区分四种能力，避免只看“Realtime”名称
+
+| 能力 | 实际说明什么 | 仍不能证明什么 |
+| --- | --- | --- |
+| 连接双向传输 | 客户端可以一边发送，一边接收 | 模型会在说话时理解打断，或正确判断是否该接话 |
+| 流式识别或合成 | 能逐步返回文字或音频 | 能持续对话、处理业务或边执行任务边交谈 |
+| 语音交互双工 | 持续处理用户声音，并协调说话、倾听、让步和恢复 | 端侧不会回声自激、排队音频会立即停止 |
+| 后台工作异步推进 | 语音前台能接收工作状态，用户仍可继续交谈 | 任务一定已经持久化，或挂断、崩溃后一定能恢复 |
+
+本报告中的持续语音方案需要同时考虑后两行。它也可以由识别、文字模型、合成和控制器共同实现；“原生音频模型”与“完整通话系统”不是同一个交付物。选型时把实际模型版本、服务协议、轮次模式、推理实现和设备一起记录。
+
+### 10.2 名称、角色与可接入对象
+
+| 用户提到的名称 | 本次确认的具体对象 | 在方案中的角色 | 接入判断 |
+| --- | --- | --- | --- |
+| Qwen-Audio | 旧开源 `Qwen-Audio`，以及当前云端 `qwen-audio-3.1-realtime-plus` / `qwen-audio-3.1-realtime-flash` 等 | 前者是音频理解到文字；后者是持续语音前台 | 必须指定代际与完整 model id |
+| Qwen3.8-Omni | `qwen3.8-omni-flash` 与 `qwen3.8-omni-flash-realtime` | 非实时音视频理解、或实时多模态对话 | 要听到模型说话应选 Realtime；非实时接口只输出文字 |
+| OpenAI GPT-Live | `gpt-live-1`，采用 client delegation | 与独立工作后端分离的持续语音前台 | 可以保留 Pipiclaw 的模型与执行器 |
+| Ming-3.0-tts | `Ming-3.0-tts-0.5b`、`Ming-3.0-tts-tiny` | 文字到声音的合成组件 | 需要识别、对话和播放控制配合 |
+| Fun-Realtime-ASR | 榜单/发布名称；可确认的产品接口是 `fun-asr-realtime` 系列 | 流式转录组件 | 不把榜单型号自动等同于某个 API 快照或开源权重 |
+| Fun-Realtime-AudioChat | 官方历史发布名称，与当前 Qwen-Audio-Realtime 文档及示例存在命名关联 | 实时语音对话的历史称呼 | 以当前可用 model id 接入，不能照抄旧 beta 名称 |
+| Fun-Audio-Chat | 独立开源项目 `Fun-Audio-Chat-8B` | 可自部署的音频语言模型 | 不能当成 Fun-Realtime-AudioChat 云服务的等价复刻 |
+
+旧 `Qwen-Audio` 仓库明确写的是音频/文字输入、文字输出，不能因为它叫 Audio 就认定能实时产生声音。[原始项目](https://github.com/QwenLM/Qwen-Audio)
+
+Fun 的名称需要保留证据强度：通义实验室 2026-05-29 周报使用 Fun-Realtime-ASR / Fun-Realtime-AudioChat 名称；当前官方 `fun-audiochat-realtime` 示例指定 `qwen-audio-3.0-realtime-plus`，服务器事件文档还保留 `pre-fun-realtime-audiochat-beta-3` 示例。这支持存在历史命名关联，不能证明榜单条目、beta 和当前 Plus/Flash 的权重完全相同。[官方周报](https://tongyilab.substack.com/p/may-29-2026-the-tongyi-weekly)、[官方示例](https://github.com/aliyun/alibabacloud-bailian-speech-demo/blob/master/samples/conversation/fun-audiochat-realtime/README.md)、[事件文档](https://help.aliyun.com/en/model-studio/qwen-audio-realtime-server-events)
+
+### 10.3 Qwen-Audio-Realtime：优先加入中文通话对照
+
+**已确认的接口能力。** 3.1 Plus/Flash 接受实时音频，返回语音和文字，支持函数调用及轮次控制。`smart_turn_v2` 结合语义判断来减少应答声、旁人说话造成的误打断；背景转录与有效会话输入还有不同事件。语音接入层应保留这一区别，不能把所有听到的文字都变成 Pipiclaw 指令。[接口指南](https://docs.qwencloud.com/developer-guides/speech/qwen-audio-realtime)
+
+**可借鉴的研究。** 3.1 技术报告把“什么时候说话”与“说什么”分别建模，并另行讨论带持久任务的 Voice Harness。报告的系统实验使用 3.0 语音前台及文字后端，且有些任务分数来自语音输入、文字输出的评测；不能用这些分数宣称 3.1 的合成声音、中文通话或 Pipiclaw 已达同等质量。[技术报告](https://arxiv.org/html/2609.25176v1)
+
+**对 Pipiclaw 的适配。** 可向语音前台暴露少量工作接入能力，例如提交、查询、补充与取消已有工作；工具先返回确实被接收的记录，再异步传递进展。实现时核对函数返回后的继续生成、有效轮次和新结果插入规则，避免普通同步函数示例把整个编码任务卡在通话里。工作仍通过 Pipiclaw Web API，而不是把其全部工具重注册给语音模型。
+
+**限制与验证。** 当前指南说明内置联网搜索与函数调用不能同时开启；以 Pipiclaw 为工作后端时，可优先让检索也走已有后端。外放、背景人声、“嗯”和“停一下”分别测试，不能用发送时关闭麦克风来冒充双工。Plus 与 Flash 的质量、可用地域和实际延迟都应按账号及版本核对。
+
+### 10.4 Qwen3.8-Omni：把非实时理解与实时通话分开选
+
+**已确认。** `qwen3.8-omni-flash` 可理解音频、图像、视频并输出文字；`qwen3.8-omni-flash-realtime` 才提供音频/文字输出，且有函数调用、MCP 和实时视觉入口。纯语音原型无需为了这些额外模态提前引入摄像头链路。[型号总览](https://docs.qwencloud.com/developer-guides/speech/omni-models)
+
+Realtime 指南提供 `semantic_vad`，以及面向更积极打断的 `semantic_vad_ec`；具体选择应通过用户停顿、改口和背景声音验证。其音频上下文保留上限与连接时长是不同限制。按当前文档，Qwen-Audio 3.1 的音频历史至多 50 轮/300 秒，Qwen3.8-Omni-Realtime 为 100 轮/600 秒；达到限制会舍弃早期内容，不能把长连接当成完整持久记忆。[Audio 上下文](https://docs.qwencloud.com/developer-guides/speech/qwen-audio-realtime)、[Omni 实时指南](https://docs.qwencloud.com/developer-guides/speech/realtime-multimodal-speech)
+
+**选用时机。** 需要“边看截图或现场画面边讨论工作”时，把 Omni-Realtime 加入候选；处理录音、会议材料或视频文件时，非实时 Omni 可作为工作工具。两者都不必替代 Pipiclaw 的长期工作模型。纯语音阶段先比较专用语音前台，避免用更大的模态覆盖代替实际体验证据。
+
+### 10.5 GPT-Live：独立后端契约最直接的对照项
+
+前文已经说明 GPT-Live 的 client delegation。其适配价值是前台音频交互与后端模型独立：接入桥用转录、当前要求和工作事实调用 Pipiclaw，而不是让 OpenAI 托管另一个工作后端。委托回调只有关联元数据，不会自动提供完整任务文字。[委托协议](https://developers.openai.com/api/docs/guides/live-delegation)
+
+测试重点应放在中文技术名词、否定与更正、长等待时的交谈、结果播报和用户打断。它的 API 分工清晰不等于在实际网络下最快；语音输出也可能改述后端结果，不能作为严格逐字播报器。计费包含活跃会话里的沉默和后台等待，见第 4.5 节；对照 ASR/TTS 时必须统一时长口径。
+
+### 10.6 Fun-ASR-Realtime：文字管线的识别候选
+
+官方 `fun-asr-realtime` 是音频到文字的流式识别接口，支持热词、中文口音/方言和中英切换相关能力；它不负责生成回答、工具决策或说话。SDK 可同时发送音频和接收转写，但这是识别流的双向传输，不能当成语音助手已经具备交互双工。[模型信息](https://help.aliyun.com/zh/model-studio/fun-asr-realtime)、[流式 SDK](https://help.aliyun.com/zh/model-studio/fun-asr-realtime-python-sdk)
+
+对 Pipiclaw，优点是边界直观：识别后提交文字，语音合成可单独替换。困难留给接入层：判断一句要求何时完整，处理不断修正的中间结果，以及用什么方式在后端忙时继续交流。只有识别分片稳定并不意味着工作意图已经完整；“不要改代码，只调查”必须作为完整约束传入。
+
+可以用项目名、命令、任务 id 和术语构建小型热词表，但识别错误不能一概靠热词解决。还应测试语气词过滤、数字规范化及标点是否改变确认、否定、日期或代码标识。云端 API 和同名开源 Fun-ASR 项目分别核对，不能把开源部署的成本与云服务榜单质量直接组合成承诺。
+
+### 10.7 Ming-3.0-tts：声音可控，实时服务要单独核实
+
+**模型角色。** Ming 提供多语言、声音复刻和表达控制。0.5b 是 Dense；tiny 是 7.9B 总参数、1.3B 激活参数的 MoE。后者的 tiny 名称不表示部署显存只需容纳 1.3B 参数，真实资源还取决于权重精度、声学组件、缓存和并发。官方测试环境不是最低硬件要求。[模型仓库](https://github.com/inclusionAI/Ming-3.0-tts)
+
+**原生推理与服务实现必须分开。** 核对 `9332fb9` 的 `MingTTS.synthesize`，该入口逐段生成、拼接后返回整条 waveform，没有逐块向调用者交付音频的迭代接口。直接调用它再播放整条结果，会把生成等待暴露给用户；这不证明模型或其他推理实现不能流式输出。[固定版本推理入口](https://github.com/inclusionAI/Ming-3.0-tts/blob/9332fb9443325d4726ce02cefd4ec1c211df4079/ming_tts.py)
+
+vLLM-Omni 的 `1bf6a1b` 服务配方提供 Tiny 的流式 PCM 输出和 `/v1/audio/speech` 接口。这是服务实现层面的可用证据；仍需实测首包、持续出音、并发和取消，也不能据此推断支持在同一请求里不断追加尚未生成完的文字。[固定版本服务配方](https://github.com/vllm-project/vllm-omni/blob/1bf6a1b15825a676b3c4181ca691c225c9c2beff/recipes/inclusionAI/Ming-3.0-TTS.md)
+
+**管线设计。** 等一个语义完整的短句或已核实结论后开始合成；按序播放，给后续句子留出生成时间，限制提前生成的长度。用户打断时清除旧音频并停止或废弃旧生成。过度切短会造成韵律与音色衔接问题，整篇生成又会增加首包等待，二者需要用同一录音集比较。数字、版本号、英文项目名和路径应有口语表达规则；技术原文继续保留在屏幕上。
+
+### 10.8 Fun-Audio-Chat 开源模型与 Fun-Realtime-AudioChat 的证据边界
+
+`Fun-Audio-Chat-8B` 官方项目提供音频理解、语音对话和 speech function calling 的推理/训练材料；参考部署需要主模型及声音生成组件，仓库给出的推理显存参考约为 24GB。其 S2T 加速结果不能直接当成 S2S 通话的首包或打断指标。[官方仓库快照](https://github.com/QwenAudio/Fun-Audio-Chat/tree/7000b00511479e6131f43cf724e85b97cb138ee2)
+
+这适合有自部署需求时做技术探索。本次未找到足够证据说明这个开源检查点与历史 Fun-Realtime-AudioChat 榜单服务是同一个发布物，也未确认它开箱提供与当前 Qwen-Audio-Realtime 相同的完整持续通话协议。前者作为自部署候选，后者按当前可用云端模型核对，分别记结论。
+
+### 10.9 现成客户端：Qwen Audio Agent 值得评估复用
+
+官方开源 `qwen-audio-agent` 已把可替换的语音前台、桌面/Web/移动入口与后台工作分开，并提供 Backend Adapter SDK。这比从零编写所有通话客户端更值得先调查；其模型表既有 Qwen，也有 GPT-Live 和本地语音管线。[官方框架](https://github.com/QwenAudio/qwen-audio-agent/tree/b648b5e116822f0265a72835890606318e08d9c6)
+
+**兼容性没有自动成立。** 它的后端适配契约涉及 submit、status、cancel、输入回答及订阅等语义，而 Pipiclaw 暴露的是 Responses-shaped Web API。需要验证两者如何关联一个工作、补充要求、取消与交付，不能只换 base URL。框架支持 Pi 的适配器也不等于支持 Pipiclaw；直接绕到 Pi 会丢掉 Pipiclaw 的 desk、任务和投递语义。[适配契约](https://qwenaudio.github.io/qwen-audio-agent/reference/backend-adapter-sdk)
+
+复用时，Pipiclaw 仍是持久任务与工作事实的所有者。语音客户端可以保存关联和播放状态，但不能形成两套互相矛盾的任务状态、长期记忆或授权来源。先验证接入所需的最小子集，再决定复用整套客户端、部分组件，还是自己编写薄客户端。本节没有建议替换 Pipiclaw runtime。
+
+### 10.10 综合选型：两种持续前台加一条组件管线
+
+以下是根据公开能力提出的实验顺序，不是性能排名，也不代表需要同时长期维护所有供应商：
+
+| 实验 | 组合 | 最想验证的问题 | 继续投入的条件 |
+| --- | --- | --- | --- |
+| A：中文持续前台 | Qwen-Audio 3.1 Realtime Plus → Pipiclaw；必要时加 Flash 对照 | 语义停顿、背景声音、技术中文和后台工作衔接是否顺畅 | 在真实中文场景中能正确转达要求且持续交谈，实际地域和网络可用 |
+| B：分离式前台基准 | GPT-Live client delegation → Pipiclaw | 明确的独立后端契约能否降低交互与接线成本 | 中文、延迟、纠正和成本达到使用要求 |
+| C：组件管线基准 | Fun-ASR-Realtime → Pipiclaw → Ming-3.0-tts 的合适服务实现 | 保留全部文字决策是否足够好，识别和合成瓶颈在哪里 | 首包、打断和声音质量达标，组件维护及 GPU 成本可接受 |
+| D：按真实需求再扩展 | Qwen3.8-Omni-Realtime；或自部署 Fun-Audio-Chat | 是否确实需要视觉输入或本地音频语言模型 | 额外收益覆盖接入、算力和维护成本 |
+
+可以先选 A 或 B 跑通完整闭环，再用另一项和 C 做有针对性的比较；不为比较而先建一个通用语音供应商平台。C 中自部署 TTS 不代表整条链路离线；Fun-ASR 云服务仍需要网络。完全本地部署应另选已确认权重和实时实现的识别组件。
+
+**选型依据应同时包含三件事：是否正确完成用户意图、谈话是否自然、整条链路的成本是否合适。** 较低识别 WER 不能保证正确理解“先别发布”，更自然的声音不能证明任务已经创建，较快的模型 token 输出也不能证明客户端更快听到有用结果。
+
+### 10.11 延迟、成本与接入契约的补充比较
+
+对组件管线，可以按以下分段定位延迟；实际有些阶段会重叠，不能机械把各段 p95 相加：
+
+```text
+首次有用声音的等待
+  = 音频上传与识别/轮次等待
+  + Pipiclaw 排队、推理和必要工具
+  + 首个可播语义片段的等待
+  + TTS 首包与播放缓冲
+```
+
+持续语音前台可能先提供合适承接，但真正的后台结果仍受 Pipiclaw 工作耗时约束。为保持交谈而增加一轮前台模型也有成本；是否值得，应从端到端任务与音频记录判断。
+
+| 方案 | 计费或资源口径 | 比较时要记录 |
+| --- | --- | --- |
+| GPT-Live | 活跃语音会话时长，后端模型另计 | 包含沉默与等待的会话秒数、重连和后端费用 |
+| Qwen-Audio / Omni-Realtime | 按具体型号、模态及地域的价格和用量规则 | 输入/输出音频与文字、历史上下文、模式和地域；Omni 3.8 对语音输出还计对应文字 |
+| Fun-ASR-Realtime | 提交识别的音频时长 | 持续上传静音、有效语音及重试的处理方式，实际模型版本 |
+| 自部署 Ming / Fun-Audio-Chat | GPU、推理服务、并发及运维 | 首包、实时率、显存峰值、长时间空闲，以及与编码模型的资源竞争 |
+
+Qwen 官方价格页按地域区分，并明确 Omni 3.8 的音频输出及对应文字分别计费，不能套用旧 Omni 的规则。[价格参考](https://docs.qwencloud.com/developer-guides/getting-started/model-prices) Fun-ASR-Realtime 的北京模型页当日标价为每音频秒 0.00033 元；按完整提交一小时计算约 1.188 元，仅是识别费用，不是整条通话成本。[识别价格](https://help.aliyun.com/zh/model-studio/fun-asr-realtime)
+
+接入试验应逐项确认以下能力，而不是仅确认“能出声音”：
+
+- 是否提供有效用户输入、背景转录、函数参数和回应文本；增量是追加还是修订。
+- 什么时候必须回传函数结果，后台工作怎样异步回来，用户仍在说话时是否会抢答。
+- 音频取消、播放清空与工作取消如何分别实现，旧结果如何因新要求而失效。
+- 会话达到时长或上下文限制后怎样接续，未完成工作与关键要求怎样保留。
+- 供应商超时或声音服务不可用时能否继续文字交互，恢复时不重复交办。
+
+### 10.12 共用验证集与证据记录
+
+在第 7 节的工作场景基础上，至少增加下列音频条件，作为实验输入规划；本次没有新增测试代码：
+
+| 条件 | 要观察的故障 |
+| --- | --- |
+| 普通话、中英混说、项目名与版本号 | 识别或发音正确但任务标识传错，或把标识“修正”为常见词 |
+| “明天……不，后天”“先别改，只调查” | 过早提交半句、丢失否定或更正 |
+| “嗯”、短停顿、咳嗽、旁人交谈 | 无关声音触发任务，或有效打断被忽略 |
+| 耳机与外放、回声和背景噪声 | Bot 听到自己后重复应答，靠关麦维持表面稳定 |
+| 长工具调用期间追加要求 | 语音前台卡住、重复交办、旧结论覆盖新要求 |
+| 结果就绪时用户正讲话 | 提前插话，或后端完成后结果一直没被表达 |
+| 长会话超出音频历史窗口 | 早先授权和限制丢失，却继续按错误范围行动 |
+| 断网、重连、TTS 取消和恢复 | 旧音频继续播放、工作重复创建或挂断误取消任务 |
+
+每次比较固定录音或调用者脚本、后端模型、工具、麦克风/扬声器与网络条件，记录确切 model id、轮次模式、音色、语速、服务地域和客户端版本。除第 5 节的时延外，记录关键意图与参数正确率、误打断/漏打断、错误唤醒、实际任务结果、可听懂程度及每个成功任务的总成本。识别 CER/WER、合成听感与业务执行正确性分别报告。
+
+参考代码按具体提交保留：Ming `9332fb9443325d4726ce02cefd4ec1c211df4079`，vLLM-Omni `1bf6a1b15825a676b3c4181ca691c225c9c2beff`，Qwen Audio Agent `b648b5e116822f0265a72835890606318e08d9c6`，Fun-Audio-Chat `7000b00511479e6131f43cf724e85b97cb138ee2`。这些是本次阅读的源码快照，不是已安装或通过生产验证的版本；API 文档、模型别名和价格在实施前重新核对。
