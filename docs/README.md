@@ -39,6 +39,7 @@
 |---|---|
 | [架构](./architecture.md) | 当前实现的源码地图、运行时拓扑、消息生命周期、并发表和磁盘布局 |
 | [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
+| [主动工作与实时语音调研](./refer/personal-agent-proactivity-and-voice.md) | Grok Bot、Muse、Dots 的官方证据，主动时机、语音客户端分工及待验证方案（2026-10-31，未实施） |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
 | [行为评测使用指南](./evals.md) | 无人参与的 `cycle`、评分器校验、短报告、证据重放与兼容参照 |
 | [设计记录](./specs/README.md) | 保留的 spec 050–060、实施状态及当前行为的判断顺序 |
@@ -54,6 +55,7 @@
 - `architecture.md` 负责解释代码位置和组件关系。
 - `sub-agents.md` 是智能体委派的用户级权威文档。
 - `leverage/` 负责“会用之后怎么用出更大产出”的观点与实践，不定义行为契约。
+- `refer/` 保存带日期与信源的调研材料，区分产品事实、代码现状和候选建议，不作为功能已实现的承诺。
 - `security.md` 是权限、隔离与授权边界的用户级权威文档。
 
 `docs/` 面向人，允许跳读、示例和完整参考；`src/playbooks/` 面向 agent，只有小型目录常驻系统提示，正文按需读取。不要把 runtime playbook 复制进 workspace 的 `AGENTS.md` 或 skill：升级会更新内置机制，副本不会同步。
