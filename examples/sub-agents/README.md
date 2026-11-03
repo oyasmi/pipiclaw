@@ -36,10 +36,14 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/codex-main.md ~/.pipiclaw/
 | `codex-high` | codex-cli | `gpt-6.1-sol` | high | 是 | 高智能档，可读图片：设计、方案权衡、复杂分析 |
 | `codex-main` | codex-cli | `gpt-6.1-terra` | high | 是 | 主力档，可读图片：常规实现、排查、文档 |
 | `codex-flash` | codex-cli | `gpt-6-luna` | high | 是 | 最快最便宜，可读图片：明确、简单、重复的工作 |
+| `cursor-high` | cursor-cli | `grok-4.7-high` | — | 随模型 | 高智能档，走 Cursor 额度：设计、取舍分析、根因不明的疑难 |
+| `cursor-main` | cursor-cli | `auto` | — | 随模型 | 主力档，Cursor auto 路由：常规实现、排查、文档 |
 | `glm-high` | claude-code | `glm-5.3` | high | 否 | 高智能档，额度宽松：高频使用不挤占 claude/codex 配额 |
 | `glm-flash` | claude-code | `glm-5.3-flash` | medium | 是 | 最便宜，可读图片：大批量简单重复工作的首选 |
 | `codex-review` | codex-cli | `gpt-6.1-sol` | high | 是 | 只读检查档：独立审查与 `purpose=verify`，在 CLI 的 read-only sandbox 中运行 |
 | `scout` | 内置 | 默认 | low | 随模型 | 只读调查档：进程内运行，用 Pipiclaw 自己的模型与守卫，不占外部额度；轻量调查同步返回 |
+
+`cursor-*` 不写 `thinkingLevel`：当前 Cursor CLI 把推理档做进 model id（如 `…-high`），而 runtime 在声明了 `thinkingLevel` 时会再给 model 加上 `[effort=…]`，该形式会被 CLI 拒绝。需要换档时改 `model`（以本机 `agent models` 为准），不要补 `thinkingLevel`。
 
 三档的分工是这套配置的主要内容：**flash** 用于「做什么和怎么做都已清楚，只差有人去做」，可以大量派发；**main** 是主力，绝大多数实现、排查、文档都在这里，也包括 token 消耗很大的长任务；**high** 只留给这一轮真正需要新判断或取舍的工作。对已经定好的活派 high，只是更贵，不会更对。
 
@@ -68,11 +72,11 @@ exec claude --dangerously-skip-permissions "$@"
 
 留着它是因为这几条跨每一个任务都成立，漏掉的代价又很高（尤其是伪造绿色检查结果和把未验证写成已验证），而让主代理每次委派重打一遍既费 token 又会漂移。
 
-要改就 9 个文件一起改。也可以整段删掉：runtime 允许外部条目的正文为空，此时不会生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex 的 stdin 就是 task 本身。内置条目的正文不能为空——没有正文的角色文件会被 discovery 丢弃。
+要改就 11 个文件一起改。也可以整段删掉：runtime 允许外部条目的正文为空，此时不会生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex-cli / cursor-cli 的 stdin 就是 task 本身。内置条目的正文不能为空——没有正文的角色文件会被 discovery 丢弃。
 
 ## 这套配置的代价，别忽略
 
-- **除 `codex-review` 和内置的 `scout` 外全部是放开权限的写条目。** 这 7 个条目都用 yolo 参数（`claude --dangerously-skip-permissions` / `codex exec --dangerously-bypass-approvals-and-sandbox`）并声明 `mutates: write`，没有 sandbox 兜底。实际边界只剩宿主账号和 `task` 里写明的范围，**必须在可信 checkout 和最小权限账号下使用**。
+- **除 `codex-review` 和内置的 `scout` 外全部是放开权限的写条目。** 这 9 个条目都用 yolo 参数（`claude --dangerously-skip-permissions` / `codex exec --dangerously-bypass-approvals-and-sandbox` / `agent --force`）并声明 `mutates: write`，没有 sandbox 兜底。实际边界只剩宿主账号和 `task` 里写明的范围，**必须在可信 checkout 和最小权限账号下使用**。
 - **同一工作目录同时只容得下一个写委派。** `mutates: write` 会取目标工作区的排他 lease（含父子目录冲突），并行写必须各自 `git worktree`；`codex-review` 不取 lease。
 - **`VERDICT` 是供参考的结论，不是门禁。** runtime 只把检查者的 PASS/FAIL 记到 run 和任务看板上。只有 `codex-review` 在结构上改不了产物；用可写条目做检查时，它可能动过产物。无论哪种，都要自己对照真实产物、diff 和检查输出再采信。
 - **独立性不再由角色提示词提供。** 要评审或验收时，必须在 `task` 里写明"你是检查者，不修实现，不把实现者的总结当作预期行为的来源"，并给出同一份验收口径和待检版本。换一个条目不会自动带来独立性。
@@ -102,5 +106,5 @@ cp /path/to/pipiclaw/examples/sub-agents/agents/codex-main.md .
 - **`description` 是唯一的路由依据。** 它进入主代理的系统提示词（子代理目录，预算 2400 字符），正文不在那里——改正文修不了选错条目。每条写清：能力特征、相对成本、适用场景，以及会改变选择的边界（能不能读图片、额度是否受限）。`runtime` / `workload` / `mutates` 已由目录分组展示，不要在文字里重复。
 - **描述必须属实且可核查。** 写错一句"支持图片输入"，代价是一次几十分钟后才失败的委派，比不写更糟。
 - **不要扩到十几个条目。** agent × 档位 × 权限很容易组合爆炸。每加一个都先问：主代理会因为它做出不同的路由决定吗？答不上来就不该存在。
-- **调 prompt 时看实际发出的内容。** 正文对 claude-code 经 `--append-system-prompt-file` 追加，对 codex-cli 与 task 一起写进 stdin；核对 run 目录里真实的 `system-prompt.txt` / `prompt.txt` 和 argv，不要只审模板 Markdown。
+- **调 prompt 时看实际发出的内容。** 正文对 claude-code 经 `--append-system-prompt-file` 追加，对 codex-cli / cursor-cli 与 task 一起写进 stdin；核对 run 目录里真实的 `system-prompt.txt` / `prompt.txt` 和 argv，不要只审模板 Markdown。
 - 委派的写法、并行隔离、等待与续接见 [../../docs/sub-agents.md](../../docs/sub-agents.md) 与运行时的 `agent-delegation.md` playbook。
