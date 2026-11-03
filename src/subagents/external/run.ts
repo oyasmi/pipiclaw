@@ -246,7 +246,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		runId: input.runId,
 		channelId: input.channelId,
 		runtime: "external",
-		harness: harness.id as "claude-code" | "codex-cli" | "exec",
+		harness: harness.id as "claude-code" | "codex-cli" | "cursor-cli" | "exec",
 		agent: input.agent,
 		label: input.label,
 		source: input.source,

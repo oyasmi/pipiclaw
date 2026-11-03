@@ -66,8 +66,8 @@ function renderKindBreakdown(summary: UsageSummary): string | null {
 }
 
 /**
- * Some harnesses cannot report tokens or cost at all (`exec` reports neither; `codex-cli` reports
- * no cost). Those runs are never dropped from the ledger (spec 040, T7) but their totals are
+ * Some harnesses cannot report tokens or cost at all (`cursor-cli` and `exec` report neither;
+ * `codex-cli` reports no cost). Those runs are never dropped from the ledger (spec 040, T7) but their totals are
  * always 0 by construction, so the aggregate total must say so explicitly — otherwise "$0.0000"
  * reads as "these runs cost nothing" instead of "cost unknown for some of these runs".
  */

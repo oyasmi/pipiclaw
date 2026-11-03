@@ -412,7 +412,7 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 
 1. `/subagents show <runId>`：确认状态、实际 argv、工作目录、pid、stderr 尾部和失败原因。
 2. `/subagents output <runId>`：确认是否已经产生部分文本结果。
-3. 查看 `<name>/subagent-artifacts/<runId>/events.jsonl` 与 `stderr.log`。`claude-code` / `codex-cli` 这类结构化 harness 必须产生可识别的终态事件，只有退出码为 0 但没有终态事件仍会判失败；通用 `exec` 没有事件协议，正常运行时只按退出码判断，因此不能承担 `purpose=verify`。
+3. 查看 `<name>/subagent-artifacts/<runId>/events.jsonl` 与 `stderr.log`。`claude-code` / `codex-cli` / `cursor-cli` 这类结构化 harness 必须产生可识别的终态事件，只有退出码为 0 但没有终态事件仍会判失败；通用 `exec` 没有事件协议，正常运行时只按退出码判断，因此不能承担 `purpose=verify`。
 4. 检查角色的 `maxWallTimeSec`、目标 CLI 登录状态、模型名和 sandbox 参数。
 5. daemon 重启后，外部进程仍可能存活；runtime 会探测 pid 并在进程结束后从产物补判。内置 run 无法跨进程恢复，会标为 `lost`。
 

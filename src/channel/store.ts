@@ -64,7 +64,7 @@ export interface LoggedSubAgentRun {
 	/** Spec 040, D7: the run this entry archives, and its lifecycle context. Only set on terminal archiving. */
 	runId?: string;
 	runtime?: "internal" | "external";
-	harness?: "claude-code" | "codex-cli" | "exec";
+	harness?: "claude-code" | "codex-cli" | "cursor-cli" | "exec";
 	status?: "completed" | "failed" | "cancelled" | "lost";
 	taskId?: string;
 	artifactDir?: string;

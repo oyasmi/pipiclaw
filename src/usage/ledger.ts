@@ -44,9 +44,9 @@ export interface UsageLedgerEntry {
 	taskId?: string;
 	usage: UsageTokens;
 	cost: UsageCost;
-	/** False only when the harness cannot report tokens at all (external `exec`). Display as "unknown", not 0. */
+	/** False when the harness cannot report tokens at all (external `cursor-cli`/`exec`). Display as "unknown", not 0. */
 	usageKnown?: boolean;
-	/** False when the harness omits a cost field (external `codex-cli`/`exec`). Display as "unknown", not 0. */
+	/** False when the harness omits a cost field (external `cursor-cli`/`codex-cli`/`exec`). Display as "unknown", not 0. */
 	costKnown?: boolean;
 }
 
@@ -60,11 +60,11 @@ export interface UsageSummary {
 	byChannel: Record<string, number>;
 	/** Only populated for entries carrying a `taskId`; unattributed spend is absent, not bucketed. */
 	byTask: Record<string, number>;
-	/** Entries with `usageKnown === false` (e.g. the `exec` harness never reports tokens at all).
+	/** Entries with `usageKnown === false` (e.g. `cursor-cli`/`exec` never report tokens at all).
 	 *  Their `usage.total` is always 0 and never contributes to `totalTokens` — display this count
 	 *  rather than let those runs silently read as "0 tokens used". */
 	unknownUsageCount: number;
-	/** Entries with `costKnown === false` (e.g. `codex-cli`/`exec`, which report no cost field).
+	/** Entries with `costKnown === false` (e.g. `cursor-cli`/`codex-cli`/`exec`, which report no cost field).
 	 *  Their `cost.total` is always 0 and never contributes to `totalCost` — same rationale. */
 	unknownCostCount: number;
 }

@@ -47,7 +47,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 6 | `src/memory/` | 一条事实一文件的工位记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
 | 6 | `src/events/` | 定时/传感器事件：定义、校验、文件监视器、`/events` | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
 | 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`record.ts` |
-| 7 | `src/subagents/` | 角色发现、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
+| 7 | `src/subagents/` | 角色发现、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`cursor-cli.ts`、`role-warnings.ts`、`exec.ts`） |
 | 8 | `src/tools/` | 交给 agent 的工具集（适配层），单一声明式注册表 | `registry.ts`（唯一事实源）、`subagent.ts`、`job.ts`、`memory-manage.ts`、各 `create*Tool` |
 | 9 | `src/agent/` | 单频道 agent 编排：SDK 会话、一轮对话、提示词、内置会话命令 | `channel-runner.ts`（门面）、`session/`（`session-host.ts`、`model-selection.ts`、`session-events.ts`、`command-extension.ts`）、`turn/`（`turn-pipeline.ts`、`turn-finish.ts`、`turn-state.ts`、`run-queue.ts`）、`prompt/`（system prompt 流水线）、`builtin-commands.ts` |
 | 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |
@@ -349,7 +349,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 ## 10. 模型与用量
 
 - **模型解析**：`models.json`（供应商/模型定义）+ `auth.json`（密钥）→ SDK `ModelRegistry`；启动时取 `settings.json` 保存的默认模型，否则第一个可用模型。`/model` 切换会重定义"主模型"并清空 fallback 状态。
-- **用量账本**（`usage/ledger.ts`）：JSONL 落在 `state/usage/`，条目分 `turn`（主轮，只记 assistant 用量）/ `subagent`（内置外部委派 run，由 `subagents/runs.ts` 统一写入，只在结算时写一次）/ `sidecar` 三类，保证 Σ(条目) = 真实开销、无重复计数。条目带 `usageKnown`/`costKnown` 标记——`codex-cli` 不报成本、`exec` 连 token 都不报，`/usage` 展示"未知"而不是 0。`/usage` 命令渲染汇总。
+- **用量账本**（`usage/ledger.ts`）：JSONL 落在 `state/usage/`，条目分 `turn`（主轮，只记 assistant 用量）/ `subagent`（内置外部委派 run，由 `subagents/runs.ts` 统一写入，只在结算时写一次）/ `sidecar` 三类，保证 Σ(条目) = 真实开销、无重复计数。条目带 `usageKnown`/`costKnown` 标记——`codex-cli` 不报成本、`cursor-cli` 与 `exec` 连 token 和 cost 都不报，`/usage` 展示"未知"而不是 0。`/usage` 命令渲染汇总。
 - **上下文预算**（`agent/turn/context-budget.ts`）：对"已组装完成的完整 prompt"（含记忆索引/任务摘要/引导）估算 token，投影超过阈值先做预防性 compact，而不是等 SDK 撞墙。
 
 ## 11. 磁盘布局（`src/paths.ts` 集中定义）

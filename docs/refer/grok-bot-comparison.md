@@ -39,7 +39,7 @@ xAI 于 **2026-08-11** 以 early beta 形式发布。此前 SpaceX 收购了 Cur
 | 常驻、有自己的机器 | 云 VM 24/7 运行 | 长驻 daemon（`src/runtime/bootstrap.ts`），在宿主机上执行命令、读写文件 |
 | 无人值守的长任务 | routine + 长任务挂起/恢复 | `events/`（唯一的时间源）、`tasks/`（Goal/DoD 合同 + ticket 唤醒）、后台 jobs |
 | 持久化状态 | 文件、会话、偏好 | 频道 memory（一个事实一个文件，后台 reflect）、session、task loop log |
-| 多 agent 分工 | chief-of-staff + 专职 Bot | `subagent` / `subagent_inline` 委派，可调用外部 claude-code / codex-cli / exec harness |
+| 多 agent 分工 | chief-of-staff + 专职 Bot | `subagent` / `subagent_inline` 委派，可调用外部 claude-code / codex-cli / cursor-cli / exec harness |
 | 危险操作闸门 | 审批检查点 | `src/security/` 的路径、命令、网络 guard + 审计日志；`mutates: write` 对重叠的工作目录加 lease |
 
 ## 3. 不同点

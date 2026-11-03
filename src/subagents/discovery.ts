@@ -12,6 +12,7 @@ import type { SecurityConfig } from "../security/types.js";
 import { splitShellWords } from "../shared/shell-words.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { SUBAGENT_TOOL_NAMES, type SubAgentToolName } from "../tools/contract/names.js";
+import { externalRoleWarning } from "./external/role-warnings.js";
 
 /** Re-exported from the leaf source of truth so validation and the tool set never drift. */
 const ALLOWED_SUB_AGENT_TOOLS = SUBAGENT_TOOL_NAMES;
@@ -29,7 +30,7 @@ const ALLOWED_MEMORY_MODES = ["none", "index"] as const;
 // "max" is a real SDK ThinkingLevel; pipiclaw's own whitelist previously omitted it (spec 040, D4).
 const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const ALLOWED_RUNTIMES = ["internal", "external"] as const;
-const ALLOWED_HARNESSES = ["claude-code", "codex-cli", "exec"] as const;
+const ALLOWED_HARNESSES = ["claude-code", "codex-cli", "cursor-cli", "exec"] as const;
 const ALLOWED_WORKLOADS = ["light", "heavy"] as const;
 const ALLOWED_MUTATES = ["read", "write"] as const;
 
@@ -681,10 +682,6 @@ function parseExternalAgent(
 	// `memory: index` is a real, informed choice; it gets a disclosure warning below.
 	const memoryMode = parseMemoryMode(frontmatter.memory, "none");
 	if (memoryMode.error) return { warning: `${entryName}: ${memoryMode.error}` };
-	const memoryDisclosureWarning =
-		memoryMode.value !== "none"
-			? `${entryName}: memory: ${memoryMode.value} sends the desk memory index / journal content to this external process`
-			: undefined;
 
 	const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC);
 
@@ -706,20 +703,14 @@ function parseExternalAgent(
 			: undefined;
 
 	const externalModelRef = readOptionalTrimmedString(frontmatter.model);
-	// Spec 042 D10: a role's `model:` can only ever come from its own frontmatter (external `model`
-	// is never taken from the invocation) — so if `command` references `$MODEL` and none is
-	// configured here, every dispatch of this role will silently drop that argv token. Surface it
-	// at discovery time, where the fix (add `model:`) is obvious, instead of only as a per-run
-	// warning after the fact. `$EFFORT` gets no equivalent check: `thinkingLevel` can be supplied
-	// per invocation, so an unset frontmatter value does not mean "no value ever".
-	const modelPlaceholderWarning =
-		command.includes("$MODEL") && !externalModelRef
-			? `${entryName}: command references $MODEL but no "model" is configured; that argv token will be dropped on every dispatch`
-			: undefined;
-
-	// All non-fatal (the role still loads); joined rather than picking one so an unlucky
-	// combination never silently loses one of them.
-	const combinedWarning = [memoryDisclosureWarning, modelPlaceholderWarning].filter(Boolean).join("; ") || undefined;
+	const combinedWarning = externalRoleWarning({
+		entryName,
+		harness: harness.value,
+		command,
+		mutates: mutates.value,
+		memory: memoryMode.value ?? "none",
+		modelConfigured: Boolean(externalModelRef),
+	});
 
 	return {
 		warning: combinedWarning,

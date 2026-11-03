@@ -12,8 +12,9 @@ import { useTempDirs } from "../../helpers/fixtures.js";
  * machine — every other harness test drives `parseOutcome` with hand-written fixtures, which only
  * proves the code agrees with itself, not with the real CLI's current output schema. This is the
  * one place that gap is closed, and it is opt-in on purpose: it needs the target CLI installed and
- * already authenticated, which no CI box can assume. Never part of `npm run test` or `npm run
- * check` — only `npm run test:e2e` with `PIPICLAW_E2E_HARNESS` set runs it.
+ * already authenticated, which no CI box can assume. Never part of `npm run test`, `npm run
+ * check`, or deterministic `npm run test:e2e` — only `npm run test:e2e:external` with
+ * `PIPICLAW_E2E_HARNESS` set runs it.
  *
  * Not a gate: a failure here means "the adapter has likely drifted from the CLI's current
  * protocol", worth investigating, not necessarily a regression in this commit.
@@ -22,7 +23,7 @@ import { useTempDirs } from "../../helpers/fixtures.js";
 const REQUESTED_HARNESSES = (process.env.PIPICLAW_E2E_HARNESS ?? "")
 	.split(",")
 	.map((value) => value.trim())
-	.filter((value): value is RunHarness => value === "claude-code" || value === "codex-cli");
+	.filter((value): value is RunHarness => value === "claude-code" || value === "codex-cli" || value === "cursor-cli");
 
 const createTempWorkspace = useTempDirs("pipiclaw-subagent-e2e-smoke-");
 
@@ -41,6 +42,7 @@ function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
 const HARNESS_COMMAND: Record<RunHarness, string> = {
 	"claude-code": "claude -p --dangerously-skip-permissions",
 	"codex-cli": "codex exec --sandbox read-only --skip-git-repo-check",
+	"cursor-cli": "agent --mode ask",
 	exec: "true", // never requested via PIPICLAW_E2E_HARNESS; exec has no protocol to drift.
 };
 
@@ -83,7 +85,13 @@ describeSmoke("external harness smoke (spec 042, D12, opt-in via PIPICLAW_E2E_HA
 			// A failure here is a real, actionable signal (CLI missing, not logged in, or the
 			// adapter's protocol assumptions drifted) — not asserted away, on purpose.
 			expect(record?.status, record?.failureReason ?? "no failure reason recorded").toBe("completed");
-			expect(record?.usage.total ?? 0, "expected some usage to be reported").toBeGreaterThan(0);
+			if (harness === "cursor-cli") {
+				// The CLI result event has no token or cost fields. A zero total must not be treated as known usage.
+				expect(record?.usageKnown).toBe(false);
+				expect(record?.sessionId).toBeTruthy();
+			} else {
+				expect(record?.usage.total ?? 0, "expected some usage to be reported").toBeGreaterThan(0);
+			}
 		},
 		60_000,
 	);

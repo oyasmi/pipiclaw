@@ -26,7 +26,7 @@ export function harnessLabel(record: RunRecord): string {
 	return record.harness ? `${record.runtime}/${record.harness}` : record.runtime;
 }
 
-/** `undefined` when cost genuinely is not known (e.g. `codex-cli`, `exec`) — never displayed as $0. */
+/** `undefined` when cost genuinely is not known (e.g. `cursor-cli`, `codex-cli`, `exec`) — never displayed as $0. */
 export function formatCost(record: RunRecord): string | undefined {
 	if (!record.costKnown) return undefined;
 	return `$${record.usage.cost.total.toFixed(2)}`;

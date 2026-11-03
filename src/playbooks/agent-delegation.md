@@ -69,7 +69,7 @@ daemon 重启后内置 run 判 lost，外部通常继续；外部启动信息尚
 
 ## 纠偏：续接还是重开
 
-`subagent_run op=follow_up` 只支持已结束的 claude-code/codex-cli run，产生新的 runId（归属发起续接的频道）；追加内容只写原契约的变化。目标不变、反馈局部、旧上下文可靠时续接，避免重建背景。换方向、反复沿错误假设尝试、需要独立判断时开新委派。
+`subagent_run op=follow_up` 只支持已结束的 claude-code/codex-cli/cursor-cli run，产生新的 runId（归属发起续接的频道）；追加内容只写原契约的变化。目标不变、反馈局部、旧上下文可靠时续接，避免重建背景。换方向、反复沿错误假设尝试、需要独立判断时开新委派。
 
 内置和 exec 不支持续接，带已有产出重新委派。条目 command/model/shell 改过时续接会拒绝，也应新开。明确阻塞、循环、崩溃、需纠偏或用户要求时才 cancel，耗时长不是理由。取消不再唤醒；用户 `/stop` 不会取消委派。
 

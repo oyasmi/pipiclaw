@@ -125,11 +125,14 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 	return lines.join("\n");
 }
 
-/** Resumable harnesses only: `claude-code`/`codex-cli`. `exec` has no session concept, and internal
- *  runs have no persisted transcript by design (spec 040, non-goals). */
-function resumableHarnessOf(record: RunRecord): "codex-cli" | "claude-code" | undefined {
+/** Resumable harnesses only: `claude-code`/`codex-cli`/`cursor-cli`. `exec` has no session concept,
+ *  and internal runs have no persisted transcript by design (spec 040, non-goals). */
+function resumableHarnessOf(record: RunRecord): "codex-cli" | "claude-code" | "cursor-cli" | undefined {
 	if (record.runtime !== "external") return undefined;
-	return record.harness === "codex-cli" || record.harness === "claude-code" ? record.harness : undefined;
+	if (record.harness === "codex-cli" || record.harness === "claude-code" || record.harness === "cursor-cli") {
+		return record.harness;
+	}
+	return undefined;
 }
 
 export function createSubAgentListTool(options: SubAgentManageToolOptions): AgentTool<typeof subagentListSchema> {

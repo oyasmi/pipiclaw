@@ -299,6 +299,68 @@ ${"x".repeat(16001)}`,
 		);
 		expect(badDefault.error).toContain("was not found among available models");
 	});
+
+	// Spec 066 D6: cursor-cli print mode and --worktree are configuration mistakes, not load failures.
+	// A path that merely contains the same letters must not count as the flag.
+	it.each([
+		{ file: "read-f.md", command: "agent -f", mutates: "read", force: "modify", worktree: false },
+		{ file: "read-force.md", command: "agent --force", mutates: "read", force: "modify", worktree: false },
+		{ file: "read-yolo.md", command: "agent --yolo", mutates: "read", force: "modify", worktree: false },
+		{ file: "read-lookalike.md", command: "agent /tmp/not--yolo", mutates: "read", force: "none", worktree: false },
+		{ file: "write-missing.md", command: "agent --mode ask", mutates: "write", force: "print", worktree: false },
+		{
+			file: "write-lookalike.md",
+			command: "agent /tmp/not--force",
+			mutates: "write",
+			force: "print",
+			worktree: false,
+		},
+		{ file: "write-f.md", command: "agent -f", mutates: "write", force: "none", worktree: false },
+		{ file: "write-force.md", command: "agent --force", mutates: "write", force: "none", worktree: false },
+		{ file: "write-yolo.md", command: "agent --yolo", mutates: "write", force: "none", worktree: false },
+		{ file: "worktree.md", command: "agent --force --worktree", mutates: "write", force: "none", worktree: true },
+		{ file: "worktree-eq.md", command: "agent --worktree=feature", mutates: "read", force: "none", worktree: true },
+		{ file: "worktree-w.md", command: "agent -w", mutates: "read", force: "none", worktree: true },
+	] as const)(
+		"cursor-cli $file warns on misconfiguration and still loads",
+		({ file, command, mutates, force, worktree }) => {
+			const workspaceDir = createTempWorkspace();
+			const subAgentsDir = getSubAgentsDir(workspaceDir);
+			mkdirSync(subAgentsDir, { recursive: true });
+			const name = file.replace(/\.md$/, "");
+			writeFileSync(
+				join(subAgentsDir, file),
+				`---
+name: ${name}
+description: cursor role
+runtime: external
+harness: cursor-cli
+command: ${command}
+mutates: ${mutates}
+---
+
+Body.
+`,
+				"utf-8",
+			);
+
+			const discovery = discoverSubAgents(workspaceDir, []);
+			expect(discovery.agents.find((agent) => agent.name === name)).toMatchObject({
+				harness: "cursor-cli",
+				mutates,
+				command,
+			});
+			const own = discovery.warnings.filter((warning) => warning.includes(file));
+			if (force === "print") expect(own.join("\n")).toContain("print mode does not write");
+			if (force === "modify") expect(own.join("\n")).toContain("can modify files");
+			if (force === "none") {
+				expect(own.join("\n")).not.toContain("print mode does not write");
+				expect(own.join("\n")).not.toContain("can modify files");
+			}
+			if (worktree) expect(own.join("\n")).toContain("worktrees");
+			else expect(own.join("\n")).not.toContain("worktrees");
+		},
+	);
 });
 
 describe("sub-agent runtime context", () => {

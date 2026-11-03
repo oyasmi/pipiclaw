@@ -4,7 +4,7 @@ import type { SubAgentThinkingLevel } from "../discovery.js";
 /**
  * The harness adapter seam (spec 040, D4). Every external run is reduced to the same process
  * model (D3: one prompt, one short-lived process); what differs between `claude-code`,
- * `codex-cli`, and `exec` is only argv assembly and stdout parsing, and that is exactly what this
+ * `codex-cli`, `cursor-cli`, and `exec` is only argv assembly and stdout parsing, and that is exactly what this
  * interface covers. It carries no state machine of its own — `runs.ts` owns that.
  */
 
@@ -29,7 +29,7 @@ export interface ExternalInvocationInput {
 export interface BuildInvocationResult {
 	executable: string;
 	args: string[];
-	/** Whether this harness can be continued later via `resumeSessionId` (claude-code/codex-cli). */
+	/** Whether this harness can be continued later via `resumeSessionId` (claude-code/codex-cli/cursor-cli). */
 	resumable: boolean;
 	/**
 	 * claude-code only (D4): a session id it picked and passed via `--session-id` *before* running,
@@ -55,9 +55,9 @@ export interface ExternalOutcome {
 	/** The harness's own session/thread id, captured for a later `resume` even if this run failed midway. */
 	sessionId?: string;
 	usage?: Partial<UsageTotals>;
-	/** `exec` is always false: it has no token accounting at all. */
+	/** `cursor-cli`/`exec` are always false: neither reports tokens. */
 	usageKnown: boolean;
-	/** `codex-cli`/`exec` are always false: neither reports a cost field. */
+	/** `cursor-cli`/`codex-cli`/`exec` are always false: none of them reports a cost field. */
 	costKnown: boolean;
 	stderrTail?: string;
 	errorMessage?: string;
@@ -72,7 +72,7 @@ export interface ParseOutcomeInput {
 }
 
 export interface ExternalHarness {
-	readonly id: "claude-code" | "codex-cli" | "exec";
+	readonly id: "claude-code" | "codex-cli" | "cursor-cli" | "exec";
 	/**
 	 * Spec 042 D12: bumped by hand whenever this adapter's `parseOutcome` schema assumptions
 	 * change. Persisted on the run and shown by `/subagents show`, so a failure caused by upstream

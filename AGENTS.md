@@ -2,7 +2,7 @@
 
 ## Project
 
-Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-works/pi-coding-agent`. It adds AI Card streaming, layered memory, scheduled work, desks (named work contexts of one assistant, used by DingTalk channels and Web API conversations, the terminal being a Web API client), and unified delegation to internal agents or external Claude Code, Codex CLI, and custom executors.
+Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-works/pi-coding-agent`. It adds AI Card streaming, layered memory, scheduled work, desks (named work contexts of one assistant, used by DingTalk channels and Web API conversations, the terminal being a Web API client), and unified delegation to internal agents or external Claude Code, Codex CLI, Cursor CLI, and custom executors.
 
 ## Core Structure
 

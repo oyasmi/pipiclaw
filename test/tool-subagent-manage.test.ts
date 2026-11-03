@@ -124,7 +124,7 @@ describe("subagent_manage tool", () => {
 		await expect(tool.execute("call-3", { op: "cancel", runId: "no-such-run" })).rejects.toThrow("was not found");
 	});
 
-	it("follow_up is rejected for an internal run and for a still-running codex-cli run", async () => {
+	it("follow_up is rejected for an internal run, a still-running codex-cli run, and a finished exec run", async () => {
 		configureSubAgentRuntime({});
 		const channelId = `dingtalk:dm:manage_followup_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
@@ -153,6 +153,38 @@ describe("subagent_manage tool", () => {
 			tools: [],
 			artifactDir: "/tmp/artifacts/run-running",
 		});
+		await manager.register({
+			...base,
+			runId: "run-exec",
+			runtime: "external",
+			harness: "exec",
+			agent: "shell",
+			label: "shell",
+			tools: [],
+			artifactDir: "/tmp/artifacts/run-exec",
+		});
+		await manager.settle(
+			"run-exec",
+			{
+				status: "completed",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				usageKnown: false,
+				costKnown: false,
+				turns: 0,
+				toolCalls: 0,
+				durationMs: 0,
+				outputText: "done",
+				sessionId: "exec-session",
+			},
+			{ announce: false },
+		);
 
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", desk: "news", deskDir: "/tmp/channel" });
 		await expect(
@@ -161,6 +193,10 @@ describe("subagent_manage tool", () => {
 		await expect(
 			tool.execute("call-5", { op: "follow_up", runId: "run-running", task: "keep going" }),
 		).rejects.toThrow("still running");
+		// A session id does not make exec resumable: it has no protocol session to continue.
+		await expect(
+			tool.execute("call-exec", { op: "follow_up", runId: "run-exec", task: "keep going" }),
+		).rejects.toThrow("does not support follow_up yet");
 	});
 
 	it("follow_up on a finished codex-cli run with no sessionId is rejected", async () => {
@@ -209,104 +245,117 @@ describe("subagent_manage tool", () => {
 		);
 	});
 
-	it("follow_up on a completed codex-cli run with a session id launches a resumed run", async () => {
-		configureSubAgentRuntime({});
-		launchExternalRunMock.mockClear();
-		const channelId = `dingtalk:dm:manage_followup_ok_${Date.now()}`;
-		const manager = getSubAgentRunManager(channelId);
-		await manager.register({
-			runId: "run-6",
-			channelId,
-			runtime: "external",
-			harness: "codex-cli",
-			agent: "builder",
-			label: "build",
-			source: "predefined",
-			tools: [],
-			purpose: "work",
-			workingDirectory: "/tmp/checkout",
-			artifactDir: "/tmp/checkout/subagent-artifacts/run-6",
-		});
-		await manager.settle(
-			"run-6",
-			{
-				status: "completed",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					total: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				usageKnown: true,
-				costKnown: false,
-				turns: 0,
-				toolCalls: 0,
-				durationMs: 0,
-				outputText: "Done.",
-				sessionId: "thread-abc",
-			},
-			{ announce: false },
-		);
-
-		const tool = createSubAgentManageTool({
-			channelId,
-			workspaceDir: "/workspace",
-			desk: "news",
-			deskDir: "/workspace/dingtalk:dm:manage_followup_ok",
-			getSubAgentDiscovery: () => ({
-				directory: "/workspace/sub-agents",
-				warnings: [],
-				agents: [
-					{
-						name: "builder",
-						description: "builder role",
-						systemPrompt: "You build things.",
-						tools: [],
-						maxTurns: 24,
-						maxToolCalls: 48,
-						maxWallTimeSec: 1800,
-						bashTimeoutSec: 120,
-						contextMode: "isolated",
-						memory: "none",
-						paths: [],
-						source: "predefined",
-						runtime: "external",
-						harness: "codex-cli",
-						command: "codex exec",
-						mutates: "read",
+	it.each([
+		{ harness: "codex-cli" as const, command: "codex exec", sessionId: "thread-abc" },
+		{ harness: "cursor-cli" as const, command: "agent --mode ask", sessionId: "chat-abc" },
+	])(
+		"follow_up on a completed $harness run with a session id launches a resumed run",
+		async ({ harness, command, sessionId }) => {
+			configureSubAgentRuntime({});
+			launchExternalRunMock.mockClear();
+			const channelId = `dingtalk:dm:manage_followup_ok_${harness}_${Date.now()}`;
+			const manager = getSubAgentRunManager(channelId);
+			const runId = `run-${harness}`;
+			await manager.register({
+				runId,
+				channelId,
+				runtime: "external",
+				harness,
+				agent: "builder",
+				label: "build",
+				source: "predefined",
+				tools: [],
+				purpose: "work",
+				workingDirectory: "/tmp/checkout",
+				artifactDir: `/tmp/checkout/subagent-artifacts/${runId}`,
+			});
+			await manager.settle(
+				runId,
+				{
+					status: "completed",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						total: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 					},
-				],
-			}),
-		});
+					usageKnown: harness !== "cursor-cli",
+					costKnown: false,
+					turns: 0,
+					toolCalls: 0,
+					durationMs: 0,
+					outputText: "Done.",
+					sessionId,
+				},
+				{ announce: false },
+			);
 
-		const result = await tool.execute("call-7", {
-			op: "follow_up",
-			runId: "run-6",
-			task: "keep going",
-		});
-		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
-		// spec 041: follow_up mints its own short run id rather than reusing the dispatching tool
-		// call's id (which is a long, provider-specific composite on some providers).
-		expect(text).toMatch(/runId=run_[a-z0-9]{6}/);
-		expect(text).toContain("run-6");
-		expect(launchExternalRunMock).toHaveBeenCalledTimes(1);
-		const launchInput = launchExternalRunMock.mock.calls[0]?.[0] as { task: string; artifactDir: string };
-		expect(launchInput).toMatchObject({
-			runId: expect.stringMatching(/^run_[a-z0-9]{6}$/),
-			resumeSessionId: "thread-abc",
-			harness: "codex-cli",
-			mutates: "read",
-			workspaceDir: "/workspace",
-		});
-		// The resumed session already holds the first envelope: the follow-up carries the instruction
-		// and its own freshly computed artifact directory, not a second copy of the runtime context.
-		expect(launchInput.task).toContain("keep going");
-		expect(launchInput.task).toContain(launchInput.artifactDir);
-		expect(launchInput.task).not.toContain("Runtime context:");
-		expect(launchInput.artifactDir).toMatch(/^\/tmp\/checkout\/subagent-artifacts\/run_[a-z0-9]{6}$/);
-	});
+			const tool = createSubAgentManageTool({
+				channelId,
+				workspaceDir: "/workspace",
+				desk: "news",
+				deskDir: "/workspace/dingtalk:dm:manage_followup_ok",
+				getSubAgentDiscovery: () => ({
+					directory: "/workspace/sub-agents",
+					warnings: [],
+					agents: [
+						{
+							name: "builder",
+							description: "builder role",
+							systemPrompt: "You build things.",
+							tools: [],
+							maxTurns: 24,
+							maxToolCalls: 48,
+							maxWallTimeSec: 1800,
+							bashTimeoutSec: 120,
+							contextMode: "isolated",
+							memory: "none",
+							paths: [],
+							source: "predefined",
+							runtime: "external",
+							harness,
+							command,
+							mutates: "read",
+						},
+					],
+				}),
+			});
+
+			const result = await tool.execute("call-7", {
+				op: "follow_up",
+				runId,
+				task: "keep going",
+			});
+			const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
+			// spec 041: follow_up mints its own short run id rather than reusing the dispatching tool
+			// call's id (which is a long, provider-specific composite on some providers).
+			expect(text).toMatch(/runId=run_[a-z0-9]{6}/);
+			expect(text).toContain(runId);
+			expect(launchExternalRunMock).toHaveBeenCalledTimes(1);
+			const launchInput = launchExternalRunMock.mock.calls[0]?.[0] as {
+				task: string;
+				artifactDir: string;
+				workingDirectory: string;
+			};
+			expect(launchInput).toMatchObject({
+				runId: expect.stringMatching(/^run_[a-z0-9]{6}$/),
+				resumeSessionId: sessionId,
+				harness,
+				mutates: "read",
+				workspaceDir: "/workspace",
+				workingDirectory: "/tmp/checkout",
+			});
+			// The resumed session already holds the first envelope: the follow-up carries the instruction
+			// and its own freshly computed artifact directory, not a second copy of the runtime context.
+			expect(launchInput.task).toContain("keep going");
+			expect(launchInput.task).toContain(launchInput.artifactDir);
+			expect(launchInput.task).not.toContain("Runtime context:");
+			expect(launchInput.artifactDir).toMatch(/^\/tmp\/checkout\/subagent-artifacts\/run_[a-z0-9]{6}$/);
+			expect(launchInput.artifactDir).not.toContain(runId);
+		},
+	);
 
 	it("follow_up is rejected when the role's harness changed since the original run (P1-2)", async () => {
 		configureSubAgentRuntime({});

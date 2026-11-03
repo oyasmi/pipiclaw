@@ -9,7 +9,7 @@ import type { WorkspaceBaseline } from "./workspace-summary.js";
 
 export type RunStatus = "running" | "completed" | "failed" | "cancelled" | "lost";
 export type RunRuntime = "internal" | "external";
-export type RunHarness = "claude-code" | "codex-cli" | "exec";
+export type RunHarness = "claude-code" | "codex-cli" | "cursor-cli" | "exec";
 export type RunMutates = "read" | "write";
 
 export type RunResolution =
@@ -38,9 +38,9 @@ export interface PendingSettlement {
 
 export interface RunUsage {
 	usage: UsageTotals;
-	/** False only for harnesses that cannot report tokens at all (`exec`). */
+	/** False for harnesses that cannot report tokens at all (`cursor-cli`, `exec`). */
 	usageKnown: boolean;
-	/** False for harnesses that omit a cost field (`codex-cli`, `exec`). */
+	/** False for harnesses that omit a cost field (`cursor-cli`, `codex-cli`, `exec`). */
 	costKnown: boolean;
 }
 

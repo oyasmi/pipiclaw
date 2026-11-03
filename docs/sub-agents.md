@@ -170,7 +170,7 @@ bashTimeoutSec: 180
 | 字段 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `name` / `description` | 是 | - | 同上 |
-| `harness` | 是 | - | `claude-code`、`codex-cli` 或 `exec` |
+| `harness` | 是 | - | `claude-code`、`codex-cli`、`cursor-cli` 或 `exec` |
 | `command` | 是 | - | 目标 CLI 的命令行，按 shell 词法分词后直接 argv 调用，**不经过 shell** |
 | `mutates` | 是 | - | `read` 或 `write`，无默认值——这是一次显式声明，决定是否取 workspace 写锁；`purpose=verify` 允许 `write`，但这类检查者无法保证没动过被检查的产物 |
 | `model` | 否 | - | 目标 harness 自己的模型字符串（如 `sonnet`），**原样透传，不经过 `models.json` 校验** |
@@ -272,7 +272,7 @@ bashTimeoutSec: 180
 | `subagent_list` | 本工位的 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况（零参数） |
 | `subagent_run op=show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
 | `subagent_run op=cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
-| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
+| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`/`cursor-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
 
 `follow_up` 只发新增的内容：被续接的会话里已经有首次派发的完整信封（运行时上下文、`paths`/记忆上下文块、角色说明），重发一遍只会重复计费并淹没新指令。续接信封只包含工作目录、这次续接新分配的产物目录、新指令，以及 `purpose=verify` 时的验收协议（结算要读它最后的 VERDICT 行）。verify 的准入检查（`exec` 不能验收）也在 `follow_up` 上重新核对一遍；当前角色若声明 `mutates: write`，续接会像首次派发一样先取得目标工作区独占 lease。
 
@@ -367,7 +367,7 @@ my-gateway/gpt-4.1
 - 多来源综合、代码审查、改动分组和独立验收：通常使用 `medium`。
 - 只有任务确实需要更深推理且预算允许时才使用 `high` 或 `xhigh`。
 
-外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`——但仅当 `thinkingLevel` 实际有值时才追加；未声明的外部 work 角色不会看到这个 flag。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果——未声明 `thinkingLevel` 的外部 work 角色，argv 里不应出现 `--effort` / `model_reasoning_effort`。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
+外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`，cursor-cli 把档位折进模型 id 的 `effort=`（如 `gpt-5[effort=high]`）——但仅当 `thinkingLevel` 实际有值时才追加；未声明的外部 work 角色不会看到这个参数。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位；cursor-cli 不把 `xhigh` / `max` 再往下夹，CLI 不接受时进程失败并在 stderr 留下原因。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果——未声明 `thinkingLevel` 的外部 work 角色，argv 里不应出现 `--effort` / `model_reasoning_effort` / `effort=`。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
 
 结构化 harness 对角色字段和协议参数的组装如下；这些都由 runtime 负责，不需要写进 `command`：
 
@@ -375,7 +375,10 @@ my-gateway/gpt-4.1
 |---|---|---|---|---|
 | `claude-code` | `--model <model>` | `--effort <level>` | system prompt 使用 `--append-system-prompt-file`，task 走 stdin | `--session-id` / `--resume`，`-p --output-format stream-json --verbose` |
 | `codex-cli` | `-m <model>` | `-c model_reasoning_effort=<level>` | system prompt 与 task 合并后走 stdin | `resume <thread-id>`，`--json -` |
+| `cursor-cli` | `--model <model>`，推理档写进模型 id 的 `effort=` | 不单独追加 flag；`off` / `minimal` / `low` 写成 `low` | system prompt 与 task 合并后走 stdin | `--resume <id>`，`-p --output-format stream-json`；runtime 追加 `--trust` |
 | `exec` | 不自动追加 | 不自动追加 | system prompt 与 task 合并后走 stdin | 不支持续接，无结构化终态协议 |
+
+cursor-cli 的可执行文件名是 `agent`，由 `command` 指定。runtime 追加 `-p --output-format stream-json`，有模型且 command 尚未自带 `--model` / `-m` 时追加 `--model`，并在 command 没有 `--trust` 时追加 `--trust`（无人值守进程回答不了工作区信任提示）。`--force` 属于 `command`，`-f` 和 `--yolo` 与它等价；runtime 不追加 `--force`、`--mode`、sandbox、workspace 或 worktree。print 模式如果这三个权限参数一个都没有，CLI 只提议修改，不会把改动写进文件。只读推荐 `agent --mode ask`（或 `--mode plan`），写入推荐 `agent --force`。工作目录里的 `.cursor/rules` 和项目说明会被 CLI 自己读入；角色正文只是用户消息的前缀，不是 claude-code 那种 system prompt 隔离。认证沿用 CLI 自己的登录或环境变量 `CURSOR_API_KEY`，不要把密钥写进角色文件。command 使用 `--worktree` / `-w` 时，实际写入在 `~/.cursor/worktrees/`，不在这次委派的工作目录，workspace 写锁覆盖不到。
 
 ### `mutates`（写权限声明）
 
