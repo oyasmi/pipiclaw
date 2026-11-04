@@ -103,7 +103,7 @@
 
 `subagent`（角色优先）把一项聚焦工作交给一个**已配置**的角色，只传 `agent`/`task` 加上可选的 `workingDirectory`/`purpose`/`taskId`——工具、模型、预算、上下文策略全部来自角色文件，调用侧不能覆盖。`subagent_inline` 是没有合适角色时的一次性执行者，携带 `systemPrompt` 及 `tools`/`model`/`effort`/`context`/`thinkingLevel`/`mutates` 等覆盖字段；可以用 `tools.subagentInline.enabled: false` 整体关掉（默认开）。
 
-- **内置角色**使用 Pipiclaw 的模型和工具，聊天共享 1 秒快速返回窗口，超过后转为后台运行；任务步骤内确认启动后立即异步返回。
+- **内置角色**使用 Pipiclaw 的模型和工具，聊天共享 10 秒快速返回窗口，超过后转为后台运行；任务步骤内确认启动后立即异步返回。
 - **外部角色**启动 Claude Code、Codex CLI 或 `exec`，恒为异步，派发后立即返回 `runId`；DingTalk daemon 会在完成时唤醒发起委派的频道；没有 daemon 时，终端内嵌的运行时只在终端打开期间做这件事。
 
 委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。

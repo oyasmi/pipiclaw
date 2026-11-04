@@ -327,22 +327,16 @@ const cases: Record<string, OracleControl[]> = {
 	"D-merge-01": [
 		pass(
 			"async-completions",
-			"A dispatched result is equivalent only after the addressed completion is persisted",
+			"A dispatched result is equivalent only after the SDK receives the addressed completion",
 			(ctx) => {
-				const runs = ["NORTH-493", "SOUTH-862"].map((token, index) => {
+				for (const [index, token] of ["NORTH-493", "SOUTH-862"].entries()) {
 					const runId = `run_fragment_${index}`;
 					const result = ctx.trace.filter((entry) => entry.kind === "tool-result")[index];
 					result.fields = { detail: `[Dispatched] ${runId}` };
-					return {
-						type: "message",
-						message: { role: "user", content: [{ type: "text", text: `[SUBAGENT:${runId}] ${token}` }] },
-					};
-				});
-				controlFile(
-					ctx,
-					"conversations/dm-1/session.jsonl",
-					`${runs.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-				);
+					controlEvent(ctx, "runtime-log", undefined, {
+						receivedUserMessage: JSON.stringify([{ type: "text", text: `[SUBAGENT:${runId}] ${token}` }]),
+					});
+				}
 			},
 		),
 		reject(
@@ -359,6 +353,12 @@ const cases: Record<string, OracleControl[]> = {
 			(ctx) => {
 				for (const entry of ctx.trace.filter((event) => event.kind === "tool-result"))
 					entry.fields = { detail: `[Dispatched] ${entry.correlationId}` };
+				for (const [index, token] of ["NORTH-493", "SOUTH-862"].entries()) {
+					controlEvent(ctx, "runtime-log", undefined, {
+						receivedUserMessage: `[SUBAGENT:run_fragment_${index}] ${token}`,
+					});
+					ctx.trace.at(-1)!.actorId = "internal-worker";
+				}
 			},
 		),
 

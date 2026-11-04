@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 完成通知与委派等待优化离线门禁通过，行为验收受额度阻断；分段调度已移出范围 |
+| 状态 | 已完成范围内实现、离线门禁和定向真实模型验收；分段调度已移出范围 |
 | 日期 | 2026-11-04 |
 | 设计 | [design.md](./design.md)，D1–D8 |
 | 交付顺序 | A1 → A2 → A3 → A4 → A5 → A6 → A7 |
@@ -24,7 +24,7 @@
 | A3 job 完成事件和 poll | `file-store.ts`、`jobs/manager.ts`、同域 `completion-observer.ts` / `probe.ts`、app/runtime 的 FileStore 注入 | watcher 与恢复接线；poll 无丢信号；不支持 watcher 的实现继续可用 |
 | A4 频道容量重试 | `runtime/channel-queue.ts`、`ingress.ts`、`durable-dispatch.ts` | 周期 drain 停用时，容量恢复仍消费 pending；失败退避有效 |
 | A5 task 步骤内结果消费 | `runtime/bootstrap.ts`、`task-lane*.ts`、新建 `task-input.ts`、`task-step.ts`、`agent/types.ts` 和既有 steer pipeline | 结果进入同一 step 的下一模型请求；落盘回执、序号栅栏和停止边界正确 |
-| A6 内部委派短等待 | `subagents/grace.ts`、`internal/run.ts`、`tools/index.ts` 的已有上下文接线 | task 异步，聊天共享 1 秒窗口，正常/失败/取消计费与完成路由一致 |
+| A6 内部委派短等待 | `subagents/grace.ts`、`internal/run.ts`、`tools/index.ts` 的已有上下文接线 | task 异步，聊天共享 10 秒窗口，正常/失败/取消计费与完成路由一致 |
 | A7 文档和最终验收 | 顶层专题文档、相关 playbook、评测记录 | 完整门禁和行为验证记录；仅使用官方发布的 SDK |
 
 这些是可审查的工作包，不要求逐包部署。D1–D8 的语义有冲突时先用源码证据修订方案，不把临时绕过写成最终实现。
@@ -90,7 +90,9 @@
 
 ## 8. A6：内部委派策略
 
-在 A5 稳定后启用 D5：task 注册成功即 dispatched；聊天 1 秒共享 grace。删除 120 秒的生产默认，不保留隐藏旧行为开关；测试用的 timing 覆写保留。
+在 A5 稳定后启用 D5：task 注册成功即 dispatched；聊天 10 秒共享 grace。删除 120 秒的生产默认，不保留隐藏旧行为开关；测试用的 timing 覆写保留。
+
+实施时最初采用 1 秒窗口；真实对照发现额外主模型轮次后，按下述端到端验证要求修订为 10 秒，并重新采集固定模型/thinking/fixture 的配对样本。旧失败保留，实际结果见 acceptance.md。
 
 重点复核 worker 极快完成、启动失败、父回合 abort、多个委派同批、共享 grace 已过期、worker 备用重试、task 输入尚未消费时关闭的分支。保持一次结算、一次用量、唯一完成路由，不能同时返回 inline 结果又发送完成输入。
 

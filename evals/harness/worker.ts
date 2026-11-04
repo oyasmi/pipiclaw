@@ -187,6 +187,11 @@ function eventTrace(event: unknown): void {
 
 	if (type === "message_end" && isRecord(record.message)) {
 		const message = record.message;
+		if (message.role === "user") {
+			const content = JSON.stringify(message.content);
+			if (content && content.length <= 1_000_000)
+				trace({ kind: "runtime-log", fields: { receivedUserMessage: content } });
+		}
 		const usage = isRecord(message.usage) ? message.usage : undefined;
 		const model = stringField(message.responseModel) ?? stringField(message.model);
 		if (model) observedModel = model;

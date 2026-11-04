@@ -45,12 +45,12 @@ export function watchAbort(signal: AbortSignal | undefined): { aborted: Promise<
  * placeholder instead of the result (D2). A code constant, not a settings key, per CLAUDE.md's
  * rule for numeric thresholds.
  */
-export const CHAT_SYNC_GRACE_MS = 1_000;
+export const CHAT_SYNC_GRACE_MS = 10_000;
 
 /**
  * Effective sync grace window. A test-only env override (`PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS`)
  * lets the deterministic e2e layer exercise the detached-settlement + completion-wake path
- * (spec 048 A14/A15/A16) without a multi-minute wait; production always uses the shared one-second chat window.
+ * (spec 048 A14/A15/A16) without a multi-minute wait; production always uses the shared ten-second chat window.
  */
 export function resolveSyncGraceMs(override?: number): number {
 	if (override !== undefined) return override;

@@ -146,6 +146,14 @@ describe("eval supervision and evidence", () => {
 					.trim(),
 			).toBe(home.workspaceDir);
 			expect(trace.some((entry) => entry.kind === "model-result")).toBe(true);
+			// 067: async receipts must survive sealed trace replay; filesystem-only evidence did not.
+			// Mutation checked 2026-11-04: removing compiled SDK user-message capture fails this assertion.
+			const userStep = probe.script.find((step) => step.kind === "user")!;
+			expect(
+				trace.some(
+					(entry) => entry.actorId === "main-agent" && entry.fields?.receivedUserMessage?.includes(userStep.text),
+				),
+			).toBe(true);
 			expect(deliveries.some((delivery) => delivery.method === "sendPlain")).toBe(true);
 			expect(model.unmatched()).toHaveLength(0);
 

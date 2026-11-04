@@ -159,7 +159,7 @@ bashTimeoutSec: 180
 | `thinkingLevel` | 否 | `medium`（与主代理默认推理档一致） | `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；内置路径会按模型能力 clamp 到最近的可用档 |
 | `maxTurns` | 否 | `32` | 最大 assistant 轮数 |
 | `maxToolCalls` | 否 | `96` | 最大工具调用次数。上限受子代理自身上下文约束——内置路径没有压缩机制，单次工具输出上限 50KB，调得过高会把"预算触顶仍有收敛回合"的软失败换成上下文溢出的硬失败 |
-| `maxWallTimeSec` | 否 | `600` | 最大总执行时长，秒；聊天仅共享等待 1 秒，task 立即异步派发，见下文"同步宽限窗口" |
+| `maxWallTimeSec` | 否 | `600` | 最大总执行时长，秒；聊天仅共享等待 10 秒，task 立即异步派发，见下文"同步宽限窗口" |
 | `bashTimeoutSec` | 否 | `120` | 子代理内 bash 命令默认超时，秒 |
 | `workload` | 否 | `light` | `light` 或 `heavy`，只影响系统提示里的目录分组展示 |
 | `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁。`purpose=verify` 允许 `write`，但这类验证会取独占写锁，也无法保证没动过被检查的产物。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent_inline` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
@@ -244,7 +244,7 @@ bashTimeoutSec: 180
 
 无论内置还是外部，`subagent`/`subagent_inline` 的调用只是**可选地等待**结果：
 
-- 普通聊天的内置委派共享 1 秒快速返回窗口：窗口内完成则内联返回，否则返回运行 id，完成后自动通知。这个窗口按发起回合的 AbortSignal 共享，后续调用只等待剩余时间；不会改变 worker 自己的执行预算。
+- 普通聊天的内置委派共享 10 秒快速返回窗口：窗口内完成则内联返回，否则返回运行 id，完成后自动通知。这个窗口按发起回合的 AbortSignal 共享，后续调用只等待剩余时间；不会改变 worker 自己的执行预算。
 - task 内的内置委派在注册、任务绑定和启动完成后立即返回，极快完成也统一把结果写入所属任务，避免同时内联返回和重复通知。
 - 外部角色确认启动后立即返回。`/stop` 结束聊天等待，已经派发的工作继续运行。
 

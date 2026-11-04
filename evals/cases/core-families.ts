@@ -330,14 +330,28 @@ export const coreFamilyCases: EvalCase[] = [
 						.map(
 							(name) =>
 								JSON.parse(readFileSync(join(directory, name), "utf8")) as {
+									runId: string;
 									status: string;
 									wakeEnqueued?: boolean;
 								},
 						);
 					const outbox = join(ctx.homeDir, "state", "dispatch");
+					const results = toolObservations(ctx, "subagent");
+					const lastTurn = ctx.trace.filter((event) => ["turn-start", "turn-end"].includes(event.kind)).at(-1);
 					return (
 						records.length >= 2 &&
 						records.every((record) => record.status !== "running" && record.wakeEnqueued) &&
+						records.every(
+							(record) =>
+								receivedRunResult(ctx, record.runId, "") ||
+								results.some(
+									({ result }) =>
+										result.ok &&
+										result.fields?.detail?.includes(record.runId) &&
+										!result.fields.detail.includes("[Dispatched]"),
+								),
+						) &&
+						lastTurn?.kind === "turn-end" &&
 						(!existsSync(outbox) || !readdirSync(outbox).some((name) => name.endsWith(".json")))
 					);
 				},

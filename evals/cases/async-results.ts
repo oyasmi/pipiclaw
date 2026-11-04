@@ -16,7 +16,7 @@ export const asyncResultCases: EvalCase[] = [
 		source: "067 asynchronous completion and paused task contract",
 		description: "任务暂停期间执行者失败；恢复后依据真实失败输出汇报，不提前推进或重复派发。",
 		definitionFile: "evals/cases/async-results.ts",
-		budget: { maxWallMs: 240_000, maxTurns: 16 },
+		budget: { maxWallMs: 240_000, maxTurns: 24 },
 		setup: async (ctx) => {
 			await mkdir(join(ctx.deskDir, ".eval"), { recursive: true });
 			await mkdir(join(ctx.workspaceDir, "sub-agents"), { recursive: true });
