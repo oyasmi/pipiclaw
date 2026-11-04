@@ -46,6 +46,7 @@ import type { PipiclawSkillsResult } from "../../skills/types.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../../subagents/discovery.js";
 import type { SubAgentRunManager } from "../../subagents/runs.js";
 import type { TaskControl } from "../../tasks/control.js";
+import { withExecutionTrace } from "../../tools/contract/execution-trace.js";
 import { createPipiclawTools } from "../../tools/index.js";
 import type { UsageLedger } from "../../usage/ledger.js";
 import { buildPipiclawSystemPrompt } from "../prompt/builder.js";
@@ -58,6 +59,7 @@ import { createCommandExtension } from "./command-extension.js";
 import { SessionCompaction } from "./compaction.js";
 import { RequestContextInput } from "./context-input.js";
 import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./event-guards.js";
+import { SessionExecutionTrace } from "./execution-trace.js";
 import type { ModelSelection } from "./model-selection.js";
 import { requestTools } from "./request-tools.js";
 import {
@@ -117,6 +119,7 @@ export interface SessionHostDeps {
 }
 
 export class SessionHost {
+	readonly trace: SessionExecutionTrace;
 	private readonly contextInput = new RequestContextInput();
 	private readonly conversation: DeskConversation;
 	private readonly channelId: string;
@@ -180,6 +183,12 @@ export class SessionHost {
 		this.channelId = deps.conversation.channelId;
 		this.deskDir = deps.conversation.deskDir;
 		this.conversationDir = deps.conversation.conversationDir;
+		this.trace = new SessionExecutionTrace(deps.profile, () => ({
+			desk: this.conversation.desk,
+			channelId: this.channelId,
+			conversation: this.conversationDir,
+			session: this.session?.sessionManager.getSessionId(),
+		}));
 		this.workspaceDir = deps.workspaceDir;
 		this.describeConversation = deps.describeConversation;
 		this.appHomeDir = deps.appHomeDir;
@@ -615,7 +624,10 @@ export class SessionHost {
 			},
 			convertToLlm: (messages) => this.contextInput.convert(messages),
 			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.models.activeModel),
-			streamFn: streamSimple,
+			streamFn: (model, context, options) => {
+				this.trace.startRequest();
+				return streamSimple(model, context, options);
+			},
 		});
 		this.initializeThinkingLevel(agent, this.models.activeModel, sessionManager);
 		const resourceLoader = this.createResourceLoader();
@@ -697,7 +709,7 @@ export class SessionHost {
 				reason: toolSchemaBudgetWarning(schemas),
 			});
 		}
-		return active;
+		return active.map((tool) => withExecutionTrace(tool, () => this.trace.fields()));
 	}
 
 	private rebuildSessionTools(): void {
@@ -721,6 +733,7 @@ export class SessionHost {
 					reason: errorMessage(err),
 				});
 			}
+			this.trace.observe(event);
 			if (isRecord(event) && event.type === "message_start") {
 				this.deps.markStreaming();
 			}

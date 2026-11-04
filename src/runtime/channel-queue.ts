@@ -19,6 +19,8 @@ interface QueuedItem {
  * (`AgentRunner.beginTurn`), not by this queue.
  */
 export class ChannelQueue {
+	constructor(private readonly onCapacity?: (queue: ChannelQueue) => void) {}
+
 	private queue: QueuedItem[] = [];
 	private processing = false;
 	private stopped = false;
@@ -42,6 +44,7 @@ export class ChannelQueue {
 		if (this.processing || this.stopped || this.queue.length === 0) return;
 		this.processing = true;
 		const { work } = this.queue.shift()!;
+		this.onCapacity?.(this);
 		try {
 			await work();
 		} catch (err) {
@@ -73,6 +76,7 @@ export class ChannelQueue {
 		const index = this.queue.findIndex((item) => item.ref === ref);
 		if (index < 0) return false;
 		this.queue.splice(index, 1);
+		if (!this.stopped) this.onCapacity?.(this);
 		return true;
 	}
 }

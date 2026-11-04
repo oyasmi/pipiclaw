@@ -64,7 +64,11 @@ export function createIngress(deps: IngressDeps): IngressService {
 	const getQueue = (channelId: string): ChannelQueue => {
 		let queue = queues.get(channelId);
 		if (!queue) {
-			queue = new ChannelQueue();
+			queue = new ChannelQueue((current) => {
+				if (stopped || isShuttingDown() || deps.stopWatchdogs.has(channelId) || queues.get(channelId) !== current)
+					return;
+				deps.getDurableDispatch()?.notifyCapacity(channelId);
+			});
 			queues.set(channelId, queue);
 		}
 		return queue;
@@ -370,13 +374,24 @@ export function createIngress(deps: IngressDeps): IngressService {
 			if (queue.size() >= EVENT_QUEUE_LIMIT) {
 				log.logEvent("warn", "runtime.channel_queue.full", "Discarding incoming event", {
 					ctx: { channelId: event.channelId, userName: event.producer },
-					fields: { messageLength: event.text.length },
+					fields: {
+						messageLength: event.text.length,
+						dispatchId: event.dispatchId,
+						desk: event.desk,
+						queueLength: queue.size(),
+						reason: "capacity",
+					},
 				});
 				return false;
 			}
 			log.logEvent("debug", "runtime.channel_queue.enqueued", "Incoming event queued", {
 				ctx: { channelId: event.channelId, userName: event.producer },
-				fields: { messageLength: event.text.length },
+				fields: {
+					messageLength: event.text.length,
+					dispatchId: event.dispatchId,
+					desk: event.desk,
+					queueLength: queue.size(),
+				},
 			});
 			queue.enqueue(async () => {
 				service.reserveEvent(event);

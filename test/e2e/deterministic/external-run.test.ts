@@ -95,6 +95,27 @@ describe("E2E deterministic: external process recovery", () => {
 			await waitFor("post-restart turn", () =>
 				model.requests.some((request) => request.matchedRoute === "after-restart"),
 			);
+			// Spec 067 mutation: remove recovery.add after restore; no periodic observer remains
+			// in this new process and the far-away deadline cannot make this completion arrive.
+			model.script.route({
+				name: "adopted-completed",
+				when: (r) => r.isMainTurn && r.lastUserText.includes(`[SUBAGENT:${record.runId}]`),
+				respond: [reply.text("[SILENT]")],
+			});
+			const completed = model.script.hold({
+				when: (r) => r.isMainTurn && r.lastUserText.includes(`[SUBAGENT:${record.runId}]`),
+			});
+			socket!.end();
+			await completed.arrived;
+			completed.release();
+			await waitFor("adopted settlement and wake committed", async () => {
+				const value = (await daemon!.call("record", { channelId, runId: record.runId })) as RunRecord;
+				return value.settledAt && value.wakeEnqueued && value.status !== "running";
+			});
+			expect(model.requests.find((r) => r.matchedRoute === "adopted-completed")?.lastUserText).toContain(
+				"EXTERNAL_HELD",
+			);
+
 			expect(model.unmatched()).toEqual([]);
 		} finally {
 			if (daemon) await crash(daemon.child);

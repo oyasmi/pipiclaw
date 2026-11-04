@@ -7,10 +7,12 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { ExecOptions, ExecResult, Executor } from "../../executor.js";
+import * as log from "../../log.js";
 import { getJournalDir } from "../../memory/journal.js";
 import { getMemoryDir, getMemoryIndexPath } from "../../memory/store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../../security/config.js";
 import type { SecurityConfig } from "../../security/types.js";
+import { withExecutionTrace } from "../../tools/contract/execution-trace.js";
 import { describeToolCall } from "../../tools/contract/presentation.js";
 import { addUsage } from "../../usage/totals.js";
 import {
@@ -146,12 +148,24 @@ export function startWorker(input: {
 	emitUpdate: (text: string) => void;
 }): void {
 	const { handle, options, config, runContext, scopedExecutor, state, retryBackoff, runManager, emitUpdate } = input;
+	let request = 0;
+	let requestStartedAt = 0;
+	let firstOutput = false;
+	const traceFields = () => ({
+		desk: options.runtimeContext.desk,
+		channelId: options.runtimeContext.channelId,
+		runId: runContext.runId,
+		taskId: runContext.taskId,
+		generation: runContext.runId,
+		request,
+		batch: request,
+	});
 	const availableTools = (options.buildTools ?? buildSubagentTools)(
 		scopedExecutor,
 		config.bashTimeoutSec,
 		options,
 		runContext,
-	);
+	).map((tool) => withExecutionTrace(tool, traceFields));
 
 	handle.worker =
 		options.createWorker?.({
@@ -174,7 +188,13 @@ export function startWorker(input: {
 			convertToLlm,
 			// Read on every request, so a backup-model switch only has to replace the key.
 			getApiKey: async () => state.apiKey,
-			streamFn: streamSimple,
+			streamFn: (model, context, streamOptions) => {
+				request++;
+				requestStartedAt = Date.now();
+				firstOutput = false;
+				log.logEvent("debug", "agent.provider.started", "Provider request started", { fields: traceFields() });
+				return streamSimple(model, context, streamOptions);
+			},
 		});
 
 	handle.wallClockTimer = setTimeout(() => {
@@ -185,12 +205,21 @@ export function startWorker(input: {
 	}, config.maxWallTimeSec * 1000);
 
 	handle.unsubscribe = handle.worker.subscribe((event: AgentEvent) => {
+		if (!firstOutput && event.type === "message_update" && event.assistantMessageEvent.type.endsWith("_delta")) {
+			firstOutput = true;
+			log.logEvent("debug", "agent.provider.output", "Provider first output observed", {
+				fields: { ...traceFields(), elapsedMs: Date.now() - requestStartedAt },
+			});
+		}
 		if (event.type === "message_end" && isAssistantMessage(event.message)) {
 			state.assistantTurns++;
 			addUsage(state.usage, event.message.usage);
 		}
 
 		if (event.type === "tool_execution_start") {
+			log.logEvent("debug", "agent.tool.preparing", "Tool preparation started", {
+				fields: { ...traceFields(), toolCallId: event.toolCallId, tool: event.toolName },
+			});
 			state.toolCalls++;
 			const label = describeToolCall(event.toolName, event.args);
 			emitUpdate(formatStatus(config.name, label));

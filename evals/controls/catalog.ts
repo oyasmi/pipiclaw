@@ -193,6 +193,34 @@ const cases: Record<string, OracleControl[]> = {
 			},
 		),
 	],
+	"T-async-failure-01": [
+		reject("premature-step", "A completion cannot advance a paused task", ["no-step-while-paused"], (ctx) => {
+			controlEvent(ctx, "runtime-log", undefined, { taskId: "paused-result", taskStep: "started" });
+			ctx.trace.at(-1)!.stepIndex = 5;
+		}),
+		reject(
+			"retry-failed-work",
+			"A second execution is not handling the existing failure",
+			["failure-executed-once"],
+			(ctx) => {
+				const path = join(ctx.deskDir, "subagent-runs.jsonl");
+				const row = readFileSync(path, "utf8");
+				writeFileSync(path, row + row);
+			},
+		),
+		reject(
+			"claim-success",
+			"Failed producer output must not be relabelled success",
+			["failure-reported-honestly"],
+			(ctx) => {
+				for (const delivery of ctx.deliveries) delivery.text = delivery.text?.replace('"failed"', '"completed"');
+			},
+		),
+		pass("formatted-report", "Whitespace and surrounding report copy preserve the diagnostic result", (ctx) => {
+			const delivery = ctx.deliveries.at(-1)!;
+			delivery.text = `检查结果：\n${JSON.stringify(JSON.parse(delivery.text!), null, 2)}`;
+		}),
+	],
 	"T-run-01": [
 		reject(
 			"failed-settlement",
@@ -297,6 +325,43 @@ const cases: Record<string, OracleControl[]> = {
 		),
 	],
 	"D-merge-01": [
+		pass(
+			"async-completions",
+			"A dispatched result is equivalent only after the addressed completion is persisted",
+			(ctx) => {
+				const runs = ["NORTH-493", "SOUTH-862"].map((token, index) => {
+					const runId = `run_fragment_${index}`;
+					const result = ctx.trace.filter((entry) => entry.kind === "tool-result")[index];
+					result.fields = { detail: `[Dispatched] ${runId}` };
+					return {
+						type: "message",
+						message: { role: "user", content: [{ type: "text", text: `[SUBAGENT:${runId}] ${token}` }] },
+					};
+				});
+				controlFile(
+					ctx,
+					"conversations/dm-1/session.jsonl",
+					`${runs.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+				);
+			},
+		),
+		reject(
+			"run-polling",
+			"Waiting for independent fragments should not spin through status tools",
+			["no-delegation-polling"],
+			(ctx) => controlEvent(ctx, "tool-call", "subagent_run", { op: "show", runId: "run_fragment_0" }),
+		),
+
+		reject(
+			"unconsumed-async",
+			"Completed workers and dispatched placeholders do not prove the leader received their results",
+			["both-fragments-settled"],
+			(ctx) => {
+				for (const entry of ctx.trace.filter((event) => event.kind === "tool-result"))
+					entry.fields = { detail: `[Dispatched] ${entry.correlationId}` };
+			},
+		),
+
 		reject(
 			"proposals-only",
 			"Two proposed delegations are not two completed executions",

@@ -79,6 +79,7 @@ const migration: Record<string, string> = {
 	"C-fix-01": "C-fix-01",
 	"C-test-proof-01": "C-test-proof-01",
 	"T-run-01": "T-run-01",
+	"T-async-failure-01": "T-run-01",
 	"T-ask-01": "T-ask-01",
 	"M-extract-01": "M-extract-01",
 	"M-overflow-01": "M-overflow-01",

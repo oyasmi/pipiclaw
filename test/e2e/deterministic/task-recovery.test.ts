@@ -91,6 +91,45 @@ describe("E2E deterministic: task commit recovery", () => {
 			expect(recovered?.lastUserText).toContain("UNSEEN_AFTER_CLAIM");
 			expect(fields("unseen")).toMatchObject({ state: "waiting", waiting: { kind: "time" }, usage: { steps: 2 } });
 			expect((await readTaskLog(deskDir, "unseen")).filter((record) => record.kind === "input_ack")).toHaveLength(1);
+			// Spec 067: SDK queue acceptance must not acknowledge an input before transcript persistence.
+			model.script.route({
+				name: "held-input-step",
+				when: (request) => request.lastUserText.includes("[TASK_STEP:unseen #3]"),
+				respond: [reply.toolCall("bash", { command: "echo boundary" })],
+			});
+			const third = model.script.hold({ when: (request) => request.lastUserText.includes("[TASK_STEP:unseen #3]") });
+			await daemon.call("turn", { channelId, text: "/tasks msg unseen START_NEXT_STEP" });
+			await daemon.call("task-scan");
+			await third.arrived;
+			await daemon.call("turn", { channelId, text: "/tasks msg unseen QUEUED_BUT_UNCONSUMED" });
+			const queuedInput = (await readTaskLog(deskDir, "unseen")).find(
+				(r) => r.kind === "message" && r.text === "QUEUED_BUT_UNCONSUMED",
+			);
+			expect(queuedInput).toBeDefined();
+			expect(
+				(await readTaskLog(deskDir, "unseen")).some(
+					(r) => r.kind === "input_ack" && r.ids.includes(queuedInput!.id!),
+				),
+			).toBe(false);
+			await crash(daemon.child);
+			third.release();
+			model.script.route({
+				name: "recover-queued-input",
+				when: (request) => request.lastUserText.includes("[TASK_STEP:unseen #4]"),
+				respond: [reply.toolCall("task_wait", { until: "+1h" })],
+			});
+			daemon = await startDaemon(home.homeDir);
+			await daemon.call("task-scan");
+			await daemon.call("task-drain");
+			expect(
+				model.requests.find((request) => request.matchedRoute === "recover-queued-input")?.lastUserText,
+			).toContain("QUEUED_BUT_UNCONSUMED");
+			expect(
+				(await readTaskLog(deskDir, "unseen")).filter(
+					(r) => r.kind === "input_ack" && r.ids.includes(queuedInput!.id!),
+				),
+			).toHaveLength(1);
+
 			expect(model.unmatched()).toEqual([]);
 		} finally {
 			if (daemon) await crash(daemon.child);

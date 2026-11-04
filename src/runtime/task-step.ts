@@ -1,14 +1,21 @@
-import type { AgentRunner } from "../agent/types.js";
+import { clipUserInput } from "../agent/turn/progress-formatter.js";
+import { type AgentRunner, MAX_USER_MESSAGE_CHARS } from "../agent/types.js";
 import type { ChannelContext } from "../channel/channel-context.js";
 import type { TurnInfo } from "../channel/transport.js";
 import * as log from "../log.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { buildTaskStepBrief, contractOpenTag, contractSha, type PendingWorkView } from "../tasks/brief.js";
+import {
+	BRIEF_INPUT_LIMIT,
+	buildTaskStepBrief,
+	contractOpenTag,
+	contractSha,
+	type PendingWorkView,
+} from "../tasks/brief.js";
 import { taskReportDelivered } from "../tasks/completion.js";
 import type { TaskSessionContext, TaskStepIntent } from "../tasks/control.js";
 import { drainTaskDeliveries, queueTaskReport } from "../tasks/delivery.js";
-import { acknowledgeTaskInputs } from "../tasks/input-receipts.js";
+import { acknowledgeTaskInputs, taskInputTag } from "../tasks/input-receipts.js";
 import { readTaskLog, type TaskStepResult } from "../tasks/loop-log.js";
 import type { StepDerivation } from "../tasks/state.js";
 import { beginStep, type EndedStep, endStep, pauseTask, readStoredTask } from "../tasks/store.js";
@@ -178,7 +185,16 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 		now,
 	});
 
-	const step: NonNullable<LiveTask["step"]> = { seq: begun.seq, startedAt: now };
+	const visibleBrief = clipUserInput(brief.text, MAX_USER_MESSAGE_CHARS);
+	const step: NonNullable<LiveTask["step"]> = {
+		seq: begun.seq,
+		startedAt: now,
+		submittedInputIds: new Set(
+			begun.inputs
+				.slice(-BRIEF_INPUT_LIMIT)
+				.flatMap((input) => (input.id && visibleBrief.includes(taskInputTag(input.id)) ? [input.id] : [])),
+		),
+	};
 	live.step = step;
 	step.timer = setTimeout(() => abortStep(ctx, live, "timeout"), ctx.timing.stepTimeLimitMs);
 	step.timer.unref?.();
@@ -209,7 +225,9 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	let usdEstimated = false;
 	let usdKnown = false;
 	try {
-		const run = await runner.run(info, SILENT_CONTEXT, options.store);
+		const running = runner.run(info, SILENT_CONTEXT, options.store);
+		ctx.inputAvailable(live.desk, live.taskId);
+		const run = await running;
 		finalText = run.finalText ?? "";
 		toolsUsed = run.toolsUsed ?? [];
 		usd = run.assistantCost?.usd ?? 0;
@@ -228,7 +246,15 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 		if (step.timer) clearTimeout(step.timer);
 		if (step.stopTimer) clearTimeout(step.stopTimer);
 	}
-	await acknowledgeTaskInputs(live.deskDir, live.taskId);
+	step.ending = true;
+	await step.submitting;
+	// Only this task step can own the SDK queue here; the next step has not started.
+	runner.clearTaskStepQueue?.(step.seq);
+	await acknowledgeTaskInputs(live.deskDir, live.taskId, {
+		desk: live.desk,
+		seq: step.seq,
+		generation: runner.generation,
+	});
 	live.step = undefined;
 
 	// A stop from the lane decides the result whatever the turn reported on its way out.

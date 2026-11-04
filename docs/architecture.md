@@ -39,7 +39,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 2 | `src/tasks/` | 持久任务：任务说明、状态推导、任务记录、预算、可靠消息投递、可恢复归档、`/tasks`，以及聊天侧控制端口 `TaskControl`。调度与执行在 `runtime/task-lane*.ts`，这样本目录保持叶子 | `contract.ts`、`state.ts`、`control.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`delivery.ts`、`archive.ts`、`commands.ts` |
 | 2 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
 | 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-id.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts` |
-| 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、工具名单 | `details.ts`、`presentation.ts`、`names.ts` |
+| 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、执行阶段追踪、工具名单 | `details.ts`、`presentation.ts`、`execution-trace.ts`、`names.ts` |
 | 4 | `src/config/` | `settings.json`、`tools.json` 的加载与校验 | `settings.ts`、`tools.ts` |
 | 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
 | 5 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts`、`client.ts` |
@@ -108,6 +108,7 @@ flowchart TB
 - **先解析绑定，再建 runner**（spec 058）：`DeskRuntime` 是 daemon 里唯一回答"这个频道绑在哪个工位上、哪些工位处于激活状态"的地方。安装时初始化 `default`，获准的真实入站消息先为缺少绑定的频道分配会话并持久化到 `default`，再下载附件和路由命令；已有绑定及其故障保持原样。只读解析和合成事件不会创建绑定；合成事件只有在它的频道仍绑定在事件所属的工位（`event.desk`）上时才被接受。没有任何绑定的工位处于休眠：它的事件 watcher 停止，任务车道和记忆调度器不再扫描它，正在跑的 run 和 job 照常结算但不投递唤醒。
 - **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
 - **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到工位目录；完成后同样先经过 durable dispatch，再唤醒发起委派的那个频道（仍绑定在该工位上时）。
+- **执行阶段日志**：`agent/session/execution-trace.ts` 关联 runner generation、task/seq、session、provider request 和工具批次；`tools/contract/execution-trace.ts` 在真实 adapter 入口与出口记录工具调用 id 和耗时。SDK 的准备事件单独记录，不代表工具已经进入执行。内部 worker 采用相同字段并关联 run id，不把参数、结果正文或凭据写进阶段日志。
 
 ## 4.0 渠道层（spec 061）
 
@@ -213,7 +214,7 @@ sequenceDiagram
 
 另外两个互斥点：`SessionResourceGate`（`agent/session/session-resource-gate.ts`）让"资源热重载"与"prompt 进行中"互斥；`DingTalkBot` 内卡片创建和 access token 刷新都做了 singleflight 合并；`subagents/workspace-lease.ts` 是进程级的排他写锁（不是队列，没有等待语义），只有 `mutates: write` 的委派 run 会取它，key 是工作目录的 realpath，父子目录也算冲突——第二个写入者直接被拒绝，不是排队。
 
-**委派 run 的生命周期不受 `ChannelQueue`/轮次状态机约束**：内置子代理超过 120s（或外部委派一开始）就从"这一轮的一部分"变成"跨轮存活的后台工作"，由 `SubAgentRunManager` 统一管理，通过 `DurableDispatchService` 完成时唤醒频道——与后台 job 是同一条唤醒管线，`/stop` 不再连带终止它（需要 `subagent_run op=cancel` 或 `/subagents cancel`）。
+**委派 run 的生命周期不受 `ChannelQueue`/轮次状态机约束**：聊天内置委派超过共享 1 秒窗口（task 内和外部委派一开始）就从"这一轮的一部分"变成"跨轮存活的后台工作"，由 `SubAgentRunManager` 统一管理，通过 `DurableDispatchService` 完成时唤醒频道——与后台 job 是同一条唤醒管线，`/stop` 不再连带终止它（需要 `subagent_run op=cancel` 或 `/subagents cancel`）。
 
 **忙态的单一所有者是 Runner 的轮次状态机**（`agent/types.ts` 的 `TurnPhase`：`idle → dispatching → preparing → streaming → finishing`）。传输层在派发消息的同一 tick 内同步调用 `runner.beginTurn()`、结束后 `endTurn()`；钉钉的忙时路由、TUI 的轮次控制、调度器的 `isChannelActive`、`/status` 全部从 `runner.isBusy()/getTurnStatus()` 派生，不再各持一份 flag。steer 窗口判断也单点化在 runner 的 `assertBusyWindowOpen`。
 
@@ -330,7 +331,7 @@ spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性
 
 **子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 区分 `internal` 与 `external`，也可通过 `subagent_inline` 按次定义 internal 执行者；命名角色统一走 `subagent` 的路由字段，inline 才接受模型、工具和预算覆盖。Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置默认限额为 32 turns / 96 tool calls / 600s；外部角色只有 `maxWallTimeSec`（默认 3600s）。
 
-`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`agent/session/session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
+`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——聊天共享 1 秒快速窗口内结算完直接内联返回（`agent/session/session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成异步返回；task 内置委派和外部角色确认启动后一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
 
 ## 9. 安全层（`src/security/`）
 
@@ -465,3 +466,11 @@ Pipiclaw 的产品是 CLI/runtime，不是 SDK。`src/index.ts` 因此只支持*
 - `npm run check` = Biome lint + `tsc --noEmit` + knip 死代码 + Vitest 单测；`npm run test:e2e` 用脚本化 mock provider 跑经过真实 bootstrap 的确定性端到端套件。
 - 记忆流水线的每个单元（lifecycle/gates/reflect/reflect-job/state/store/migrate）都有独立测试文件，这是"分层不摊平"原则的另一面。
 - 领域边界与工程规则的权威描述在 `AGENTS.md`；每个子系统的设计脉络在 `docs/specs/NNN-*` 与 `docs/archive/specs/NNN-*`。
+
+### 执行完成的及时观察（spec 067 A）
+
+- `subagents/external/recovery.ts` 仅调度接管 run 的 10 秒观察，`external/reconciliation.ts` 提供三态进程核实；manager 仍独占必要结算、用量和写锁释放。正常 close 不等待版本诊断。
+- `jobs/completion-observer.ts` 通过同一 FileStore 的可选目录观察接收提示，manager 通过批量 probe 和逐 job 队列决定终态；`jobs/runtime.ts` 装配每工位 manager。完成提交的 revision 唤醒 poll，10 秒扫描保留。
+- ingress 绑定 ChannelQueue 实例的容量回调，durable dispatch 只重试索引中的记录并复核磁盘、lease 与退避。停止和队列重置不发容量通知。
+- `runtime/task-input.ts` 合并所属任务的结果；submitted 集合只防止同一步骤重复提交，`input_ack` 仍以真实 transcript 为准。步骤结束等待提交收敛并清空旧步骤未消费队列，下一步骤从持久日志重放。
+- 工具调度遵循官方发布的 SDK 整批策略；批次中存在串行工具时整批串行。spec067 已删除需要自建 SDK 的分段调度方案。

@@ -175,6 +175,9 @@ function parseRecord(raw: string): DurableDispatchRecord | undefined {
  * channel queue.
  */
 export class DurableDispatchService {
+	private stopped = false;
+	private readonly capacityRejected = new Map<string, Set<string>>();
+	private readonly capacityDrains = new Map<string, { dirty: boolean }>();
 	private readonly queue = createSerialQueue<string>();
 	private readonly leaseMs: number;
 	private timer: ReturnType<typeof setInterval> | null = null;
@@ -202,6 +205,7 @@ export class DurableDispatchService {
 
 	start(): void {
 		if (this.timer) return;
+		this.stopped = false;
 		this.drainSafely();
 		this.timer = setInterval(() => this.drainSafely(), this.options.intervalMs ?? DEFAULT_INTERVAL_MS);
 		this.timer.unref?.();
@@ -219,9 +223,56 @@ export class DurableDispatchService {
 	}
 
 	stop(): void {
+		this.stopped = true;
 		if (!this.timer) return;
 		clearInterval(this.timer);
 		this.timer = null;
+	}
+
+	/** Capacity is only a scheduling hint; every retry still reads disk under the per-id lock. */
+	notifyCapacity(channelId: string): void {
+		if (this.stopped || !this.capacityRejected.get(channelId)?.size) return;
+		const current = this.capacityDrains.get(channelId);
+		if (current) {
+			current.dirty = true;
+			return;
+		}
+		const drain = { dirty: true };
+		this.capacityDrains.set(channelId, drain);
+		setImmediate(() => {
+			void (async () => {
+				do {
+					drain.dirty = false;
+					for (const id of [...(this.capacityRejected.get(channelId) ?? [])]) {
+						if (this.stopped) return;
+						await this.drainRecord(id, Date.now());
+					}
+				} while (drain.dirty && !this.stopped);
+			})()
+				.catch((error) =>
+					log.logWarn("dispatch.capacity.failed", "Capacity retry failed", {
+						channelId,
+						reason: errorMessage(error),
+					}),
+				)
+				.finally(() => this.capacityDrains.delete(channelId));
+		});
+	}
+
+	private trackRejected(channelId: string, id: string): void {
+		let ids = this.capacityRejected.get(channelId);
+		if (!ids) {
+			ids = new Set();
+			this.capacityRejected.set(channelId, ids);
+		}
+		ids.add(id);
+	}
+
+	private untrack(id: string): void {
+		for (const [channel, ids] of this.capacityRejected) {
+			ids.delete(id);
+			if (!ids.size) this.capacityRejected.delete(channel);
+		}
 	}
 
 	async dispatch(event: WakeEvent): Promise<boolean> {
@@ -374,6 +425,7 @@ export class DurableDispatchService {
 					// Unless /stop dropped the closure meanwhile: then there is nothing left to turn away.
 					if (wasQueued && this.stopEpoch(channelId) === epoch) this.absorbed.set(id, channelId);
 					this.running.add(id);
+					this.untrack(id);
 					events.push(withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries));
 				});
 			} catch (error) {
@@ -407,6 +459,7 @@ export class DurableDispatchService {
 	async markCompleted(id: string | undefined): Promise<void> {
 		if (!id) return;
 		this.running.delete(id);
+		this.untrack(id);
 		await this.queue.run(id, async () => {
 			await unlink(recordPath(this.options.stateDir, id)).catch(() => undefined);
 		});
@@ -454,10 +507,17 @@ export class DurableDispatchService {
 	private async drainRecord(id: string, now: number): Promise<void> {
 		await this.queue.run(id, async () => {
 			const record = await this.read(id);
-			if (!record) return;
+			if (!record) {
+				this.untrack(id);
+				return;
+			}
+			if (record.status === "pending") this.trackRejected(record.event.channelId, id);
 			// A poison pill: give up on redelivery for good, once. Left on disk (not deleted) so
 			// `onExhausted`'s notice stays inspectable and the record is available for manual retry.
-			if (record.status === "exhausted") return;
+			if (record.status === "exhausted") {
+				this.untrack(id);
+				return;
+			}
 			// The turn is still running in this process: renew its lease rather than treating a
 			// long turn as a lost one and redelivering the wake underneath it (D2).
 			if (record.status === "running" && this.running.has(id)) {
@@ -480,6 +540,7 @@ export class DurableDispatchService {
 			if (this.options.isReachable && !this.options.isReachable(record.event.channelId)) return;
 			if (record.deliveries >= MAX_DELIVERIES) {
 				record.status = "exhausted";
+				this.untrack(id);
 				record.leaseExpiresAt = undefined;
 				record.nextAttemptAt = undefined;
 				await this.write(record);
@@ -501,7 +562,11 @@ export class DurableDispatchService {
 			const accepted = this.options.bot.enqueueEvent(
 				withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries),
 			);
-			if (accepted) return;
+			if (accepted) {
+				this.untrack(id);
+				return;
+			}
+			this.trackRejected(record.event.channelId, id);
 			// Admission rejection (queue full, bot stopped) is backpressure, not a delivery attempt —
 			// the handler never ran and never got a chance to fail (R2). Counting it against
 			// MAX_DELIVERIES meant a few minutes of congestion permanently exhausted a record that

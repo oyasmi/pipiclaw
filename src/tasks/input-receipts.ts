@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import * as log from "../log.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { appendTaskLog, newInputs, readTaskLog } from "./loop-log.js";
 import { withTaskMutation } from "./mutation-lock.js";
@@ -9,7 +10,11 @@ export function taskInputTag(id: string): string {
 }
 
 /** Read the actual transcript, not SDK queue/message events (those precede persistence). */
-export async function acknowledgeTaskInputs(deskDir: string, taskId: string): Promise<void> {
+export async function acknowledgeTaskInputs(
+	deskDir: string,
+	taskId: string,
+	trace?: { desk: string; seq: number; generation?: string },
+): Promise<void> {
 	await withTaskMutation(deskDir, taskId, async () => {
 		const pending = newInputs(await readTaskLog(deskDir, taskId, { strict: true }));
 		if (pending.length === 0) return;
@@ -49,6 +54,11 @@ export async function acknowledgeTaskInputs(deskDir: string, taskId: string): Pr
 			for (const match of text.matchAll(/<task_input id="([a-f0-9-]+)" \/>/g)) received.add(match[1]);
 		}
 		const ids = pending.flatMap((record) => (record.id && received.has(record.id) ? [record.id] : []));
-		if (ids.length > 0) await appendTaskLog(deskDir, taskId, { kind: "input_ack", ids });
+		if (ids.length > 0) {
+			await appendTaskLog(deskDir, taskId, { kind: "input_ack", ids });
+			log.logInfoEvent("tasks.input.received", "Task inputs received", {
+				fields: { deskDir, taskId, ...trace, ids },
+			});
+		}
 	});
 }

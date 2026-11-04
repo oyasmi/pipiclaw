@@ -1,9 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildMemoryIndexForBootstrap } from "../../src/memory/index-budget.js";
 import { listMemoryEntries } from "../../src/memory/store.js";
-import { checkpointHasFile, observesFile, taskParkObservations, toolObservations } from "../graders/observations.js";
+import {
+	checkpointHasFile,
+	observesFile,
+	receivedRunResult,
+	taskParkObservations,
+	toolObservations,
+} from "../graders/observations.js";
 import { verificationField } from "../graders/verification.js";
 import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
 import {
@@ -309,10 +315,48 @@ export const coreFamilyCases: EvalCase[] = [
 			"A-fragments-01",
 			"主代理委派两个独立只读分片，并依据两份真实执行结果汇总。",
 		),
+		script: [
+			...regressionCases.find((item) => item.id === "A-fragments-01")!.script,
+			{
+				kind: "waitFor",
+				timeoutMs: 60_000,
+				failureCategory: "runtime",
+				predicate: (ctx) => {
+					// Idle dispatch does not mean its asynchronous workers and wakes have finished.
+					const directory = join(ctx.homeDir, "state", "subagent-runs", "eval");
+					if (!existsSync(directory)) return false;
+					const records = readdirSync(directory)
+						.filter((name) => name.endsWith(".json"))
+						.map(
+							(name) =>
+								JSON.parse(readFileSync(join(directory, name), "utf8")) as {
+									status: string;
+									wakeEnqueued?: boolean;
+								},
+						);
+					const outbox = join(ctx.homeDir, "state", "dispatch");
+					return (
+						records.length >= 2 &&
+						records.every((record) => record.status !== "running" && record.wakeEnqueued) &&
+						(!existsSync(outbox) || !readdirSync(outbox).some((name) => name.endsWith(".json")))
+					);
+				},
+			},
+		],
+
 		graders: [
 			...regressionCases
 				.find((item) => item.id === "A-fragments-01")!
 				.graders.filter((grader) => grader.graderId !== "both-fragments-dispatched"),
+			tracePredicate(
+				"no-delegation-polling",
+				(ctx) =>
+					!ctx.trace.some(
+						(event) => event.kind === "tool-call" && ["subagent_run", "subagent_list"].includes(event.tool ?? ""),
+					),
+				"simple independent fragments should finish through completion delivery, without polling",
+			),
+
 			tracePredicate(
 				"both-fragments-settled",
 				(ctx) => {
@@ -348,7 +392,8 @@ export const coreFamilyCases: EvalCase[] = [
 									run.output?.includes(token) &&
 									results.some(
 										({ result }) =>
-											result.fields?.detail?.includes(run.runId!) && result.fields.detail.includes(token),
+											result.fields?.detail?.includes(run.runId!) &&
+											(result.fields.detail.includes(token) || receivedRunResult(ctx, run.runId!, token)),
 									),
 							),
 						) &&

@@ -45,7 +45,15 @@ export interface TurnStatus {
 	taskText?: string;
 }
 
+export interface TaskSteerScope {
+	seq: number;
+	/** Synchronous final validation after preparation, immediately before SDK submission. */
+	isCurrent(): boolean;
+}
+
 export interface AgentRunner {
+	/** In-process identity used to correlate task submissions with provider requests. */
+	readonly generation?: string;
 	/** The (desk, channel) pairing this runner serves; fixed for the runner's lifetime. */
 	readonly conversation: DeskConversation;
 	/** Run one turn for `turn`, writing its progress and answer to `ctx`. */
@@ -72,7 +80,14 @@ export interface AgentRunner {
 	handleBuiltinCommand(command: RunnerBuiltInCommand): Promise<string>;
 	/** True if `text` is a slash command the runtime or session layer can handle. */
 	isKnownSlashCommand(text: string): boolean;
-	queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void>;
+	queueSteer(
+		text: string,
+		userName?: string,
+		images?: InboundImage[],
+		scope?: TaskSteerScope,
+	): Promise<void> | Promise<"queued" | "stale">;
+	/** Only the task lane calls this after submissions have drained and before another step. */
+	clearTaskStepQueue?(seq: number): void;
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
 	/** `undefined` while the SDK session is still being built. */
@@ -288,6 +303,7 @@ export type RunnerProfile =
 	| { kind: "task"; sessionPath: string; session: TaskSessionContext };
 
 export interface RunnerFactoryPaths {
+	fileStore?: FileStore;
 	profile?: RunnerProfile;
 	/** Chat only: resolves the task lane's control port (the lane is built after the runners' factory). */
 	getTaskControl?: () => TaskControl | undefined;

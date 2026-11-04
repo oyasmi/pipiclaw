@@ -157,6 +157,32 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		ctx.trace.at(-1)!.correlationId = "job-start";
 		workPark(ctx);
 		controlDelivery(ctx, fixtureToken(ctx.seed, "JOB-REPORT"));
+	} else if (id === "T-async-failure-01") {
+		controlFile(
+			ctx,
+			"subagent-runs.jsonl",
+			`${JSON.stringify({
+				taskId: "paused-result",
+				agent: "failing-reader",
+				status: "failed",
+				failed: true,
+				output: fixtureToken(ctx.seed, "FAILURE-EVIDENCE"),
+			})}\n`,
+		);
+		workPark(ctx);
+		for (const [tool, stepIndex] of [
+			["task_pause", 2],
+			["task_resume", 7],
+		] as const) {
+			controlEvent(ctx, "tool-call", tool, { argsJson: '{"id":"paused-result"}' });
+			ctx.trace.at(-1)!.correlationId = tool;
+			ctx.trace.at(-1)!.stepIndex = stepIndex;
+			controlEvent(ctx, "tool-result", tool);
+			ctx.trace.at(-1)!.correlationId = tool;
+			ctx.trace.at(-1)!.stepIndex = stepIndex;
+		}
+		controlDelivery(ctx, JSON.stringify({ status: "failed", evidence: fixtureToken(ctx.seed, "FAILURE-EVIDENCE") }));
+		ctx.deliveries.at(-1)!.stepIndex = 8;
 	} else if (id === "T-run-01") {
 		controlFile(
 			ctx,

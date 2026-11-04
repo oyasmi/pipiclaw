@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { WakeEvent } from "../src/channel/channel-event.js";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
+import * as hostProcess from "../src/shared/host-process.js";
 import type { SettleInput } from "../src/subagents/run-record.js";
 import { MAX_RUNNING_SUBAGENT_RUNS_PER_HOST } from "../src/subagents/run-record.js";
 import { createSubAgentRuntime } from "../src/subagents/run-registry.js";
@@ -114,6 +115,59 @@ function register(manager: SubAgentRunManager, overrides: Partial<Parameters<Sub
 }
 
 describe("SubAgentRunManager (spec 040, D1/D7)", () => {
+	// Spec 067: restore alone cannot observe a later exit before a far-away deadline.
+	it("observes adopted exits before deadline, preserves unknown identity, and stops observation", async () => {
+		const stateDir = createTempDir();
+		const artifactDir = createTempDir();
+		const original = new SubAgentRunManager(DESK, { stateDir });
+		await register(original, { runtime: "external", harness: "exec", artifactDir });
+		await original.setLaunched("run-1", {
+			pid: 83838,
+			argv: ["fixture"],
+			processStartedAt: Date.now(),
+			deadlineAt: Date.now() + 3_600_000,
+			pidStartedAt: "identity",
+		});
+		await register(original, { runId: "run-2", runtime: "external", harness: "exec", artifactDir: createTempDir() });
+		await original.setLaunched("run-2", {
+			pid: 83839,
+			argv: ["fixture"],
+			processStartedAt: Date.now(),
+			deadlineAt: Date.now() + 3_600_000,
+			pidStartedAt: "identity",
+		});
+		original.stop();
+		const alive = vi.spyOn(hostProcess, "isProcessAlive").mockReturnValue(true);
+		const identity = vi.spyOn(hostProcess, "readProcessStartTime").mockResolvedValue(undefined);
+		vi.spyOn(hostProcess, "isProcessGroupAlive").mockReturnValue(false);
+		const { dispatch, events } = makeDispatch();
+		const restored = new SubAgentRunManager(DESK, { stateDir, dispatch });
+		vi.useFakeTimers();
+		try {
+			await restored.restore();
+			expect(restored.get("run-1")?.status).toBe("running");
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(restored.get("run-1")?.status).toBe("running");
+			identity.mockResolvedValue("identity");
+			alive.mockImplementation((pid) => pid === 83839);
+			writeFileSync(join(artifactDir, "events.jsonl"), "ADOPTED_RESULT");
+			await vi.advanceTimersByTimeAsync(10_000);
+			await vi.waitFor(() => expect(restored.get("run-1")?.wakeEnqueued).toBe(true));
+			expect(events).toHaveLength(1);
+			expect(events[0].text).toContain("ADOPTED_RESULT");
+			expect(restored.get("run-1")).toMatchObject({ status: "failed", usageRecorded: true });
+			expect(restored.get("run-2")?.status).toBe("running");
+			const probes = identity.mock.calls.length;
+			restored.stop();
+			await vi.advanceTimersByTimeAsync(3_600_000);
+			expect(identity).toHaveBeenCalledTimes(probes);
+			expect(events).toHaveLength(1);
+		} finally {
+			restored.stop();
+			vi.useRealTimers();
+			vi.restoreAllMocks();
+		}
+	});
 	it("keeps identical channel/run ids isolated between application instances and their wake sinks", async () => {
 		const firstWake = makeDispatch();
 		const secondWake = makeDispatch();

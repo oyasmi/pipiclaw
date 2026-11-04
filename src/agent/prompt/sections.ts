@@ -21,6 +21,7 @@
  */
 
 import { renderPlaybookCatalog } from "../../playbooks/catalog.js";
+import { CHAT_SYNC_GRACE_MS } from "../../subagents/grace.js";
 import type { PromptBuildContext, PromptSectionDefinition, SubAgentSummary } from "./types.js";
 
 function hasTool(context: PromptBuildContext, name: string): boolean {
@@ -188,9 +189,11 @@ function renderSubAgentDirectory(subAgents: SubAgentSummary[]): string {
 		"A sub-agent starts blank: state the goal, scope, paths, constraints and acceptance criteria in the task you hand it.",
 	];
 	for (const group of sortedGroups) {
-		// internal is always sync up to SYNC_GRACE_MS, then converts to async by itself (D2) — the
-		// model does not choose this, it is just told what to expect.
-		const mode = group.runtime === "external" ? "async" : "sync (auto-async past 120s)";
+		// The runtime chooses delivery; the model is told the same production policy.
+		const mode =
+			group.runtime === "external"
+				? "async"
+				: `chat: shared ${CHAT_SYNC_GRACE_MS / 1000}s quick return, then async; task: async`;
 		lines.push("", `${group.runtime} · ${group.workload} · ${group.mutates} · ${mode}`);
 		for (const agent of group.agents) {
 			const suffix = agent.unavailable ? ` (unavailable: ${agent.unavailable})` : "";

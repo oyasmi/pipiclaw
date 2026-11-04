@@ -22,6 +22,7 @@ import { checkGuards, evaluateWaiting, type GuardVerdict } from "../tasks/state.
 import { pauseTask, readStoredTask, reconcileTaskState, requeueWaiting } from "../tasks/store.js";
 import { finishTaskClose } from "./task-close.js";
 import { isFrozen, LaneControl } from "./task-control.js";
+import { TaskInputDelivery } from "./task-input.js";
 import {
 	ERROR_BACKOFF_MS,
 	type LaneContext,
@@ -76,6 +77,7 @@ function isExecuting(seen: Seen, live: LiveTask | undefined): boolean {
 export class TaskLane implements TaskControl {
 	private readonly ctx: LaneContext;
 	private readonly control: LaneControl;
+	private readonly inputs: TaskInputDelivery;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private notifyTimer: ReturnType<typeof setTimeout> | null = null;
 	private started = false;
@@ -105,10 +107,12 @@ export class TaskLane implements TaskControl {
 			now: options.now ?? (() => Date.now()),
 			timing,
 			notify: () => this.notify(),
+			inputAvailable: (desk, id) => this.inputAvailable(desk, id),
 			release: (live) => this.release(live),
 			isStopped: () => this.stopped,
 		};
 		this.control = new LaneControl(this.ctx);
+		this.inputs = new TaskInputDelivery(this.ctx);
 	}
 
 	// === Lifecycle ===
@@ -125,6 +129,7 @@ export class TaskLane implements TaskControl {
 
 	/** Stop admitting, stop the steps in flight (their `step_end` is written by the next start, D10) and let go of every runner. */
 	stop(): void {
+		this.inputs.stop();
 		this.stopped = true;
 		this.started = false;
 		if (this.timer) clearTimeout(this.timer);
@@ -135,6 +140,10 @@ export class TaskLane implements TaskControl {
 			abortStep(this.ctx, live, "shutdown");
 			if (!live.driving) void this.dispose(live);
 		}
+	}
+
+	inputAvailable(desk: string, taskId: string): void {
+		this.inputs.notify(desk, taskId);
 	}
 
 	/** Something changed that a task may need to react to (a result, a message, a new task): look again soon. */

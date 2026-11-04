@@ -1,10 +1,12 @@
 import { existsSync, readFileSync, renameSync, utimesSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EventHistoryAction, EventHistoryRecord } from "../../../src/events/types.js";
+import * as runtimeLog from "../../../src/log.js";
 import { readActiveTasks } from "../../../src/tasks/contract.js";
 import { readTaskLog } from "../../../src/tasks/loop-log.js";
 import { readStoredTask } from "../../../src/tasks/store.js";
+import { heldCommand } from "../../support/held-command.js";
 import {
 	createDeterministicHarness,
 	type DeterministicHarness,
@@ -23,6 +25,7 @@ describe("E2E deterministic: the task lane", () => {
 	const taskId = "e2e-det-task";
 	afterEach(async () => {
 		await harness.shutdown();
+		vi.restoreAllMocks();
 	});
 
 	const tasksDir = () => join(harness.deskDir, "tasks");
@@ -95,44 +98,111 @@ describe("E2E deterministic: the task lane", () => {
 		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).not.toContain("TASK_STEP");
 	});
 
-	it("T-lane-2: a bound result wakes the task in its own session — the chat is never asked", async () => {
-		// Mutation check (2026-10-28): drop `onTaskInput` from the job runtime wiring in bootstrap and
-		// raise the lane's sleep ceiling; the second step never starts and the archive wait times out.
-		harness = await createDeterministicHarness({ services: true });
-		await seedTask();
-		harness.model.script.route({
-			name: "step-1",
-			when: stepOf(1),
-			respond: [
-				reply.toolCall("bash", { command: "sleep 0.5; echo JOB_RESULT_77", async: true }),
-				reply.text("job started; waiting"),
-			],
+	it("T-lane-2: a bound result wakes the task, then another result joins the same running step", async () => {
+		// Spec 067 mutations: remove scoped inputAvailable and the in-step request lacks the result;
+		// restore task synchronous grace and the post-dispatch parent gate cannot arrive while the worker is held.
+		let submitted!: () => void;
+		const submission = new Promise<void>((resolve) => {
+			submitted = resolve;
 		});
-		harness.model.script.route({
-			name: "step-2",
-			when: stepOf(2),
-			respond: [
-				reply.toolCall("task_report", { text: "result checked" }),
-				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "result checked" }),
-			],
+		const logInfo = runtimeLog.logInfoEvent;
+		vi.spyOn(runtimeLog, "logInfoEvent").mockImplementation((event, message, options) => {
+			logInfo(event, message, options);
+			if (event === "tasks.input.submitted" && options?.fields?.taskId === taskId && options.fields.seq === 2)
+				submitted();
 		});
+		harness = await createDeterministicHarness({
+			services: true,
+			subagentSyncGraceMs: 60_000,
+			jobSweepIntervalMs: 3_600_000,
+		});
+		const job = await heldCommand(harness.homeDir, "JOB_RESULT_77");
+		try {
+			await seedTask();
+			harness.model.script.route({
+				name: "worker",
+				when: (r) => r.systemPrompt.includes("IN_STEP_WORKER"),
+				respond: [reply.text("SECOND_RESULT_88")],
+			});
+			harness.model.script.route({
+				name: "step-1",
+				when: stepOf(1),
+				respond: [
+					reply.toolCall("bash", { command: job.command, async: true }),
+					reply.text("job started; waiting"),
+				],
+			});
+			harness.model.script.route({
+				name: "step-2",
+				when: stepOf(2),
+				respond: [
+					reply.toolCall("subagent_inline", {
+						task: "Produce the second result.",
+						systemPrompt: "IN_STEP_WORKER",
+						tools: ["read"],
+						mutates: "read",
+					}),
+					reply.toolCall("bash", { command: "echo tool-boundary" }),
+					reply.text("unused"),
+				],
+			});
+			harness.model.script.route({
+				name: "in-step-result",
+				when: (r) => r.tools.includes("task_report") && r.lastUserText.includes("SECOND_RESULT_88"),
+				respond: [
+					reply.toolCall("task_report", { text: "result checked" }),
+					reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "result checked" }),
+				],
+			});
+			const worker = harness.model.script.hold({ when: (r) => r.systemPrompt.includes("IN_STEP_WORKER") });
+			const parent = harness.model.script.hold({
+				when: (r) =>
+					stepOf(2)(r) && r.messages.some((m) => m.role === "tool" && JSON.stringify(m).includes("Dispatched")),
+			});
+			await job.arrived;
+			await waitFor("first step settled waiting for work", async () =>
+				(await readTaskLog(harness.deskDir, taskId)).some(
+					(r) => r.kind === "step_end" && r.seq === 1 && r.next === "work",
+				),
+			);
+			job.release();
+			await worker.arrived;
+			await parent.arrived;
+			worker.release();
+			await Promise.race([
+				submission,
+				new Promise((_, reject) =>
+					setTimeout(() => reject(new Error("task result not submitted")), 10_000).unref(),
+				),
+			]);
+			parent.release();
+			await waitFor("the task to be archived", () => existsSync(archived()), { intervalMs: 25 });
 
-		await waitFor("the task to be archived", () => existsSync(archived()), { intervalMs: 25 });
-
-		const log = await readTaskLog(harness.deskDir, taskId);
-		expect(log.filter((r) => r.kind === "step_end").map((r) => (r.kind === "step_end" ? r.next : ""))).toEqual([
-			"work",
-			"closed",
-		]);
-		expect(log.map((r) => r.kind)).toContain("settle");
-		const second = harness.mainTurnRequests().find((r) => r.lastUserText.includes(`[TASK_STEP:${taskId} #2]`));
-		expect(second?.lastUserText).toMatch(/<task_inputs>[\s\S]*JOB_RESULT_77/);
-		// The second step carries only what is new: the contract came with the first.
-		expect(second?.lastUserText).not.toContain("<task_contract");
-		// The chat saw neither the job's completion nor the task's steps.
-		const chatRequests = harness.mainTurnRequests().filter((r) => r.tools.includes("task_create"));
-		expect(chatRequests.every((r) => r.lastUserText.includes("seed-task") || r.matchedRoute === "create")).toBe(true);
-		expect(JSON.stringify(harness.mainTurnRequests().map((r) => r.lastUserText))).not.toContain("[JOB:");
+			const log = await readTaskLog(harness.deskDir, taskId);
+			expect(log.filter((r) => r.kind === "step_end").map((r) => (r.kind === "step_end" ? r.next : ""))).toEqual([
+				"work",
+				"closed",
+			]);
+			const settles = log.filter((r) => r.kind === "settle");
+			expect(settles).toHaveLength(2);
+			for (const settle of settles)
+				expect(
+					log.filter((r) => r.kind === "input_ack").flatMap((r) => (r.kind === "input_ack" ? r.ids : [])),
+				).toContain(settle.id);
+			const second = harness.mainTurnRequests().find((r) => stepOf(2)(r));
+			expect(second?.lastUserText).toMatch(/<task_inputs>[\s\S]*JOB_RESULT_77/);
+			expect(second?.lastUserText).not.toContain("<task_contract");
+			const inStep = harness.mainTurnRequests().find((r) => r.matchedRoute === "in-step-result");
+			expect(inStep?.lastUserText).toContain("SECOND_RESULT_88");
+			expect(log.filter((r) => r.kind === "step")).toHaveLength(2);
+			const chatRequests = harness.mainTurnRequests().filter((r) => r.tools.includes("task_create"));
+			expect(chatRequests.every((r) => r.lastUserText.includes("seed-task") || r.matchedRoute === "create")).toBe(
+				true,
+			);
+			expect(JSON.stringify(harness.mainTurnRequests().map((r) => r.lastUserText))).not.toContain("[JOB:");
+		} finally {
+			await job.close();
+		}
 	});
 
 	it("T-lane-3: the chat manages a running task — a message joins the step, a pause stops it, a resume goes on", async () => {

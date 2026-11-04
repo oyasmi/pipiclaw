@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { MAX_RUNNING_SUBAGENT_RUNS_PER_DESK, MAX_RUNNING_SUBAGENT_RUNS_PER_HOST } from "../src/subagents/run-record.js";
@@ -359,6 +359,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		releasePrompt?.();
 
 		const result = await resultPromise;
+		await vi.waitFor(() => expect(manager.get(result.details.runId)?.settledAt).toBeDefined());
 		expect(manager.get(result.details.runId)?.verificationVerdict).toBeDefined();
 		const nextLease = acquireWorkspaceLease({
 			runId: "next-verify",

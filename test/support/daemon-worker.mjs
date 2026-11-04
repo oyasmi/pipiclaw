@@ -99,6 +99,7 @@ const runtime = await createRuntimeContext({
 	],
 	registerSignalHandlers: false,
 	startServices: false,
+	adoptedRunCheckIntervalMs: 50,
 	createEventsWatcher: () => ({ start() {}, stop() {} }),
 });
 process.on("message", async ({ action, text, channelId, runId, taskId, mode, kind, point, desk = "e2e" }) => {

@@ -2,8 +2,8 @@
 	"r1": [],
 	"r2": [],
 	"r3": {
-		"src/jobs/manager.ts": 1095,
-		"src/subagents/discovery.ts": 1040,
-		"src/subagents/runs.ts": 1169
+		"src/jobs/manager.ts": 975,
+		"src/subagents/discovery.ts": 1031,
+		"src/subagents/runs.ts": 1048
 	}
 }

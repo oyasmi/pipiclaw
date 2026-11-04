@@ -151,11 +151,13 @@ export async function dispatchInternalRun(input: InternalRunInput): Promise<Dele
 	);
 
 	const abortWatch = watchAbort(signal);
-	const raceResult = await Promise.race([
-		outcomePromise,
-		sleepUnref(Math.max(0, deadline - now)).then(() => "timed-out" as const),
-		abortWatch.aborted,
-	]);
+	const raceResult = runContext.taskId
+		? ("timed-out" as const)
+		: await Promise.race([
+				outcomePromise,
+				sleepUnref(Math.max(0, deadline - now)).then(() => "timed-out" as const),
+				abortWatch.aborted,
+			]);
 	abortWatch.dispose();
 
 	if (raceResult !== "timed-out" && raceResult !== "aborted") {

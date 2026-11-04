@@ -89,6 +89,11 @@ export interface LiveTask {
 	step?: {
 		seq: number;
 		startedAt: number;
+		submittedInputIds: Set<string>;
+		submitting?: Promise<void>;
+		injecting?: boolean;
+		inputDirty?: boolean;
+		ending?: boolean;
 		abort?: StepAbort;
 		timer?: ReturnType<typeof setTimeout>;
 		stopTimer?: ReturnType<typeof setTimeout>;
@@ -113,6 +118,7 @@ export interface LaneContext {
 	};
 	/** Ask for a rescan soon (debounced). */
 	notify(): void;
+	inputAvailable(desk: string, taskId: string): void;
 	/** Dispose a task's runner and forget its in-memory state, unless a drive loop still owns it. */
 	release(live: LiveTask): Promise<void>;
 	/** Whether the lane has been stopped. */

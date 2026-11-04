@@ -25,6 +25,7 @@ import {
 	tasksDir,
 } from "../tasks/store.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
+import { submitTaskInput } from "./task-input.js";
 import { type LaneContext, taskKey } from "./task-lane-types.js";
 import { listPendingWork } from "./task-pending.js";
 import { abortStep } from "./task-step.js";
@@ -129,9 +130,18 @@ export class LaneControl implements TaskControl {
 		if (!document || !messageId) return { kind: "not_found" };
 		if (live?.step && live.runner && !live.step.abort) {
 			try {
-				await live.runner.queueSteer(`[用户对任务 ${id} 说] ${text}\n${taskInputTag(messageId)}`, input.from);
-				ctx.notify();
-				return { kind: "injected" };
+				if (
+					await submitTaskInput(
+						ctx,
+						live,
+						`[用户对任务 ${id} 说] ${text}\n${taskInputTag(messageId)}`,
+						[messageId],
+						input.from,
+					)
+				) {
+					ctx.notify();
+					return { kind: "injected" };
+				}
 			} catch (error) {
 				log.logInfoEvent("tasks.message.inject_failed", "Message could not join the running step", {
 					fields: { taskId: id, desk, reason: errorMessage(error) },

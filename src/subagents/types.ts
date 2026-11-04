@@ -134,7 +134,7 @@ export interface SubAgentToolOptions {
 	buildTools?: BuildSubagentTools;
 	/** Test-only override for the D6 convergence-turn wall clock; defaults to CONVERGENCE_WALL_CLOCK_MS. */
 	convergenceWallClockMs?: number;
-	/** Test-only override for the D2 sync grace window; defaults to SYNC_GRACE_MS. */
+	/** Test-only override for the D2 sync grace window; defaults to CHAT_SYNC_GRACE_MS for chat; task dispatch never waits for the worker. */
 	syncGraceMs?: number;
 	/** Test-only override for the transient-error retry backoff base; defaults to RETRY_BASE_DELAY_MS. */
 	retryBaseDelayMs?: number;

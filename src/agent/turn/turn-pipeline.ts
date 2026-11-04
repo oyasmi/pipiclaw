@@ -15,7 +15,7 @@ import { errorMessage } from "../../shared/text-utils.js";
 import type { ModelSelection } from "../session/model-selection.js";
 import { SessionRetryAttempt } from "../session/session-adapter.js";
 import type { SessionHost } from "../session/session-host.js";
-import { MAX_USER_MESSAGE_CHARS, type RunnerProfile, type RunState } from "../types.js";
+import { MAX_USER_MESSAGE_CHARS, type RunnerProfile, type RunState, type TaskSteerScope } from "../types.js";
 import { estimateIncomingMessageTokens } from "./context-budget.js";
 import { clipUserInput } from "./progress-formatter.js";
 import { buildFirstTurnMemoryBootstrap, buildTaskDigestForTurn, renderDeskTurnContext } from "./turn-context.js";
@@ -289,7 +289,13 @@ export class TurnPipeline {
 		throw new Error("No task is currently running.");
 	}
 
-	async queueBusyMessage(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
+	async queueBusyMessage(
+		text: string,
+		userName?: string,
+		images?: InboundImage[],
+		scope?: TaskSteerScope,
+	): Promise<"queued" | "stale"> {
+		if (scope && !this.acceptsScope(scope)) return "stale";
 		this.assertBusyWindowOpen();
 
 		await this.host.ensureSessionReady();
@@ -309,14 +315,37 @@ export class TurnPipeline {
 			this.runState.ctx?.emit({ type: "commentary", level: "notice", text: notice });
 		}
 
+		if (scope && !this.acceptsScope(scope)) return "stale";
 		this.assertBusyWindowOpen();
 
 		const queueMessage = async () => {
+			if (scope && !this.acceptsScope(scope)) return "stale" as const;
 			this.assertBusyWindowOpen();
+			if (scope) {
+				// Runtime task inputs are already prepared, rather than interactive commands.
+				// AgentSession.steer awaits input extensions; the public synchronous primitive
+				// keeps the final scope check adjacent to actual submission, including on stop.
+				this.session.agent.steer({
+					role: "user",
+					content: [{ type: "text", text: queuedMessage }, ...preparedImages.images],
+					timestamp: Date.now(),
+				});
+				return "queued" as const;
+			}
 			await this.session.steer(queuedMessage, preparedImages.images.length > 0 ? preparedImages.images : undefined);
+			return "queued" as const;
 		};
 
-		await this.host.runPrompt(queueMessage);
+		return this.host.runPrompt(queueMessage);
+	}
+
+	private acceptsScope(scope: TaskSteerScope): boolean {
+		if (this.deps.isRetired() || this.deps.profile.kind !== "task" || !scope.isCurrent()) return false;
+		try {
+			return this.deps.profile.session.seq() === scope.seq;
+		} catch {
+			return false;
+		}
 	}
 
 	async maybeRunPreventiveCompactionForIncomingText(incomingText: string, imageCount: number = 0): Promise<void> {

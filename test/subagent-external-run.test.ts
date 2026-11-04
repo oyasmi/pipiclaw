@@ -268,7 +268,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			probeCliVersionFn: async () => {
 				probeStartedResolve();
 				await probeGate;
-				return undefined;
+				return "fixture 1.2";
 			},
 		});
 
@@ -282,9 +282,17 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(persisted).toMatchObject({ status: "running", pid: 73737 });
 		await expect(launchPromise).resolves.toEqual({ ok: true });
 
-		releaseProbe();
+		// Spec 067 mutation: making close await the version probe leaves this completion blocked.
 		child.emit("close", 0);
-		await waitFor(() => getSubAgentRunManager(channelId).get("run-ext-handshake")?.status !== "running");
+		await waitFor(() => getSubAgentRunManager(channelId).get("run-ext-handshake")?.settledAt !== undefined);
+		const terminal = getSubAgentRunManager(channelId).get("run-ext-handshake");
+		releaseProbe();
+		await waitFor(() => getSubAgentRunManager(channelId).get("run-ext-handshake")?.cliVersion === "fixture 1.2");
+		expect(getSubAgentRunManager(channelId).get("run-ext-handshake")).toMatchObject({
+			status: terminal?.status,
+			settledAt: terminal?.settledAt,
+			usageRecorded: true,
+		});
 	});
 
 	it("runs a write-capable purpose=verify under the lease and records the declared verdict", async () => {

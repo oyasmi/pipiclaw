@@ -637,7 +637,12 @@ describe("control from the chat (D24)", () => {
 		await started.promise;
 		const outcome = await harness.lane.message("main", "busy", { from: "Alice", channel: CHANNEL, text: "多做一点" });
 		expect(outcome).toEqual({ kind: "injected" });
-		expect(harness.runners.busy?.queueSteer).toHaveBeenCalledWith(expect.stringContaining("多做一点"), "Alice");
+		expect(harness.runners.busy?.queueSteer).toHaveBeenCalledWith(
+			expect.stringContaining("多做一点"),
+			"Alice",
+			undefined,
+			expect.objectContaining({ seq: 1 }),
+		);
 		release.resolve();
 		await running;
 		while ((await state("busy"))?.state === "running") await new Promise((resolve) => setTimeout(resolve, 5));
@@ -662,6 +667,17 @@ describe("control from the chat (D24)", () => {
 		await harness.lane.runOnce();
 		await queued.promise;
 		await harness.lane.message("main", "unsent", { from: "A", channel: CHANNEL, text: "UNCONSUMED_STEER" });
+		// A changed report channel invalidates the old live runner even when both addresses
+		// remain bound to this desk. Preserve the input for the next step instead of steering it.
+		const current = await readStoredTask(harness.deskDir, "unsent");
+		writeFileSync(
+			join(harness.deskDir, "tasks", "unsent.md"),
+			renderTaskDocument({ ...current!.fields, channel: "dingtalk:dm:other" }, current!.body),
+		);
+		await harness.lane.message("main", "unsent", { from: "A", channel: CHANNEL, text: "CHANGED_REPORT_CHANNEL" });
+		expect(harness.runners.unsent?.queueSteer).toHaveBeenCalledTimes(1);
+		writeFileSync(join(harness.deskDir, "tasks", "unsent.md"), renderTaskDocument(current!.fields, current!.body));
+
 		finish.resolve();
 		await harness.lane.drained();
 		await harness.settle();

@@ -34,7 +34,8 @@ import { StartupRefusal } from "../desk/startup-error.js";
 import type { DeskConversation } from "../desk/types.js";
 import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
-import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
+import { createFileStore, type FileStore } from "../file-store.js";
+import { createJobRuntime, type JobRuntime } from "../jobs/runtime.js";
 import * as log from "../log.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/runtime.js";
@@ -141,6 +142,7 @@ async function releaseCachedRunner(channelRunners: Map<string, AgentRunner>, cha
 
 interface RuntimeContextOptions {
 	executor?: Executor;
+	fileStore?: FileStore;
 	paths: BootstrapPaths;
 	/** Replaces the transports `channel.json` turns on (tests and embedders). */
 	transports?: Transport[];
@@ -156,6 +158,8 @@ interface RuntimeContextOptions {
 	memoryMaintenanceSchedulerIntervalMs?: number;
 	/** Background-job sweep cadence override (tests use a short one for timely completion wakes). */
 	jobSweepIntervalMs?: number;
+	dispatchIntervalMs?: number;
+	adoptedRunCheckIntervalMs?: number;
 	/** Receives raw SDK session events after subscription, without changing runtime handling. */
 	observer?: (event: unknown, channelId: string) => void;
 	/** Observes task steps starting and ending; used only by isolated evaluation workers. */
@@ -214,6 +218,7 @@ async function buildRuntimeContext(
 	let durableDispatch: DurableDispatchService | undefined;
 	let shuttingDown = false;
 	const executor = options.executor ?? createExecutor();
+	const fileStore = options.fileStore ?? createFileStore();
 	const dispatch = (event: WakeEvent) => durableDispatch?.dispatch(event) ?? false;
 
 	// The transports this process hosts. A delivered answer is archived through `store`, which is
@@ -324,6 +329,7 @@ async function buildRuntimeContext(
 
 	/** What every runner of a channel shares: the desk's managers, settings and how the channel is named and answered. */
 	const runnerPaths = (conversation: DeskConversation, channelId: string): RunnerFactoryPaths => ({
+		fileStore,
 		jobManager: jobs.get(conversation.desk),
 		runManager: runs.get(conversation.desk),
 		appHomeDir,
@@ -438,6 +444,7 @@ async function buildRuntimeContext(
 
 	const dispatchStateDir = join(appHomeDir, "state", "dispatch");
 	durableDispatch = new DurableDispatchService({
+		intervalMs: options.dispatchIntervalMs,
 		stateDir: dispatchStateDir,
 		bot: ingress,
 		isReachable: (channelId) => transports.isReachable(channelId),
@@ -461,19 +468,21 @@ async function buildRuntimeContext(
 	// Background jobs and delegation runs are owned per desk (spec 058, D15); their completion wakes
 	// pass the producer-side binding check before they are dispatched.
 	const jobs = createJobRuntime(executor, {
+		fileStore,
 		jobsStateDir: join(appHomeDir, "state", "jobs"),
 		workspaceDir,
 		dispatch,
 		isBoundTo,
-		onTaskInput: () => taskLane.notify(),
+		onTaskInput: (desk, taskId) => taskLane.inputAvailable(desk, taskId),
 		...(options.jobSweepIntervalMs ? { sweepIntervalMs: options.jobSweepIntervalMs } : {}),
 	});
 	const runs = createSubAgentRuntime({
+		adoptedCheckIntervalMs: options.adoptedRunCheckIntervalMs,
 		stateDir: join(appHomeDir, "state", "subagent-runs"),
 		workspaceDir,
 		dispatch,
 		isBoundTo,
-		onTaskInput: () => taskLane.notify(),
+		onTaskInput: (desk, taskId) => taskLane.inputAvailable(desk, taskId),
 		// A best-effort out-of-band notice, independent of the completion wake. `notices: "off"`
 		// (settings.json) restores the silent behavior.
 		notify: (desk, channelId, notice) => {
@@ -486,41 +495,7 @@ async function buildRuntimeContext(
 		ledger: getUsageLedger(),
 		store,
 	});
-	// Admission (bot.start() below) must not open until every persisted job and run is back in
-	// memory, and restore is independent of bindings (D6): a dormant desk's runs still settle.
-	await jobs.restore();
-	await runs.restore();
-	runs.start();
-	// Activation repairs each bound desk's conversations before its channels can take traffic.
-	await deskRuntime.activateBound();
-
-	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
-		? options.createMemoryMaintenanceScheduler()
-		: new MemoryMaintenanceScheduler({
-				appHomeDir,
-				getConversations: () => deskRuntime.boundConversations(),
-				// Conversations active this boot reuse their runner's in-memory context; every other one
-				// gets a lightweight disk-backed context instead of resurrecting a full runner.
-				getRuntimeContext: async (conversation) => {
-					const runner = channelRunners.get(conversation.channelId);
-					if (runner && runner.conversation.desk === conversation.desk) {
-						return runner.getMemoryMaintenanceContext();
-					}
-					return loadDetachedMaintenanceContext({
-						conversation,
-						workspaceDir,
-						authConfigPath: options.paths.authConfigPath,
-						modelsConfigPath: options.paths.modelsConfigPath,
-						settingsManager: runtimeSettingsManager,
-					});
-				},
-				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
-				getSettings: () => {
-					runtimeSettingsManager.reload();
-					return { memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings() };
-				},
-				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
-			});
+	// Producers can complete during restore; construct their scoped consumer before observing them.
 	// `tools.json` is re-read on every driver tick — and a tick follows every turn — so cache the
 	// parse behind the file's change token.
 	let cachedToolsStamp: string | undefined;
@@ -567,6 +542,42 @@ async function buildRuntimeContext(
 		activeTasks,
 		onStep: options.onTaskStep,
 	});
+
+	// Admission (bot.start() below) must not open until every persisted job and run is back in
+	// memory, and restore is independent of bindings (D6): a dormant desk's runs still settle.
+	await jobs.restore();
+	await runs.restore();
+	runs.start();
+	// Activation repairs each bound desk's conversations before its channels can take traffic.
+	await deskRuntime.activateBound();
+
+	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
+		? options.createMemoryMaintenanceScheduler()
+		: new MemoryMaintenanceScheduler({
+				appHomeDir,
+				getConversations: () => deskRuntime.boundConversations(),
+				// Conversations active this boot reuse their runner's in-memory context; every other one
+				// gets a lightweight disk-backed context instead of resurrecting a full runner.
+				getRuntimeContext: async (conversation) => {
+					const runner = channelRunners.get(conversation.channelId);
+					if (runner && runner.conversation.desk === conversation.desk) {
+						return runner.getMemoryMaintenanceContext();
+					}
+					return loadDetachedMaintenanceContext({
+						conversation,
+						workspaceDir,
+						authConfigPath: options.paths.authConfigPath,
+						modelsConfigPath: options.paths.modelsConfigPath,
+						settingsManager: runtimeSettingsManager,
+					});
+				},
+				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
+				getSettings: () => {
+					runtimeSettingsManager.reload();
+					return { memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings() };
+				},
+				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
+			});
 
 	const shutdownWithReason = createShutdown({
 		taskLane,

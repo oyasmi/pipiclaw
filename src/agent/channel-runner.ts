@@ -430,8 +430,32 @@ export class ChannelRunner implements AgentRunner {
 		return this.session.promptTemplates.some((template) => template.name.toLowerCase() === name);
 	}
 
-	async queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
-		await this.pipeline.queueBusyMessage(requireQueuedMessage(text, "steer"), userName, images);
+	private taskQueueSeq?: number;
+
+	get generation(): string {
+		return this.host.trace.generation;
+	}
+
+	async queueSteer(
+		text: string,
+		userName?: string,
+		images?: InboundImage[],
+		scope?: import("./types.js").TaskSteerScope,
+	): Promise<"queued" | "stale"> {
+		const result = await this.pipeline.queueBusyMessage(requireQueuedMessage(text, "steer"), userName, images, scope);
+		if (scope && result === "queued") this.taskQueueSeq = scope.seq;
+		return result;
+	}
+
+	clearTaskStepQueue(seq: number): void {
+		if (this.retired || this.profile.kind !== "task" || !this.host.sessionInitialized) return;
+		try {
+			if (this.profile.session.seq() !== seq) return;
+		} catch {
+			// A stopped step still owns this runner until the lane finishes its teardown.
+			if (this.taskQueueSeq !== seq) return;
+		}
+		this.session.clearQueue();
 	}
 
 	async flushMemoryForShutdown(): Promise<void> {

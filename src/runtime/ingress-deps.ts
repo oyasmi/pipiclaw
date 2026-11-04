@@ -12,7 +12,7 @@ import type { ChannelIndex } from "../channel/channel-index.js";
 import type { ChannelStore } from "../channel/store.js";
 import type { PushMessage } from "../channel/transport.js";
 import type { DeskCommandPort } from "../desk/commands.js";
-import type { JobRuntime } from "../jobs/manager.js";
+import type { JobRuntime } from "../jobs/runtime.js";
 import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import type { TaskControl } from "../tasks/control.js";
 import type { ChannelResolution } from "./desk-runtime.js";

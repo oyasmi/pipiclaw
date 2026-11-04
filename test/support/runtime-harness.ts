@@ -206,6 +206,9 @@ export async function createDeterministicHarness(options?: {
 	web?: boolean;
 	/** Start background services (durable dispatch, task driver, job sweep) — A16/A17. */
 	services?: boolean;
+	jobSweepIntervalMs?: number;
+	dispatchIntervalMs?: number;
+	observer?: (event: unknown, channelId: string) => void;
 	/** Use the production event watcher as well as the real driver/outbox. */
 	events?: boolean;
 	/** Shorten the sub-agent sync grace window so the detached-settlement + wake path is
@@ -290,7 +293,9 @@ export async function createDeterministicHarness(options?: {
 			paths,
 			registerSignalHandlers: false,
 			startServices: options?.services ?? false,
-			jobSweepIntervalMs: options?.services ? 150 : undefined,
+			jobSweepIntervalMs: options?.jobSweepIntervalMs ?? (options?.services ? 150 : undefined),
+			dispatchIntervalMs: options?.dispatchIntervalMs,
+			observer: options?.observer,
 			createEventsWatcher: options?.events ? undefined : () => ({ start() {}, stop() {} }),
 			transports: [
 				new DingTalkTransport({

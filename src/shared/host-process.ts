@@ -19,7 +19,7 @@ const execFileAsync = promisify(execFile);
  */
 export async function readProcessStartTime(pid: number): Promise<string | undefined> {
 	try {
-		const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "lstart="]);
+		const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "lstart="], { timeout: 1_000 });
 		const value = stdout.trim();
 		return value || undefined;
 	} catch {
@@ -76,6 +76,20 @@ export function isProcessGroupAlive(pid: number): boolean {
 		return true;
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/** A zombie cannot write. A failed host probe remains unknown, never evidence of a safe group. */
+export async function processGroupQuiescent(pid: number): Promise<boolean> {
+	if (!isProcessGroupAlive(pid)) return true;
+	try {
+		const { stdout } = await execFileAsync("ps", ["-eo", "pgid=,stat="], { timeout: 1_000 });
+		return !stdout.split("\n").some((line) => {
+			const [group, state] = line.trim().split(/\s+/);
+			return Number(group) === pid && !state?.startsWith("Z");
+		});
+	} catch {
+		return false;
 	}
 }
 

@@ -62,7 +62,7 @@
 
 `bash` 传 `async: true` 立即返回 job id，命令在后台继续跑；`job` 负责之后的 `list` / `poll` / `cancel`。
 
-关键约束：每个工位最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`，重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，完成后自动唤醒启动它的频道并带上输出尾部（该频道已换绑到别的工位时不唤醒）。TUI 不提供这套常驻恢复与完成投递，退出前应取回所需结果。已结束作业保留 7 天供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
+关键约束：每个工位最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`，重启后会认领仍在运行的作业；本机 FileStore 观察完成文件，事件触发后立即核实，10 秒扫描处理漏事件、超时或不支持观察的实现；`poll` 收到完成提交便返回，并保留 3 秒回查与 30 秒总等待。完成后唤醒启动它的频道并带上输出尾部（该频道已换绑时不唤醒）；属于任务的作业结果写入任务，正在执行的步骤在下一完整工具批次后可见。TUI 嵌入运行时退出后停止观察，detached 作业仍可继续，下一运行时可恢复记录。已结束作业保留 7 天供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
 
 ## 网页工具（`web_search` / `web_fetch`）
 
@@ -103,7 +103,7 @@
 
 `subagent`（角色优先）把一项聚焦工作交给一个**已配置**的角色，只传 `agent`/`task` 加上可选的 `workingDirectory`/`purpose`/`taskId`——工具、模型、预算、上下文策略全部来自角色文件，调用侧不能覆盖。`subagent_inline` 是没有合适角色时的一次性执行者，携带 `systemPrompt` 及 `tools`/`model`/`effort`/`context`/`thinkingLevel`/`mutates` 等覆盖字段；可以用 `tools.subagentInline.enabled: false` 整体关掉（默认开）。
 
-- **内置角色**使用 Pipiclaw 的模型和工具，通常在 120 秒同步宽限内直接返回；超时后转为后台 run。
+- **内置角色**使用 Pipiclaw 的模型和工具，聊天共享 1 秒快速返回窗口，超过后转为后台运行；任务步骤内确认启动后立即异步返回。
 - **外部角色**启动 Claude Code、Codex CLI 或 `exec`，恒为异步，派发后立即返回 `runId`；DingTalk daemon 会在完成时唤醒发起委派的频道；没有 daemon 时，终端内嵌的运行时只在终端打开期间做这件事。
 
 委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。

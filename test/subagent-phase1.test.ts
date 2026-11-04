@@ -164,7 +164,10 @@ describe("sub-agent discovery", () => {
 		// internal entry carries the internal runtime's equivalent binding instead: a tool
 		// whitelist and budgets, never a CLI.
 		for (const agent of discovery.agents) {
-			expect(agent.thinkingLevel).toBeTruthy();
+			// Cursor chooses reasoning through its model id; its harness rejects a separate level.
+			if (agent.runtime === "external" && agent.harness === "cursor-cli")
+				expect(agent.thinkingLevel).toBeUndefined();
+			else expect(agent.thinkingLevel).toBeTruthy();
 			if (agent.runtime === "internal") {
 				expect(agent).toMatchObject({ workload: "light", mutates: "read" });
 				expect(agent.tools).not.toContain("write");
@@ -172,7 +175,7 @@ describe("sub-agent discovery", () => {
 				continue;
 			}
 			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
-			expect(["claude-code", "codex-cli"]).toContain(agent.harness);
+			expect(["claude-code", "codex-cli", "cursor-cli"]).toContain(agent.harness);
 			expect(agent.externalModelRef).toBeTruthy();
 		}
 		// A write entry runs with approvals/sandbox off, so its `mutates: write` lease is the only
@@ -423,8 +426,9 @@ describe("sub-agent tool", () => {
 			"---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n\n## Work Items\n- [ ] W1 check it\n",
 		);
 		let delegatedTask = "";
+		const managers = testManagers("dingtalk:dm:123", deskDir);
 		const tool = createSubAgentInlineTool({
-			...testManagers("dingtalk:dm:123", deskDir),
+			...managers,
 			boundTaskId: "ship",
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
@@ -457,8 +461,11 @@ describe("sub-agent tool", () => {
 		expect(result.details).toMatchObject({
 			purpose: "verify",
 			taskId: "ship",
-			verificationVerdict: "pass",
+			dispatched: true,
 		});
+		await vi.waitFor(() => expect(managers.runManager.get(result.details.runId!)?.taskAccounted).toBe(true));
+		expect(managers.runManager.get(result.details.runId!)?.verificationVerdict).toBe("pass");
+
 		expect(delegatedTask).toContain(join(deskDir, "tasks", "ship.md"));
 		expect(delegatedTask).toContain("VERDICT: PASS or VERDICT: FAIL");
 		// Spec 052, D4/D6: the checker's verdict lands on the task's board source, bound to the item.

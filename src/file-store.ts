@@ -1,4 +1,4 @@
-import { createReadStream, type Dirent } from "node:fs";
+import { createReadStream, type Dirent, watch } from "node:fs";
 import { stat as fsStat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Readable, Writable } from "node:stream";
@@ -89,6 +89,9 @@ export interface WalkFilesResult {
 }
 
 export interface FileStore {
+	/** Optional host directory events; a basename or an unspecified directory change is only a hint. */
+	watchDirectory?(path: string, onChange: (name?: string) => void, onError: (error: Error) => void): { close(): void };
+
 	/** ENOENT resolves to `undefined` rather than throwing. */
 	stat(path: string): Promise<FileStat | undefined>;
 
@@ -160,6 +163,12 @@ async function fsyncDir(dir: string): Promise<void> {
 }
 
 class HostFileStore implements FileStore {
+	watchDirectory(path: string, onChange: (name?: string) => void, onError: (error: Error) => void): { close(): void } {
+		const watcher = watch(path, { persistent: false }, (_event, filename) => onChange(filename ?? undefined));
+		watcher.on("error", onError);
+		return watcher;
+	}
+
 	async stat(path: string): Promise<FileStat | undefined> {
 		try {
 			return toFileStat(await fsStat(path));

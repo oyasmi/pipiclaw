@@ -1,10 +1,10 @@
-import { readdir, readFile, rename, rmdir, stat, unlink } from "node:fs/promises";
+import { readdir, readFile, rename, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { WakeEvent } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../shared/host-process.js";
+import { isProcessAlive, killProcessGroup } from "../shared/host-process.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -14,7 +14,8 @@ import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
 import { buildRunCompletionWake, countWakeSiblings } from "./completion-wake.js";
 import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
-import { finalizeExternalRun } from "./external/settlement.js";
+import { processIdentity, reconcileExternalRun } from "./external/reconciliation.js";
+import { AdoptedRunObserver } from "./external/recovery.js";
 import { runArchiveEntry, runLedgerEntry } from "./run-archive.js";
 import {
 	applyPendingSettlement,
@@ -51,7 +52,6 @@ import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLe
  * the parent agent re-process the same result). Everything else — duration, tool counts, verdict
  * — is plain data that can be overwritten harmlessly.
  */
-type ProcessIdentity = "same" | "different" | "unknown";
 
 export interface RunManagerOptions {
 	/** Root of the per-desk record directories (`<stateDir>/<desk>/`). Omit to skip persistence. */
@@ -72,6 +72,7 @@ export interface RunManagerOptions {
 	store?: ChannelStore;
 	/** Application-wide admission count, supplied by the owning runtime. */
 	runningCount?: () => number;
+	adoptedCheckIntervalMs?: number;
 }
 
 /** Registration is serialized across channel managers so the host-wide count and insertion are
@@ -102,9 +103,8 @@ export class SubAgentRunManager {
 	/** External launch intents exist before a safe live child handle does. A cancel in that window
 	 * is remembered here and consumed before spawn, rather than spawning a process nothing can cancel. */
 	private readonly externalLaunches = new Map<string, { cancelRequested: boolean }>();
-	/** One-shot deadline checks for external processes adopted during restore. Unlike a child this
-	 *  daemon spawned itself, an adopted process cannot emit a `close` event to this process. */
-	private readonly externalRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly recovery: AdoptedRunObserver;
+	private readonly recoveryQueue = createSerialQueue<string>();
 	/** Live external runs' tail-the-artifact-file progress pollers (P1a). Never persisted or
 	 *  reconstructed on restore — an adopted run has no fresher information to poll for than
 	 *  restart reconciliation already reads once from the finished process's own output. */
@@ -119,7 +119,21 @@ export class SubAgentRunManager {
 	constructor(
 		private readonly target: { desk: string; deskDir: string },
 		private readonly options: RunManagerOptions,
-	) {}
+	) {
+		this.recovery = new AdoptedRunObserver(
+			(id) => this.runs.get(id),
+			async (id) => {
+				const record = this.runs.get(id);
+				if (record) await this.reconcileExternalRunAtDeadline(record);
+			},
+			(runId, error) =>
+				log.logWarn("subagent.reconcile.failed", "Adopted external run reconcile failed", {
+					reason: errorMessage(error),
+					fields: { runId, desk: this.target.desk },
+				}),
+			options.adoptedCheckIntervalMs,
+		);
+	}
 
 	/** The completion wake's dispatch id (a chat-level run; a task-bound run never wakes a channel). */
 	private wakeDispatchId(runId: string): string {
@@ -129,7 +143,7 @@ export class SubAgentRunManager {
 	/** Release observation timers without cancelling dispatched work or its settlement. */
 	stop(): void {
 		this.stopped = true;
-		for (const runId of this.externalRecoveryTimers.keys()) this.clearExternalRecoveryTimer(runId);
+		this.recovery.stop();
 		for (const runId of this.externalProgressTails.keys()) this.stopExternalProgressTail(runId);
 	}
 
@@ -291,7 +305,7 @@ export class SubAgentRunManager {
 		this.cancelHandles.delete(record.runId);
 		this.externalLaunches.delete(record.runId);
 		this.internalProgressPacers.delete(record.runId);
-		this.clearExternalRecoveryTimer(record.runId);
+		this.recovery.remove(record.runId);
 	}
 
 	get(runId: string): RunRecord | undefined {
@@ -466,10 +480,15 @@ export class SubAgentRunManager {
 
 	/** Persist best-effort probe results after the pid/launch recovery record is already durable.
 	 * A slow or unavailable `ps`/`--version` probe must never reopen the post-spawn recovery window. */
-	async updateLaunchMetadata(runId: string, info: { pidStartedAt?: string; cliVersion?: string }): Promise<void> {
+	async updateLaunchMetadata(
+		runId: string,
+		info: { pidStartedAt?: string; cliVersion?: string },
+		launch?: { pid: number; processStartedAt: number },
+	): Promise<void> {
 		await this.queue.run(runId, async () => {
 			const record = this.runs.get(runId);
-			if (!record || record.status !== "running" || !record.pid) return;
+			if (this.stopped || !record || !record.pid) return;
+			if (launch && (record.pid !== launch.pid || record.processStartedAt !== launch.processStartedAt)) return;
 			if (info.pidStartedAt !== undefined) record.pidStartedAt = info.pidStartedAt;
 			if (info.cliVersion !== undefined) record.cliVersion = info.cliVersion;
 			await this.persist(record);
@@ -484,17 +503,18 @@ export class SubAgentRunManager {
 	/** Record why a still-running external run is about to be killed, before the signal is sent
 	 *  (P1-1) — see the `terminationReason` field doc. A no-op once the run is no longer running.
 	 *  Called by both the live in-process watcher (`external/run.ts`) and `sweep()` below. */
-	async markTerminationReason(runId: string, reason: "timeout" | "cancelled"): Promise<void> {
+	async markTerminationReason(runId: string, reason: "timeout" | "cancelled", required = false): Promise<void> {
 		await this.queue.run(runId, async () => {
 			const record = this.runs.get(runId);
 			if (!record || record.status !== "running") return;
+			const previous = record.terminationReason;
 			record.terminationReason = reason;
-			await this.persist(record).catch((error) => {
-				log.logWarn("subagent.persist.failed", "Termination reason persist failed", {
-					reason: errorMessage(error),
-					fields: { runId },
-				});
-			});
+			try {
+				await this.persist(record, required);
+			} catch (error) {
+				record.terminationReason = previous;
+				throw error;
+			}
 		});
 	}
 
@@ -541,7 +561,7 @@ export class SubAgentRunManager {
 			await this.persist(record);
 			this.cancelHandles.delete(runId);
 			this.externalLaunches.delete(runId);
-			this.clearExternalRecoveryTimer(runId);
+			this.recovery.remove(runId);
 			this.stopExternalProgressTail(runId);
 			this.internalProgressPacers.delete(runId);
 
@@ -586,6 +606,9 @@ export class SubAgentRunManager {
 				return;
 			}
 			await this.announce(record, input.outputText, outputSaved);
+			log.logInfoEvent("subagent.settlement.committed", "Run settlement committed", {
+				fields: { desk: this.target.desk, runId, taskId: record.taskId, durationMs: record.durationMs },
+			});
 		});
 	}
 
@@ -706,7 +729,6 @@ export class SubAgentRunManager {
 				// waiting for its one-shot deadline check.
 				record.terminationReason = "cancelled";
 				await this.persist(record).catch(() => undefined);
-				await killProcessGroup(record.pid).catch(() => undefined);
 				adoptedRecord = record;
 			} else {
 				// Truly unreachable (e.g. an internal run this process did not launch): mark it lost
@@ -723,8 +745,7 @@ export class SubAgentRunManager {
 			return "running"; // A live handle or the adopted-run reconciliation below drives settlement.
 		});
 		if (!adoptedRecord) return status;
-		this.clearExternalRecoveryTimer(runId);
-		await this.reconcileExternalRun(adoptedRecord).catch((error) => {
+		await this.reconcileExternalRunAtDeadline(adoptedRecord).catch((error) => {
 			log.logWarn("subagent.reconcile.failed", "Cancelled adopted run reconcile failed", {
 				reason: errorMessage(error),
 				fields: { runId },
@@ -819,6 +840,7 @@ export class SubAgentRunManager {
 						fields: { runId: record?.runId },
 					});
 				});
+				if (record.status === "running" && record.runtime === "external") this.recovery.add(record.runId);
 				continue;
 			}
 			if (record.runtime === "internal" && record.status === "running") {
@@ -875,12 +897,12 @@ export class SubAgentRunManager {
 						// Either an identity mismatch or an unavailable probe is settled as lost with the
 						// uncertainty recorded, instead of silently degrading to an unprotected writer
 						// (D10.1/D10.3).
-						const processIdentity = record.pid ? await this.processIdentity(record) : "unknown";
+						const identity = record.pid ? await processIdentity(record) : "unknown";
 						let processSafetyNote: string;
-						if (processIdentity === "same") {
+						if (identity === "same") {
 							await killProcessGroup(record.pid!).catch(() => undefined);
 							processSafetyNote = " The adopted process identity matched and its process group was signalled.";
-						} else if (processIdentity === "different") {
+						} else if (identity === "different") {
 							processSafetyNote =
 								" The persisted pid identity did not match the current process; no signal was sent.";
 						} else {
@@ -927,7 +949,7 @@ export class SubAgentRunManager {
 						fields: { runId: record?.runId },
 					});
 				});
-				if (record.status === "running") this.scheduleExternalRecovery(record);
+				if (record.status === "running") this.recovery.add(record.runId);
 			}
 			if (isTerminal(record.status) && record.settledAt) {
 				// A settled-but-unwoken record means the wake was lost between settlement and
@@ -960,169 +982,38 @@ export class SubAgentRunManager {
 		}
 	}
 
-	/** Whether `record.pid` is still the same process that was launched, when that can be checked
-	 *  at all (D10.3). A missing `pidStartedAt` (an older record, or a `ps` that failed once at
-	 *  launch) means there is nothing to compare against — trust `isProcessAlive` alone rather
-	 *  than manufacture a false negative. */
-	private async isSameProcess(record: RunRecord): Promise<boolean> {
-		if (!record.pid) return false;
-		if (!record.pidStartedAt) return true;
-		const current = await readProcessStartTime(record.pid);
-		return current === record.pidStartedAt;
-	}
-
-	private async processIdentity(record: RunRecord): Promise<ProcessIdentity> {
-		if (!record.pid || !record.pidStartedAt) return "unknown";
-		const current = await readProcessStartTime(record.pid);
-		if (!current) return "unknown";
-		return current === record.pidStartedAt ? "same" : "different";
-	}
-
-	/**
-	 * Restart reconciliation for an external run still marked `running` (D10.3), and the terminal
-	 * judgement `sweep()` uses once an adopted run's process is confirmed gone. Unlike internal
-	 * runs, a `detached` external process outlives the daemon, so the first move is a liveness
-	 * probe, not an automatic `lost`:
-	 *
-	 * - no `pid` at all: the intent was persisted but spawn was never confirmed — cannot prove it
-	 *   ever started, so it is judged `lost` the same as an internal run (D1).
-	 * - `pid` alive under the same identity: genuinely still running. Left alone.
-	 * - `pid` gone (or reused by an unrelated process): the process finished, died, or was killed
-	 *   while the daemon was down. `finalizeExternalRun` (spec 042 D1) parses whatever the process
-	 *   actually wrote before applying `terminationReason` — the same sequence the live post-exit
-	 *   path uses, so a reconciled run never loses usage, output, session id, or its verify verdict
-	 *   just because the daemon happened to be down when the run finished.
-	 */
 	private async reconcileExternalRun(record: RunRecord): Promise<void> {
-		if (!record.pid) {
-			await this.settle(
-				record.runId,
-				{
-					status: "lost",
-					failureReason: "No pid was ever recorded for this run; it cannot be proven to have started.",
-					usage: record.usage,
-					usageKnown: record.usageKnown,
-					costKnown: record.costKnown,
-					turns: record.turns ?? 0,
-					toolCalls: record.toolCalls ?? 0,
-					durationMs: Date.now() - record.startedAt,
-					durationEstimated: true,
-					outputText: "",
-				},
-				{ announce: true },
-			);
-			return;
-		}
-		if (isProcessAlive(record.pid) && (await this.isSameProcess(record))) {
-			return; // Still genuinely running; nothing to reconcile yet.
-		}
-		if (!record.harness) {
-			// Defensive only: external runs always get a harness at register() time (spec 040 D1).
-			await this.settle(
-				record.runId,
-				{
-					status: "failed",
-					failureReason: "Run has no recorded harness; cannot judge it.",
-					usage: record.usage,
-					usageKnown: record.usageKnown,
-					costKnown: record.costKnown,
-					turns: record.turns ?? 0,
-					toolCalls: record.toolCalls ?? 0,
-					durationMs: Date.now() - record.startedAt,
-					durationEstimated: true,
-					outputText: "",
-				},
-				{ announce: true },
-			);
-			return;
-		}
-
-		// Duration can only be estimated post-restart: the artifact file's own mtime is the closest
-		// proxy for "when the process last wrote something" (D1); wall clock from the last known
-		// process start is the fallback when the file is missing (e.g. already GC'd).
-		const processStartedAt = record.processStartedAt ?? record.startedAt;
-		let durationMs = Date.now() - processStartedAt;
-		try {
-			const eventsStat = await stat(join(record.artifactDir, "events.jsonl"));
-			durationMs = eventsStat.mtimeMs - processStartedAt;
-		} catch {
-			// No events file (or already GC'd) — fall back to the wall-clock estimate above.
-		}
-
-		const maxWallTimeSec =
-			record.maxWallTimeSec ??
-			(record.deadlineAt ? Math.round((record.deadlineAt - record.startedAt) / 1000) : undefined);
-
-		await finalizeExternalRun(
-			{
-				harnessId: record.harness,
-				purpose: record.purpose,
-				workingDirectory: record.workingDirectory,
-				artifactDir: record.artifactDir,
-				exitCode: undefined,
-				durationMs: Math.max(0, durationMs),
-				durationEstimated: true,
-				terminationReason: record.terminationReason,
-				maxWallTimeSec,
-				mutates: record.mutates,
-				workspaceBaseline: record.workspaceBaseline,
-			},
-			(settleInput, options) => this.settle(record.runId, settleInput, options),
-			{ announce: record.terminationReason !== "cancelled" },
+		await reconcileExternalRun(
+			record,
+			(id, input, options) => this.settle(id, input, options),
+			() => !this.stopped && this.runs.get(record.runId) === record && record.status === "running",
 		);
 	}
 
-	/** Reconcile an adopted process once at restore and once at its persisted deadline. Probing
-	 *  liveness before assigning a timeout lets a process that finished just before the deadline be
-	 *  settled from its artifacts as a normal completion. */
 	private async reconcileExternalRunAtDeadline(record: RunRecord, now = Date.now()): Promise<void> {
-		if (
-			record.pid &&
-			record.deadlineAt &&
-			now >= record.deadlineAt &&
-			record.terminationReason !== "timeout" &&
-			isProcessAlive(record.pid) &&
-			(await this.isSameProcess(record))
-		) {
-			await this.markTerminationReason(record.runId, "timeout");
-			await killProcessGroup(record.pid).catch(() => undefined);
-		}
-		await this.reconcileExternalRun(record);
-	}
-
-	private clearExternalRecoveryTimer(runId: string): void {
-		const timer = this.externalRecoveryTimers.get(runId);
-		if (!timer) return;
-		clearTimeout(timer);
-		this.externalRecoveryTimers.delete(runId);
-	}
-
-	private scheduleExternalRecovery(record: RunRecord): void {
-		if (this.stopped) return;
-		if (!record.deadlineAt) return;
-		this.clearExternalRecoveryTimer(record.runId);
-		const timer = setTimeout(
-			() => {
-				this.externalRecoveryTimers.delete(record.runId);
-				const current = this.runs.get(record.runId);
-				if (!current || current.status !== "running") return;
-				// Timers can fire just before their wall-clock deadline. Re-arm rather than losing
-				// the only recovery check and leaving an adopted process running indefinitely.
-				if (current.deadlineAt && Date.now() < current.deadlineAt) {
-					this.scheduleExternalRecovery(current);
-					return;
-				}
-				void this.reconcileExternalRunAtDeadline(current).catch((error) => {
-					log.logWarn("subagent.reconcile.failed", "Adopted external run reconcile failed", {
-						reason: errorMessage(error),
-						fields: { runId: current.runId },
-					});
-				});
-			},
-			Math.max(0, record.deadlineAt - Date.now()),
-		);
-		timer.unref?.();
-		this.externalRecoveryTimers.set(record.runId, timer);
+		await this.recoveryQueue.run(record.runId, async () => {
+			if (this.stopped || record.status !== "running") return;
+			if (record.settlementPending && !record.settledAt) {
+				const pending = record.settlementPending;
+				const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => "");
+				if (!this.stopped)
+					await this.settle(record.runId, { ...pending, outputText }, { announce: pending.announce });
+				return;
+			}
+			const identity = await processIdentity(record);
+			if (this.stopped || record.status !== "running") return;
+			if (
+				record.pid &&
+				isProcessAlive(record.pid) &&
+				identity === "same" &&
+				(record.terminationReason || (record.deadlineAt && now >= record.deadlineAt))
+			) {
+				if (!record.terminationReason) await this.markTerminationReason(record.runId, "timeout", true);
+				if (this.stopped || record.status !== "running") return;
+				await killProcessGroup(record.pid);
+			}
+			if (!this.stopped) await this.reconcileExternalRun(record);
+		});
 	}
 
 	/**

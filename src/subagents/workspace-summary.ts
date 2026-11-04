@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const GIT_STATUS_TIMEOUT_MS = 1_000;
 
 /**
  * P2-2: a plain-language "what changed" line for a completion wake, so the agent that reads it
@@ -27,7 +28,10 @@ const BASELINE_MAX_ENTRIES = 500;
 async function readPorcelain(workingDirectory: string): Promise<string[] | undefined> {
 	try {
 		const args = ["-C", workingDirectory, "status", "--porcelain=v1", "--untracked-files=all"];
-		const { stdout } = await execFileAsync("git", args, { maxBuffer: 4 * 1024 * 1024 });
+		const { stdout } = await execFileAsync("git", args, {
+			maxBuffer: 4 * 1024 * 1024,
+			timeout: GIT_STATUS_TIMEOUT_MS,
+		});
 		return stdout
 			.split("\n")
 			.map((line) => line.trimEnd())

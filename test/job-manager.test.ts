@@ -14,8 +14,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WakeEvent } from "../src/channel/channel-event.js";
 import { createExecutor, type ExecOptions, type ExecResult, type Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import { jobArtifacts } from "../src/jobs/launch.js";
-import { createJobRuntime, DeskJobManager, FINISHED_JOB_RETENTION_MS, MAX_RUNNING_JOBS } from "../src/jobs/manager.js";
+import { DeskJobManager, FINISHED_JOB_RETENTION_MS, MAX_RUNNING_JOBS } from "../src/jobs/manager.js";
+import { createJobRuntime } from "../src/jobs/runtime.js";
 import * as log from "../src/log.js";
 import { isProcessAlive } from "../src/shared/host-process.js";
 import { createUsage } from "../src/tasks/budget.js";
@@ -149,6 +151,41 @@ describe("DeskJobManager", () => {
 		// No list/poll/cancel call — rely purely on the internal sweeper to reconcile state.
 		await new Promise((resolve) => setTimeout(resolve, 40));
 		expect(manager.runningCount()).toBe(0);
+		// The same completion must also wake an already-waiting poll without advancing its
+		// three-second fallback. Events are duplicate hints, never trusted exit codes.
+		let changed!: (name?: string) => void;
+		const close = vi.fn();
+		const watchedExecutor = new FakeJobExecutor();
+		const watched = managedJobManager({ desk: "news" }, watchedExecutor, {
+			sweepIntervalMs: 3_600_000,
+			fileStore: Object.assign(createFileStore(), {
+				watchDirectory: (_path: string, onChange: (name?: string) => void) => {
+					changed = onChange;
+					return { close };
+				},
+			}),
+		});
+		const job = await watched.start("true", "watch", 300, { channelId: "dingtalk:dm:1" });
+		await watched.list();
+		vi.useFakeTimers();
+		try {
+			const result = watched.poll([job.id]);
+			await vi.advanceTimersByTimeAsync(0);
+			watchedExecutor.probeResult = "EXIT:invalid";
+			changed("unregistered.exit");
+			changed();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(watched.runningCount()).toBe(1);
+			watchedExecutor.probeResult = "EXIT:0";
+			changed();
+			changed();
+			await vi.advanceTimersByTimeAsync(0);
+			await vi.waitFor(async () => expect((await result)[0].status).toBe("completed"));
+			expect(close).toHaveBeenCalledTimes(1);
+		} finally {
+			watched.stop();
+			vi.useRealTimers();
+		}
 	});
 
 	it("survives a probe that cannot spawn instead of taking the process down", async () => {

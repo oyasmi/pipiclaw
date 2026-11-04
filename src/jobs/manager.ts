@@ -3,7 +3,6 @@ import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WakeEvent } from "../channel/channel-event.js";
-import { getDeskDir, getDeskLogsDir, isDeskName } from "../desk/paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -13,8 +12,11 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
 import { readStoredTask } from "../tasks/store.js";
+import { JobCompletionObserver } from "./completion-observer.js";
+import { CompletionSignal } from "./completion-signal.js";
 import { buildJobCompletionWake } from "./completion-wake.js";
 import { buildLaunchScript, type JobArtifacts, jobArtifacts, parseLaunchOutput } from "./launch.js";
+import { probeJobs } from "./probe.js";
 import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobRecord, toSnapshot } from "./record.js";
 
 /**
@@ -109,21 +111,10 @@ function jobSpillPath(id: string, spillDir?: string): string {
 	return join(spillDir ?? tmpdir(), `pipiclaw-job-${id}.log`);
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, ms);
-		signal?.addEventListener(
-			"abort",
-			() => {
-				clearTimeout(timer);
-				resolve();
-			},
-			{ once: true },
-		);
-	});
-}
-
 export class DeskJobManager {
+	private readonly pendingCompletion = new Set<string>();
+	private readonly completion = new CompletionSignal();
+	private readonly observer: JobCompletionObserver;
 	private readonly jobs = new Map<string, JobRecord>();
 	/**
 	 * Serializes every probe → decide → terminal-transition sequence for a single job. The sweeper,
@@ -152,6 +143,21 @@ export class DeskJobManager {
 		this.options = typeof options === "number" ? { sweepIntervalMs: options } : options;
 		this.sweepIntervalMs = this.options.sweepIntervalMs ?? SWEEP_INTERVAL_MS;
 		this.fileStore = this.options.fileStore ?? createFileStore();
+		this.observer = new JobCompletionObserver(this.fileStore, async (ids) => {
+			log.logEvent("debug", "job.completion.hinted", "Background job completion check requested", {
+				fields: { desk: this.target.desk, jobIds: ids, trigger: "watch" },
+			});
+			const records = ids.flatMap((id) => {
+				const record = this.jobs.get(id);
+				return record?.status === "running" ? [record] : [];
+			});
+			const probes = await this.probeAll(records);
+			for (const record of records)
+				await this.reconcileQueue.run(record.id, async () => {
+					if (!this.stopped && record.status === "running")
+						await this.applyProbe(record, probes.get(record.id) ?? "");
+				});
+		});
 	}
 
 	private recordPath(id: string): string | undefined {
@@ -277,6 +283,7 @@ export class DeskJobManager {
 		const spillFile = jobSpillPath(id, this.options.spillDir);
 		const art = jobArtifacts(spillFile);
 		const launch = buildLaunchScript(command, art);
+		this.observer.add(id, art.exitFile);
 
 		let result: ExecResult;
 		try {
@@ -284,6 +291,7 @@ export class DeskJobManager {
 		} catch (error) {
 			// The launch was aborted (or the executor could not run it). A detached child may
 			// already be running — try to recover its pid and clean it up honestly.
+			this.observer.remove(id);
 			throw await this.recoverInterruptedLaunch(art, error);
 		}
 
@@ -292,6 +300,7 @@ export class DeskJobManager {
 			// The wrapper's readiness handshake never completed: the inner shell could not start
 			// (spill unwritable, `setsid`/`sh` exec failure, …). It has already killed whatever it
 			// spawned; drop the scratch files and surface the inner error.
+			this.observer.remove(id);
 			await this.unlinkArtifacts(art);
 			const detail =
 				result.stdout
@@ -311,6 +320,7 @@ export class DeskJobManager {
 
 		const pid = launched.pid;
 		if (pid === undefined || !Number.isFinite(pid) || pid <= 0) {
+			this.observer.remove(id);
 			await this.unlinkArtifacts(art);
 			throw new Error(`Failed to start background job "${label}": ${result.stderr.trim() || "no PID returned"}`);
 		}
@@ -363,6 +373,8 @@ export class DeskJobManager {
 				const tail = outcome === "terminated" ? "its process was terminated" : "its process was already gone";
 				return new Error(`Background job started but ${reason}; ${tail}. No job was created.`);
 			});
+			if (record.status === "running") this.observer.ready(id);
+			else this.observer.remove(id);
 			throw failure;
 		}
 		if (options.taskId && this.target.deskDir) {
@@ -377,6 +389,7 @@ export class DeskJobManager {
 				});
 			});
 		}
+		this.observer.ready(id);
 		this.ensureSweeper();
 		return toSnapshot(record);
 	}
@@ -429,7 +442,7 @@ export class DeskJobManager {
 	 * so their slots free up even when the model never polls, and stops itself once nothing is running.
 	 */
 	private ensureSweeper(): void {
-		if (this.stopped || this.sweepTimer || this.runningCount() === 0) {
+		if (this.stopped || this.sweepTimer || (this.runningCount() === 0 && this.pendingCompletion.size === 0)) {
 			return;
 		}
 		this.sweepTimer = setInterval(() => {
@@ -447,6 +460,8 @@ export class DeskJobManager {
 	/** Stop observation at application shutdown; detached jobs keep running. */
 	stop(): void {
 		this.stopped = true;
+		this.observer.stop();
+		this.completion.stop();
 		this.stopSweeper();
 		if (this.garbageCollectionTimer) clearTimeout(this.garbageCollectionTimer);
 		this.garbageCollectionTimer = undefined;
@@ -463,9 +478,13 @@ export class DeskJobManager {
 		if (this.stopped || this.sweeping) {
 			return; // A prior sweep is still awaiting the executor; skip this tick.
 		}
+		this.observer.retry();
 		this.sweeping = true;
 		try {
 			const running = Array.from(this.jobs.values()).filter((record) => record.status === "running");
+			log.logEvent("debug", "job.completion.hinted", "Background job completion check requested", {
+				fields: { desk: this.target.desk, jobIds: running.map((r) => r.id), trigger: "sweep" },
+			});
 			// One shell for the whole sweep, not one per job: the sweeper runs every 10s for as
 			// long as any job lives, so per-job spawns are the steady-state cost of backgrounding.
 			const probes = await this.probeAll(running);
@@ -484,10 +503,20 @@ export class DeskJobManager {
 						});
 					});
 			}
+			for (const id of this.pendingCompletion) {
+				const record = this.jobs.get(id);
+				if (!record || this.stopped) break;
+				await this.refresh(record).catch((error) =>
+					log.logWarn("job.completion.retry_failed", "Background job completion failed", {
+						reason: errorMessage(error),
+						fields: { jobId: id },
+					}),
+				);
+			}
 			await this.collectGarbage();
 		} finally {
 			this.sweeping = false;
-			if (this.runningCount() === 0) {
+			if (this.runningCount() === 0 && this.pendingCompletion.size === 0) {
 				this.stopSweeper();
 			}
 		}
@@ -500,45 +529,8 @@ export class DeskJobManager {
 	 * Each job contributes one branch that reads its exit-code file if present and otherwise checks
 	 * liveness (three-state when a start time was captured — see the inline comment).
 	 */
-	private async probeAll(records: JobRecord[], signal?: AbortSignal): Promise<Map<string, string>> {
-		const states = new Map<string, string>();
-		if (records.length === 0) {
-			return states;
-		}
-		const script = records
-			.map((record) => {
-				const id = shellEscape(record.id);
-				const exitFile = shellEscape(record.exitFile);
-				// Liveness: when the job's start time was captured, require the pid to still report
-				// that exact `ps -o lstart=` — a recycled pid then reads as GONE, not ALIVE, so the
-				// manager never mistakes an unrelated process for the job. Older records without a
-				// captured start time fall back to a bare `kill -0`, the best they can do.
-				// `-s`, not `-f`: an existing-but-empty `.exit` file (a torn write) must not count as
-				// a finished job. The writer renames a fully-written temp file into place, so `-s`
-				// here only ever sees the settled value (T4).
-				//
-				// Identity liveness is three-state: with a captured start time, `ps` reporting the
-				// *same* lstart is ALIVE, a *different* one is DIFFERENT (pid recycled — our process
-				// is gone), and `ps` returning nothing while `kill -0` still says alive is UNKNOWN
-				// (do not conclude anything — a later probe retries). Legacy records have only
-				// `kill -0`: ALIVE / GONE.
-				const liveness = record.pidStartedAt
-					? `__pc_cur="$(ps -o lstart= -p ${record.pid} 2>/dev/null)"; ` +
-						`if [ -z "$__pc_cur" ]; then ` +
-						`if kill -0 ${record.pid} 2>/dev/null; then printf '%s UNKNOWN\\n' ${id}; else printf '%s GONE\\n' ${id}; fi; ` +
-						`elif [ "$__pc_cur" = ${shellEscape(record.pidStartedAt)} ]; then printf '%s ALIVE\\n' ${id}; ` +
-						`else printf '%s DIFFERENT\\n' ${id}; fi`
-					: `if kill -0 ${record.pid} 2>/dev/null; then printf '%s ALIVE\\n' ${id}; else printf '%s GONE\\n' ${id}; fi`;
-				return `if [ -s ${exitFile} ]; then printf '%s EXIT:%s\\n' ${id} "$(cat ${exitFile})"; else ${liveness}; fi`;
-			})
-			.join("\n");
-		const probe = await this.executor.exec(script, { signal });
-		for (const line of probe.stdout.split("\n")) {
-			const separator = line.indexOf(" ");
-			if (separator <= 0) continue;
-			states.set(line.slice(0, separator), line.slice(separator + 1).trim());
-		}
-		return states;
+	private probeAll(records: JobRecord[], signal?: AbortSignal): Promise<Map<string, string>> {
+		return probeJobs(this.executor, records, signal);
 	}
 
 	/**
@@ -558,8 +550,7 @@ export class DeskJobManager {
 	 */
 	private async reconcileLocked(record: JobRecord, signal?: AbortSignal, announce = true): Promise<void> {
 		if (record.status !== "running") {
-			await this.logSettlementToTask(record);
-			await this.announce(record, signal);
+			await this.commitCompletion(record, signal);
 			return;
 		}
 		const probes = await this.probeAll([record], signal);
@@ -644,6 +635,7 @@ export class DeskJobManager {
 
 	/** Move a job to a terminal status: record it, persist it, and wake the channel once. */
 	private async finish(record: JobRecord, status: JobStatus, signal?: AbortSignal, announce = true): Promise<void> {
+		this.pendingCompletion.add(record.id);
 		record.status = status;
 		record.durationMs = Date.now() - record.startedAt;
 		record.finishedAt = Date.now();
@@ -653,8 +645,21 @@ export class DeskJobManager {
 			record.notified = true;
 		}
 		await this.persist(record);
+		await this.commitCompletion(record, signal);
+		this.scheduleGarbageCollection();
+	}
+
+	private async commitCompletion(record: JobRecord, signal?: AbortSignal): Promise<void> {
+		this.pendingCompletion.add(record.id);
 		await this.logSettlementToTask(record);
 		await this.announce(record, signal);
+		if (!record.notified && record.contract.notify && this.options.dispatch) return;
+		this.pendingCompletion.delete(record.id);
+		this.observer.remove(record.id);
+		this.completion.publish();
+		log.logInfoEvent("job.completion.committed", "Background job completion committed", {
+			fields: { desk: this.target.desk, jobId: record.id, taskId: record.contract.taskId },
+		});
 		this.scheduleGarbageCollection();
 	}
 
@@ -851,6 +856,9 @@ export class DeskJobManager {
 	 */
 	async poll(ids: string[] | undefined, signal?: AbortSignal): Promise<JobSnapshot[]> {
 		const deadline = Date.now() + POLL_WAIT_MS;
+		log.logEvent("debug", "job.completion.hinted", "Background job completion check requested", {
+			fields: { desk: this.target.desk, jobIds: ids, trigger: "poll" },
+		});
 		// Freeze the observation set once, up front. `refresh(..., announce=false)` marks a job's
 		// completion wake as consumed (the result is being returned inline), so if we re-derived the
 		// watch list each iteration a job that finished mid-poll would drop out of "running", never
@@ -866,6 +874,7 @@ export class DeskJobManager {
 						.map((job) => job.id);
 
 		while (true) {
+			const revision = this.completion.revision;
 			for (const id of watchedIds) {
 				const record = this.jobs.get(id);
 				if (record) {
@@ -878,10 +887,14 @@ export class DeskJobManager {
 				.map((id) => this.jobs.get(id))
 				.filter((record): record is JobRecord => record !== undefined);
 			const anyDone = watched.some((record) => record.status !== "running");
-			if (watched.length === 0 || anyDone || Date.now() >= deadline || signal?.aborted) {
+			if (watched.length === 0 || anyDone || this.stopped || Date.now() >= deadline || signal?.aborted) {
 				return watched.map(toSnapshot);
 			}
-			await sleep(POLL_CHECK_INTERVAL_MS, signal);
+			await this.completion.wait(
+				revision,
+				Math.min(POLL_CHECK_INTERVAL_MS, Math.max(0, deadline - Date.now())),
+				signal,
+			);
 		}
 	}
 
@@ -919,6 +932,7 @@ export class DeskJobManager {
 				continue;
 			}
 			this.jobs.set(record.id, record);
+			if (record.status === "running") this.observer.add(record.id, record.exitFile);
 			restored++;
 			// One probe decides between "still running", "finished while we were down", and "gone";
 			// refresh already encodes all three, including the late completion wake.
@@ -928,6 +942,8 @@ export class DeskJobManager {
 					fields: { jobId: record?.id },
 				});
 			});
+			if (record.status === "running") this.observer.ready(record.id);
+			else this.observer.remove(record.id);
 		}
 
 		await this.collectGarbage();
@@ -957,84 +973,3 @@ export class DeskJobManager {
 		return { spillFile: record.spillFile, text };
 	}
 }
-
-interface JobRuntimeConfig {
-	/** Root of the per-desk record directories (`<jobsStateDir>/<desk>/`). */
-	jobsStateDir?: string;
-	/**
-	 * The agent workspace root. A job's full-output spill goes to `<desk>/logs/` so the
-	 * "Full output: …" pointer is a file the model can read (fix plan §2.2). The path is stable
-	 * across restarts, so a re-adopted job's spill is still found.
-	 */
-	workspaceDir?: string;
-	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
-	isBoundTo?: JobManagerOptions["isBoundTo"];
-	onTaskInput?: JobManagerOptions["onTaskInput"];
-	/** Sweep cadence override for the lazily-built desk managers (tests). */
-	sweepIntervalMs?: number;
-}
-
-/** One application's jobs; the executor and configuration cannot change after construction. */
-export function createJobRuntime(executor: Executor, options: JobRuntimeConfig = {}) {
-	const config = { ...options };
-	const managers = new Map<string, DeskJobManager>();
-	let stopped = false;
-
-	function get(desk: string): DeskJobManager {
-		let manager = managers.get(desk);
-		if (!manager) {
-			const deskDir = config.workspaceDir ? getDeskDir(config.workspaceDir, desk) : undefined;
-			manager = new DeskJobManager({ desk, deskDir }, executor, {
-				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, desk) } : {}),
-				...(deskDir ? { spillDir: getDeskLogsDir(deskDir) } : {}),
-				...(config.dispatch ? { dispatch: config.dispatch } : {}),
-				...(config.isBoundTo ? { isBoundTo: config.isBoundTo } : {}),
-				...(config.onTaskInput ? { onTaskInput: config.onTaskInput } : {}),
-				...(config.sweepIntervalMs ? { sweepIntervalMs: config.sweepIntervalMs } : {}),
-			});
-			managers.set(desk, manager);
-			if (stopped) manager.stop();
-		}
-		return manager;
-	}
-
-	/**
-	 * Re-adopt every desk's persisted jobs at startup. Desks are the record directories themselves,
-	 * and restore does not depend on bindings (spec 058, D6): a job still running when its desk went
-	 * dormant survives the restart too.
-	 */
-	async function restore(): Promise<number> {
-		const jobsStateDir = config.jobsStateDir;
-		if (!jobsStateDir) return 0;
-		let desks: string[];
-		try {
-			await mkdir(jobsStateDir, { recursive: true });
-			desks = (await readdir(jobsStateDir, { withFileTypes: true }))
-				.filter((entry) => entry.isDirectory() && isDeskName(entry.name))
-				.map((entry) => entry.name);
-		} catch (error) {
-			log.logWarn("job.scan.failed", "Persisted background job scan failed", { reason: errorMessage(error) });
-			return 0;
-		}
-
-		let restored = 0;
-		for (const desk of desks) {
-			restored += await get(desk).restore();
-		}
-		if (restored > 0) {
-			log.logInfoEvent("job.restore.done", "Background job records restored", { fields: { count: restored } });
-		}
-		return restored;
-	}
-
-	return {
-		get,
-		restore,
-		stop: () => {
-			stopped = true;
-			for (const manager of managers.values()) manager.stop();
-		},
-	};
-}
-
-export type JobRuntime = ReturnType<typeof createJobRuntime>;

@@ -19,7 +19,7 @@ import { useTempDirs } from "./helpers/fixtures.js";
  * Spec 040, D2: a run that outlives the sync grace window degrades to a "still running"
  * placeholder instead of blocking the tool call. This exercises that race end to end through
  * the real `subagent` tool, using the `syncGraceMs` test seam (mirrors `convergenceWallClockMs`)
- * so the test does not have to wait out the real SYNC_GRACE_MS (120s).
+ * so tests control the wait independently of the production shared one-second chat window.
  */
 
 const model = getModel("openai", "gpt-4o-mini")!;

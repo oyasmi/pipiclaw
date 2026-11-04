@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { TraceEvent, TrialContext } from "../harness/schema.js";
 
 export interface ToolObservation {
@@ -81,4 +83,27 @@ export function checkpointHasFile(ctx: TrialContext, checkpoint: string, path: s
 	if (!event?.fields?.fileTree) return;
 	const entries = JSON.parse(event.fields.fileTree) as Array<{ path: string }>;
 	return entries.some((entry) => entry.path.replaceAll("\\", "/") === path);
+}
+
+/** Async completion is evidence only after the main session persisted its addressed result. */
+export function receivedRunResult(ctx: TrialContext, runId: string, token: string): boolean {
+	const directory = join(ctx.deskDir, "conversations", "dm-1");
+	if (!existsSync(directory)) return false;
+	return readdirSync(directory)
+		.filter((name) => name.endsWith(".jsonl"))
+		.some((name) =>
+			readFileSync(join(directory, name), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.some((line) => {
+					try {
+						const entry = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
+						if (entry.type !== "message" || entry.message?.role !== "user") return false;
+						const content = JSON.stringify(entry.message.content);
+						return content?.includes(`[SUBAGENT:${runId}]`) && content.includes(token);
+					} catch {
+						return false;
+					}
+				}),
+		);
 }

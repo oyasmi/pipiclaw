@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { changedPathsSummary, snapshotWorkspace } from "../src/subagents/workspace-summary.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -49,5 +49,22 @@ describe("write-run workspace summary", () => {
 		expect(await changedPathsSummary(dir, baseline)).toBeUndefined();
 		expect(await changedPathsSummary(dir)).toContain("no pre-run baseline");
 		expect(await snapshotWorkspace(tempDir())).toBeUndefined(); // not a git checkout
+		// Spec 067: both optional Git paths must actually terminate a stuck executable.
+		const bin = tempDir();
+		const marker = join(bin, "terminated");
+		const executable = join(bin, "git");
+		writeFileSync(
+			executable,
+			`#!${process.execPath}\nconst fs = require("node:fs");\nprocess.on("SIGTERM", () => { fs.appendFileSync(${JSON.stringify(marker)}, "term\\n"); process.exit(1); });\nsetTimeout(() => process.exit(0), 5000);\n`,
+		);
+		chmodSync(executable, 0o755);
+		vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+		try {
+			expect(await snapshotWorkspace(dir)).toBeUndefined();
+			expect(await changedPathsSummary(dir)).toBeUndefined();
+			expect(readFileSync(marker, "utf8").split("\n").filter(Boolean)).toHaveLength(2);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 });

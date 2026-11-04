@@ -440,33 +440,27 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	// process that later reuses the same number. `undefined` when `ps` is unavailable — restore()
 	// treats a conflict as unsafe to signal, while ordinary adoption remains conservative. Run
 	// alongside the D12 CLI-version probe — neither depends on the other, and both are best-effort.
-	const launchMetadataPromise: Promise<void> = Promise.all([
-		Promise.resolve().then(() => (input.readProcessStartTimeFn ?? readProcessStartTime)(pid)),
-		Promise.resolve().then(() => (input.probeCliVersionFn ?? probeCliVersion)(invocation.executable)),
-	])
-		.then(async ([pidStartedAt, cliVersion]) => {
-			await runManager.updateLaunchMetadata(input.runId, { pidStartedAt, cliVersion }).catch((error) =>
-				log.logWarn("subagent.launch_probes.persist_failed", "Launch probe persist failed", {
+	const probes: Array<() => Promise<{ pidStartedAt?: string; cliVersion?: string }>> = [
+		async () => ({ pidStartedAt: await (input.readProcessStartTimeFn ?? readProcessStartTime)(pid) }),
+		async () => ({ cliVersion: await (input.probeCliVersionFn ?? probeCliVersion)(invocation.executable) }),
+	];
+	for (const probe of probes) {
+		void Promise.resolve()
+			.then(probe)
+			.then((info) => runManager.updateLaunchMetadata(input.runId, info, { pid, processStartedAt }))
+			.catch((error) =>
+				log.logWarn("subagent.launch_probes.failed", "Launch probe failed", {
 					reason: errorMessage(error),
 					fields: { runId: input.runId },
 				}),
 			);
-		})
-		.catch((error) => {
-			// The production probes are already best-effort; keep the same property for test seams or
-			// a future host implementation and never leave a spawned child unobserved because metadata
-			// collection failed.
-			log.logWarn("subagent.launch_probes.collect_failed", "Launch probe collection failed", {
-				reason: errorMessage(error),
-				fields: { runId: input.runId },
-			});
-		});
+	}
 
-	// Deliberately attach the close watcher before waiting for probe metadata. A fast child can exit
-	// during that wait; the promise is already listening, and finalization waits for the launch
-	// metadata promise so terminal publication still follows the same safe order.
+	// Optional diagnostics never gate process cleanup or terminal publication.
 	void closePromise.then(async (exitCode) => {
-		await launchMetadataPromise;
+		log.logInfoEvent("subagent.process.observed", "External process completion observed", {
+			fields: { runId: input.runId, taskId: input.taskId, observer: "live" },
+		});
 		clearTimeout(wallClockTimer);
 		// Spec 042 D8: this fires on every exit (normal, cancelled, or timed out) as a backup reap —
 		// a cancel/timeout already killed the group via its own call site above. The common case
@@ -474,6 +468,9 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		// descendant (the leader exited before it did) pays the TERM-then-KILL sequence.
 		await reapProcessGroup(pid);
 
+		log.logEvent("debug", "subagent.finalizer.started", "External run finalizer started", {
+			fields: { runId: input.runId, taskId: input.taskId, observer: "live", deskDir: input.deskDir },
+		});
 		const durationMs = Date.now() - processStartedAt;
 		const terminationReason = runManager.get(input.runId)?.terminationReason;
 		// Spec 042 D1: parse whatever the process actually wrote *before* applying a cancel/timeout
@@ -511,8 +508,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	}
 
 	// The dispatching tool call does not wait for the probes: the pid is already durable and the
-	// cancel handle installed, so they are diagnostics only. Settlement still waits for them (the
-	// close watcher above) so a run's terminal record carries them.
+	// cancel handle installed, so they are diagnostics only.
 	return { ok: true };
 
 	function failedSettleInput(reason: string): SettleInput {

@@ -1,3 +1,4 @@
+import { asyncResultCases } from "./async-results.js";
 import { capabilityCases } from "./capability.js";
 import { compactionCases } from "./compaction.js";
 import { coreFamilyCases } from "./core-families.js";
@@ -18,4 +19,5 @@ export const allCases = [
 	...coreRenovatedCases,
 	...coreFamilyCases,
 	...extendedFamilyCases,
+	...asyncResultCases,
 ];
