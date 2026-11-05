@@ -16,8 +16,8 @@
 
 | 取值 | 行为 |
 |---|---|
-| `full_progress_then_plain_final` | 展示完整过程，最后另发纯文本结论 |
-| `rolling_progress_then_plain_final` | 只保留最近进度，最后另发纯文本结论 |
+| `full_progress_then_plain_final` | 钉钉把思考和工具调用追加到一张卡片上，快到 2.9KB 时压成短快照再继续，再另发纯文本结论并把卡片收成一行。终端仍展示完整过程 |
+| `rolling_progress_then_plain_final` | 钉钉同样追加；压缩时不固定思考。终端与默认模式的显示相同 |
 | `final_card_only` | 隐藏过程，只投递最终结果 |
 
 后台唤醒默认不展示过程。后台作业、委派完成和定时事件投递到聊天会话，没有新结果时可返回 `[SILENT]`；任务步骤在任务车道里于任务自己的会话运行（不进聊天），回合结束这一步就结束，面向用户的内容通过 `task_report` 交付。

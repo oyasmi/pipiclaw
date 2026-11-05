@@ -8,6 +8,7 @@ import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ConversationMeta, DINGTALK_API, http } from "./api.js";
 import type { DingTalkConfig } from "./config.js";
+import { CARD_REQUEST_MAX_BYTES } from "./progress.js";
 
 interface AICard {
 	instanceId: string;
@@ -22,12 +23,20 @@ interface AICard {
 }
 
 interface CardStreamOptions {
+	/** `false` replaces the variable; `true` appends `content` and is sent with `isFull: false`. */
 	append: boolean;
 	finalize: boolean;
 	failed: boolean;
 }
 
 const TOKEN_REFRESH_SECS = 90 * 60; // 1.5 hours (tokens expire after 2 hours)
+
+/** A streaming variable that is markdown rejects `isFull: false`. The message names one of these. */
+function rejectsMarkdownAppend(data: unknown): boolean {
+	const text = typeof data === "string" ? data : JSON.stringify(data ?? "");
+	const normalized = text.toLowerCase();
+	return normalized.includes("isfull") || normalized.includes("markdown");
+}
 
 export interface CardControllerDeps {
 	config: DingTalkConfig;
@@ -44,6 +53,16 @@ export class CardController {
 	private cardCreationAttempted = new Set<symbol>();
 	// Share creation within a turn, but never let a late old turn own a new turn's card.
 	private cardCreationInFlight = new Map<string, { generation: symbol; promise: Promise<AICard | null> }>();
+	/**
+	 * The live template accepts appended list items. A markdown variable that does not is remembered
+	 * for the process: later progress updates send a full snapshot instead of trying append again.
+	 */
+	private appendSupported = true;
+
+	/** False after this process has seen the template reject an appended fragment. */
+	supportsStreamingAppend(): boolean {
+		return this.appendSupported;
+	}
 
 	constructor(private deps: CardControllerDeps) {}
 
@@ -110,6 +129,7 @@ export class CardController {
 	): Promise<boolean> {
 		if (!this.isCardGenerationCurrent(channelId, generation)) return false;
 		const { append, finalize, failed } = options;
+		if (append && !this.appendSupported) return false;
 		if (append && !content && !finalize && !failed) {
 			return true;
 		}
@@ -171,7 +191,9 @@ export class CardController {
 		this.activeCards.delete(channelId);
 		// /stop and /new may invalidate a turn before its controller gets to finish.
 		if (card && !card.finished) {
-			void this.streamCard(card, `${card.content || "正在处理…"}\n\n处理已结束。`, {
+			// One plain line. Keeping the transcript would leave an unfinished markdown document
+			// in the chat, and a card cannot be deleted.
+			void this.streamCard(card, "处理已结束。", {
 				append: false,
 				finalize: true,
 				failed: false,
@@ -334,6 +356,15 @@ export class CardController {
 			}
 		}
 
+		// Progress updates stay within one request. A finalized answer is the model's own markdown
+		// and may be longer; a failed finalize falls back to a normal message.
+		if (!options.finalize && !options.failed && Buffer.byteLength(content) > CARD_REQUEST_MAX_BYTES) {
+			log.logWarn("dingtalk.card.frame_too_large", "Card streaming skipped an oversized frame", {
+				fields: { bytes: Buffer.byteLength(content) },
+			});
+			return false;
+		}
+
 		const body = {
 			outTrackId: card.instanceId,
 			guid: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
@@ -364,13 +395,14 @@ export class CardController {
 			}
 
 			card.lastUpdated = Date.now() / 1000;
-			card.content = options.append ? `${card.content}${content}` : content;
+			card.content = options.append ? card.content + content : content;
 			if (options.finalize || options.failed) {
 				card.finished = true;
 			}
 			return true;
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
+				if (options.append && rejectsMarkdownAppend(err.response.data)) this.appendSupported = false;
 				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", {
 					reason: JSON.stringify(err.response.data),
 					fields: { status: err.response.status },

@@ -99,7 +99,7 @@ workspace 下的文件是另一类：它们是给模型读的**内容**（身份
 - `cardTemplateId` 留空也能工作，但不会使用 AI Card；正式使用建议补上。
 - `allowFrom: []` 或省略表示允许所有发送者；灰度时填 staff ID。
 - `busyMessageDefault` 默认 `"steer"`，也可设 `"followUp"` / `"followup"`。
-- `responseMode` 默认 `"full_progress_then_plain_final"`；另有 `"rolling_progress_then_plain_final"` 和 `"final_card_only"`。
+- `responseMode` 默认 `"full_progress_then_plain_final"`：过程追加在一张卡片上，快写满时压短再继续，结论另发一条 Markdown。另有 `"rolling_progress_then_plain_final"` 和 `"final_card_only"`。
 
 保留任何 `your-*` 占位值都会让启动检查失败。
 

@@ -7,6 +7,7 @@ import type { TurnEvent, TurnOutcome } from "../src/channel/channel-context.js";
 import type { TurnInfo } from "../src/channel/transport.js";
 import { DingTalkBot } from "../src/dingtalk/bot.js";
 import { createDingTalkContext, type DeliveryPort } from "../src/dingtalk/delivery.js";
+import { CARD_COMPACT_MAX_BYTES, CARD_DOCUMENT_MAX_BYTES, CARD_REQUEST_MAX_BYTES } from "../src/dingtalk/progress.js";
 import {
 	type FinalDelivery,
 	finalDeliveryOf,
@@ -66,6 +67,10 @@ class RecordingPort implements DeliveryPort {
 		return this.result("appendToCard", true);
 	}
 
+	supportsStreamingAppend(): boolean {
+		return this.result("supportsStreamingAppend", true);
+	}
+
 	async replaceCard(channelId: string, content: string, finalize = false): Promise<boolean> {
 		this.calls.push({ method: "replaceCard", args: [channelId, content, finalize] });
 		return this.result("replaceCard", true);
@@ -95,6 +100,17 @@ class RecordingPort implements DeliveryPort {
 	}
 }
 
+/** The card body implied by replace and append calls, in order. */
+function renderedCard(calls: Array<{ method: string; args: unknown[] }>): string {
+	let document = "";
+	for (const call of calls) {
+		const text = String(call.args[1] ?? "");
+		if (call.method === "replaceCard") document = text;
+		else if (call.method === "appendToCard") document += text;
+	}
+	return document;
+}
+
 function setup(mode: ResponseMode = "full_progress_then_plain_final", quiet = false) {
 	const port = new RecordingPort();
 	port.responseMode = mode;
@@ -118,17 +134,17 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 	});
 
 	it.each(["full_progress_then_plain_final", "rolling_progress_then_plain_final"] as const)(
-		"never clears a waiting or populated card on silent completion in %s",
+		"collapses a card that showed progress to one status line on silent completion in %s",
 		async (mode) => {
 			const { port, ctx } = setup(mode);
 			await vi.advanceTimersByTimeAsync(WARMUP_MS);
 			expect(port.calls[0].method).toBe("replaceCard");
 			expect(String(port.calls[0].args[1]).trim()).not.toBe("");
 			ctx.emit(progress("visible progress"));
-			await vi.advanceTimersByTimeAsync(800);
+			await vi.advanceTimersByTimeAsync(0);
 			await ctx.finish(outcome("silent"));
 			const finalized = port.calls.filter((call) => call.method === "finalizeExistingCard");
-			expect(finalized.at(-1)?.args[1]).toContain("visible progress");
+			expect(finalized.at(-1)?.args[1]).toBe("已处理，无需答复。");
 			expect(port.methods()).not.toContain("sendPlain");
 		},
 	);
@@ -143,32 +159,54 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		expect(archived).toEqual(["answer"]);
 	});
 
-	it("coalesces progress, ignores blanks, sends a snapshot before later deltas, and never archives progress", async () => {
+	it("coalesces queued progress into one frame, then appends only a new line", async () => {
 		const { port, archive, ctx } = setup();
 		ctx.emit(progress(" "));
 		ctx.emit(progress("A"));
 		ctx.emit(progress("B"));
-		await vi.advanceTimersByTimeAsync(799);
 		expect(port.calls).toEqual([]);
-		await vi.advanceTimersByTimeAsync(1);
-		expect(port.calls).toEqual([{ method: "replaceCard", args: [CHANNEL, "- A\n- B", false] }]);
+		await vi.advanceTimersByTimeAsync(0);
+		const first = String(port.calls[0]?.args[1]);
+		expect(port.calls[0]?.method).toBe("replaceCard");
+		expect(first).toContain("\n- A\n- B");
+		expect(first.split("\n").every((line) => line.startsWith("- "))).toBe(true);
+		expect(Buffer.byteLength(first)).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
 		ctx.emit(progress("C"));
-		await vi.advanceTimersByTimeAsync(800);
-		expect(port.calls.at(-1)).toEqual({ method: "appendToCard", args: [CHANNEL, "\n- C"] });
+		await vi.advanceTimersByTimeAsync(0);
+		const appended = String(port.calls.at(-1)?.args[1]);
+		expect(port.calls.at(-1)?.method).toBe("appendToCard");
+		expect(appended).toBe("\n- C");
+		expect(appended).not.toContain("A");
+		const after = port.calls.length;
+		ctx.emit(progress("C"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(port.calls).toHaveLength(after);
+		port.configure("supportsStreamingAppend", false);
+		ctx.emit(progress("D"));
+		await vi.advanceTimersByTimeAsync(0);
+		const fallback = port.calls.at(-1);
+		expect(fallback?.method).toBe("replaceCard");
+		const snapshot = String(fallback?.args[1]);
+		expect(Buffer.byteLength(snapshot)).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
+		expect(snapshot.split("\n").some((line) => line === "- A")).toBe(false);
+		expect(snapshot).toContain("D");
 		expect(archive).not.toHaveBeenCalled();
 	});
 
-	it("keeps a rolling window with a tool-call count and finishes without sending the transcript as a second answer", async () => {
+	it("appends each new tool line and folds the card without sending the transcript again", async () => {
 		const { port, ctx } = setup("rolling_progress_then_plain_final");
 		for (const text of ["A", "B", "C", "D", "E"]) {
 			ctx.emit({ type: "tool.start", callId: text, tool: "bash", args: { command: text } });
-			await vi.advanceTimersByTimeAsync(800);
+			await vi.advanceTimersByTimeAsync(0);
 		}
-		expect(port.methods()).toEqual(Array(5).fill("replaceCard"));
-		const last = String(port.calls.at(-1)?.args[1]);
-		// Five tool calls were counted, though the window shows only the last three.
-		expect(last).toContain("工具 5");
-		expect(last.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(3);
+		expect(port.calls[0]?.method).toBe("replaceCard");
+		expect(port.calls.slice(1).every((call) => call.method === "appendToCard")).toBe(true);
+		for (const call of port.calls) {
+			expect(Buffer.byteLength(String(call.args[1]))).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
+		}
+		const card = renderedCard(port.calls);
+		expect(card).toContain("执行 A");
+		expect(card).toContain("执行 E");
 		ctx.emit(answer("answer"));
 		await ctx.finish(outcome("completed"));
 		expect(port.calls.filter((call) => call.method === "sendPlain")).toHaveLength(1);
@@ -258,23 +296,44 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		expect(port.calls).toHaveLength(3);
 	});
 
-	it("replays after an uncertain append and caps failed progress without discarding the card", async () => {
+	it("keeps appended markdown complete, stops after two failed updates, and folds the card", async () => {
 		const { port, ctx } = setup();
-		ctx.emit(progress("A"));
-		await vi.advanceTimersByTimeAsync(800);
+		ctx.emit({ type: "reasoning", text: `\`\`\`\n**未闭合 ${"甲".repeat(3000)}尾` });
+		ctx.emit({ type: "tool.start", callId: "1", tool: "bash", args: { command: "ls src/a_b.ts *.md" } });
+		ctx.emit(progress("可见"));
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = renderedCard(port.calls);
+		for (const call of port.calls) {
+			expect(Buffer.byteLength(String(call.args[1]))).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
+		}
+		expect(frame.includes("```") || frame.includes("`") || /[*_~]{2}/.test(frame)).toBe(false);
+		expect(frame).toContain("尾");
+		expect(frame).toContain("可见");
+		expect(frame).toContain("a_b.ts");
+		expect(frame).toContain("*.md");
+		expect(frame.split("\n").every((line) => line.startsWith("- "))).toBe(true);
+		const sent = {
+			replace: port.calls.filter((call) => call.method === "replaceCard").length,
+			append: port.calls.filter((call) => call.method === "appendToCard").length,
+		};
 		port.configure("appendToCard", false);
-		ctx.emit(progress("B"));
-		await vi.advanceTimersByTimeAsync(800);
 		port.configure("replaceCard", false);
-		ctx.emit(progress("C"));
-		await vi.advanceTimersByTimeAsync(800);
-		ctx.emit(progress("D"));
-		await vi.advanceTimersByTimeAsync(800);
-		expect(port.methods()).toEqual(["replaceCard", "appendToCard", "replaceCard"]);
-		expect(port.calls.at(-1)?.args[1]).toBe("- A\n- B\n- C");
-		ctx.emit(answer("answer"));
+		ctx.emit(progress("更多"));
+		await vi.advanceTimersByTimeAsync(0);
+		ctx.emit(progress("再来"));
+		await vi.advanceTimersByTimeAsync(0);
+		ctx.emit(progress("停"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(port.calls.filter((call) => call.method === "replaceCard")).toHaveLength(sent.replace + 2);
+		expect(port.calls.filter((call) => call.method === "appendToCard")).toHaveLength(sent.append + 2);
+		ctx.emit(answer("结论"));
 		await ctx.finish(outcome("completed"));
-		expect(port.methods()).toContain("finalizeExistingCard");
+		const summary = String(port.calls.filter((call) => call.method === "finalizeExistingCard").at(-1)?.args[1]);
+		expect(summary.startsWith("完成 · 工具调用 1 次 · ")).toBe(true);
+		expect(summary).not.toContain("可见");
+		expect(port.calls.filter((call) => call.method === "sendPlain")).toEqual([
+			{ method: "sendPlain", args: [CHANNEL, "结论"] },
+		]);
 	});
 
 	it("archives only an answer that reached the user, and a failing archive does not break delivery", async () => {
@@ -298,8 +357,8 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		full.ctx.emit({ type: "commentary", level: "error", text: "tool exploded" });
 		full.ctx.emit({ type: "commentary", level: "warning", text: "switched model" });
 		full.ctx.emit({ type: "commentary", level: "notice", text: "skill updated" });
-		await vi.advanceTimersByTimeAsync(800);
-		const card = String(full.port.calls.find((call) => call.method === "replaceCard")?.args[1]);
+		await vi.advanceTimersByTimeAsync(0);
+		const card = renderedCard(full.port.calls);
 		expect(card).toContain("✕ tool exploded");
 		expect(card).toContain("✕ switched model");
 		// A notice is a side message, never a progress line.
@@ -311,7 +370,7 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		const none = setup("final_card_only");
 		none.ctx.emit({ type: "commentary", level: "error", text: "tool exploded" });
 		none.ctx.emit({ type: "commentary", level: "warning", text: "switched model" });
-		await vi.advanceTimersByTimeAsync(800);
+		await vi.advanceTimersByTimeAsync(0);
 		// With no progress to put it in, an error stays out of the chat but a warning is still said.
 		expect(none.port.calls).toEqual([{ method: "sendPlain", args: [CHANNEL, "⚠️ switched model"] }]);
 	});
@@ -410,13 +469,13 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		return [...cards.values()][0];
 	};
 
-	it("preserves visible progress when a warmed turn becomes silent", async () => {
+	it("folds a card that showed progress to one status line when the turn is silent", async () => {
 		const { ctx } = remote();
 		await vi.advanceTimersByTimeAsync(WARMUP_MS);
 		ctx.emit(progress("observed work"));
-		await vi.advanceTimersByTimeAsync(800);
+		await vi.advanceTimersByTimeAsync(0);
 		await ctx.finish(outcome("silent"));
-		expect(onlyCard().content).toContain("observed work");
+		expect(onlyCard().content).toBe("已处理，无需答复。");
 		expect(onlyCard().finished).toBe(true);
 		expect(plainCalls()).toHaveLength(0);
 	});
@@ -426,7 +485,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		failWrites = true;
 		for (const text of ["one", "two", "three", "four"]) {
 			ctx.emit(progress(text));
-			await vi.advanceTimersByTimeAsync(800);
+			await vi.advanceTimersByTimeAsync(0);
 		}
 		expect(http.put).toHaveBeenCalledTimes(2);
 		expect(onlyCard().content.trim()).not.toBe("");
@@ -446,16 +505,43 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		expect(plainCalls()).toHaveLength(1);
 	});
 
-	it("recovers an accepted but unacknowledged append with a full snapshot on the same instance", async () => {
+	it("appends whole lines until the card nears 2.9KB, then sends one short snapshot", async () => {
 		const { ctx } = remote();
 		ctx.emit(progress("A"));
-		await vi.advanceTimersByTimeAsync(800);
-		loseAppendResponse = true;
+		await vi.advanceTimersByTimeAsync(0);
 		ctx.emit(progress("B"));
-		await vi.advanceTimersByTimeAsync(800);
+		await vi.advanceTimersByTimeAsync(0);
 		ctx.emit(progress("C"));
-		await vi.advanceTimersByTimeAsync(800);
-		expect(onlyCard().content).toBe("- A\n- B\n- C");
+		await vi.advanceTimersByTimeAsync(0);
+		for (let index = 0; index < 6; index++) {
+			ctx.emit(progress(`${index}${"丙".repeat(400)}`));
+			await vi.advanceTimersByTimeAsync(0);
+		}
+		const frames = http.put.mock.calls.map((call) => call[1] as StreamBody);
+		expect(frames[0]?.isFull).toBe(true);
+		expect(frames[0]?.content.split("\n").every((line) => line.startsWith("- "))).toBe(true);
+		let document = "";
+		let compressed = false;
+		for (const frame of frames) {
+			expect(Buffer.byteLength(frame.content)).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
+			if (frame.isFull) {
+				if (Buffer.byteLength(document) > CARD_COMPACT_MAX_BYTES) {
+					expect(Buffer.byteLength(frame.content)).toBeLessThanOrEqual(CARD_COMPACT_MAX_BYTES);
+					compressed = true;
+				}
+				document = frame.content;
+			} else {
+				expect(frame.content.startsWith("\n- ")).toBe(true);
+				expect(Buffer.byteLength(document) + Buffer.byteLength(frame.content)).toBeLessThanOrEqual(
+					CARD_DOCUMENT_MAX_BYTES,
+				);
+				document += frame.content;
+			}
+		}
+		expect(compressed).toBe(true);
+		expect(frames.some((frame) => frame.content.includes("- A"))).toBe(true);
+		expect(onlyCard().content).toContain("丙");
+		expect(Buffer.byteLength(onlyCard().content)).toBeLessThanOrEqual(CARD_DOCUMENT_MAX_BYTES);
 	});
 
 	it.each(["template", ""])(
@@ -498,16 +584,19 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		createGate = undefined;
 		const next = context();
 		next.emit(progress("next turn"));
-		await vi.advanceTimersByTimeAsync(800);
+		await vi.advanceTimersByTimeAsync(0);
+		const nextId = [...cards.keys()].find((id) => id !== oldId);
+		expect(cards.get(nextId ?? "")?.content).toContain("next turn");
 		gate.resolve();
 		await stopping;
 		next.emit(answer("answer"));
 		await next.finish(outcome("completed"));
 		expect(cards.size).toBe(2);
 		expect(cards.get(oldId)?.finished).toBe(true);
-		const nextCard = [...cards.entries()].find(([id]) => id !== oldId)?.[1];
-		expect(nextCard?.content).toContain("next turn");
-		expect(nextCard?.finished).toBe(true);
+		expect(cards.get(oldId)?.content).not.toContain("next turn");
+		// The answer folds the new card in place. The late create must not have replaced it.
+		expect(cards.get(nextId ?? "")?.content).toMatch(/^完成 · 工具调用 0 次 · /);
+		expect(cards.get(nextId ?? "")?.finished).toBe(true);
 	});
 
 	it("stop is serialized after the old write and stale progress cannot create another card", async () => {

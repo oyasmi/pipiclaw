@@ -1,7 +1,9 @@
 /**
  * The DingTalk implementation of the turn output port (`ChannelContext`): it reads a turn's
  * structured events and renders them as AI-Card progress, plain messages and a final answer,
- * including the "card failed, send it plainly" fallbacks.
+ * including the "card failed, send it plainly" fallbacks. Progress appends whole list items
+ * until the card nears the document ceiling, then one short snapshot replaces it. The answer
+ * is a normal message and the card then folds to one line.
  */
 import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
 import type { TurnInfo } from "../channel/transport.js";
@@ -9,7 +11,16 @@ import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
-import { formatProgressEntry } from "./progress.js";
+import {
+	CARD_COMPACT_MAX_BYTES,
+	CARD_REQUEST_MAX_BYTES,
+	type ProgressActivity,
+	type ProgressWrite,
+	planProgressWrite,
+	renderCardStatus,
+	renderProgressFrame,
+	renderProgressLine,
+} from "./progress.js";
 import type { FinalDelivery, ProgressStyle } from "./response-mode.js";
 
 /**
@@ -36,6 +47,8 @@ export interface DeliveryPort {
 		failed?: boolean,
 		generation?: symbol,
 	): Promise<boolean>;
+	/** False once this process has learned that the template rejects an appended fragment. */
+	supportsStreamingAppend(): boolean;
 	finalizeCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
 	finalizeExistingCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
 	discardCard(channelId: string, generation?: symbol): void;
@@ -44,15 +57,10 @@ export interface DeliveryPort {
 /** Records a delivered answer in the channel's conversation log. */
 export type ArchiveBotResponse = (channelId: string, text: string) => Promise<void>;
 
-const MIN_UPDATE_INTERVAL_MS = 800;
-const ROLLING_WINDOW_SIZE = 3;
+const PROGRESS_WINDOW = 3;
 const WAITING_TEXT = "正在处理…";
 const MAX_PROGRESS_FAILURES = 2;
-// DingTalk's card renderer swallows a bare "\n" between plain lines (and a blank-line
-// paragraph break leaves too much vertical gap), but it does reliably break a markdown
-// list onto separate lines. Render each progress entry as a list item instead.
-const PROGRESS_LINE_BREAK = "\n";
-const PROGRESS_ENTRY_PREFIX = "- ";
+const SILENT_STATUS = "已处理，无需答复。";
 // Last-resort ceiling on how long flush() will block a caller. Outbound HTTP now
 // has its own timeout, so the sync loop is already bounded; this only guards against
 // an unforeseen stall so run()'s finally can never hang the channel forever.
@@ -63,9 +71,13 @@ const CARD_WARMUP_MS = 3500;
 type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
 
 class ChannelDeliveryController {
-	private progressSegments: string[] = [];
-	private cachedProgressText = "";
-	private progressTextDirty = false;
+	private thinking = "";
+	private activities: ProgressActivity[] = [];
+	/** What the card shows after the warmup line has been replaced. Empty until the first real frame. */
+	private document = "";
+	/** Whole list items not yet on the card. */
+	private pendingLines: string[] = [];
+	private warmupDelivered = false;
 	private mode: DeliveryMode = "progress";
 	private desiredRevision = 0;
 	private appliedRevision = 0;
@@ -78,14 +90,10 @@ class ChannelDeliveryController {
 	private cardWarmupScheduled = false;
 	private cardWarmupTriggered = false;
 	private progressStartedAt = 0;
-	private progressWindowStartedAt = 0;
 	private toolCallCount = 0;
-	private lastDeliveredAt = 0;
 	private timer: NodeJS.Timeout | null = null;
 	private cardWarmupTimer: NodeJS.Timeout | null = null;
 	private flushWaiters: Array<() => void> = [];
-	private sentProgressChars = 0;
-	private replayRequired = false;
 	private finalReplacementText = "";
 
 	/** Deliveries run one after another in the order the events arrived. */
@@ -151,20 +159,17 @@ class ChannelDeliveryController {
 	private async deliver(event: TurnEvent): Promise<void> {
 		switch (event.type) {
 			case "tool.start":
-				await this.appendProgress(
-					formatProgressEntry("tool", describeToolCall(event.tool, event.args)),
-					false,
-					true,
-				);
+				await this.remember(describeToolCall(event.tool, event.args), "➜", { countTool: true });
 				return;
 			case "tool.update":
-				await this.appendProgress(formatProgressEntry("tool", event.text), false);
+				await this.remember(event.text, "➜");
 				return;
 			case "tool.end":
-				if (event.failure) await this.appendProgress(formatProgressEntry("error", event.failure), false);
+				if (event.failure) await this.remember(event.failure, "✕");
 				return;
 			case "reasoning":
-				await this.appendProgress(formatProgressEntry("thinking", event.text), false);
+				// Full mode keeps the latest thought pinned. Rolling lets it scroll with everything else.
+				await this.remember(event.text, "✦", { pin: this.progressStyle === "full", tail: true });
 				return;
 			case "commentary":
 				await this.deliverCommentary(event.text, event.level);
@@ -173,9 +178,7 @@ class ChannelDeliveryController {
 				await this.deliverAnswer(event.text);
 				return;
 			case "compaction":
-				if (event.phase === "start") {
-					await this.appendProgress(formatProgressEntry("assistant", "正在压缩上下文…"), false);
-				}
+				if (event.phase === "start") await this.remember("正在压缩上下文…", "");
 				return;
 			case "steer.applied":
 				return;
@@ -185,14 +188,14 @@ class ChannelDeliveryController {
 	private async deliverCommentary(text: string, level: "error" | "warning" | "notice" | undefined): Promise<void> {
 		switch (level) {
 			case undefined:
-				await this.appendProgress(formatProgressEntry("assistant", text), false);
+				await this.remember(text, "");
 				return;
 			case "error":
-				await this.appendProgress(formatProgressEntry("error", text), false);
+				await this.remember(text, "✕");
 				return;
 			case "warning":
 				if (this.progressStyle !== "none") {
-					await this.appendProgress(formatProgressEntry("error", text), false);
+					await this.remember(text, "✕");
 				} else {
 					await this.notice(`⚠️ ${text}`);
 				}
@@ -309,40 +312,41 @@ class ChannelDeliveryController {
 		});
 	}
 
-	private async appendProgress(text: string, shouldLog: boolean, isToolCall = false): Promise<void> {
+	/**
+	 * Record one progress line. `pin` holds the latest thinking for the next snapshot. The line
+	 * itself is queued and appended; the header is rewritten only when the card is compressed.
+	 */
+	private async remember(
+		text: string,
+		marker: ProgressActivity["marker"],
+		options?: { countTool?: boolean; pin?: boolean; tail?: boolean },
+	): Promise<void> {
 		if (this.closed || this.ending || !this.isCurrent || !text.trim()) return;
 		// Final-card-only mode shows no progress; ignore any stray progress writes
 		// so we never create or flicker a card before the final replacement.
 		if (this.progressStyle === "none") return;
 
 		this.clearCardWarmup();
-		if (this.progressStartedAt === 0) {
-			this.progressStartedAt = Date.now();
+		if (this.progressStartedAt === 0) this.progressStartedAt = Date.now();
+		if (options?.countTool) this.toolCallCount++;
+		if (options?.pin) {
+			this.thinking = text;
+		} else {
+			this.activities.push({ marker, text, tail: options?.tail === true });
+			while (this.activities.length > PROGRESS_WINDOW) this.activities.shift();
 		}
-		if (isToolCall) {
-			this.toolCallCount++;
-		}
-		if (this.progressSegments.length > 0) {
-			this.progressSegments.push(PROGRESS_LINE_BREAK);
-		}
-		this.progressSegments.push(`${PROGRESS_ENTRY_PREFIX}${text}`);
-		this.progressTextDirty = true;
-		if (this.progressStyle === "rolling") {
-			this.trimToRecentEntries(ROLLING_WINDOW_SIZE);
-			// The header carries elapsed time and a step count, so it changes on every update:
-			// an append-only delta would leave a stale header on the card.
-			this.replayRequired = true;
-			this.sentProgressChars = 0;
-		}
-		if (this.progressWindowStartedAt === 0) {
-			this.progressWindowStartedAt = Date.now();
-		}
-		if (shouldLog) {
-			this.archiveBotResponse(text);
-		}
-
+		this.queueLine(marker, text, options?.tail === true);
 		this.mode = "progress";
 		this.bumpRevision(false);
+	}
+
+	/** Queue one finished list item. An unchanged tail is not sent again. */
+	private queueLine(marker: ProgressActivity["marker"], text: string, tail: boolean): void {
+		const line = renderProgressLine({ marker, text, tail });
+		if (!line) return;
+		const last = this.pendingLines.at(-1) ?? (this.document ? this.document.split("\n").at(-1) : undefined);
+		if (line === last) return;
+		this.pendingLines.push(line);
 	}
 
 	private async sendFinal(text: string, shouldLog: boolean, title?: string): Promise<boolean> {
@@ -353,7 +357,7 @@ class ChannelDeliveryController {
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = null;
 
-		if (this.cardWarmupTriggered && !this.getProgressText().trim()) {
+		if (this.cardWarmupTriggered && !this.hasRecordedProgress()) {
 			// The card only ever said "正在处理…": the answer goes into it rather than into a second
 			// message under a card that would just read "已答复。".
 			this.finalReplacementText = text;
@@ -414,16 +418,9 @@ class ChannelDeliveryController {
 			this.timer = null;
 		}
 
-		const delay =
-			forceImmediate || this.mode !== "progress"
-				? 0
-				: Math.max(
-						0,
-						MIN_UPDATE_INTERVAL_MS -
-							(Date.now() - (this.lastDeliveredAt > 0 ? this.lastDeliveredAt : this.progressWindowStartedAt)),
-					);
-
-		if (delay === 0) {
+		// Endings go out immediately. Progress waits one macrotask so events already queued on the
+		// delivery chain collapse into one write. Nothing polls on a clock.
+		if (forceImmediate || this.mode !== "progress") {
 			void this.runSyncLoop();
 			return;
 		}
@@ -431,7 +428,7 @@ class ChannelDeliveryController {
 		this.timer = setTimeout(() => {
 			this.timer = null;
 			void this.runSyncLoop();
-		}, delay);
+		}, 0);
 	}
 
 	private async runSyncLoop(): Promise<void> {
@@ -441,63 +438,20 @@ class ChannelDeliveryController {
 		try {
 			while (this.appliedRevision < this.desiredRevision) {
 				const mode = this.mode;
-				const body = this.getProgressText();
-				const progressText =
-					mode === "progress" && this.progressStyle === "rolling" && body
-						? `${this.buildRollingHeader()}\n\n${body}`
-						: body || (this.cardWarmupTriggered ? WAITING_TEXT : "");
-				const throttleBaseAt = this.lastDeliveredAt > 0 ? this.lastDeliveredAt : this.progressWindowStartedAt;
-				if (mode === "progress" && throttleBaseAt > 0) {
-					const remaining = MIN_UPDATE_INTERVAL_MS - (Date.now() - throttleBaseAt);
-					if (remaining > 0) {
-						this.timer = setTimeout(() => {
-							this.timer = null;
-							void this.runSyncLoop();
-						}, remaining);
-						return;
-					}
-				}
-
 				const revision = this.desiredRevision;
-				const content = progressText.trim();
 				const replacementText = this.finalReplacementText;
 				let touchedRemote = false;
 
 				try {
 					if (mode === "progress") {
-						if (content && this.isCurrent && this.progressFailures < MAX_PROGRESS_FAILURES) {
-							const nextSentChars = progressText.length;
-							if (this.replayRequired || this.sentProgressChars === 0) {
-								touchedRemote = await this.bot.replaceCard(
-									this.event.channelId,
-									progressText,
-									false,
-									false,
-									this.cardGeneration,
-								);
-							} else {
-								const delta = progressText.slice(this.sentProgressChars);
-								touchedRemote = delta
-									? await this.bot.appendToCard(this.event.channelId, delta, false, false, this.cardGeneration)
-									: true;
-							}
-							if (!touchedRemote) {
-								this.progressFailures++;
-								this.replayRequired = true;
-							} else {
-								this.sentProgressChars = body ? nextSentChars : 0;
-								this.replayRequired = false;
-							}
+						if (this.isCurrent && this.progressFailures < MAX_PROGRESS_FAILURES) {
+							touchedRemote = await this.publishProgress();
 						}
 					} else if (mode === "finalize-existing") {
-						if (content || this.cardWarmupTriggered) {
-							const finalProgressText =
-								this.progressStyle === "rolling"
-									? this.buildSummaryText()
-									: [body, "已答复。"].filter(Boolean).join("\n\n");
+						if (this.document || this.cardWarmupTriggered || this.hasRecordedProgress()) {
 							touchedRemote = await this.bot.finalizeExistingCard(
 								this.event.channelId,
-								finalProgressText,
+								this.buildSummaryText(),
 								this.cardGeneration,
 							);
 						}
@@ -511,10 +465,10 @@ class ChannelDeliveryController {
 							this.finalResponseDelivered = touchedRemote;
 						}
 					} else if (mode === "silent") {
-						if (content) {
+						if (this.document || this.cardWarmupTriggered || this.hasRecordedProgress()) {
 							touchedRemote = await this.bot.finalizeExistingCard(
 								this.event.channelId,
-								[body, "已处理，无需答复。"].filter(Boolean).join("\n\n"),
+								renderCardStatus(SILENT_STATUS),
 								this.cardGeneration,
 							);
 						}
@@ -524,18 +478,9 @@ class ChannelDeliveryController {
 						channelId: this.event.channelId,
 						reason: errorMessage(err),
 					});
-					if (mode === "progress") {
-						this.progressFailures++;
-						this.replayRequired = true;
-					}
+					if (mode === "progress") this.progressFailures++;
 				}
 
-				if (touchedRemote) {
-					this.lastDeliveredAt = Date.now();
-				}
-				if (mode !== "progress" || touchedRemote) {
-					this.progressWindowStartedAt = 0;
-				}
 				this.appliedRevision = revision;
 			}
 		} finally {
@@ -600,17 +545,105 @@ class ChannelDeliveryController {
 		this.bot.discardCard(this.event.channelId, this.cardGeneration);
 	}
 
-	private getProgressText(): string {
-		if (!this.progressTextDirty) {
-			return this.cachedProgressText;
-		}
-
-		this.cachedProgressText = this.progressSegments.join("");
-		this.progressTextDirty = false;
-		return this.cachedProgressText;
+	/** True once this turn has something to show besides the warmup line. */
+	private hasRecordedProgress(): boolean {
+		return this.thinking !== "" || this.activities.length > 0 || this.document !== "";
 	}
 
-	/** Clock-style elapsed time (`0:42`, `1:02`, `1:05:09`) for the narrow rolling header. */
+	/** Send queued progress, or the one-shot warmup line when nothing has been recorded yet. */
+	private async publishProgress(): Promise<boolean> {
+		if (this.pendingLines.length === 0) return this.publishWarmup();
+		let touched = false;
+		while (this.pendingLines.length > 0 && this.progressFailures < MAX_PROGRESS_FAILURES) {
+			const step = await this.sendPending();
+			if (step.touched) touched = true;
+			if (!step.cont) break;
+		}
+		return touched;
+	}
+
+	private async publishWarmup(): Promise<boolean> {
+		if (this.document || !this.cardWarmupTriggered || this.warmupDelivered) return false;
+		const ok = await this.bot.replaceCard(this.event.channelId, WAITING_TEXT, false, false, this.cardGeneration);
+		if (!ok) {
+			this.progressFailures++;
+			return false;
+		}
+		this.warmupDelivered = true;
+		return true;
+	}
+
+	private async sendPending(): Promise<{ touched: boolean; cont: boolean }> {
+		const planned = planProgressWrite({
+			document: this.document,
+			pending: this.pendingLines,
+			append: this.bot.supportsStreamingAppend(),
+			header: this.buildLiveHeader(),
+			fallback: this.snapshot(CARD_REQUEST_MAX_BYTES, this.activities),
+			compact: this.snapshot(CARD_COMPACT_MAX_BYTES, this.activities.slice(-1)),
+		});
+		if (!planned || planned.method === "drop") {
+			if (planned?.method === "drop") this.pendingLines.shift();
+			else this.pendingLines = [];
+			return { touched: false, cont: planned?.method === "drop" };
+		}
+		const ok = await this.writeProgress(planned);
+		if (ok) {
+			this.applySent(planned);
+			this.progressFailures = 0;
+			return { touched: true, cont: true };
+		}
+		if (planned.method === "append") {
+			const frame = this.bot.supportsStreamingAppend()
+				? this.snapshot(CARD_COMPACT_MAX_BYTES, this.activities.slice(-1))
+				: this.snapshot(CARD_REQUEST_MAX_BYTES, this.activities);
+			const replaced = await this.bot.replaceCard(this.event.channelId, frame, false, false, this.cardGeneration);
+			if (replaced) {
+				this.document = frame;
+				this.pendingLines = this.bot.supportsStreamingAppend()
+					? this.pendingLines.filter((line) => !frame.split("\n").includes(line))
+					: [];
+				this.progressFailures = 0;
+				return { touched: true, cont: false };
+			}
+		}
+		this.progressFailures++;
+		return { touched: false, cont: false };
+	}
+
+	private async writeProgress(planned: ProgressWrite): Promise<boolean> {
+		if (planned.method === "append") {
+			return this.bot.appendToCard(this.event.channelId, planned.content, false, false, this.cardGeneration);
+		}
+		return this.bot.replaceCard(this.event.channelId, planned.content, false, false, this.cardGeneration);
+	}
+
+	private applySent(planned: ProgressWrite): void {
+		if (planned.method === "append") {
+			this.document += planned.content;
+			this.pendingLines.shift();
+			return;
+		}
+		this.document = planned.content;
+		if (planned.clearPending) {
+			this.pendingLines = [];
+			return;
+		}
+		const lines = new Set(planned.content.split("\n"));
+		this.pendingLines = this.pendingLines.filter((line) => !lines.has(line));
+	}
+
+	/** A full snapshot: the live header, pinned thinking in full mode, and the given activities. */
+	private snapshot(maxBytes: number, activities: ProgressActivity[]): string {
+		return renderProgressFrame({
+			header: this.buildLiveHeader(),
+			thinking: this.progressStyle === "full" ? this.thinking : undefined,
+			activities,
+			maxBytes,
+		});
+	}
+
+	/** Clock-style elapsed time (`0:42`, `1:02`, `1:05:09`) for the card's first line. */
 	private formatClock(ms: number): string {
 		const seconds = Math.max(0, Math.round(ms / 1000));
 		const minutes = Math.floor(seconds / 60);
@@ -624,46 +657,16 @@ class ChannelDeliveryController {
 	}
 
 	/**
-	 * Standing first line for rolling mode. The window only keeps the last few entries, so a long
-	 * turn otherwise gave no way to tell "still working, 14 tool calls in" from "stuck": every
-	 * visible line looked the same as a minute ago. The numbers are already tracked for the closing
-	 * summary. Counted as tool calls, never "steps" — a step is a task's unit (spec 053, D4).
+	 * Standing first line. The card only keeps the latest thought and a few activity lines, so
+	 * without this a long turn looks identical to one that just started. Counted as tool calls,
+	 * never "steps" — a step is a task's unit (spec 053, D4).
 	 */
-	private buildRollingHeader(): string {
+	private buildLiveHeader(): string {
 		return `⏱ ${this.formatClock(this.elapsedMs())} · 工具 ${this.toolCallCount}`;
 	}
 
-	private trimToRecentEntries(maxEntries: number): void {
-		let entryCount = 0;
-		for (const segment of this.progressSegments) {
-			if (segment !== PROGRESS_LINE_BREAK) {
-				entryCount++;
-			}
-		}
-
-		if (entryCount <= maxEntries) {
-			return;
-		}
-
-		const entriesToRemove = entryCount - maxEntries;
-		let removedEntries = 0;
-		while (removedEntries < entriesToRemove && this.progressSegments.length > 0) {
-			const segment = this.progressSegments.shift();
-			if (segment !== PROGRESS_LINE_BREAK) {
-				removedEntries++;
-			}
-		}
-		while (this.progressSegments[0] === PROGRESS_LINE_BREAK) {
-			this.progressSegments.shift();
-		}
-
-		this.progressTextDirty = true;
-		this.replayRequired = true;
-		this.sentProgressChars = 0;
-	}
-
 	private buildSummaryText(): string {
-		return `完成 · 工具调用 ${this.toolCallCount} 次 · ${formatElapsedZh(this.elapsedMs())}`;
+		return renderCardStatus(`完成 · 工具调用 ${this.toolCallCount} 次 · ${formatElapsedZh(this.elapsedMs())}`);
 	}
 }
 

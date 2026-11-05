@@ -151,11 +151,11 @@ export type TuiResponseMode =
 
 export interface PipiclawTuiSettings {
 	/**
-	 * Output shape for the terminal TUI, using the same vocabulary as the DingTalk
-	 * channel's `responseMode`: `full_progress_then_plain_final` (default) streams full progress
-	 * then a plain final answer; `rolling_progress_then_plain_final` keeps only
-	 * recent progress; `final_card_only` hides progress. Independent of the
-	 * DingTalk channel's `responseMode` in `channel.json`.
+	 * Output shape for the terminal TUI. The names match DingTalk's `responseMode`,
+	 * but the terminal renders them itself and is not bound by the card size limit:
+	 * `full_progress_then_plain_final` (default) keeps the live transcript, then prints
+	 * the answer; `rolling_progress_then_plain_final` keeps recent progress;
+	 * `final_card_only` hides progress. Independent of `channel.json`.
 	 */
 	responseMode: TuiResponseMode;
 }

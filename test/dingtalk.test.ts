@@ -506,7 +506,7 @@ describe("dingtalk", () => {
 		);
 	});
 
-	it("supports append and replace card streaming payloads", async () => {
+	it("appends a fragment, keeps append after a network error, and stops appending when markdown rejects it", async () => {
 		const { bot } = createBot();
 		const privateApi = getPrivateApi(bot);
 		getPrivateApi(bot).tokens.accessToken = "cached-token";
@@ -550,6 +550,22 @@ describe("dingtalk", () => {
 			}),
 			expect.any(Object),
 		);
+
+		axiosMock.put.mockRejectedValueOnce(new Error("socket hang up"));
+		await expect(bot.appendToCard("dingtalk:dm:staff_1", "\n- 瞬断")).resolves.toBe(false);
+		expect(bot.supportsStreamingAppend()).toBe(true);
+
+		axiosMock.put.mockRejectedValueOnce({
+			isAxiosError: true,
+			response: { status: 400, data: { message: "markdown variable requires isFull" } },
+		});
+		await expect(bot.appendToCard("dingtalk:dm:staff_1", "\n- 下一行")).resolves.toBe(false);
+		expect(bot.supportsStreamingAppend()).toBe(false);
+		const puts = axiosMock.put.mock.calls.length;
+		await expect(bot.appendToCard("dingtalk:dm:staff_1", "\n- 再来")).resolves.toBe(false);
+		expect(axiosMock.put.mock.calls).toHaveLength(puts);
+		await expect(bot.replaceCard("dingtalk:dm:staff_1", "甲".repeat(400))).resolves.toBe(false);
+		expect(axiosMock.put.mock.calls).toHaveLength(puts);
 
 		await expect(bot.replaceCard("dingtalk:dm:staff_1", "hello world", true)).resolves.toBe(true);
 		expect(axiosMock.put).toHaveBeenLastCalledWith(

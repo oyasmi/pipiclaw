@@ -189,6 +189,11 @@ export class DingTalkBot implements DeliveryPort {
 		return this.cards.replaceCard(channelId, content, finalize, failed, generation);
 	}
 
+	/** False after this process has seen the template reject an appended fragment. */
+	supportsStreamingAppend(): boolean {
+		return this.cards.supportsStreamingAppend();
+	}
+
 	/** Append a delta to the active card transcript. */
 	async appendToCard(
 		channelId: string,

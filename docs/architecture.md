@@ -156,7 +156,7 @@ sequenceDiagram
         S->>S: LLM ↔ 工具调用（经安全护栏）
         S-->>R: 会话事件
         R->>D: session-events 翻译为进度条目
-        D-->>U: AI Card 流式更新（≥800ms 节流）
+        D-->>U: AI Card 按需追加（接近 2.9KB 时压缩）
     end
     S-->>R: 结束
     R->>D: 最终文本 replaceMessage / [SILENT] 静默收尾
@@ -187,15 +187,15 @@ sequenceDiagram
 
 | responseMode（channel.json） | 进度展示 | 最终回复 |
 |---|---|---|
-| `full_progress_then_plain_final`（默认） | AI Card 累积全部进度 | 卡片收尾 + plain 消息 |
-| `rolling_progress_then_plain_final` | 卡片滚动窗口（常驻首行 `⏱ 用时 · N 步` + 最近 3 段） | 同上 |
+| `full_progress_then_plain_final`（默认） | 一张卡片按需追加完整列表行。累计将超过 2.9KB 时，用约 200 字节的全量快照压缩（用时、工具次数、最近一段思考、最近一条活动），再继续追加。单次请求不超过 1KB | 普通 Markdown 消息；卡片收成一行摘要 |
+| `rolling_progress_then_plain_final` | 同样追加；压缩时不固定思考，只留最近一条活动 | 同上 |
 | `final_card_only` | 无进度 | 仅最终卡片 |
 
-两种 `*_then_plain_final` 下，若等待卡（约 3.5 秒后创建）直到答复时仍没有进度，答复直接写进这张卡，不再另发 plain 消息（`delivery.ts` `sendFinal`）。
+两种 `*_then_plain_final` 下，进度有新内容才推送，同一时刻到齐的事件合成一次请求。第一次进度用完整列表换掉等待文案，之后 `isFull: false` 追加一整行。模板若拒绝追加，同一进程改为每次发送不超过 1KB 的完整快照。思考里的代码围栏和成对强调符会先拆掉，截断也不会留下未闭合的 Markdown。若等待卡（约 3.5 秒后创建）直到答复时仍没有进度，答复直接写进这张卡，不再另发 plain 消息（`delivery.ts` `sendFinal`）。有进度时，正式答案先作为普通消息发出，卡片再收成一行摘要；静默收成「已处理，无需答复。」，停止收成「处理已结束。」。
 
 聊天侧后台唤醒（JOB / SUBAGENT / EVENT）不受上表约束；TASK_STEP 默认静音，只投递显式通知和运行时回执。对聊天侧后台唤醒，`handleEvent` 给它们的 `ChannelContext` 传 `progressStyle: "none"`，因此不建卡、不推思考流、`[SILENT]` 收尾也没有卡片要删；最终答案仍按 `finalDelivery` 正常投递。用户消息不受影响。
 
-`ChannelDeliveryController` 维护 revision 计数的同步循环：进度更新合并、≥800ms 节流、卡片预热（`primeCard`）、失败时降级 plain、`flush()` 有 60s 兜底死线保证 `run()` 的 finally 不会永久挂起频道。
+`ChannelDeliveryController` 维护 revision 计数的同步循环：进度更新合并、卡片预热（`primeCard`）、进度连续失败两次后停止更新（最终答复仍会发出，卡片失败时改走普通消息）、`flush()` 有 60s 兜底死线保证 `run()` 的 finally 不会永久挂起频道。
 
 ## 5. 并发模型：谁在串行化什么
 
