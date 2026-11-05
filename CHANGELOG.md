@@ -12,10 +12,22 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - **Bound results go straight to the task.** Delegations and jobs bound to a task write their result into the task's log and notify the lane; they no longer wake a channel.
 - **Upgrades are offline operator work.** Task files, logs, `tasks/.steer/` and the related dispatch records change format and the runtime reads only the new one; follow the [task migration guide](docs/task-migration.md) before starting a home that has active tasks.
 
+### Added
+
+- **`cursor-cli` external harness.** A role can set `harness: cursor-cli` and stay on the existing one-prompt process. The runtime assembles argv, parses `stream-json`, and labels progress; settlement and resume do not grow a second state machine. Example roles: `cursor-high` and `cursor-main`.
+
 ### Changed
 
 - Upgrade all four direct Pi SDK dependencies from 1.2.0 to 1.4.0, including provider retry, model-switching and terminal rendering fixes. Explicitly preserve Pipiclaw's summary output ceiling of 4096 tokens (lower for smaller models), and keep malformed tool arguments out of user-facing error messages as recoverable rejections.
 - `/stop` stops only the chat turn; pause a task with `/tasks pause`. `/status` shows a one-line summary of the desk's background tasks.
+- **Delegations and jobs finish without holding the turn (spec 067).** An internal delegation started in a task returns as soon as it is registered; its result is injected into the running step at the next complete tool-batch boundary. Chat delegations share one 10-second window and then continue in the background. An adopted external run is watched until it finishes, a job notifies as soon as it completes, and a delivery refused because the channel queue is full is retried as soon as capacity returns.
+- **Finished work is kept longer.** A finished background job and its output are kept for 7 days (was 24 hours); a settled delegation and its runtime-managed artifacts are kept for 30 days (was 7). The clock still starts at `finishedAt` / `settledAt`; reading the output or restarting does not reset it.
+
+### Fixed
+
+- **DingTalk progress no longer repeats itself.** The card appends complete items as they happen instead of resending the whole frame on a timer, which used to write the same text into the transcript again. Near the card limit the progress is compressed; when the turn ends the card folds to one line and the answer is sent as a normal message.
+- **A crash no longer drops a task report or a half-finished archive.** A report is saved under `tasks/.delivery/` before it is sent, and an unanswered question is retried. Archiving commits a snapshot first and finishes it on the next start without running another model step.
+- **Reflection no longer loses progress it already committed.** An identical background add after a partial failure is skipped. An explicit replacement is written before automatic deletes, and deletes wait if any replacement fails. Explicit forgetting stays consistent with what the user asked. No new persisted fields or settings.
 
 ## [0.9.5-beta.3] - 2026-10-28
 
