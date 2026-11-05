@@ -1,8 +1,8 @@
 /**
  * The DingTalk implementation of the turn output port (`ChannelContext`): it reads a turn's
  * structured events and renders them as AI-Card progress, plain messages and a final answer,
- * including the "card failed, send it plainly" fallbacks. Progress appends whole list items
- * until the card nears the document ceiling, then one short snapshot replaces it. The answer
+ * including the "card failed, send it plainly" fallbacks. Progress grows in a local window,
+ * folds at its byte ceiling, and publishes paced deltas between replacement snapshots. The answer
  * is a normal message and the card then folds to one line.
  */
 import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
@@ -11,16 +11,7 @@ import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
-import {
-	CARD_COMPACT_MAX_BYTES,
-	CARD_REQUEST_MAX_BYTES,
-	type ProgressActivity,
-	type ProgressWrite,
-	planProgressWrite,
-	renderCardStatus,
-	renderProgressFrame,
-	renderProgressLine,
-} from "./progress.js";
+import { type ProgressActivity, ProgressWindow, type ProgressWrite, renderCardStatus } from "./progress.js";
 import type { FinalDelivery, ProgressStyle } from "./response-mode.js";
 
 /**
@@ -47,7 +38,6 @@ export interface DeliveryPort {
 		failed?: boolean,
 		generation?: symbol,
 	): Promise<boolean>;
-	/** False once this process has learned that the template rejects an appended fragment. */
 	supportsStreamingAppend(): boolean;
 	finalizeCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
 	finalizeExistingCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
@@ -57,7 +47,9 @@ export interface DeliveryPort {
 /** Records a delivered answer in the channel's conversation log. */
 export type ArchiveBotResponse = (channelId: string, text: string) => Promise<void>;
 
-const PROGRESS_WINDOW = 3;
+// A minimum gap after each completed write gives the client time to display a fold. This is
+// a throttle, not a debounce: continuous events cannot postpone the next frame indefinitely.
+const PROGRESS_INTERVAL_MS = 800;
 const WAITING_TEXT = "正在处理…";
 const MAX_PROGRESS_FAILURES = 2;
 const SILENT_STATUS = "已处理，无需答复。";
@@ -71,12 +63,11 @@ const CARD_WARMUP_MS = 3500;
 type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
 
 class ChannelDeliveryController {
-	private thinking = "";
-	private activities: ProgressActivity[] = [];
+	private readonly progress: ProgressWindow;
+	private nextProgressAt = 0;
 	/** What the card shows after the warmup line has been replaced. Empty until the first real frame. */
 	private document = "";
-	/** Whole list items not yet on the card. */
-	private pendingLines: string[] = [];
+	private documentEpoch = -1;
 	private warmupDelivered = false;
 	private mode: DeliveryMode = "progress";
 	private desiredRevision = 0;
@@ -110,6 +101,7 @@ class ChannelDeliveryController {
 		private readonly quiet: boolean,
 	) {
 		this.event = { channelId: turn.channelId };
+		this.progress = new ProgressWindow(this.progressStyle === "rolling" ? "rolling" : "full");
 		this.cardGeneration = bot.getCardGeneration(turn.channelId);
 	}
 
@@ -168,8 +160,8 @@ class ChannelDeliveryController {
 				if (event.failure) await this.remember(event.failure, "✕");
 				return;
 			case "reasoning":
-				// Full mode keeps the latest thought pinned. Rolling lets it scroll with everything else.
-				await this.remember(event.text, "✦", { pin: this.progressStyle === "full", tail: true });
+				// Both modes record thinking chronologically; full retains the latest thought on a fold.
+				await this.remember(event.text, "✦", { tail: true });
 				return;
 			case "commentary":
 				await this.deliverCommentary(event.text, event.level);
@@ -250,6 +242,7 @@ class ChannelDeliveryController {
 					await this.silence();
 					break;
 				case "cancelled":
+					await this.silence();
 					break;
 				case "completed":
 					if (this.lastAnswer && !this.finalResponseDelivered) {
@@ -313,13 +306,12 @@ class ChannelDeliveryController {
 	}
 
 	/**
-	 * Record one progress line. `pin` holds the latest thinking for the next snapshot. The line
-	 * itself is queued and appended; the header is rewritten only when the card is compressed.
+	 * Record the latest desired view; bursts update it while one paced request publishes it.
 	 */
 	private async remember(
 		text: string,
 		marker: ProgressActivity["marker"],
-		options?: { countTool?: boolean; pin?: boolean; tail?: boolean },
+		options?: { countTool?: boolean; tail?: boolean },
 	): Promise<void> {
 		if (this.closed || this.ending || !this.isCurrent || !text.trim()) return;
 		// Final-card-only mode shows no progress; ignore any stray progress writes
@@ -329,24 +321,10 @@ class ChannelDeliveryController {
 		this.clearCardWarmup();
 		if (this.progressStartedAt === 0) this.progressStartedAt = Date.now();
 		if (options?.countTool) this.toolCallCount++;
-		if (options?.pin) {
-			this.thinking = text;
-		} else {
-			this.activities.push({ marker, text, tail: options?.tail === true });
-			while (this.activities.length > PROGRESS_WINDOW) this.activities.shift();
-		}
-		this.queueLine(marker, text, options?.tail === true);
+		const changed = this.progress.record({ marker, text, tail: options?.tail === true });
+		if (!changed && !options?.countTool) return;
 		this.mode = "progress";
 		this.bumpRevision(false);
-	}
-
-	/** Queue one finished list item. An unchanged tail is not sent again. */
-	private queueLine(marker: ProgressActivity["marker"], text: string, tail: boolean): void {
-		const line = renderProgressLine({ marker, text, tail });
-		if (!line) return;
-		const last = this.pendingLines.at(-1) ?? (this.document ? this.document.split("\n").at(-1) : undefined);
-		if (line === last) return;
-		this.pendingLines.push(line);
 	}
 
 	private async sendFinal(text: string, shouldLog: boolean, title?: string): Promise<boolean> {
@@ -412,23 +390,21 @@ class ChannelDeliveryController {
 
 	private schedule(forceImmediate: boolean): void {
 		if (this.running) return;
-
-		if (this.timer) {
-			clearTimeout(this.timer);
-			this.timer = null;
-		}
-
-		// Endings go out immediately. Progress waits one macrotask so events already queued on the
-		// delivery chain collapse into one write. Nothing polls on a clock.
 		if (forceImmediate || this.mode !== "progress") {
+			if (this.timer) clearTimeout(this.timer);
+			this.timer = null;
 			void this.runSyncLoop();
 			return;
 		}
-
-		this.timer = setTimeout(() => {
-			this.timer = null;
-			void this.runSyncLoop();
-		}, 0);
+		if (this.timer) return;
+		// One macrotask coalesces the first burst; subsequent frames respect the minimum gap.
+		this.timer = setTimeout(
+			() => {
+				this.timer = null;
+				void this.runSyncLoop();
+			},
+			Math.max(0, this.nextProgressAt - Date.now()),
+		);
 	}
 
 	private async runSyncLoop(): Promise<void> {
@@ -482,6 +458,9 @@ class ChannelDeliveryController {
 				}
 
 				this.appliedRevision = revision;
+				// Events received during HTTP must wait for the next display interval. An ending
+				// still runs immediately after the in-flight write, without draining old progress.
+				if (mode === "progress" && this.mode === "progress") break;
 			}
 		} finally {
 			this.running = false;
@@ -547,100 +526,47 @@ class ChannelDeliveryController {
 
 	/** True once this turn has something to show besides the warmup line. */
 	private hasRecordedProgress(): boolean {
-		return this.thinking !== "" || this.activities.length > 0 || this.document !== "";
+		return this.progress.hasContent || this.document !== "";
 	}
 
-	/** Send queued progress, or the one-shot warmup line when nothing has been recorded yet. */
+	/** Publish one bounded write per display interval, anchored to the last successful write. */
 	private async publishProgress(): Promise<boolean> {
-		if (this.pendingLines.length === 0) return this.publishWarmup();
-		let touched = false;
-		while (this.pendingLines.length > 0 && this.progressFailures < MAX_PROGRESS_FAILURES) {
-			const step = await this.sendPending();
-			if (step.touched) touched = true;
-			if (!step.cont) break;
-		}
-		return touched;
-	}
-
-	private async publishWarmup(): Promise<boolean> {
-		if (this.document || !this.cardWarmupTriggered || this.warmupDelivered) return false;
-		const ok = await this.bot.replaceCard(this.event.channelId, WAITING_TEXT, false, false, this.cardGeneration);
-		if (!ok) {
-			this.progressFailures++;
-			return false;
-		}
-		this.warmupDelivered = true;
-		return true;
-	}
-
-	private async sendPending(): Promise<{ touched: boolean; cont: boolean }> {
-		const planned = planProgressWrite({
-			document: this.document,
-			pending: this.pendingLines,
-			append: this.bot.supportsStreamingAppend(),
-			header: this.buildLiveHeader(),
-			fallback: this.snapshot(CARD_REQUEST_MAX_BYTES, this.activities),
-			compact: this.snapshot(CARD_COMPACT_MAX_BYTES, this.activities.slice(-1)),
-		});
-		if (!planned || planned.method === "drop") {
-			if (planned?.method === "drop") this.pendingLines.shift();
-			else this.pendingLines = [];
-			return { touched: false, cont: planned?.method === "drop" };
-		}
-		const ok = await this.writeProgress(planned);
-		if (ok) {
-			this.applySent(planned);
-			this.progressFailures = 0;
-			return { touched: true, cont: true };
-		}
-		if (planned.method === "append") {
-			const frame = this.bot.supportsStreamingAppend()
-				? this.snapshot(CARD_COMPACT_MAX_BYTES, this.activities.slice(-1))
-				: this.snapshot(CARD_REQUEST_MAX_BYTES, this.activities);
-			const replaced = await this.bot.replaceCard(this.event.channelId, frame, false, false, this.cardGeneration);
-			if (replaced) {
-				this.document = frame;
-				this.pendingLines = this.bot.supportsStreamingAppend()
-					? this.pendingLines.filter((line) => !frame.split("\n").includes(line))
-					: [];
+		if (this.ending || !this.isCurrent) return false;
+		const hasProgress = this.progress.hasContent;
+		if (!hasProgress && (!this.cardWarmupTriggered || this.warmupDelivered)) return false;
+		const planned: ProgressWrite | undefined = hasProgress
+			? this.progress.plan(
+					this.buildLiveHeader(),
+					{ epoch: this.documentEpoch, content: this.document },
+					this.bot.supportsStreamingAppend(),
+				)
+			: { epoch: -1, content: WAITING_TEXT, append: false, document: "", complete: true };
+		if (!planned) return false;
+		try {
+			const write = planned.append ? this.bot.appendToCard.bind(this.bot) : this.bot.replaceCard.bind(this.bot);
+			const ok = await write(this.event.channelId, planned.content, false, false, this.cardGeneration);
+			if (ok) {
+				if (hasProgress) {
+					// Apply this immutable request's baseline, even if newer events folded the desired
+					// view during HTTP. Its epoch forces the next write to replace that old cycle.
+					this.document = planned.document;
+					this.documentEpoch = planned.epoch;
+				} else this.warmupDelivered = true;
 				this.progressFailures = 0;
-				return { touched: true, cont: false };
+				if (!planned.complete && !this.ending) this.bumpRevision(false);
+			} else {
+				this.progressFailures++;
+				if (planned.append) {
+					// The server may have applied an append whose response was lost. Replacing a short
+					// new cycle restores certainty without duplicating that delta or replaying history.
+					this.progress.rebase();
+					if (this.progressFailures < MAX_PROGRESS_FAILURES && !this.ending) this.bumpRevision(false);
+				}
 			}
+			return ok;
+		} finally {
+			this.nextProgressAt = Date.now() + PROGRESS_INTERVAL_MS;
 		}
-		this.progressFailures++;
-		return { touched: false, cont: false };
-	}
-
-	private async writeProgress(planned: ProgressWrite): Promise<boolean> {
-		if (planned.method === "append") {
-			return this.bot.appendToCard(this.event.channelId, planned.content, false, false, this.cardGeneration);
-		}
-		return this.bot.replaceCard(this.event.channelId, planned.content, false, false, this.cardGeneration);
-	}
-
-	private applySent(planned: ProgressWrite): void {
-		if (planned.method === "append") {
-			this.document += planned.content;
-			this.pendingLines.shift();
-			return;
-		}
-		this.document = planned.content;
-		if (planned.clearPending) {
-			this.pendingLines = [];
-			return;
-		}
-		const lines = new Set(planned.content.split("\n"));
-		this.pendingLines = this.pendingLines.filter((line) => !lines.has(line));
-	}
-
-	/** A full snapshot: the live header, pinned thinking in full mode, and the given activities. */
-	private snapshot(maxBytes: number, activities: ProgressActivity[]): string {
-		return renderProgressFrame({
-			header: this.buildLiveHeader(),
-			thinking: this.progressStyle === "full" ? this.thinking : undefined,
-			activities,
-			maxBytes,
-		});
 	}
 
 	/** Clock-style elapsed time (`0:42`, `1:02`, `1:05:09`) for the card's first line. */
@@ -657,7 +583,8 @@ class ChannelDeliveryController {
 	}
 
 	/**
-	 * Standing first line. The card only keeps the latest thought and a few activity lines, so
+	 * Cycle header, refreshed on replacement so it remains a stable prefix for appended progress.
+	 * A long turn can retain only the latest thought and a few activity lines after a fold, so
 	 * without this a long turn looks identical to one that just started. Counted as tool calls,
 	 * never "steps" — a step is a task's unit (spec 053, D4).
 	 */

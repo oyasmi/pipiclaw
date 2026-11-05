@@ -58,8 +58,8 @@ Pipiclaw 是同一个助手，**工位（desk）**划分不同工作的状态：
 
 | 值 | 体验 |
 |---|---|
-| `full_progress_then_plain_final` | 一张卡片按需追加思考和工具调用，快写满时收成短状态再继续；结束后卡片收成一行，结论另发一条 Markdown。默认值 |
-| `rolling_progress_then_plain_final` | 同样追加；收短时不固定思考。结束后同样收成一行并另发结论 |
+| `full_progress_then_plain_final` | 一张卡片在当前周期内累积全部进度，不限制行数；达到正文预算时收短再继续增长；结束后卡片收成一行，结论另发一条 Markdown。默认值 |
+| `rolling_progress_then_plain_final` | 固定显示最近五条进度，包含思考和活动，随新进度滚动。结束后收成一行并另发结论 |
 | `final_card_only` | 隐藏过程，只在卡片中交付最终结果 |
 
 没有配置 `cardTemplateId` 时仍可正常回复，只是不使用 AI Card。TUI 在 `settings.json.tui.responseMode` 使用同一组取值，但与钉钉设置彼此独立。

@@ -7,7 +7,7 @@ import type { TurnEvent, TurnOutcome } from "../src/channel/channel-context.js";
 import type { TurnInfo } from "../src/channel/transport.js";
 import { DingTalkBot } from "../src/dingtalk/bot.js";
 import { createDingTalkContext, type DeliveryPort } from "../src/dingtalk/delivery.js";
-import { CARD_COMPACT_MAX_BYTES, CARD_DOCUMENT_MAX_BYTES, CARD_REQUEST_MAX_BYTES } from "../src/dingtalk/progress.js";
+import { CARD_DOCUMENT_MAX_BYTES, CARD_REQUEST_MAX_BYTES } from "../src/dingtalk/progress.js";
 import {
 	type FinalDelivery,
 	finalDeliveryOf,
@@ -28,8 +28,9 @@ const outcome = (kind: TurnOutcome["kind"], message?: string): TurnOutcome => ({
 });
 const progress = (text: string): TurnEvent => ({ type: "commentary", text });
 const answer = (text: string): TurnEvent => ({ type: "answer", text });
-/** The card warm-up is the one timer the delivery starts on its own. */
+/** Advance the display throttle explicitly; no real sleeps in these scenarios. */
 const WARMUP_MS = 3500;
+const FRAME_MS = 800;
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -100,7 +101,7 @@ class RecordingPort implements DeliveryPort {
 	}
 }
 
-/** The card body implied by replace and append calls, in order. */
+/** The document implied by the recording port's writes. */
 function renderedCard(calls: Array<{ method: string; args: unknown[] }>): string {
 	let document = "";
 	for (const call of calls) {
@@ -159,59 +160,118 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		expect(archived).toEqual(["answer"]);
 	});
 
-	it("coalesces queued progress into one frame, then appends only a new line", async () => {
+	it("coalesces bursts without postponing a frame, and paces events received during HTTP", async () => {
+		// A debounce starves busy streams; draining revisions immediately hides folds on slow HTTP.
+		// Mutation (2026-11-05): zero the interval -> an extra frame appears before the deadline.
 		const { port, archive, ctx } = setup();
 		ctx.emit(progress(" "));
 		ctx.emit(progress("A"));
 		ctx.emit(progress("B"));
 		expect(port.calls).toEqual([]);
 		await vi.advanceTimersByTimeAsync(0);
-		const first = String(port.calls[0]?.args[1]);
-		expect(port.calls[0]?.method).toBe("replaceCard");
-		expect(first).toContain("\n- A\n- B");
-		expect(first.split("\n").every((line) => line.startsWith("- "))).toBe(true);
-		expect(Buffer.byteLength(first)).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
+		expect(renderedCard(port.calls)).toContain("\n- A\n- B");
 		ctx.emit(progress("C"));
-		await vi.advanceTimersByTimeAsync(0);
-		const appended = String(port.calls.at(-1)?.args[1]);
-		expect(port.calls.at(-1)?.method).toBe("appendToCard");
-		expect(appended).toBe("\n- C");
-		expect(appended).not.toContain("A");
-		const after = port.calls.length;
-		ctx.emit(progress("C"));
-		await vi.advanceTimersByTimeAsync(0);
-		expect(port.calls).toHaveLength(after);
-		port.configure("supportsStreamingAppend", false);
+		await vi.advanceTimersByTimeAsync(FRAME_MS - 1);
+		expect(port.calls).toHaveLength(1);
+		let release!: (ok: boolean) => void;
+		port.configure(
+			"appendToCard",
+			new Promise<boolean>((resolve) => {
+				release = resolve;
+			}),
+		);
 		ctx.emit(progress("D"));
+		await vi.advanceTimersByTimeAsync(1);
+		expect(port.calls).toHaveLength(2);
+		expect(renderedCard(port.calls)).toContain("- D");
+		ctx.emit(progress("E"));
+		ctx.emit(progress("F"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS * 2);
+		expect(port.calls).toHaveLength(2);
+		port.configure("appendToCard", true);
+		release(true);
+		await vi.advanceTimersByTimeAsync(FRAME_MS - 1);
+		expect(port.calls).toHaveLength(2);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(port.calls).toHaveLength(3);
+		expect(renderedCard(port.calls)).toContain("- F");
+		ctx.emit(progress("F"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(port.calls).toHaveLength(3);
+		// Templates that reject append use bounded snapshots; they never receive a >1KB replay.
+		port.configure("supportsStreamingAppend", false);
+		ctx.emit(progress("fallback"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(port.calls.at(-1)?.method).toBe("replaceCard");
+		expect(renderedCard(port.calls)).toContain("fallback");
+		port.configure("supportsStreamingAppend", true);
+		port.configure(
+			"appendToCard",
+			new Promise<boolean>((resolve) => {
+				release = resolve;
+			}),
+		);
+		ctx.emit(progress("held"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		const beforeFold = port.calls.length;
+		// A fold while an old append is in flight must survive its late acknowledgement.
+		for (let index = 0; index < 25; index++) ctx.emit(progress(`burst-${index} ${"甲".repeat(100)}`));
 		await vi.advanceTimersByTimeAsync(0);
-		const fallback = port.calls.at(-1);
-		expect(fallback?.method).toBe("replaceCard");
-		const snapshot = String(fallback?.args[1]);
-		expect(Buffer.byteLength(snapshot)).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
-		expect(snapshot.split("\n").some((line) => line === "- A")).toBe(false);
-		expect(snapshot).toContain("D");
+		port.configure("appendToCard", true);
+		release(true);
+		await vi.advanceTimersByTimeAsync(FRAME_MS - 1);
+		expect(port.calls).toHaveLength(beforeFold);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(port.calls.at(-1)?.method).toBe("replaceCard");
+		await vi.runAllTimersAsync();
+		const burst = port.calls.slice(beforeFold);
+		expect(burst.length).toBeGreaterThan(1); // A current cycle larger than 1KB is paced in parts.
+		for (const call of burst)
+			expect(Buffer.byteLength(String(call.args[1]))).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
+		expect(renderedCard(port.calls)).toContain("burst-24");
+		expect(renderedCard(port.calls).split("\n")).not.toContain("- A");
 		expect(archive).not.toHaveBeenCalled();
 	});
 
-	it("appends each new tool line and folds the card without sending the transcript again", async () => {
-		const { port, ctx } = setup("rolling_progress_then_plain_final");
-		for (const text of ["A", "B", "C", "D", "E"]) {
-			ctx.emit({ type: "tool.start", callId: text, tool: "bash", args: { command: text } });
-			await vi.advanceTimersByTimeAsync(0);
+	it("accumulates full progress while rolling keeps only recent events, and finalizes without waiting", async () => {
+		// Mutation (2026-11-05): force both modes to rolling -> the first tool event disappears.
+		for (const mode of ["full_progress_then_plain_final", "rolling_progress_then_plain_final"] as const) {
+			const { port, ctx } = setup(mode);
+			for (let index = 0; index < 16; index++) {
+				ctx.emit({ type: "tool.start", callId: String(index), tool: "bash", args: { command: `cmd-${index}` } });
+				await vi.advanceTimersByTimeAsync(FRAME_MS);
+			}
+			const card = renderedCard(port.calls);
+			expect(card).toContain("cmd-15");
+			if (mode === "full_progress_then_plain_final") {
+				expect(card).toContain("cmd-0");
+				expect(card.split("\n")).toHaveLength(17); // No arbitrary row limit in full mode.
+			} else {
+				expect(card).not.toContain("cmd-0");
+				expect(card.split("\n")).toHaveLength(6); // header + five recent events
+			}
+			ctx.emit({ type: "reasoning", text: "new thought" });
+			await vi.advanceTimersByTimeAsync(FRAME_MS);
+			const withThinking = renderedCard(port.calls);
+			expect(withThinking).toContain("new thought");
+			expect(withThinking.split("\n")).toHaveLength(mode === "rolling_progress_then_plain_final" ? 6 : 18);
+			// Five maximum-sized entries must fit with the header, without silently folding rolling.
+			for (let index = 0; index < 5; index++) {
+				ctx.emit(progress(`${index}${"甲".repeat(400)}`));
+				await vi.advanceTimersByTimeAsync(FRAME_MS);
+			}
+			if (mode === "rolling_progress_then_plain_final") {
+				const recent = renderedCard(port.calls);
+				expect(recent.split("\n")).toHaveLength(6);
+				expect(Buffer.byteLength(recent)).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
+			}
+			ctx.emit(progress("pending"));
+			ctx.emit(answer("answer"));
+			await ctx.finish(outcome("completed"));
+			expect(port.calls.filter((call) => call.method === "sendPlain")).toHaveLength(1);
+			const finalized = port.calls.filter((call) => call.method === "finalizeExistingCard");
+			expect(String(finalized.at(-1)?.args[1])).toContain("工具调用 16 次");
 		}
-		expect(port.calls[0]?.method).toBe("replaceCard");
-		expect(port.calls.slice(1).every((call) => call.method === "appendToCard")).toBe(true);
-		for (const call of port.calls) {
-			expect(Buffer.byteLength(String(call.args[1]))).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
-		}
-		const card = renderedCard(port.calls);
-		expect(card).toContain("执行 A");
-		expect(card).toContain("执行 E");
-		ctx.emit(answer("answer"));
-		await ctx.finish(outcome("completed"));
-		expect(port.calls.filter((call) => call.method === "sendPlain")).toHaveLength(1);
-		const finalized = port.calls.filter((call) => call.method === "finalizeExistingCard");
-		expect(String(finalized.at(-1)?.args[1])).toContain("完成 · 工具调用 5 次");
 	});
 
 	it("draws no progress and primes no card for a final-only channel or a quiet turn", async () => {
@@ -296,7 +356,7 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		expect(port.calls).toHaveLength(3);
 	});
 
-	it("keeps appended markdown complete, stops after two failed updates, and folds the card", async () => {
+	it("keeps markdown complete and stops after two failed writes without losing the final answer", async () => {
 		const { port, ctx } = setup();
 		ctx.emit({ type: "reasoning", text: `\`\`\`\n**未闭合 ${"甲".repeat(3000)}尾` });
 		ctx.emit({ type: "tool.start", callId: "1", tool: "bash", args: { command: "ls src/a_b.ts *.md" } });
@@ -312,20 +372,14 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		expect(frame).toContain("a_b.ts");
 		expect(frame).toContain("*.md");
 		expect(frame.split("\n").every((line) => line.startsWith("- "))).toBe(true);
-		const sent = {
-			replace: port.calls.filter((call) => call.method === "replaceCard").length,
-			append: port.calls.filter((call) => call.method === "appendToCard").length,
-		};
-		port.configure("appendToCard", false);
+		const sent = port.calls.length;
 		port.configure("replaceCard", false);
-		ctx.emit(progress("更多"));
-		await vi.advanceTimersByTimeAsync(0);
-		ctx.emit(progress("再来"));
-		await vi.advanceTimersByTimeAsync(0);
-		ctx.emit(progress("停"));
-		await vi.advanceTimersByTimeAsync(0);
-		expect(port.calls.filter((call) => call.method === "replaceCard")).toHaveLength(sent.replace + 2);
-		expect(port.calls.filter((call) => call.method === "appendToCard")).toHaveLength(sent.append + 2);
+		port.configure("appendToCard", false);
+		for (const text of ["更多", "再来", "停"]) {
+			ctx.emit(progress(text));
+			await vi.advanceTimersByTimeAsync(FRAME_MS);
+		}
+		expect(port.calls).toHaveLength(sent + 2);
 		ctx.emit(answer("结论"));
 		await ctx.finish(outcome("completed"));
 		const summary = String(port.calls.filter((call) => call.method === "finalizeExistingCard").at(-1)?.args[1]);
@@ -391,8 +445,21 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		ctx.emit(progress("stale"));
 		release(true);
 		await finishing;
-		expect(port.calls.filter((call) => call.method === "appendToCard")).toHaveLength(0);
+		expect(port.calls.filter((call) => call.method === "replaceCard")).toHaveLength(1);
 		expect(port.methods()).not.toContain("sendPlain");
+		// The new throttle must not delay /stop when a future frame is queued.
+		const next = setup();
+		next.ctx.emit(progress("first"));
+		await vi.advanceTimersByTimeAsync(0);
+		next.ctx.emit(progress("pending"));
+		await vi.advanceTimersByTimeAsync(0);
+		let ended = false;
+		const stopped = next.ctx.finish(outcome("cancelled")).then(() => {
+			ended = true;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(ended).toBe(true);
+		await stopped;
 	});
 });
 
@@ -420,12 +487,11 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 	let streamGate: ReturnType<typeof deferred> | undefined;
 	let failWrites: boolean;
 	let loseCreateResponse: boolean;
-	let loseAppendResponse: boolean;
 
 	beforeEach(() => {
 		cards.clear();
 		createGate = streamGate = undefined;
-		failWrites = loseCreateResponse = loseAppendResponse = false;
+		failWrites = loseCreateResponse = false;
 		http.post.mockReset().mockImplementation(async (url: string, body: CreateBody) => {
 			if (url.endsWith("createAndDeliver")) {
 				cards.set(body.outTrackId, { content: body.cardData.cardParamMap.content, finished: false });
@@ -441,7 +507,6 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 			if (!card) throw new Error("unknown card");
 			card.content = body.isFull ? body.content : card.content + body.content;
 			card.finished = body.isFinalize;
-			if (!body.isFull && loseAppendResponse) throw new Error("lost append response");
 			return { data: {} };
 		});
 	});
@@ -485,7 +550,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		failWrites = true;
 		for (const text of ["one", "two", "three", "four"]) {
 			ctx.emit(progress(text));
-			await vi.advanceTimersByTimeAsync(0);
+			await vi.advanceTimersByTimeAsync(FRAME_MS);
 		}
 		expect(http.put).toHaveBeenCalledTimes(2);
 		expect(onlyCard().content.trim()).not.toBe("");
@@ -505,43 +570,73 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		expect(plainCalls()).toHaveLength(1);
 	});
 
-	it("appends whole lines until the card nears 2.9KB, then sends one short snapshot", async () => {
+	it("repeatedly folds and regrows a bounded window without replaying removed content", async () => {
+		// Regression: 6ca4630 mixed replacement with remote append and drained queued lines after
+		// folding. Epoch changes must reset the acknowledged prefix; normal growth sends deltas.
+		// Mutations (2026-11-06): force full snapshots / retain the old baseline after replace;
+		// both lose the newest event once the request-sized prefix is exhausted, and turn this case red.
 		const { ctx } = remote();
-		ctx.emit(progress("A"));
+		ctx.emit({ type: "reasoning", text: "latest thought" });
 		await vi.advanceTimersByTimeAsync(0);
-		ctx.emit(progress("B"));
-		await vi.advanceTimersByTimeAsync(0);
-		ctx.emit(progress("C"));
-		await vi.advanceTimersByTimeAsync(0);
-		for (let index = 0; index < 6; index++) {
-			ctx.emit(progress(`${index}${"丙".repeat(400)}`));
-			await vi.advanceTimersByTimeAsync(0);
-		}
-		const frames = http.put.mock.calls.map((call) => call[1] as StreamBody);
-		expect(frames[0]?.isFull).toBe(true);
-		expect(frames[0]?.content.split("\n").every((line) => line.startsWith("- "))).toBe(true);
-		let document = "";
-		let compressed = false;
-		for (const frame of frames) {
+		let previous: string[] = [];
+		let folds = 0;
+		let regrows = 0;
+		let folded = false;
+		const removed = new Set<string>();
+		let wireBytes = 0;
+		let snapshotBytes = 0;
+		for (let index = 0; index < 160; index++) {
+			const line = `activity-${index} extra words ${"甲".repeat(12)}`;
+			ctx.emit(progress(line));
+			await vi.advanceTimersByTimeAsync(FRAME_MS);
+			const frame = http.put.mock.calls.at(-1)?.[1] as StreamBody;
 			expect(Buffer.byteLength(frame.content)).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
-			if (frame.isFull) {
-				if (Buffer.byteLength(document) > CARD_COMPACT_MAX_BYTES) {
-					expect(Buffer.byteLength(frame.content)).toBeLessThanOrEqual(CARD_COMPACT_MAX_BYTES);
-					compressed = true;
-				}
-				document = frame.content;
-			} else {
-				expect(frame.content.startsWith("\n- ")).toBe(true);
-				expect(Buffer.byteLength(document) + Buffer.byteLength(frame.content)).toBeLessThanOrEqual(
-					CARD_DOCUMENT_MAX_BYTES,
-				);
-				document += frame.content;
+			if (!frame.isFull) expect(frame.content).toBe(`\n- ${line}`);
+			wireBytes += Buffer.byteLength(frame.content);
+			snapshotBytes += Buffer.byteLength(onlyCard().content);
+			expect(Buffer.byteLength(onlyCard().content)).toBeLessThanOrEqual(CARD_DOCUMENT_MAX_BYTES);
+			const rows = onlyCard().content.split("\n");
+			expect(rows.every((row) => row.startsWith("- "))).toBe(true);
+			expect(onlyCard().content).toContain("latest thought");
+			expect(rows.at(-1)).toBe(`- ${line}`);
+			if (rows.length < previous.length) {
+				folds++;
+				folded = true;
+				expect(rows.length).toBe(4); // header, pinned thought, two retained activities
+				for (const row of previous.slice(2)) if (!rows.includes(row)) removed.add(row);
+			} else if (folded) {
+				expect(rows.length).toBe(previous.length + 1);
+				regrows++;
+				folded = false;
 			}
+			for (const row of removed) expect(rows).not.toContain(row);
+			previous = rows;
 		}
-		expect(compressed).toBe(true);
-		expect(frames.some((frame) => frame.content.includes("- A"))).toBe(true);
-		expect(onlyCard().content).toContain("丙");
-		expect(Buffer.byteLength(onlyCard().content)).toBeLessThanOrEqual(CARD_DOCUMENT_MAX_BYTES);
+		expect(folds).toBeGreaterThanOrEqual(3);
+		expect(regrows).toBeGreaterThanOrEqual(3);
+		expect(wireBytes).toBeLessThan(snapshotBytes / 2);
+		// Long Chinese lines must respect the UTF-8 budget, including multibyte truncation.
+		for (let index = 0; index < 8; index++) {
+			ctx.emit(progress(`${index}${"丙".repeat(400)}`));
+			await vi.advanceTimersByTimeAsync(FRAME_MS);
+			expect(Buffer.byteLength(onlyCard().content)).toBeLessThanOrEqual(CARD_DOCUMENT_MAX_BYTES);
+		}
+		// The server applied this write, but its response was lost. A retry must replace it,
+		// rather than duplicate it or restore an earlier window.
+		http.put.mockImplementationOnce(async (_url: string, body: StreamBody) => {
+			const card = cards.get(body.outTrackId);
+			if (card) card.content = body.isFull ? body.content : card.content + body.content;
+			throw new Error("lost append response");
+		});
+		ctx.emit(progress("ambiguous"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect((http.put.mock.calls.at(-1)?.[1] as StreamBody).isFull).toBe(true);
+		ctx.emit(progress("recovered"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(onlyCard().content.match(/ambiguous/g)).toHaveLength(1);
+		expect(onlyCard().content).toContain("recovered");
+		await ctx.finish(outcome("silent"));
 	});
 
 	it.each(["template", ""])(

@@ -1,17 +1,15 @@
 /**
- * Text for the live DingTalk progress card.
- *
- * A live update is one complete markdown list (`isFull: true`) or one extra list item
- * (`isFull: false`). The configured template accepts both. Each request stays within
- * {@link CARD_REQUEST_MAX_BYTES}. Once the next item would carry the card past
- * {@link CARD_DOCUMENT_MAX_BYTES}, the card is replaced by a short snapshot and appending resumes.
- * Dynamic text is made markdown-inert first, and every line is finished before it is cut.
+ * Locally owned progress cycles. Full mode grows to the document budget; rolling keeps recent
+ * activities. Epochs distinguish a replacement from growth, even when retained text is identical.
+ * Writes contain only acknowledged-prefix deltas, bounded to complete markdown list items.
  */
 export const CARD_REQUEST_MAX_BYTES = 1000;
 export const CARD_DOCUMENT_MAX_BYTES = 2900;
-export const CARD_COMPACT_MAX_BYTES = 200;
-
+const ROLLING_WINDOW_SIZE = 5;
+const RETAINED_ACTIVITIES = 2;
 const LINE_BYTES = 180;
+// Reserve enough room for all five rolling entries plus their newlines in one snapshot.
+const HEADER_BYTES = CARD_REQUEST_MAX_BYTES - ROLLING_WINDOW_SIZE * (LINE_BYTES + 1);
 const ELLIPSIS = "…";
 
 /** A line already classified by the delivery controller. `tail` keeps the end of the text. */
@@ -19,14 +17,6 @@ export interface ProgressActivity {
 	marker: "" | "➜" | "✕" | "✦";
 	text: string;
 	tail?: boolean;
-}
-
-/** The next card write. `drop` discards one queued line that cannot be sent on its own. */
-export interface ProgressWrite {
-	method: "replace" | "append" | "drop";
-	content: string;
-	/** The snapshot already stands for every queued line. */
-	clearPending: boolean;
 }
 
 /**
@@ -99,8 +89,8 @@ function isCompleteMarkdownList(frame: string): boolean {
 	return lines.length > 0 && lines.every((line) => line.startsWith("- ") && line === line.trim() && line.length > 2);
 }
 
-/** One list item, sized so a request that prefixes a newline still fits in one update. */
-export function renderProgressLine(activity: ProgressActivity, maxBytes = CARD_REQUEST_MAX_BYTES - 1): string {
+/** One bounded, complete list item; long model text cannot cause a sudden height jump. */
+export function renderProgressLine(activity: ProgressActivity, maxBytes = LINE_BYTES): string {
 	const text = markedLine(activity.marker, activity.text, Math.max(0, maxBytes - 2), activity.tail === true);
 	if (!text) return "";
 	const line = listItem(text);
@@ -108,107 +98,93 @@ export function renderProgressLine(activity: ProgressActivity, maxBytes = CARD_R
 	return line;
 }
 
-/**
- * One complete markdown list: a header, the latest thinking excerpt, then the activity window.
- * Lines are dropped whole, then shortened, until the frame fits `maxBytes`.
- */
-export function renderProgressFrame(input: {
-	header: string;
-	thinking?: string;
-	activities: ProgressActivity[];
-	maxBytes?: number;
-}): string {
-	const maxBytes = input.maxBytes ?? CARD_REQUEST_MAX_BYTES;
-	const headerLine = listItem(inert(input.header) || "正在处理…");
-	let thinkingBudget = Math.min(LINE_BYTES, maxBytes);
-	let lineBudget = Math.min(LINE_BYTES, maxBytes);
-	let activities = input.activities.filter((activity) => inert(activity.text));
-
-	const build = (): string => {
-		const lines = [headerLine];
-		if (input.thinking) {
-			const thinking = markedLine("✦", input.thinking, thinkingBudget, true);
-			if (thinking) lines.push(listItem(thinking));
-		}
-		for (const activity of activities) {
-			const line = markedLine(activity.marker, activity.text, lineBudget, activity.tail === true);
-			if (line) lines.push(listItem(line));
-		}
-		return lines.join("\n");
-	};
-
-	let frame = build();
-	while (byteLength(frame) > maxBytes && activities.length > 1) {
-		activities = activities.slice(1);
-		frame = build();
-	}
-	while (byteLength(frame) > maxBytes && thinkingBudget > 24) {
-		thinkingBudget = Math.floor(thinkingBudget * 0.6);
-		frame = build();
-	}
-	while (byteLength(frame) > maxBytes && lineBudget > 24) {
-		lineBudget = Math.floor(lineBudget * 0.6);
-		frame = build();
-	}
-	while (byteLength(frame) > maxBytes && activities.length > 0) {
-		activities = activities.slice(1);
-		frame = build();
-	}
-	if (byteLength(frame) <= maxBytes && isCompleteMarkdownList(frame)) return frame;
-	if (byteLength(headerLine) <= maxBytes && isCompleteMarkdownList(headerLine)) return headerLine;
-	return "- 正在处理…";
+export interface ProgressFrame {
+	epoch: number;
+	content: string;
 }
 
-/**
- * The first real progress frame. It replaces the warmup line instead of appending onto it, and
- * it keeps only the queued items that fit in one request. The rest stay queued for append.
- */
-export function renderOpeningFrame(header: string, pending: readonly string[]): string {
-	const head = renderProgressLine({ marker: "", text: header });
+export interface ProgressWrite extends ProgressFrame {
+	append: boolean;
+	/** The document acknowledged if this write succeeds, including any prior prefix. */
+	document: string;
+	complete: boolean;
+}
+
+/** Take a request-sized prefix without cutting a list item or UTF-8 character. */
+function requestPrefix(content: string): string {
 	const lines: string[] = [];
-	if (head) lines.push(head);
-	for (const line of pending) {
-		const candidate = [...lines, line].join("\n");
-		if (byteLength(candidate) > CARD_REQUEST_MAX_BYTES) break;
+	for (const line of content.split("\n")) {
+		if (byteLength([...lines, line].join("\n")) > CARD_REQUEST_MAX_BYTES) break;
 		lines.push(line);
 	}
-	const frame = lines.join("\n");
-	if (frame && byteLength(frame) <= CARD_REQUEST_MAX_BYTES && isCompleteMarkdownList(frame)) return frame;
-	return head && byteLength(head) <= CARD_REQUEST_MAX_BYTES ? head : "- 正在处理…";
+	return lines.join("\n");
 }
 
-/**
- * Choose the next progress write. Appending continues while the card stays under the document
- * ceiling; crossing it sends the short snapshot first. With append unavailable, every update is
- * one snapshot that already fits in a single request.
- */
-export function planProgressWrite(input: {
-	document: string;
-	pending: readonly string[];
-	append: boolean;
-	header: string;
-	fallback: string;
-	compact: string;
-}): ProgressWrite | undefined {
-	const pending = input.pending.filter((line) => line.trim());
-	if (pending.length === 0) return undefined;
-	if (!input.append) {
-		if (!input.fallback || input.fallback === input.document) return undefined;
-		return { method: "replace", content: input.fallback, clearPending: true };
+/** Desired view independent of an in-flight write; old cycles never remain in a replay queue. */
+export class ProgressWindow {
+	private thinking = "";
+	private activities: Array<{ line: string; thinking: boolean }> = [];
+	private epoch = 0;
+	private header = "";
+
+	constructor(private readonly style: "full" | "rolling") {}
+
+	get hasContent(): boolean {
+		return this.activities.length > 0;
 	}
-	if (!input.document) {
-		const opening = renderOpeningFrame(input.header, pending);
-		if (!opening) return undefined;
-		return { method: "replace", content: opening, clearPending: false };
+
+	record(activity: ProgressActivity): boolean {
+		const line = renderProgressLine(activity);
+		if (!line || line === this.activities.at(-1)?.line) return false;
+		const thinking = activity.marker === "✦";
+		if (thinking) this.thinking = line;
+		this.activities.push({ line, thinking });
+		if (this.style === "rolling" && this.activities.length > ROLLING_WINDOW_SIZE) {
+			this.activities = this.activities.slice(-ROLLING_WINDOW_SIZE);
+			this.restart();
+		} else if (byteLength(this.body()) > CARD_DOCUMENT_MAX_BYTES) {
+			// Bound storage while HTTP is stalled too. Render also accounts for the header.
+			this.rebase();
+		}
+		return true;
 	}
-	const delta = `\n${pending[0]}`;
-	if (byteLength(delta) > CARD_REQUEST_MAX_BYTES) return { method: "drop", content: "", clearPending: false };
-	if (byteLength(input.document) + byteLength(delta) > CARD_DOCUMENT_MAX_BYTES) {
-		if (!input.compact || input.compact === input.document)
-			return { method: "drop", content: "", clearPending: false };
-		return { method: "replace", content: input.compact, clearPending: false };
+
+	plan(header: string, acknowledged: ProgressFrame, append: boolean): ProgressWrite | undefined {
+		// Without append support, a full cycle must fit in one snapshot. Its header can refresh
+		// freely; otherwise it stays stable until replacement so ordinary growth is a prefix.
+		if (!append) this.header = "";
+		this.header ||= renderProgressLine({ marker: "", text: header }, HEADER_BYTES);
+		const maxBytes = append ? CARD_DOCUMENT_MAX_BYTES : CARD_REQUEST_MAX_BYTES;
+		if (byteLength(`${this.header}\n${this.body()}`) > maxBytes) {
+			this.rebase();
+			this.header = renderProgressLine({ marker: "", text: header }, HEADER_BYTES);
+		}
+		const frame = `${this.header}\n${this.body()}`;
+		const canAppend = append && acknowledged.epoch === this.epoch && frame.startsWith(acknowledged.content);
+		const delta = canAppend ? frame.slice(acknowledged.content.length) : frame;
+		if (!delta) return undefined;
+		const content = requestPrefix(delta);
+		const document = canAppend ? acknowledged.content + content : content;
+		return { epoch: this.epoch, content, append: canAppend, document, complete: document === frame };
 	}
-	return { method: "append", content: delta, clearPending: false };
+
+	/** An ambiguous append is recovered with a short replacement, never by replaying its delta. */
+	rebase(): void {
+		if (this.style === "full") {
+			const recent = this.activities.filter((activity) => !activity.thinking).slice(-RETAINED_ACTIVITIES);
+			this.activities = this.thinking ? [{ line: this.thinking, thinking: true }, ...recent] : recent;
+		}
+		this.restart();
+	}
+
+	private restart(): void {
+		this.epoch++;
+		this.header = "";
+	}
+
+	private body(): string {
+		return this.activities.map((activity) => activity.line).join("\n");
+	}
 }
 
 /** A one-line card ending. Falls back to a fixed line if the text could not stay plain markdown. */
