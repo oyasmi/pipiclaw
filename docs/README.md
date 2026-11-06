@@ -40,6 +40,7 @@
 | [架构](./architecture.md) | 当前实现的源码地图、运行时拓扑、消息生命周期、并发表和磁盘布局 |
 | [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
 | [主动工作与实时语音调研](./refer/personal-agent-proactivity-and-voice.md) | Grok Bot、Muse、Dots 的官方证据；Qwen、GPT-Live、Ming/Fun 模型比较，主动时机与语音接入方案（2026-10-31，未实施） |
+| [主动性机制与设计取舍](./refer/personal-agent-proactivity-design-notes.md) | Grok Bot、DeepSeek Super-agent、OpenClaw 的证据；主动介入的分寸、心跳与 watchdog、现有任务约束及分阶段验证建议（2026-11-06，未实施） |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
 | [行为评测使用指南](./evals.md) | 无人参与的 `cycle`、评分器校验、短报告、证据重放与兼容参照 |
 | [设计记录](./specs/README.md) | 保留的 spec 050–066、实施状态及当前行为的判断顺序 |
