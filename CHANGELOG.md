@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.5-beta.4] - 2026-11-06
+
 ### Breaking
 
 - **Pi SDK 1.4.0.** The built-in `kimi-coding` provider now uses OpenAI Chat Completions; custom base URLs must include `/v1`. Check configured model references against the updated catalog before upgrading; see the [Pi upgrade notes](docs/configuration-reference.md#pi-140-升级注意事项).
@@ -25,7 +27,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Fixed
 
-- **DingTalk progress no longer repeats itself.** The card appends complete items as they happen instead of resending the whole frame on a timer, which used to write the same text into the transcript again. Near the card limit the progress is compressed; when the turn ends the card folds to one line and the answer is sent as a normal message.
+- **DingTalk progress appears immediately and no longer repeats itself.** The waiting card starts without delaying model execution; a quick answer replaces it directly. Progress updates append complete items at a controlled pace instead of repeatedly resending the whole frame. Near the card limit the view folds to recent activity without replaying old updates; after a turn with progress, the card folds to one line and the answer is sent as a normal message.
 - **A crash no longer drops a task report or a half-finished archive.** A report is saved under `tasks/.delivery/` before it is sent, and an unanswered question is retried. Archiving commits a snapshot first and finishes it on the next start without running another model step.
 - **Reflection no longer loses progress it already committed.** An identical background add after a partial failure is skipped. An explicit replacement is written before automatic deletes, and deletes wait if any replacement fails. Explicit forgetting stays consistent with what the user asked. No new persisted fields or settings.
 
