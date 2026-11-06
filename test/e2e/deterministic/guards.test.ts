@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBindingsPath } from "../../../src/desk/paths.js";
 import { createDeskRecord } from "../../../src/desk/registry.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
@@ -27,7 +27,22 @@ describe("E2E deterministic: path guard", () => {
 			],
 		});
 
-		await harness.sendUserMessage("WRITE_OUTSIDE 请写文件");
+		// The initial waiting card also consumes a display interval. Hold the model after the
+		// refusal, then advance the progress clock so this checks guard rendering, not HTTP speed.
+		const gate = harness.model.script.hold({
+			when: (r) => r.isMainTurn && r.messages.some((message) => message.role === "tool"),
+		});
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		const sending = harness.sendUserMessageNoWait("WRITE_OUTSIDE 请写文件");
+		try {
+			await gate.arrived;
+			await vi.advanceTimersByTimeAsync(800);
+		} finally {
+			vi.useRealTimers();
+			gate.release();
+			await sending;
+			await harness.waitForIdle();
+		}
 		expect(existsSync(target)).toBe(false);
 		expect(JSON.stringify(harness.mainTurnRequests().at(-1)?.messages)).toContain(
 			"outside workspace, home, and temp paths",
@@ -37,9 +52,10 @@ describe("E2E deterministic: path guard", () => {
 		// gets a line rendered from the refusal's structured form — it names the blocked path and
 		// carries none of the model text. Mutation check (2026-10-12): dropping the `blocked`
 		// branch in session-events.ts falls back to the error's first line ("Path blocked
-		// [outside-allowed-roots]"), which has no path, and the first assertion goes red.
+		// [outside-allowed-roots]"), which has no path. Rechecked 2026-11-06 with controlled
+		// progress timing: the error-line path assertion below goes red.
 		const delivered = harness.deliveries.map((d) => d.text ?? "").join("\n");
-		expect(delivered).toContain(target);
+		expect(delivered.split("\n").some((line) => line.includes("✕") && line.includes(target))).toBe(true);
 		expect(delivered).not.toMatch(/Path blocked|Resolved path/);
 	});
 

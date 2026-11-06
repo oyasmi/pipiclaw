@@ -29,7 +29,6 @@ const outcome = (kind: TurnOutcome["kind"], message?: string): TurnOutcome => ({
 const progress = (text: string): TurnEvent => ({ type: "commentary", text });
 const answer = (text: string): TurnEvent => ({ type: "answer", text });
 /** Advance the display throttle explicitly; no real sleeps in these scenarios. */
-const WARMUP_MS = 3500;
 const FRAME_MS = 800;
 
 beforeEach(() => vi.useFakeTimers());
@@ -112,9 +111,14 @@ function renderedCard(calls: Array<{ method: string; args: unknown[] }>): string
 	return document;
 }
 
-function setup(mode: ResponseMode = "full_progress_then_plain_final", quiet = false) {
+function setup(
+	mode: ResponseMode = "full_progress_then_plain_final",
+	quiet = false,
+	configure?: (port: RecordingPort) => void,
+) {
 	const port = new RecordingPort();
 	port.responseMode = mode;
+	configure?.(port);
 	const archived: string[] = [];
 	const archive = vi.fn(async (_channelId: string, text: string) => {
 		archived.push(text);
@@ -124,25 +128,24 @@ function setup(mode: ResponseMode = "full_progress_then_plain_final", quiet = fa
 }
 
 describe("DingTalk turn delivery: events onto cards and messages", () => {
-	it("delays the waiting notice and cancels it when the answer arrives first", async () => {
+	it("opens a waiting card synchronously and closes it even when no progress follows", async () => {
 		const { port, ctx } = setup();
-		await vi.advanceTimersByTimeAsync(WARMUP_MS - 1);
-		expect(port.calls).toEqual([]);
-		ctx.emit(answer("answer"));
-		await ctx.finish(outcome("completed"));
+		expect(port.methods()).toEqual(["replaceCard"]);
+		expect(String(port.calls[0].args[1]).trim()).not.toBe("");
+		await ctx.finish(outcome("silent"));
 		await vi.runAllTimersAsync();
-		expect(port.methods()).toEqual(["sendPlain", "discardCard"]);
+		expect(port.methods()).toEqual(["replaceCard", "finalizeExistingCard", "discardCard"]);
 	});
 
 	it.each(["full_progress_then_plain_final", "rolling_progress_then_plain_final"] as const)(
 		"collapses a card that showed progress to one status line on silent completion in %s",
 		async (mode) => {
 			const { port, ctx } = setup(mode);
-			await vi.advanceTimersByTimeAsync(WARMUP_MS);
+			await vi.advanceTimersByTimeAsync(0);
 			expect(port.calls[0].method).toBe("replaceCard");
 			expect(String(port.calls[0].args[1]).trim()).not.toBe("");
 			ctx.emit(progress("visible progress"));
-			await vi.advanceTimersByTimeAsync(0);
+			await vi.advanceTimersByTimeAsync(FRAME_MS);
 			await ctx.finish(outcome("silent"));
 			const finalized = port.calls.filter((call) => call.method === "finalizeExistingCard");
 			expect(finalized.at(-1)?.args[1]).toBe("已处理，无需答复。");
@@ -152,7 +155,6 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 
 	it("puts the answer into a waiting-only card instead of sending a second message", async () => {
 		const { port, archived, ctx } = setup();
-		await vi.advanceTimersByTimeAsync(WARMUP_MS);
 		ctx.emit(answer("answer"));
 		await ctx.finish(outcome("completed"));
 		expect(port.methods()).toEqual(["replaceCard", "finalizeCard", "discardCard"]);
@@ -167,12 +169,12 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		ctx.emit(progress(" "));
 		ctx.emit(progress("A"));
 		ctx.emit(progress("B"));
-		expect(port.calls).toEqual([]);
-		await vi.advanceTimersByTimeAsync(0);
+		expect(port.methods()).toEqual(["replaceCard"]);
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
 		expect(renderedCard(port.calls)).toContain("\n- A\n- B");
 		ctx.emit(progress("C"));
 		await vi.advanceTimersByTimeAsync(FRAME_MS - 1);
-		expect(port.calls).toHaveLength(1);
+		expect(port.calls).toHaveLength(2);
 		let release!: (ok: boolean) => void;
 		port.configure(
 			"appendToCard",
@@ -182,22 +184,22 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		);
 		ctx.emit(progress("D"));
 		await vi.advanceTimersByTimeAsync(1);
-		expect(port.calls).toHaveLength(2);
+		expect(port.calls).toHaveLength(3);
 		expect(renderedCard(port.calls)).toContain("- D");
 		ctx.emit(progress("E"));
 		ctx.emit(progress("F"));
 		await vi.advanceTimersByTimeAsync(FRAME_MS * 2);
-		expect(port.calls).toHaveLength(2);
+		expect(port.calls).toHaveLength(3);
 		port.configure("appendToCard", true);
 		release(true);
 		await vi.advanceTimersByTimeAsync(FRAME_MS - 1);
-		expect(port.calls).toHaveLength(2);
-		await vi.advanceTimersByTimeAsync(1);
 		expect(port.calls).toHaveLength(3);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(port.calls).toHaveLength(4);
 		expect(renderedCard(port.calls)).toContain("- F");
 		ctx.emit(progress("F"));
 		await vi.advanceTimersByTimeAsync(FRAME_MS);
-		expect(port.calls).toHaveLength(3);
+		expect(port.calls).toHaveLength(4);
 		// Templates that reject append use bounded snapshots; they never receive a >1KB replay.
 		port.configure("supportsStreamingAppend", false);
 		ctx.emit(progress("fallback"));
@@ -332,15 +334,16 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 	});
 
 	it("waits for in-flight progress before closing and ignores everything after the end", async () => {
-		const { port, ctx } = setup();
 		let release!: (ok: boolean) => void;
-		port.configure(
-			"replaceCard",
-			new Promise<boolean>((resolve) => {
-				release = resolve;
-			}),
-		);
-		await vi.advanceTimersByTimeAsync(WARMUP_MS);
+		const { port, ctx } = setup("full_progress_then_plain_final", false, (port) => {
+			port.configure(
+				"replaceCard",
+				new Promise<boolean>((resolve) => {
+					release = resolve;
+				}),
+			);
+		});
+		await vi.advanceTimersByTimeAsync(0);
 		let closed = false;
 		const closing = ctx.finish(outcome("completed")).then(() => {
 			closed = true;
@@ -361,7 +364,7 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		ctx.emit({ type: "reasoning", text: `\`\`\`\n**未闭合 ${"甲".repeat(3000)}尾` });
 		ctx.emit({ type: "tool.start", callId: "1", tool: "bash", args: { command: "ls src/a_b.ts *.md" } });
 		ctx.emit(progress("可见"));
-		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
 		const frame = renderedCard(port.calls);
 		for (const call of port.calls) {
 			expect(Buffer.byteLength(String(call.args[1]))).toBeLessThanOrEqual(CARD_REQUEST_MAX_BYTES);
@@ -393,6 +396,7 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 	it("archives only an answer that reached the user, and a failing archive does not break delivery", async () => {
 		const { port, archive, ctx } = setup();
 		port.configure("sendPlain", false);
+		ctx.emit(progress("observed work"));
 		ctx.emit(answer("undelivered"));
 		await ctx.finish(outcome("completed"));
 		// The plain send failed; the end-of-turn fallback put it in a card instead. Nothing was archived.
@@ -411,7 +415,7 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		full.ctx.emit({ type: "commentary", level: "error", text: "tool exploded" });
 		full.ctx.emit({ type: "commentary", level: "warning", text: "switched model" });
 		full.ctx.emit({ type: "commentary", level: "notice", text: "skill updated" });
-		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
 		const card = renderedCard(full.port.calls);
 		expect(card).toContain("✕ tool exploded");
 		expect(card).toContain("✕ switched model");
@@ -430,15 +434,16 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 	});
 
 	it("a stopped turn closes its card at once instead of waiting behind an in-flight write", async () => {
-		const { port, ctx } = setup();
 		let release!: (ok: boolean) => void;
-		port.configure(
-			"replaceCard",
-			new Promise<boolean>((resolve) => {
-				release = resolve;
-			}),
-		);
-		await vi.advanceTimersByTimeAsync(WARMUP_MS);
+		const { port, ctx } = setup("full_progress_then_plain_final", false, (port) => {
+			port.configure(
+				"replaceCard",
+				new Promise<boolean>((resolve) => {
+					release = resolve;
+				}),
+			);
+		});
+		await vi.advanceTimersByTimeAsync(0);
 		const finishing = ctx.finish(outcome("cancelled"));
 		// The write is still pending, yet the card is already discarded and later events draw nothing.
 		expect(port.methods()).toEqual(["replaceCard", "discardCard"]);
@@ -536,9 +541,9 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 
 	it("folds a card that showed progress to one status line when the turn is silent", async () => {
 		const { ctx } = remote();
-		await vi.advanceTimersByTimeAsync(WARMUP_MS);
-		ctx.emit(progress("observed work"));
 		await vi.advanceTimersByTimeAsync(0);
+		ctx.emit(progress("observed work"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
 		await ctx.finish(outcome("silent"));
 		expect(onlyCard().content).toBe("已处理，无需答复。");
 		expect(onlyCard().finished).toBe(true);
@@ -577,7 +582,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		// both lose the newest event once the request-sized prefix is exhausted, and turn this case red.
 		const { ctx } = remote();
 		ctx.emit({ type: "reasoning", text: "latest thought" });
-		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
 		let previous: string[] = [];
 		let folds = 0;
 		let regrows = 0;
@@ -640,22 +645,24 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 	});
 
 	it.each(["template", ""])(
-		"does not create a progress card or fallback message after a fast final (%s)",
+		"keeps one card for a fast final, or sends plainly without a template (%s)",
 		async (template) => {
 			const { ctx } = remote(template);
-			ctx.emit(progress("buffered progress"));
 			ctx.emit(answer("answer"));
+			ctx.emit(progress("late progress"));
 			await ctx.finish(outcome("completed"));
-			await vi.advanceTimersByTimeAsync(2000);
-			expect(cards.size).toBe(0);
-			expect(plainCalls()).toHaveLength(1);
+			// Cross two display intervals without draining the bot's recurring idle sweep.
+			await vi.advanceTimersByTimeAsync(FRAME_MS * 2);
+			expect(cards.size).toBe(template ? 1 : 0);
+			if (template) expect(onlyCard()).toEqual({ content: "answer", finished: true });
+			expect(plainCalls()).toHaveLength(template ? 0 : 1);
 		},
 	);
 
 	it("waits for in-flight creation and then answers in that same card", async () => {
-		const { ctx } = remote();
 		createGate = deferred();
-		await vi.advanceTimersByTimeAsync(WARMUP_MS);
+		const { ctx } = remote();
+		await vi.advanceTimersByTimeAsync(0);
 		ctx.emit(answer("answer"));
 		let answered = false;
 		const finishing = ctx.finish(outcome("completed")).then(() => {
@@ -670,16 +677,16 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 	});
 
 	it("a late create after stop cannot replace the next turn's card", async () => {
-		const { ctx, context } = remote();
 		const gate = deferred();
 		createGate = gate;
-		await vi.advanceTimersByTimeAsync(WARMUP_MS);
+		const { ctx, context } = remote();
+		await vi.advanceTimersByTimeAsync(0);
 		const oldId = [...cards.keys()][0];
 		const stopping = ctx.finish(outcome("cancelled"));
 		createGate = undefined;
 		const next = context();
 		next.emit(progress("next turn"));
-		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
 		const nextId = [...cards.keys()].find((id) => id !== oldId);
 		expect(cards.get(nextId ?? "")?.content).toContain("next turn");
 		gate.resolve();
@@ -695,9 +702,9 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 	});
 
 	it("stop is serialized after the old write and stale progress cannot create another card", async () => {
-		const { ctx, context } = remote();
 		streamGate = deferred();
-		await vi.advanceTimersByTimeAsync(WARMUP_MS);
+		const { ctx, context } = remote();
+		await vi.advanceTimersByTimeAsync(0);
 		const stopping = ctx.finish(outcome("cancelled"));
 		ctx.emit(progress("stale progress"));
 		streamGate.resolve();

@@ -57,18 +57,15 @@ const SILENT_STATUS = "已处理，无需答复。";
 // has its own timeout, so the sync loop is already bounded; this only guards against
 // an unforeseen stall so run()'s finally can never hang the channel forever.
 const FLUSH_DEADLINE_MS = 60_000;
-/** How long a turn may stay silent before a "正在处理…" card appears. */
-const CARD_WARMUP_MS = 3500;
 
 type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
 
 class ChannelDeliveryController {
 	private readonly progress: ProgressWindow;
 	private nextProgressAt = 0;
-	/** What the card shows after the warmup line has been replaced. Empty until the first real frame. */
+	/** What the card shows after the waiting line has been replaced. Empty until the first real frame. */
 	private document = "";
 	private documentEpoch = -1;
-	private warmupDelivered = false;
 	private mode: DeliveryMode = "progress";
 	private desiredRevision = 0;
 	private appliedRevision = 0;
@@ -78,12 +75,9 @@ class ChannelDeliveryController {
 	private ending = false;
 	private progressFailures = 0;
 	private readonly cardGeneration: symbol;
-	private cardWarmupScheduled = false;
-	private cardWarmupTriggered = false;
-	private progressStartedAt = 0;
+	private readonly progressStartedAt = Date.now();
 	private toolCallCount = 0;
 	private timer: NodeJS.Timeout | null = null;
-	private cardWarmupTimer: NodeJS.Timeout | null = null;
 	private flushWaiters: Array<() => void> = [];
 	private finalReplacementText = "";
 
@@ -103,6 +97,9 @@ class ChannelDeliveryController {
 		this.event = { channelId: turn.channelId };
 		this.progress = new ProgressWindow(this.progressStyle === "rolling" ? "rolling" : "full");
 		this.cardGeneration = bot.getCardGeneration(turn.channelId);
+		// Start the waiting card in the same sync loop as progress and completion. Do not await
+		// its HTTP request: the caller can start the model while card creation is in flight.
+		if (this.progressStyle !== "none") this.bumpRevision(true);
 	}
 
 	private get isCurrent(): boolean {
@@ -263,39 +260,6 @@ class ChannelDeliveryController {
 		}
 	}
 
-	primeCard(delayMs: number): void {
-		if (
-			this.closed ||
-			this.ending ||
-			this.progressStyle === "none" ||
-			this.cardWarmupScheduled ||
-			this.cardWarmupTriggered
-		) {
-			return;
-		}
-
-		this.cardWarmupScheduled = true;
-		this.cardWarmupTimer = setTimeout(
-			() => {
-				this.cardWarmupScheduled = false;
-				this.cardWarmupTimer = null;
-				if (this.closed || this.ending || !this.isCurrent || this.desiredRevision > 0) return;
-				this.cardWarmupTriggered = true;
-				// Use the same serialized loop as progress and completion; no detached create request.
-				this.bumpRevision(true);
-			},
-			Math.max(0, delayMs),
-		);
-	}
-
-	private clearCardWarmup(): void {
-		this.cardWarmupScheduled = false;
-		if (this.cardWarmupTimer) {
-			clearTimeout(this.cardWarmupTimer);
-			this.cardWarmupTimer = null;
-		}
-	}
-
 	private archiveBotResponse(text: string): void {
 		void this.archive(this.event.channelId, text).catch((err) => {
 			log.logWarn("channel.archive.write_failed", "Bot response archive failed", {
@@ -318,8 +282,6 @@ class ChannelDeliveryController {
 		// so we never create or flicker a card before the final replacement.
 		if (this.progressStyle === "none") return;
 
-		this.clearCardWarmup();
-		if (this.progressStartedAt === 0) this.progressStartedAt = Date.now();
 		if (options?.countTool) this.toolCallCount++;
 		const changed = this.progress.record({ marker, text, tail: options?.tail === true });
 		if (!changed && !options?.countTool) return;
@@ -331,11 +293,10 @@ class ChannelDeliveryController {
 		if (this.closed || this.ending || !this.isCurrent || !text.trim()) return this.finalResponseDelivered;
 
 		this.ending = true;
-		this.clearCardWarmup();
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = null;
 
-		if (this.cardWarmupTriggered && !this.hasRecordedProgress()) {
+		if (this.progressStyle !== "none" && !this.hasRecordedProgress()) {
 			// The card only ever said "正在处理…": the answer goes into it rather than into a second
 			// message under a card that would just read "已答复。".
 			this.finalReplacementText = text;
@@ -364,7 +325,6 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered || !this.isCurrent || !text.trim()) return;
 
 		this.ending = true;
-		this.clearCardWarmup();
 		this.finalReplacementText = text;
 		this.mode = "finalize-with-fallback";
 		this.bumpRevision(true);
@@ -378,7 +338,6 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered) return;
 
 		this.ending = true;
-		this.clearCardWarmup();
 		this.mode = "silent";
 		this.bumpRevision(true);
 	}
@@ -424,7 +383,7 @@ class ChannelDeliveryController {
 							touchedRemote = await this.publishProgress();
 						}
 					} else if (mode === "finalize-existing") {
-						if (this.document || this.cardWarmupTriggered || this.hasRecordedProgress()) {
+						if (this.progressStyle !== "none") {
 							touchedRemote = await this.bot.finalizeExistingCard(
 								this.event.channelId,
 								this.buildSummaryText(),
@@ -441,7 +400,7 @@ class ChannelDeliveryController {
 							this.finalResponseDelivered = touchedRemote;
 						}
 					} else if (mode === "silent") {
-						if (this.document || this.cardWarmupTriggered || this.hasRecordedProgress()) {
+						if (this.progressStyle !== "none") {
 							touchedRemote = await this.bot.finalizeExistingCard(
 								this.event.channelId,
 								renderCardStatus(SILENT_STATUS),
@@ -515,7 +474,6 @@ class ChannelDeliveryController {
 		}
 
 		this.closed = true;
-		this.clearCardWarmup();
 		if (this.mode === "progress") {
 			this.mode = "silent";
 			this.bumpRevision(true);
@@ -524,7 +482,7 @@ class ChannelDeliveryController {
 		this.bot.discardCard(this.event.channelId, this.cardGeneration);
 	}
 
-	/** True once this turn has something to show besides the warmup line. */
+	/** True once this turn has something to show besides the waiting line. */
 	private hasRecordedProgress(): boolean {
 		return this.progress.hasContent || this.document !== "";
 	}
@@ -533,7 +491,6 @@ class ChannelDeliveryController {
 	private async publishProgress(): Promise<boolean> {
 		if (this.ending || !this.isCurrent) return false;
 		const hasProgress = this.progress.hasContent;
-		if (!hasProgress && (!this.cardWarmupTriggered || this.warmupDelivered)) return false;
 		const planned: ProgressWrite | undefined = hasProgress
 			? this.progress.plan(
 					this.buildLiveHeader(),
@@ -551,7 +508,7 @@ class ChannelDeliveryController {
 					// view during HTTP. Its epoch forces the next write to replace that old cycle.
 					this.document = planned.document;
 					this.documentEpoch = planned.epoch;
-				} else this.warmupDelivered = true;
+				}
 				this.progressFailures = 0;
 				if (!planned.complete && !this.ending) this.bumpRevision(false);
 			} else {
@@ -579,7 +536,7 @@ class ChannelDeliveryController {
 	}
 
 	private elapsedMs(): number {
-		return this.progressStartedAt > 0 ? Date.now() - this.progressStartedAt : 0;
+		return Date.now() - this.progressStartedAt;
 	}
 
 	/**
@@ -608,8 +565,5 @@ export function createDingTalkContext(
 	quiet: boolean,
 ): ChannelContext {
 	const controller = new ChannelDeliveryController(turn, port, archive, quiet);
-	const context = controller.buildContext();
-	// Same warm-up as before: a card that says "正在处理…" appears if the first output is slow.
-	if (!quiet) controller.primeCard(CARD_WARMUP_MS);
-	return context;
+	return controller.buildContext();
 }
