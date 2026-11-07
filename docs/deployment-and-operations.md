@@ -150,25 +150,44 @@ supervisorctl tail -f pipiclaw
 
 ### 零 LLM 成本的运行时入口（Zero-Cost Runtime Commands）
 
-排障不必先"问 agent"。下面这些命令由传输层直接读文件渲染，不触发 LLM 回合，忙碌时也可用：
+先从不调用模型的命令确认问题范围，频道忙碌时也能使用：
 
-- `/status` —— 执行状态、当前模型、上下文用量、运行时长、版本
-- `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；任务相关条目带 `taskId`；任务的 `usage.usd` 另外汇总任务成本（含绑定委派）用于预算，无法实报的外部成本可能含估算
-- `/tasks doctor` —— 任务文件与等待条件的只读体检，每条问题附下一步建议
-- `/tasks pause|resume|run|steer|reply ...` —— 暂停、恢复、立即唤醒、纠偏或回答阻塞问题
-- `/subagents` —— 运行中的委派、最近结果和角色可用性摘要
-- `/subagents show <runId>` / `output <runId>` —— 实际 argv、工作目录、stderr 与文本产出
-- `/subagents cancel <runId|all>` —— 不经过模型，直接终止委派
+| 想确认什么 | 命令 |
+|---|---|
+| 当前模型、上下文、执行状态与版本 | `/status` |
+| 本工位、本频道和全局的用量、费用及未知条目 | `/usage [7d\|month]` |
+| 任务状态、记录、文件或投递问题 | `/tasks show <id>`、`/tasks log <id>`、`/tasks doctor` |
+| 补充要求、暂停、恢复或取消任务 | `/tasks msg <id> <内容>`、`/tasks pause <id>`、`/tasks resume <id>`、`/tasks cancel <id>` |
+| 委派是否结束、实际命令、错误与产出 | `/subagents`、`/subagents show <runId>`、`/subagents output <runId>` |
+| 终止不再需要的委派 | `/subagents cancel <runId\|all>` |
+
+任务暂停不取消在途工作；取消任务会连带取消它的委派与作业。`/stop` 只停聊天。完整命令见[交互指南](./interaction-and-commands.md)。
 
 ### 结构化日志与成本账本（Structured Logs and Cost Ledger）
 
-除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。
+运行日志默认写入 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`，按大小轮转；用量账本按月写入 `state/usage/usage-YYYY-MM.jsonl`。费用缺价格信息时显示未知，不应按零成本解释；任务费用包含绑定委派，尚未上报或无法报告的费用不能提前精确限制。
 
-每条警告都有一个可筛选的事件名，格式为 `<domain>.<object>.<verb>`，例如 `dingtalk.reconnect.failed`、`dingtalk.card.stream_failed`、`dispatch.exhausted`、`taskdriver.task.paused`、`subagent.settle.failed`、`runtime.shutdown.waiting`。消息本身是固定的一句话，变化的部分（原因、id、计数）放在 `fields` 里（原因在 `fields.reason` 和 `details`），所以 `jq 'select(.event == "dingtalk.reconnect.failed")'` 就能筛出同一类问题。群聊频道（`group_<base64 id>`）的记录也带 `channelId` 字段。
+每条记录有可筛选的 `event`，如 `tasks.step.started`、`subagent.settle.failed`；`message` 是固定说明，频道、原因和计数放在 `channelId` 或 `fields` 中，警告原因通常在 `fields.reason`，详情可能位于 `details`。例如：
 
-> **从 0.9.x 升级的注意事项**：此前所有警告的事件名都是 `system.warning`、大部分 info 是 `system.info`；依赖这两个名字筛选的外部脚本需要改用新的事件名。仍未迁移的少量 info 级记录还在 `system.info` 下。每步都会出现的 `taskdriver.step.enqueued` 降到了 debug 级别。
+```bash
+jq 'select(.event == "subagent.settle.failed")' ~/.pipiclaw/state/logs/runtime.jsonl
+```
 
-日志级别与落盘开关见[配置字段参考的可观测性一节](./configuration-reference.md#可观测性结构化日志与成本账本observability-structured-logging--cost-ledger)。
+日志级别与开关见[可观测性配置](./configuration-reference.md#可观测性结构化日志与成本账本observability-structured-logging--cost-ledger)。
+
+### 定位一次执行慢在哪里
+
+先用 `/tasks` 或 `/subagents show <runId>` 判断是在执行、等结果，还是等待用户。仍无法解释时，临时设置 `PIPICLAW_LOG_LEVEL=debug` 并重启服务，复现后按同一 `generation`、`session`、`request` 和 `toolCallId` 串起日志；任务还可按 `taskId`、`seq` 筛选。
+
+| 阶段事件 | 能判断什么 |
+|---|---|
+| `agent.provider.started` → `agent.provider.output` | 模型请求到首次有效输出的等待 |
+| `agent.tool.preparing` → `agent.tool.execute_started` | 工具准备和批次调度的等待，尚非工具实际执行时间 |
+| `agent.tool.execute_started` → `agent.tool.execute_finished` | 工具执行耗时，结束事件含 `elapsedMs` 和 `failed` |
+
+后台作业完成会主动核实，10 秒扫描补漏；聊天队列满时，结果保留在磁盘并在容量释放后重试。任务结果进入执行中步骤仍须等到完整工具批次结束，耗时也可能来自同批次尚未结束的工具。不要仅凭界面上的工具开始时间判断执行器慢。
+
+阶段事件不包含参数、结果正文或凭据，但 debug 日志的其他事件可能包含业务内容。复现后恢复原日志级别，分享日志前按敏感数据处理。`PIPICLAW_DEBUG=1` 另用于保存实际提示词，不等同于开启 debug 日志。
 
 ### 进程日志（Process Logs）
 
@@ -425,7 +444,7 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 - 初期使用 `allowFrom` 做灰度
 - 定期备份 `~/.pipiclaw/`
 - 升级前先看 `CHANGELOG.md` / `CHANGELOG.zh-CN.md`
-- 修改各工位的 `events/` 和 `sub-agents/` 时保留版本管理记录
+- 修改工位的 `events/` 或工作区的 `sub-agents/` 时保留版本管理记录
 - 高权限外部角色尽量使用独立 worktree、最小权限账号和目标 CLI 的 sandbox
 
 ## 相关文档（Related Docs）

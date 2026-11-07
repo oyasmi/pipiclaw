@@ -1,98 +1,87 @@
-# 运行机制说明（Runtime Mechanisms）
+# 运行机制
 
-这份文档解释配置背后的运行行为。字段取值本身见
-[configuration-reference.md](./configuration-reference.md)，快速上手见
-[configuration.md](./configuration.md)。
+这份文档解释对话、记忆和后台工作怎样继续、何时停止，以及重启后会发生什么。配置方法见[配置指南](./configuration.md)，字段取值见[配置参考](./configuration-reference.md)。
 
-## 模型与 fallback
+## 模型失败时如何继续
 
-主模型从 `settings.json.defaultProvider` + `defaultModel` 解析；没有设置时使用当前可用模型列表里的第一个。模型引用优先写成 `provider/modelId`，避免同名 model id 造成歧义。
+主模型由 `settings.json.defaultProvider` 与 `defaultModel` 指定；未设置时使用当前可用模型列表中的第一个。模型引用建议写成 `provider/modelId`，避免同名模型产生歧义。
 
-`settings.json.fallbackModel` 是单个备用模型引用。主模型回合失败时（上下文超限除外），runtime 会用备用模型重跑这一轮；随后 5 分钟内的新轮次直接走备用模型，冷却后自动试回主模型。手动 `/model` 切换会清除 fallback 状态。`/status` 会显示 fallback 是否生效，usage ledger 按实际调用模型记账。
+配置 `fallbackModel` 后，主模型回合失败时会用备用模型重试；用户主动停止和上下文超限不触发切换。随后 5 分钟内的新回合直接使用备用模型，冷却后自动试回主模型。手动 `/model` 切换会清除备用状态，`/status` 可查看当前是否正在使用备用模型，用量按实际调用的模型记录。
 
-## 输出模式
+## 回复如何展示
 
-钉钉 `channel.json` 的 `dingtalk.responseMode` 和终端的 `settings.json.tui.responseMode` 使用同一组取值：
+钉钉的输出模式在 `channel.json` 的 `dingtalk.responseMode` 中设置，终端使用独立的 `settings.json.tui.responseMode`。
 
-| 取值 | 行为 |
+| 模式 | 钉钉体验 |
 |---|---|
-| `full_progress_then_plain_final` | 钉钉在当前周期内累积全部进度，不限制行数；达到约 2.9KB 正文预算时保留最新思考和最近两条活动，再继续累积。正常增长只发增量，进度帧之间至少间隔 800ms，结论另发，卡片收成一行。终端仍展示完整过程 |
-| `rolling_progress_then_plain_final` | 钉钉固定保留最近五条进度，包含思考和活动，随新进度滚动。终端与默认模式的显示相同 |
-| `final_card_only` | 隐藏过程，只投递最终结果 |
+| `full_progress_then_plain_final`（默认） | 先显示等待卡，再累积进度；内容较长时收短到最近活动，随后继续增长。有进度的回合结束后，结论另发，卡片收成一行 |
+| `rolling_progress_then_plain_final` | 显示最近五条进度，结束后结论另发，卡片收成一行 |
+| `final_card_only` | 隐藏过程，只用卡片展示最终答复 |
 
-后台唤醒默认不展示过程。后台作业、委派完成和定时事件投递到聊天会话，没有新结果时可返回 `[SILENT]`；任务步骤在任务车道里于任务自己的会话运行（不进聊天），回合结束这一步就结束，面向用户的内容通过 `task_report` 交付。
+两种展示进度的模式都会在对话回合开始时创建等待卡，模型同时开始处理。若答复到来前没有进度，答案直接写进这张卡。未配置卡片模板时使用普通消息。终端前两种模式都展示完整过程，不受钉钉卡片长度限制。
 
-## 记忆维护
+后台工作不展示进度卡：任务通过汇报、提问和完成回执通知你；作业、委派和事件只在有需要跟进的内容时回复。想主动查看，使用 `/tasks`、`/subagents` 或 `/status`。卡片的更新预算和节奏见[输出模式参考](./configuration-reference.md#responsemode-行为矩阵)。
 
-记忆属于工位（spec 050、058），由工位目录下的文件分层：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录。会话在各频道自己的会话区 `conversations/<kind>-<n>/` 里：`log.jsonl` / `context.jsonl` 是冷存储；`active-session.json` 存在时指定当前聊天 session JSONL，缺失则使用 `context.jsonl`。绑定到同一工位的频道共享记忆、各自保留对话；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。这里的隔离是应用状态隔离，不是 OS 文件权限边界。
+## 记忆何时整理
 
-后台 memory maintenance scheduler 不使用事件文件。它只在本地 gate 通过后才发起 LLM sidecar：
+记忆属于工位。同工位的频道共享记忆与工作日记，各自保留对话；工作区的 `MEMORY.md` 是所有工位共享、由管理员维护的背景。文件组织和遗忘边界见[记忆指南](./memory.md)。
 
-| 任务 | 内置间隔 | 作用 |
-|---|---:|---|
-| Reflect | 20 分钟 | 从新对话中同时提炼 journal 新增行和 durable memory 增/改/删 |
+明确要求“记住”或“忘掉”时，助手当场使用记忆工具处理。自动整理则从新对话中提炼当天的工作日记和以后仍有用的事实：
 
-另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个会话区（只看激活工位中已绑定频道的会话区）。`settings.json.memoryMaintenance.enabled: false` 只关闭空闲定时反思；压缩、`/new` 和正常退出等边界仍可能触发同一个反思 pass，显式记忆工具也不受影响。`sessionSearch.summarizeWithModel` 默认已关闭，曾主动开启时可关闭以节省额外总结调用。
+| 入口 | 何时发生 |
+|---|---|
+| 空闲维护 | 内置反思间隔为 20 分钟，频道需静默满 10 分钟；每次调度最多处理一个会话区，只处理激活工位中仍有绑定的频道 |
+| 会话边界 | 压缩或 `/new` 先在本地保存待整理素材，再后台反思；正常退出也可能整理尚未处理的内容 |
 
-## 定时事件
+没有新素材、频道仍活跃或未到间隔时，不调用整理模型。`memoryMaintenance.enabled: false` 只关闭空闲定时整理，已保存的边界工作仍会继续或在重启后恢复，显式记忆操作也不受影响。`sessionSearch.summarizeWithModel` 默认关闭，历史检索因此不额外调用总结模型。
 
-事件文件位于 `workspace/desk-<name>/events/*.json`，`channelId` 是投递频道，须绑定在该工位上，否则到点跳过。当前只支持：
+## 定时事件如何触发
 
-- `one-shot`：未来某个时间触发一次。
-- `periodic`：按五段 cron 触发，按主机时区解释。
+事件定义保存在工位的 `events/` 目录，`channelId` 指定投递频道。`one-shot` 用于未来的一次提醒，`periodic` 使用主机时区的五段 cron。创建单次提醒至少提前 2 分钟；周期事件最密每 30 分钟一次，带 `preAction` 时最密每 5 分钟一次。
 
-`immediate` 已退役；当前要做的事应在当前回合直接完成，未来回访用至少 2 分钟后的 one-shot。
+`preAction` 是触发前的条件检查：命令退出 0 才继续，非 0 静默跳过，不调用模型。简单提醒进入聊天；需要拆分、检查和交付的定时工作使用任务模板，每次生成独立的任务实例。上一实例未结束时，本次跳过并通知你。
 
-`preAction` 是触发前传感器：bash 命令退出 0 才唤醒 agent，非 0 静默跳过。无 `preAction` 的 periodic 最密 30 分钟；带 `preAction` 的 periodic 最密 5 分钟。事件触发采用 durable dispatch，语义是 at-least-once，所以事件处理必须可重试，外部动作要自己做幂等保护。
+投递频道换绑离开工位，或所属渠道关闭时，事件不投递。已进入持久投递记录的事件会在重启后重试，因此一次外部动作可能被重复尝试；涉及发送、发布或修改外部对象时，需要查询真实状态并避免重复执行。定义格式与恢复细节见[事件与任务](./events-and-tasks.md)。
 
-## 后台作业
+## 后台作业怎样返回结果
 
-`bash async: true` 会把长命令交给 per-channel job manager，立即返回 job id。`job` 工具负责 `list` / `poll` / `cancel`。
+长测试、构建或下载可以由助手交给后台作业，当前聊天无需一直等待。每个工位合计最多运行 5 个作业，执行超时仍由命令的 `timeout` 决定；后台运行不会延长它。
 
-当前保证：
+本机作业的完成文件发生变化时，运行时主动核实结果；10 秒扫描负责补漏和超时处理。助手用 `job poll` 等待时，单次最多约 30 秒，完成结果提交后即可返回。
 
-- 每个 channel 最多 5 个运行中 job。
-- `poll` 单次最多等约 30 秒。
-- 运行中 job 由 sweeper 定期探活；结束后自动释放运行名额。
-- 默认会在 job 结束时唤醒当前 channel，唤醒文本包含退出码、耗时、输出尾部和完整输出路径。
-- job 记录持久化在 app state 下，daemon 重启后会重新认领仍在运行或刚结束的 job。
-- 终态 job 的记录和输出保留 7 天后清理。
+聊天发起的作业默认通知发起频道，前提是它仍绑定在原工位；任务步骤发起的作业直接将结果交给任务。记录和输出持久化保存，重启后恢复跟踪；结束后保留 7 天，重要产物应另存为项目文件。具体能力见[后台作业工具](./tools.md#后台作业job)。
 
-因此，等待后台作业时不要再创建 event check-in；启动 job 后结束当前回合即可。重要产物仍应由命令自己写入 workspace 文件，而不是只依赖 stdout。
+## 任务怎样持续推进
 
-## 长程任务
+任务是交给助手负责的一次性项目，包含目标、验收清单、工作项和预算。每个执行中的任务都有自己的会话，聊天与任务可以同时进行；任务的进度和提问只发到指定的汇报频道。
 
-任务是一个由 Pipiclaw 作为负责人推进的一次性项目，在工位级的**任务车道**里于后台独立执行：契约、任务记录和运行时写下的状态分离，聊天与任务互不占用。
+运行时根据实际情况决定下一步：继续工作、等委派或作业、等你回答，或等约定时刻。委派和作业结果先写入任务记录；步骤仍在执行时，在下一完整工具批次后送入同一步骤，否则唤起后续步骤。你可用 `/tasks msg <id> <内容>` 补充要求或回答问题。
 
-任务文件位于 `workspace/desk-<name>/tasks/<id>.md`，frontmatter 的 `channel` 是汇报频道；它不在该工位上时任务冻结。`tools.tasks.enabled` 同时门控三件事：全部 task_* 工具、任务车道开新步骤、每回合任务摘要注入。
+| 约束 | 行为 |
+|---|---|
+| 执行槽 | 每工位最多 3 个、整个运行时最多 5 个；执行中和等结果占槽，其余排队或等待状态不占 |
+| 预算 | 默认 60 步、20 美元，包含绑定委派的已知费用；未知费用单独披露，美元预算不是严格账单上限 |
+| 停止保护 | 预算耗尽、连续两步无工具调用、连续两步超时或连续三步出错后暂停并通知；单步 20 分钟后请求中止，无法停止时需部署者处理 |
+| 恢复 | 重启后核对在途工作、补记被打断步骤，再按事实继续；漏通知由最长 15 分钟的扫描补查 |
 
-当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进后继工作项的文字，等待由运行时按事实推导；每个任务按自己的 Goal、DoD、Work Items 和预算收口。手工编辑造成的旧契约或损坏元数据用 `/tasks doctor` 检查；更早的任务格式见[事件与任务](./events-and-tasks.md#从更早的任务格式升级)。
+`/stop` 停聊天，`/tasks pause <id>` 暂停任务，`/tasks cancel <id>` 取消任务及其在途委派和作业。汇报频道离开工位或渠道关闭时任务冻结，恢复绑定与启用后继续。`tools.tasks.enabled: false` 关闭任务工具、新步骤执行和聊天中的任务摘要。
 
-任务车道是自适应 timer + 通知的扫描：最长每 15 分钟扫描一次，最近的约定时刻到来或收到通知（结果结算、你的消息、新任务）就提前醒；只扫描激活的工位。维护（到时的等待、有新输入的等待、超预算的暂停）零 token。执行槽每个工位最多 3 个、整个运行时最多 5 个，"执行中"与"等结果"占槽；每个执行中的任务有自己的 runner 和任务会话，单步 20 分钟后请求中止，未响应则暂停并通知部署者重启。绑定任务的委派与作业结算时直接把结果写进任务记录并通知车道，不再经过聊天。预算耗尽、连续两步没有工具调用、连续两次单步超时或连续三次出错时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。重启后车道对账每个活动任务（补写被打断步骤的结束记录），再继续。
+报告先保存再发送，未确认送达时自动重试；完成前还需确认最终报告送达并提交归档。重复收到报告不必重新交办任务，可先用 `/tasks show <id>` 查看。完整状态、交付规则和排障见[任务指南](./events-and-tasks.md#第二部分长程任务tasks)，旧数据升级见[任务迁移说明](./task-migration.md)。
 
-周期与定时的工作不在任务里：事件带 `task` 模板，每次触发由 runtime 生成一个独立的任务实例，上一实例没结束就跳过并通知。任务本身没有 `schedule`，也没有单独的开周期动作。
+## 委派怎样执行与恢复
 
-## 智能体委派与验收
+角色从 `workspace/sub-agents/*.md` 加载。内置角色使用 Pipiclaw 的模型、工具和守卫；外部角色启动 Claude Code、Codex CLI、Cursor CLI 或脚本，使用目标 CLI 的认证、权限和运行环境。角色配置与真实权限边界见[智能体委派](./sub-agents.md)。
 
-`workspace/sub-agents/*.md` 只加载实际存在的配置，不自动注入默认角色。角色分为两种 runtime：
+聊天里的内置委派共享一个 10 秒快速返回窗口：及时完成就直接返回结果，否则转入后台。任务里的内置委派、以及全部外部委派，确认启动后立即异步返回。完成后自动通知原频道或所属任务；频道队列满时结果保留在磁盘，容量释放后重试。
 
-- `internal` 在 Pipiclaw 进程内创建隔离上下文，使用 Pipiclaw 模型、工具白名单和安全守卫。没有角色文件时仍可通过 inline `systemPrompt` 临时创建内置角色。
-- `external` 启动一次性的 Claude Code、Codex CLI 或任意脚本进程，使用目标 CLI 自己的认证、模型、工具和 sandbox。外部角色必须通过工作区角色文件配置，不能临时内联命令。
+`/stop` 和任务暂停都不会取消已派发的委派。需要终止时用 `/subagents cancel <runId>`，无需模型参与。重启后，外部进程按身份和产物重新核对；内置执行无法跨进程存活，会标记为 `lost`。`lost` 表示结果未知，应先核查产物，再决定重跑。已结算委派及运行时管理产物保留 30 天。
 
-两者共用 `SubAgentRunManager`：注册 run、保存产出、结算状态、记录用量、释放工作区写锁，并通过 durable dispatch 唤醒所属频道。内置 run 最多同步等待 `min(maxWallTimeSec, 120s)`；没有在窗口内完成就转为后台工作。外部 run 的同步宽限恒为 0，派发后立即返回 `runId`。
+长期后台工作需要常驻 daemon。没有 daemon 时，终端内嵌的运行时仅在终端打开期间推进任务、观察作业并投递结果；退出后停止，下一次运行时启动再恢复记录。
 
-`/stop` 只停止主回合，不影响独立 run。模型使用 `subagent_list` 查看、`subagent_run` 取消或续接，用户使用 `/subagents` 直接控制。DingTalk daemon 会持久化 run 并投递完成唤醒；外部 detached 进程在 daemon 重启时通过 pid 和产物协议重新对账，内置 run 无法跨进程存活，重启后标为 `lost` 并通知频道。没有 daemon 时终端内嵌的运行时在打开期间同样装配这套持久化与唤醒，但随终端退出而关闭，不能作为长时间外部 run 的可靠宿主。
+独立检查可以使用 `purpose: verify`。检查者给出 `VERDICT: PASS|FAIL`，负责人仍需对照真实产物和验收标准判断；通过标记不能代替检查证据，也不会自动关闭任务。
 
-检查使用 `purpose: verify`，要求最后一行是 `VERDICT: PASS` 或 `VERDICT: FAIL`。运行时只记录这个结论（run 记录与所属任务的看板），**不**把它当作关闭任务的门禁，也不做工作区快照或 attestation：
+## 日志与费用怎样查看
 
-- 内置 verifier 会被结构性移除 write/edit，但默认工具集仍含 `bash`，仍可能写宿主机；只有声明 `mutates: read` 且不含 `bash` 的角色配置才是结构性只读。
-- 声明 `mutates: write` 的 verifier 可以运行测试和构建，但验证期间会取得目标工作区（含父子目录冲突）的独占 lease；lease 只负责委派间互斥，不是只读沙箱。
-- `exec` harness 仍不能承担检查，因为它没有协议终态；运行失败或没有 VERDICT 行一律记为 FAIL。
+`/usage` 汇总对话、委派和后台整理的模型用量，账本按月写入 `state/usage/usage-YYYY-MM.jsonl`。缺少价格信息时费用显示未知；Codex CLI 不报告成本，Cursor CLI 与 `exec` 不报告 token 或成本，未知不能当作免费。
 
-是否采信检查者的结论由负责人判断：对照真实产物、diff 和检查输出，并在汇报里写明谁检查了什么、结论如何；方法见 `task-lead.md`。带 `taskId` 的委派（任务会话里自动绑定）在派发和结算时写进任务日志。
-
-## 日志与账本
-
-结构化运行日志写到 `state/logs/runtime.jsonl`，用量账本按月写到 `state/usage/usage-YYYY-MM.jsonl`。`/usage` 聚合 turn、subagent、sidecar 三类 LLM 消耗。缺价格元数据时 token 仍记账、成本标为 unknown；Codex CLI 不报告成本，`exec` 连 token 也无法报告，不能把 unknown 当成 0 或免费。
-
-`PIPICLAW_DEBUG=1` 会在对应 channel 目录写出 `last_prompt.json`，用于检查实际发送给模型的 prompt。
+运行日志位于 `state/logs/runtime.jsonl`。定位执行延迟见[运维排障](./deployment-and-operations.md#定位一次执行慢在哪里)；检查实际提示词时，可启用 `PIPICLAW_DEBUG=1`，在频道会话区读取 `last_prompt.json`。

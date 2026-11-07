@@ -55,7 +55,7 @@ daemon 是长期宿主，负责任务车道、job/委派的结果回流和外部
 | workspace `SOUL.md` / `AGENTS.md` | 共同身份与工作原则 | 注入 system prompt，工位同名文件不替代它们 |
 | workspace `MEMORY.md` | 所有工位共享的背景 | 用户维护，首轮按预算注入；`memory_search` 可查 |
 | workspace `desk-bindings.json` | 频道 → 工位，唯一绑定记录 | 运行时管理；不直接改写模拟创建或切换 |
-| workspace `skills/` | 可复用程序性知识 | `skill` 列出/加载，通用 `write` / `edit` 创建和更新 |
+| workspace `skills/` 与服务器用户 `~/.agents/skills/` | 可复用程序性知识，两来源供所有工位使用，有效 workspace 同名版本优先 | `skill` 列出/加载；默认在 workspace 创建，维护规则见 `memory-and-learning.md` |
 | workspace `sub-agents/` | 委派角色 | 目录在 system prompt；由部署者修改，模型不能 write/edit 角色文件 |
 | workspace `ENVIRONMENT.md` / `CHANNELS.md` | 机器事实 / 频道索引（含各频道绑定的工位） | `read` / `edit`；CHANNELS 只有主题列可补写，其余由 runtime 重建 |
 | 工位目录 `memory/<name>.md` | 一条 durable fact | `read` 正文；写入用 `memory_save` / `memory_forget`，保证串行写入和索引同步 |

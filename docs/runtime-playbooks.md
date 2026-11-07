@@ -10,7 +10,7 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 |---|---|---|---|
 | System prompt | 每回合不能忘的安全边界、资源所有权、最小恢复纪律 | Pipiclaw | 每回合常驻 |
 | Runtime playbooks | 当前版本的 memory/event/task/subagent 机制、跨工具流程、故障恢复 | Pipiclaw 包 | metadata 常驻，正文按需 read |
-| Workspace `AGENTS.md` / `skills/` | 用户偏好、团队策略、环境专属 SOP、第三方工具用法 | 用户与 agent | 指令注入或按 skill 触发 |
+| Workspace `AGENTS.md` / skills | 用户偏好、团队策略、环境专属 SOP、第三方工具用法 | 用户与 agent | 规则注入；工作区与用户共享 skills 按需读取 |
 | Task 契约与记录 | Goal、DoD、Work Items；等待状态、委派看板和任务记录 | agent 写契约正文；runtime 管文件头状态与记录 | 首步注入契约，之后每步注入新输入、看板与状态 |
 
 边界原则：
@@ -73,7 +73,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 ## Playbook 编写原则
 
 1. **description 是触发器**：包含"讲什么"和"什么时候读"，中文书写并附英文术语，名称使用短小 kebab-case。
-2. **一个决策时刻一份文件**：宁可一份稍长，也不要让模型为了完成一件事读两份。反过来，两个不会同时发生的场景不要塞进一份。
+2. **按决策职责组织**：一份手册讲清一类机制的操作与恢复；跨机制工作用明确章节引用连接，不复制整套流程，也不要求每次读取全部相关手册。
 3. **默认模型已有通用能力**：只写 Pipiclaw 特有、容易出错或跨工具的知识。
 4. **按脆弱程度决定自由度**：hash/verification/幂等 request id 等窄桥给精确顺序；开放的规划问题给判断条件。
 5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。已经定好归属的几条：等待、幂等、检查与返工裁决、汇报在 `task-lead.md`；委派上下文、角色、隔离和续接在 `agent-delegation.md`；文件入口在 `runtime-orientation.md`。自动唤醒的跨机制纪律留 system prompt：完成独立工作，只剩等待时结束回合。操作点可留一句提醒，详细解释不复制。
@@ -89,13 +89,8 @@ Pipiclaw 可以通过 bash、subagent、event preAction 与用户安装的工具
 
 内部 subagent 与配置成 workspace 委派角色的外部 AI Agent 都通过 `subagent` / `subagent_list` / `subagent_run` 驱动；异步 run 结束时会自行唤醒发起它的频道；先完成独立工作和派发，只剩等待时结束回合，不用 `bash async`、event 或轮询包裹等待。未配置成委派角色的第三方工具，其命令、状态协议和完成态检测仍属于用户安装的 skill/可执行文件；需要长跑命令时使用 background job，需要条件探测时使用 event preAction。这样第三方工具可以独立升级，也不会污染 Pipiclaw 的产品知识层。
 
-## 面向 workspace 的迁移
+## 与工作区规则配合
 
-已有 `AGENTS.md` 如果包含 Pipiclaw 文件语义、task/event SOP、旧任务 driver 的 cooldown / 等待票用法、已删除命令或 verifier 细节，应删除这些镜像内容，改为引用对应 playbook。workspace `sub-agents/` 中的角色定义则属于用户可修改配置，不是 Pipiclaw 随包注入的默认内容。保留的应是：
+workspace `AGENTS.md` 保存称呼、沟通习惯、团队安全要求和项目工作原则；skills 保存可复用流程，默认在工作区维护，也可加载服务器用户的 `~/.agents/skills/`。具体来源与刷新方式见[Skills 指南](./skills.md)。
 
-- 称呼、沟通风格和默认工作环；
-- 团队安全政策和外部影响边界；
-- 何时偏好某个用户 skill/第三方工具；
-- 组织特有的知识库、质量标准和晋升规则。
-
-迁移不会改变 task/event/memory 的落盘格式，只改变 agent 获取 runtime 知识的方式。
+Pipiclaw 的工具、等待和恢复规则引用内置 playbook，不在工作区保留副本。用户可修改 `sub-agents/` 中的角色配置，但角色正文仍应专注于职责、约束与交付标准。已有规则含重复机制说明时，保留组织自己的要求，将产品用法改为引用对应手册。

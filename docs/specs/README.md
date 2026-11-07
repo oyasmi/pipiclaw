@@ -1,6 +1,6 @@
 # 设计记录
 
-`docs/specs/` 当前保留 spec 050–067，其中 055 已完成离线实施，真实发布验收待执行；058、059 的初始化与布局设计由 060 接续；060 的 desk 运行时重构已实施，一次性迁移改由 AI agent 按说明执行；061 的渠道层与 Web API 已实施，真实部署上线（R4）待用户在场执行；063 的共享技能目录已实施并完成验证；064 的任务车道已实施并进行审查修复（迁移演练与真实部署上线待执行）；065 的个人交付聚焦与结果保留期调整已实施；067 已完成范围内实现、离线门禁和定向真实模型验收；仅使用官方 SDK，分段调度已移出范围。编号 050 之前的所有 spec 已完整移到 [历史归档](../archive/README.md)，保留原编号、目录名和文件名；这些历史设计仍可用于追溯决策。
+这里保存 spec 050–067 的设计取舍和实施证据，供修改源码、追溯决策时参考。当前用法见[专题手册](../README.md)，编号 050 之前的设计见[历史归档](../archive/README.md)。设计中的旧字段、路径和未采用方案不代表当前功能。
 
 ## 保留的设计
 
@@ -18,6 +18,12 @@
 | `059` | [默认个人助手](./059-default-assistant/design.md)：默认接入已实施；dot 布局与脚本方案由 060 接续 |
 | `060` | [Desk：一个助手，多个工位](./060-desk/design.md)：工位目录直接位于 workspace，统一默认初始化，无运行时迁移兼容；已实施（[验收记录](./060-desk/acceptance.md)）；[追加修复](./060-desk/followup.md)已实施 |
 | `061` | [渠道层与 Web API](./061-channel-plane/design.md)：钉钉与遵循 OpenAI Responses API 的 Web API 并列为两个渠道，`Transport` / `Ingress` 契约与结构化回合输出，`channel.json` 分段与开关，TUI 改为 Web API 客户端；已实施，真实部署上线待执行（[实施计划](./061-channel-plane/plan.md)、[验收记录](./061-channel-plane/acceptance.md)） |
+| `062` | [Responses 上下文与响应保存](./062-responses-context/design.md)：请求历史、响应链与服务端会话，响应保存独立于上下文选择 |
+| `063` | [共享技能目录](./063-shared-skills/design.md)：工作区与用户共享来源、同名优先级；已实施（[验收记录](./063-shared-skills/acceptance.md)） |
+| `064` | [任务车道](./064-task-lane/design.md)：独立任务执行、运行时推导状态与聊天控制；已实施（[计划](./064-task-lane/plan.md)、[验收](./064-task-lane/acceptance.md)、[修复记录](../reviews/2026-10-29-spec-064-task-lane-fixes.md)），迁移演练与真实部署验收待执行 |
+| `065` | [个人交付聚焦与结果保留](./065-personal-delivery-focus/design.md)：产品范围、作业 7 天与委派 30 天保留期；已实施 |
+| `066` | [Cursor CLI harness](./066-cursor-cli-harness/design.md)：外部委派、协议解析与续接；已实施（[计划](./066-cursor-cli-harness/plan.md)、[验收](./066-cursor-cli-harness/acceptance.md)），真实 CLI smoke 与流协议核对待执行 |
+| `067` | [工具执行与委派结果回收提速](./067-execution-latency/design.md)：完成观察、结果回流与共享快速窗口；范围内实现、离线门禁与定向真实模型验收已完成（[计划](./067-execution-latency/plan.md)、[验收](./067-execution-latency/acceptance.md)），使用官方 SDK，分段调度未采用 |
 
 050、051 已完成的实施清单也保存在归档中（[050](../archive/specs/050-memory-v2/plan.md)、[051](../archive/specs/051-long-horizon-task-loop/plan.md)）。
 
@@ -39,10 +45,3 @@
 - 同步更新归档索引及引用链接；仍影响当前实现的取舍应保留在对应设计中。
 - Spec 中的完成状态不证明当前代码仍保持该行为，重大版本变更后以测试和当前架构文档复核。
 - 不从 spec 直接链接用户 Quickstart；用户路径必须经过 `README.md` 或 `docs/README.md`。
-
-- [062 — Responses 上下文与响应保存](062-responses-context/design.md)
-- [063 — 共享技能目录](063-shared-skills/design.md)：显式支持用户共享与工作区两个来源，有效工作区同名技能优先，统一目录解析；已实施（[验收记录](063-shared-skills/acceptance.md)）。
-- [064 — 任务车道](064-task-lane/design.md)：任务从频道队列拆出，由工位级任务车道执行，聊天侧可查看、对话、暂停与取消；等待由运行时按事实推导，取代 052 的等待票与 `task_step_end`；已实施，实施记录见设计 §20–21，验收记录见 [acceptance.md](064-task-lane/acceptance.md)，审查修复与验证见[修复记录](../reviews/2026-10-29-spec-064-task-lane-fixes.md)；迁移演练尚未执行，真实部署上线（R4）待用户在场执行（[实施计划](064-task-lane/plan.md)）。
-- [065 — 个人交付聚焦与结果保留期调整](065-personal-delivery-focus/design.md)：修正聊天任务指导，作业结果保留 7 天、委派产物保留 30 天，收敛默认委派教学、Web API 范围与个人产品定位；保留频道通知与 `subagent_inline`；已实施。
-- [066 — cursor-cli harness](066-cursor-cli-harness/design.md)：外部委派增加 `cursor-cli`（命令名 `agent`），沿用一进程一 prompt；已实施（[实施计划](066-cursor-cli-harness/plan.md)、[验收记录](066-cursor-cli-harness/acceptance.md)）。未运行 opt-in 真实 CLI smoke，流协议未核对。
-- [067 — 工具执行与委派结果回收提速](067-execution-latency/design.md)：已完成范围内实现、离线门禁和定向真实模型验收；聊天共享 10 秒窗口，任务委派立即异步；仅使用官方 SDK，分段调度已移出范围。详见[实施计划](067-execution-latency/plan.md)与[验收记录](067-execution-latency/acceptance.md)。

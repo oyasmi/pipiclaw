@@ -99,7 +99,7 @@ workspace 下的文件是另一类：它们是给模型读的**内容**（身份
 - `cardTemplateId` 留空也能工作，但不会使用 AI Card；正式使用建议补上。
 - `allowFrom: []` 或省略表示允许所有发送者；灰度时填 staff ID。
 - `busyMessageDefault` 默认 `"steer"`，也可设 `"followUp"` / `"followup"`。
-- `responseMode` 默认 `"full_progress_then_plain_final"`：当前周期内累积全部进度，达到正文预算时收短再继续增长，结论另发一条 Markdown。另有 `"rolling_progress_then_plain_final"` 和 `"final_card_only"`。
+- `responseMode` 默认 `"full_progress_then_plain_final"`：先显示等待卡，再累积进度，较长时收短后继续；有进度时结论另发，快速答复可直接写入等待卡。另有滚动进度与只显示最终卡片的模式，见[交互指南](./interaction-and-commands.md#钉钉中的输出形态)。
 
 保留任何 `your-*` 占位值都会让启动检查失败。
 

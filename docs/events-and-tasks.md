@@ -70,12 +70,12 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `type` | 是 | `one-shot` 或 `periodic` |
-| `channelId` | 是 | 目标会话通道 ID，例如 `dm_<staffId>` 或 `group_<conversationId>` |
+| `channelId` | 是 | 目标会话通道 ID，例如 `dingtalk:dm:<staffId>`、`dingtalk:group:<conversationId>` 或 `webapi:conv_<id>` |
 | `text` | 与 `task` 二选一 | 事件触发后发送给 Pipiclaw 的聊天文本 |
 | `task` | 与 `text` 二选一 | **任务模板**：触发时按它生成一个任务实例，见[任务模板事件](#任务模板事件周期与定时工作) |
 | `preAction` | 否 | 触发前执行的动作门控，见下方说明 |
 
-各类型的专属字段（`at`、`schedule`）在下面对应小节列出。cron 一律按主机时区解释，没有 `timezone` 字段。`text` 与 `task` 必须且只能出现一个。
+各类型的专属字段（`at`、`schedule`）在下面对应小节列出。示例中的频道 ID 与时间都需替换为实际值，单次事件应安排在未来 2 分钟至约 24.8 天内。cron 一律按主机时区解释，没有 `timezone` 字段。`text` 与 `task` 必须且只能出现一个。
 
 ## 任务模板事件：周期与定时工作
 
@@ -84,7 +84,7 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 ```json
 {
   "type": "periodic",
-  "channelId": "dm_your-staff-id",
+  "channelId": "dingtalk:dm:your-staff-id",
   "schedule": "0 9 * * 1",
   "task": {
     "title": "周报编写",
@@ -102,7 +102,7 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 2. 如果同一个事件上一次的实例还没结束，**本次不生成**，并直接给频道发一条不经过模型的回执（上一实例的 id、状态与 `/tasks show` 用法）。两个实例并行做同一类工作几乎总是重复劳动，而卡住的实例本身受预算和车道的守护规则约束，最终一定会结束或停下来告诉你。
 3. 否则按模板写出任务文件（`origin` 记录事件名），由任务车道在后台、在任务自己的会话里推进，不进聊天也不占用聊天。
 
-模板里写的是每次都要遵守的要求；每个实例独立，不继承上一次的状态，只在首步看到上一实例的收尾记录和最后一次汇报（`<previous_occurrence>`）作为衔接。想改进模板，由 agent 用 `task_report` 提出，你确认后用 `event_manage update` 更新。
+模板保存每次都要遵守的要求。实例各自记录进度，只在首步参考上一实例的收尾记录和最后汇报。需要调整目标或检查项时，在聊天中确认修改内容，让助手更新事件模板；修改不会自动改变已经创建的任务。
 
 ## 事件动作门控（Action Gate）
 
@@ -126,7 +126,7 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 ```json
 {
   "type": "periodic",
-  "channelId": "dm_your-staff-id",
+  "channelId": "dingtalk:dm:your-staff-id",
   "text": "现在是本周最后一个工作日的下午，请帮我整理本周周报。",
   "schedule": "0 16 * * 1-5",
   "preAction": {
@@ -147,10 +147,6 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 
 ## 两类事件详解（The Two Event Types）
 
-### Immediate 已退役
-
-旧版本的 `immediate` 事件已经退役。当前回合能完成的事应直接在当前回合完成；需要未来唤醒时使用 `one-shot`，需要周期检查时使用 `periodic`。
-
 ### 单次事件（One-Shot）
 
 以下 `at` 仅示意带时区偏移的格式；使用时替换为实际未来时刻。手写事件也受 Node.js timer 上限约束，最多约 24.8 天；更远的提醒应临近时创建。
@@ -160,7 +156,7 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 ```json
 {
   "type": "one-shot",
-  "channelId": "dm_your-staff-id",
+  "channelId": "dingtalk:dm:your-staff-id",
   "text": "提醒我检查今天的发布结果。",
   "at": "2026-10-03T18:00:00+08:00"
 }
@@ -177,8 +173,8 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 ```json
 {
   "type": "periodic",
-  "channelId": "dm_your-staff-id",
-  "text": "回顾本周的 MEMORY.md，清理过时项并补充缺失的稳定事实。",
+  "channelId": "dingtalk:dm:your-staff-id",
+  "text": "检查本工位的记忆，报告过时或冲突信息；需要修改时使用记忆工具，不直接编辑生成的 MEMORY.md。",
   "schedule": "0 9 * * 1"
 }
 ```
@@ -228,7 +224,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 示例：
 
 ```json
-{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pipiclaw/workspace/desk-default/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","desk":"default","textPreview":"检查共享背景与当前工位记忆...","queue":{"accepted":true}}
+{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pipiclaw/workspace/desk-default/events/weekly-review.json","eventType":"periodic","channelId":"dingtalk:dm:123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","desk":"default","textPreview":"检查共享背景与当前工位记忆...","queue":{"accepted":true}}
 ```
 
 说明：
@@ -242,8 +238,9 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 常见形态：
 
-- 私聊：`dm_<staffId>`
-- 群聊：`group_<conversationId>`
+- 钉钉私聊：`dingtalk:dm:<staffId>`
+- 钉钉群聊：`dingtalk:group:<conversationId>`
+- Web API / 终端：`webapi:conv_<id>`
 
 频道绑定到工位之后，`workspace/CHANNELS.md` 会列出它的 id、名称和所属工位；`desk-bindings.json` 是绑定的原始记录。在频道里让 agent 用 `event_manage` 创建事件时，投递频道自动就是当前频道，不用自己写。
 
@@ -256,12 +253,12 @@ Pipiclaw 会把事件调度层的审计记录写入：
 | 入口 | 谁用 | 能做什么 |
 |------|------|----------|
 | 手工编辑 `*.json` | 人 | 任意增改；最终仍由 watcher 装载校验 |
-| `/events` 命令 | 人（钉钉侧） | list / show / delete / history —— 只读 + 删除 |
+| `/events` 命令 | 人（钉钉、终端或 Web API 会话） | list / show / delete / history —— 只读 + 删除 |
 | `event_manage` 工具 | 主 agent（聊天会话） | list / show / create / update / delete —— 带写入时校验和防自激励闸门 |
 
 ### `/events` 命令（人用，只读 + 删除）
 
-在钉钉频道里用 `/events` 查看和删除现有事件。它只管理已有文件，不支持通过命令创建或更新；需要新增或修改时，直接编辑 `desk-<name>/events/*.json` 或让 agent 用 `event_manage`。`/events` 列出本工位的全部事件，投递到别的频道的会标出频道名，投递频道已不在本工位上的标为已暂停。
+在当前会话里用 `/events` 查看和删除工位的事件。它只管理已有文件，不支持通过命令创建或更新；需要新增或修改时，直接编辑 `desk-<name>/events/*.json` 或让 agent 用 `event_manage`。`/events` 列出本工位的全部事件，投递到别的频道的会标出频道名，投递频道已不在本工位上的标为已暂停。
 
 | 命令 | 说明 |
 |------|------|
@@ -330,8 +327,8 @@ Pipiclaw 会把事件调度层的审计记录写入：
 ```json
 {
   "type": "periodic",
-  "channelId": "dm_your-staff-id",
-  "text": "检查本频道的长期记忆，报告过时或冲突条目；修改时使用记忆工具，不直接编辑生成的 MEMORY.md。",
+  "channelId": "dingtalk:dm:your-staff-id",
+  "text": "检查本工位的长期记忆，报告过时或冲突条目；修改时使用记忆工具，不直接编辑生成的 MEMORY.md。",
   "schedule": "0 10 * * 1"
 }
 ```
@@ -341,7 +338,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 ```json
 {
   "type": "one-shot",
-  "channelId": "dm_your-staff-id",
+  "channelId": "dingtalk:dm:your-staff-id",
   "text": "检查今天发布后的错误反馈和回滚风险。",
   "at": "2026-10-03T21:30:00+08:00"
 }
@@ -352,7 +349,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 ```json
 {
   "type": "periodic",
-  "channelId": "dm_your-staff-id",
+  "channelId": "dingtalk:dm:your-staff-id",
   "text": "列出今天最需要跟进的待办、未完成事项和风险点。",
   "schedule": "0 9 * * 1-5"
 }
@@ -497,8 +494,8 @@ budget: {"usd":30}
 负责人最需要的状态是"我的团队现在在做什么、刚刚回来了什么"。在任务会话里：
 
 - **委派和后台作业自动绑定到本任务**，聊天里发起的工作不绑定任何任务；委派带上它对应的工作项 `item`（`subagent {agent, task, item:"W2"}`），运行时校验这个项存在。
-- 绑定的委派/作业派发和结算时，运行时在任务记录里写 `dispatch` / `settle` 记录（含状态、耗时、成本、`VERDICT`、输出文件路径），成本计入任务预算，并**直接通知车道**——结果不再经过聊天。记录与契约一起归档，所以委派记录一周后被回收，任务里的结果仍在。
-- 每一步的 brief 里有 `<task_inputs>`（这一步被叫醒的原因：回来的结果及其输出尾部、卡顿报告、你的消息、恢复、上一步的异常）和 `<task_board>`（每个工作项对应的委派/作业、状态与输出路径）。
+- 绑定的委派/作业派发和结算时，运行时在任务记录里写 `dispatch` / `settle` 记录（含状态、耗时、成本、`VERDICT`、输出文件路径），成本计入任务预算，并**直接通知车道**——结果直接交给任务会话。记录与契约一起归档，委派记录及运行时产物结算满 30 天后清理，任务记录中的结果仍保留。
+- 每步有新输入时提供 `<task_inputs>`（结果、卡顿、用户消息、恢复或异常），有工作记录时提供 `<task_board>`（工作项、执行状态和输出路径）。步骤仍在执行时，新结果在下一完整工具批次后送入同一步骤；未消费的输入留给后续步骤，重启后也可恢复。
 
 外部执行者连续 10 分钟没有任何输出，运行时除了推送提示，还会在任务记录里写一条卡顿报告并叫醒负责人，由它看 stderr 与上次输出时间后决定取消重派还是继续等。
 
@@ -568,7 +565,7 @@ events 与 tasks 之间只有一条边：**事件按模板生成任务实例**�
 
 运行时的回执使用四个标记：✅ 完成、⚠️ 需要你的决定、🛑 暂停或取消、⏳ 进行中。提问回执是 `⚠️ 任务 … 需要你的决定：…`，暂停回执带任务 id、原因和可直接复制的命令；预算耗尽时附带对应维度的加码示例（`+steps 10` 或 `+usd 5`）。
 
-doctor 只查三类问题：frontmatter 不可读（任务不会执行）、汇报频道缺失或未绑定到本工位（任务冻结）、"等结果"却超过 1 小时没有任何在途工作（车道可能没在运行）。
+`/tasks doctor` 检查文件头、汇报频道、异常等待、损坏的任务记录、未完成归档和已重试的待确认消息，并给出下一步。它只诊断，不直接修复文件；报告或归档的自动重试仍由运行时负责。
 
 模型侧的工具面有两套：
 

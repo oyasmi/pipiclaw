@@ -43,7 +43,7 @@
 | [主动性机制与设计取舍](./refer/personal-agent-proactivity-design-notes.md) | Grok Bot、DeepSeek Super-agent、OpenClaw 的证据；主动介入的分寸、心跳与 watchdog、现有任务约束及分阶段验证建议（2026-11-06，未实施） |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
 | [行为评测使用指南](./evals.md) | 无人参与的 `cycle`、评分器校验、短报告、证据重放与兼容参照 |
-| [设计记录](./specs/README.md) | 保留的 spec 050–066、实施状态及当前行为的判断顺序 |
+| [设计记录](./specs/README.md) | 保留的 spec 050–067、实施状态及当前行为的判断顺序 |
 | [历史文档归档](./archive/README.md) | 编号 050 之前的完整 spec，以及已完成的实施清单、review 和快照 |
 | [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
 

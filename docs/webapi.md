@@ -237,7 +237,7 @@ Pipiclaw 只接受它真能做到的参数；会改变行为的参数**按名字
 - **message 在完整后一次给出**（先 `output_text.delta` 再 `done`），不逐 token 流式。
 - **usage**：`input_tokens` 含缓存读写，`cached_tokens` 是缓存命中；`reasoning_tokens` 恒为 0。
 - **没有请求方的 Response**：任务汇报、定时事件、委派或后台作业完成的唤醒，会在所属会话里出现一个 `input_items` 为空的 Response。后台唤醒回合若整个回合都静默（`[SILENT]`）则不产生 Response。客户端用 `GET /v1/conversations/{id}/items?order=asc&after=<最后看到的 item id>` 拉取。会话 items 对游标客户端是追加序列：存在排队或进行中的 Response 时，排在它之后的 Response 的 items 要等它结束才出现，所以已读到的游标之前不会再插入新 item。
-- **取消**：`background: true` 的 Response 用 `POST …/cancel`；同步或流式请求，**断开连接就是取消**。取消只作用于这一个 Response：排队中的直接移出队列，正在执行的只停止它自己的回合；同一会话里其他请求排队的 Response 照常执行（这一点与文本 `/stop` 不同，`/stop` 会清空整个会话的队列并暂停正在执行的任务步骤）。对 background + stream 的 Response 取消时，流在已发出的事件之后直接结束，不发终态事件——结果看 cancel 的返回值或再 `GET` 一次。WebSocket 连接关闭时，它上面排队和进行中的 Response 都被取消。
+- **取消**：`background: true` 的 Response 用 `POST …/cancel`；同步或流式请求，**断开连接就是取消**。取消只作用于这一个 Response：排队中的直接移出队列，正在执行的只停止它自己的回合；同一会话里其他请求排队的 Response 照常执行（这一点与文本 `/stop` 不同，钉钉的 `/stop` 会清空该频道的聊天队列，后台任务仍继续运行）。对 background + stream 的 Response 取消时，流在已发出的事件之后直接结束，不发终态事件——结果看 cancel 的返回值或再 `GET` 一次。WebSocket 连接关闭时，它上面排队和进行中的 Response 都被取消。
 - **steering 只在 WebSocket 上**（规范如此）。目标必须是本连接上创建、正在 `in_progress` 的 Response，失败时回 `response.steer.failed`，`error.code` 是 `response_not_found`、`response_not_active`、`response_already_completed`、`invalid_input` 或 `too_many_pending_steers`（每个 Response 最多 4 个未生效的 steer）。这是对规范的扩展：官方 OpenAI 对会话绑定的 Response 不支持 steering，Pipiclaw 支持。
 - **重启**：进行中的 Response 在重启后标为 `failed`（"服务重启，回合被中断"），**不会自动重跑**，因为它的工具可能已经产生了副作用。
 

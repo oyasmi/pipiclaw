@@ -62,7 +62,9 @@
 
 `bash` 传 `async: true` 立即返回 job id，命令在后台继续跑；`job` 负责之后的 `list` / `poll` / `cancel`。
 
-关键约束：每个工位最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`，重启后会认领仍在运行的作业；本机 FileStore 观察完成文件，事件触发后立即核实，10 秒扫描处理漏事件、超时或不支持观察的实现；`poll` 收到完成提交便返回，并保留 3 秒回查与 30 秒总等待。完成后唤醒启动它的频道并带上输出尾部（该频道已换绑时不唤醒）；属于任务的作业结果写入任务，正在执行的步骤在下一完整工具批次后可见。TUI 嵌入运行时退出后停止观察，detached 作业仍可继续，下一运行时可恢复记录。已结束作业保留 7 天供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
+每工位合计最多 **5 个**运行中作业，`poll` 单次最多等待约 **30 秒**。作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`，重启后恢复跟踪，已结束的记录与输出保留 7 天。重要产物应另存为项目文件。
+
+本机完成文件变化时主动核实结果，10 秒扫描处理漏事件和超时；`poll` 在结果提交后返回，并保留 3 秒回查。聊天作业默认通知发起频道（须仍绑定原工位），任务作业直接写入任务记录，在完整工具批次后送入执行中的步骤。终端内嵌运行时退出后停止跟踪，detached 作业可能继续，下次运行时启动再恢复。
 
 ## 网页工具（`web_search` / `web_fetch`）
 
@@ -89,26 +91,26 @@
 | `skill` (只读) + `write`/`edit` | `workspace/skills/`，也可加载 `~/.agents/skills/` | 某个流程跨任务可复用时沉淀 |
 | `session_search` | 只读 `log.jsonl` / `context.jsonl` | 用户引用较早的对话、而工作记忆里没有时 |
 
-`session_search` 的匹配跑在整条消息上（展示窗口按命中位置开窗，不再只取头部），只有有真实文本命中的结果才返回——近期但完全不相关的消息不会因为"新"就被算成命中；被扫描上限截断的消息数会在响应里公开。`memory_save` 的回执如实反映落盘结果（成功/疑似凭据/此前被明确遗忘/未知），用户显式重新保存一条被 `memory_forget` 过的事实会放行并撤销 tombstone。
+`session_search` 的匹配跑在整条消息上（展示窗口围绕命中位置截取），只有有真实文本命中的结果才返回——近期但完全不相关的消息不会因为"新"就被算成命中；被扫描上限截断的消息数会在响应里公开。`memory_save` 的回执如实反映落盘结果（成功/疑似凭据/此前被明确遗忘/未知），用户显式重新保存一条被 `memory_forget` 过的事实会放行并撤销 tombstone。
 
 分层原理和"什么该记、什么不该记"见 [memory.md](./memory.md)。
 
 ## 调度与长程类
 
-`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个工位，同工位的任何频道都能修改和删除其中的事件，修改保留原投递频道；`action: "show"` 读回完整定义以便安全更新。长程任务有两套工具面：聊天里 `task_create`/`task_list`/`task_log`/`task_close`/`task_message`/`task_pause`/`task_resume` 创建、查看与管理；任务会话里 `task_log`/`task_close`/`task_report`/`task_ask`/`task_wait`——回合结束就是一步结束，`task_ask`/`task_wait`/`task_close` 成功后直接结束本轮，不再多一次模型请求。模型的任何工具参数都不能写任务的状态；`task_log` 会在活动记录缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
+`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），投递频道由 runtime 绑定为当前频道；list 覆盖整个工位，同工位的任何频道都能修改和删除其中的事件，修改保留原投递频道；`action: "show"` 读回完整定义以便安全更新。长程任务有两套工具面：聊天里 `task_create`/`task_list`/`task_log`/`task_close`/`task_message`/`task_pause`/`task_resume` 创建、查看与管理；任务会话里 `task_log`/`task_close`/`task_report`/`task_ask`/`task_wait`——回合结束就是一步结束，`task_ask`/`task_wait`/`task_close` 成功后直接结束本轮，不再多一次模型请求。模型的任何工具参数都不能写任务的状态；`task_log` 会在活动记录缺失时回退到归档副本。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
 
 `tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、任务车道开新步骤和每回合的任务摘要注入。
 
 ## 智能体委派（`subagent` / `subagent_list` / `subagent_run`）
 
-`subagent`（角色优先）把一项聚焦工作交给一个**已配置**的角色，只传 `agent`/`task` 加上可选的 `workingDirectory`/`purpose`/`taskId`——工具、模型、预算、上下文策略全部来自角色文件，调用侧不能覆盖。`subagent_inline` 是没有合适角色时的一次性执行者，携带 `systemPrompt` 及 `tools`/`model`/`effort`/`context`/`thinkingLevel`/`mutates` 等覆盖字段；可以用 `tools.subagentInline.enabled: false` 整体关掉（默认开）。
+`subagent` 把一项聚焦工作交给**已配置**的角色，必填 `agent`、`task`，可选 `workingDirectory`、`purpose`、`item`。工具、模型、预算和上下文策略来自角色文件，调用侧不能覆盖。`item` 仅在任务步骤中有效，所属任务自动绑定；聊天中的委派不绑定任务。`subagent_inline` 用于没有合适角色时的一次性内置执行者，携带 `systemPrompt` 和所需的工具、模型、预算档等参数；可用 `tools.subagentInline.enabled: false` 关闭（默认开）。
 
 - **内置角色**使用 Pipiclaw 的模型和工具，聊天共享 10 秒快速返回窗口，超过后转为后台运行；任务步骤内确认启动后立即异步返回。
-- **外部角色**启动 Claude Code、Codex CLI 或 `exec`，恒为异步，派发后立即返回 `runId`；DingTalk daemon 会在完成时唤醒发起委派的频道；没有 daemon 时，终端内嵌的运行时只在终端打开期间做这件事。
+- **外部角色**启动 Claude Code、Codex CLI、Cursor CLI 或脚本，确认启动后立即返回 `runId`。聊天委派完成时通知发起频道，任务委派直接将结果送入任务。长期后台工作需要常驻 daemon；终端内嵌运行时只在终端打开期间跟踪与通知。
 
 委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。
 
-`subagent_list` 给出本工位委派 run 的快照；`subagent_run` 对单个 run 执行 `show`（自诊断）/`cancel`（终止）/`follow_up`（在支持续接的已结束 Claude Code / Codex run 上开启新一轮）。用户侧不必经过模型，可直接使用 `/subagents` 命令。
+`subagent_list` 给出本工位委派 run 的快照；`subagent_run` 对单个 run 执行 `show`（自诊断）/`cancel`（终止）/`follow_up`（在支持续接且有会话标识的已结束 Claude Code / Codex / Cursor run 上开启新一轮）。用户侧不必经过模型，可直接使用 `/subagents` 命令。
 
 完整角色格式、并发、产物、验收和安全边界见 [sub-agents.md](./sub-agents.md)。
 

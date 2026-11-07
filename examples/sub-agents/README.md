@@ -47,7 +47,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/codex-main.md ~/.pipiclaw/
 
 三档的分工是这套配置的主要内容：**flash** 用于「做什么和怎么做都已清楚，只差有人去做」，可以大量派发；**main** 是主力，绝大多数实现、排查、文档都在这里，也包括 token 消耗很大的长任务；**high** 只留给这一轮真正需要新判断或取舍的工作。对已经定好的活派 high，只是更贵，不会更对。
 
-`scout` 和 `codex-review` 都不属于这三档。`scout` 是唯一的内置条目：它在 Pipiclaw 进程内运行，用 `settings.subagentModel`（未设时用主会话当前模型），不经过外部 CLI、不占它们的订阅额度，bash 与文件访问走 runtime 的命令与路径守卫。轻量调查通常在 120 秒同步宽限窗口内直接返回结果。它只做只读调查——定位实现、查配置、读日志——工具白名单里没有 `write`/`edit`，不占写锁，可以和其他工作并行；需要写入或跨文件实现时换外部条目。
+`scout` 和 `codex-review` 都不属于这三档。`scout` 是唯一的内置条目：它在 Pipiclaw 进程内运行，用 `settings.subagentModel`（未设时用主会话当前模型），不经过外部 CLI、不占它们的订阅额度，bash 与文件访问走 runtime 的命令与路径守卫。聊天里的内置委派共享 10 秒快速返回窗口，未完成就转后台；任务步骤内确认启动后立即异步返回。它只做只读调查——定位实现、查配置、读日志——工具白名单里没有 `write`/`edit`，不占写锁，可以和其他工作并行；需要写入或跨文件实现时换外部条目。
 
 `codex-review` 只做检查：read-only sandbox 是 codex 自己强制的边界，所以它改不了被检查的产物，也不占写锁，可以和其他工作并行。检查者尽量和实现者不是同一家模型——它检查 claude/glm 的产物最有价值；检查 codex 自己的产物时，可以另配一个 `claude --permission-mode plan` 的只读条目。它跑不了会写文件的测试或构建，这类检查要么先由实现者或主代理跑好、把输出交给它，要么换可写条目。
 

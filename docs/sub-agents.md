@@ -1,6 +1,6 @@
 # 智能体委派（Sub-Agents）
 
-> **读者**：想把 reviewer / researcher 这类轻量角色，或 Claude Code / Codex CLI 这类重型外部智能体，接入同一套工作流的使用者与管理员。
+> **读者**：想把 reviewer / researcher 这类轻量角色，或 Claude Code / Codex CLI / Cursor CLI 这类外部智能体，接入同一套工作流的使用者与管理员。
 > **前置**：已完成 [README](../README.md) 的安装与配置。
 > **读完你能**：启用一个现成角色，理解内置与外部委派的差异，查看和控制异步 run，并按真实权限边界编写自己的角色。
 
@@ -8,18 +8,18 @@
 
 它和[事件与任务](./events-and-tasks.md)是正交能力：事件与任务解决“什么时候继续、在途状态保存在哪里”，委派解决“这一步由谁来做”。当前回合中的一次临时委派不需要创建 task；需要跨时间恢复、记录目标和验收时，再用 task 承载长期状态。
 
-从 spec 040 起，子代理有两种 **runtime**：
+子代理有两种执行方式（`runtime`）：
 
 - **`internal`**（默认）：在 Pipiclaw 进程内运行的隔离上下文子智能体。它使用 Pipiclaw 的模型、工具和安全守卫，启动快，适合检索、筛查和窄范围分析。
-- **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI 或任意脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
+- **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI、Cursor CLI 或脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
 
 两者共用一个角色目录（`workspace/sub-agents/`）、一套 run 生命周期和控制面（`subagent_list` / `subagent_run` 工具 / `/subagents` 命令）。调用面按形状分两个工具：`subagent` 选一个已配置角色（内置或外部都走它），`subagent_inline` 是没有合适角色时的一次性内置执行者。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
 
-在任务里，委派会和任务看板咬合（`taskId` + `item`，任务会话内自动绑定），独立检查用 `purpose: verify`；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md#团队看板与工作项)。
+任务步骤中的委派自动归入该任务，可用 `item` 对应工作项；结果进入任务记录和看板。聊天中的委派独立运行，无需先建任务。独立检查使用 `purpose: verify`，任务中的用法见[团队看板与工作项](./events-and-tasks.md#团队看板与工作项)。
 
 ## 五分钟启用一个外部角色
 
-外部角色的前提是：目标 CLI 已经安装在**运行 Pipiclaw 的同一账号**下，能从该进程的 `PATH` 找到，并已完成登录。先在 shell 中自行验证 `claude` 或 `codex` 能运行。
+外部角色的前提是：目标 CLI 已经安装在**运行 Pipiclaw 的同一账号**下，能从该进程的 `PATH` 找到，并已完成登录。先在 shell 中验证所选的 `claude`、`codex` 或 Cursor 的 `agent` 命令能运行。
 
 全局 npm 安装会把推荐配置一起安装。以下示例复制两个 Claude Code 条目：
 
@@ -49,16 +49,16 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.
 
 外部委派会立刻返回 `runId`，完成时自动唤醒发起委派的频道（它已换绑到别的工位时不唤醒，结果仍保存在 run 记录里）。过程中可用 `/subagents` 查看，用 `/subagents cancel <runId>` 终止。不要为了等结果反复轮询或重复派发。
 
-> **运行入口边界**：完成唤醒、`state/subagent-runs/` 持久化和 daemon 重启对账由钉钉常驻 runtime 装配。没有 daemon 时，`pipiclaw tui` 内嵌的运行时在终端打开期间同样装配这些，终端退出即关闭，之后需要 daemon 重新对账；长时间外部委派请使用 daemon。
+> 长时间委派请使用常驻 daemon。它为钉钉和 Web API 跟踪运行状态、投递结果，并在重启后恢复外部运行记录。没有 daemon 时，终端内嵌运行时只在终端打开期间提供这些能力。
 
 ## 它是什么
 
 工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
 
-仓库及 npm 包提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，分两套组织方式，**不要同时装**：
+仓库及 npm 包提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，按两种方式组织，建议选一套使用：
 
-- `agents/` — **推荐**。按能力与成本组织的 7 个条目（`claude-high` / `claude-main` / `codex-high` / `codex-main` / `codex-flash` / `glm-high` / `glm-flash`），加一个只读检查条目 `codex-review`（codex `--sandbox read-only`）和一个内置只读调查条目 `scout`（进程内，用 Pipiclaw 自己的模型与守卫），把 agent、模型和推理档直接交给主智能体按需选择。文件正文只有一段与任务无关的交付约定，不含岗位设定。
-- `roles/` — 早期的 8 个岗位角色（explorer、git-committer、planner、builder、builder-hard、reviewer、verifier、worker），保留作参考、迁移对照，以及仍然需要真只读执行边界（`--permission-mode plan` / `--sandbox read-only`）的场景。
+- `agents/` — **推荐**。按能力与成本组织的 Claude、Codex、Cursor 和 GLM 条目，加一个只读检查条目 `codex-review`（codex `--sandbox read-only`）和一个内置只读调查条目 `scout`（进程内，用 Pipiclaw 自己的模型与守卫），把 agent、模型和推理档直接交给主智能体按需选择。文件正文只有一段与任务无关的交付约定，不含岗位设定。
+- `roles/` — 按调查、规划、实现、审查等岗位组织，适合需要固定职责的工作流。逐项核对其工具和 CLI 权限；岗位名称不提供只读保证。
 
 ```bash
 cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
@@ -85,7 +85,7 @@ cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 不适合任何一种子代理的场景：
 
 - 只需要主代理顺手完成的一步小事
-- 需要继续递归创建下级代理的复杂代理树（子代理没有 `subagent` 工具，外部 agent 是否会自己 spawn 子代理不受 pipiclaw 控制或约束，见下文"明确不可控的部分"）
+- 需要继续递归创建下级代理的复杂代理树（子代理没有 `subagent` 工具，外部 agent 是否会自己 spawn 子代理不受 pipiclaw 控制或约束，见[安全边界](#运行时规则runtime-rules)）
 
 已结算的委派记录与运行时管理产物从结算时起保留 30 天，由每日批次清理；执行器自建文件不在此清理范围。长期交付物应写入任务指定的位置。延长保留期会增加磁盘占用。
 
@@ -143,7 +143,7 @@ bashTimeoutSec: 180
 
 ## Frontmatter 字段说明（Frontmatter Reference）
 
-`runtime` 缺省为 `internal`，因此所有既有内置角色文件零改动继续工作。**每个字段只对一种 runtime 有意义，写在错误的一侧会被驳回（产生 discovery warning），不会被静默忽略。**
+`runtime` 缺省为 `internal`。**每个字段只对一种 runtime 有意义，写在错误的一侧会被驳回（产生 discovery warning），不会被静默忽略。**
 
 ### 内置（`runtime: internal`，或省略）
 
@@ -190,7 +190,7 @@ bashTimeoutSec: 180
 
 ## 调用参数（Invocation Parameters）
 
-上面的 frontmatter 是**人**的配置面：你在配置文件里精确设定角色的模型、工具（内置）或命令（外部）和执行预算。委派分两个工具，按调用形状而非动词切分（spec 046）——角色优先，内联是没有角色匹配时的显式高级模式：
+角色文件由部署者配置模型、工具或外部命令、权限声明与执行预算。助手调用时优先使用已配置角色；没有适用角色时，才使用一次性内置执行者。下表供编写流程或排查调用问题时参考，日常使用只需直接说明工作目标。
 
 **`subagent`（角色优先，常规路径）**——选一个已配置的角色，只有路由字段，没有任何覆盖字段：
 
@@ -198,11 +198,11 @@ bashTimeoutSec: 180
 |------|--------|------|
 | `agent` | - | 必填。`workspace/sub-agents/` 里某个已配置角色的名字（内置或外部） |
 | `task` | - | 必填。完整任务描述；子代理看不到主对话，目标/范围/路径/约束/验收方法都要写进来 |
-| `workingDirectory` | 当前工位目录（主代理的 cwd） | 委派代码仓库时**必须显式传仓库路径**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
-| `purpose` | `work` | `verify` 进入检查者协议；带 `taskId` 时按任务的 DoD 检查，再带 `item` 时只检查该工作项和它引用的 DoD |
-| `taskId` | - | 绑定任务台账；`purpose: verify` 要求它 |
+| `workingDirectory` | 主代理的实际 cwd（默认是工位目录，可自定义） | 委派代码仓库时**必须显式传仓库路径**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
+| `purpose` | `work` | `verify` 进入独立检查协议；任务内按其 DoD 检查，不带任务时按委派要求检查 |
+| `item` | - | 仅任务步骤可用，如 `W2`；绑定对应工作项，检查范围为该项及它引用的 DoD |
 
-工具、模型、执行预算、上下文策略、`mutates` 一律来自角色文件，调用侧**无法覆盖**——这不是权限收紧，是把"这些是部署方的决定"落到类型层：命名一个外部角色再传 `tools`/`model`/`mutates` 不再是"被驳回"，而是这个调用形状根本没有这些字段。
+所属任务由执行环境决定，不接受 `taskId` 参数。工具、模型、预算、上下文策略和 `mutates` 来自角色文件，调用时不能覆盖。需要将要求交给已有任务时，在聊天中转达或使用 `/tasks msg <id> <内容>`，由任务负责人派发。
 
 **`subagent_inline`（没有合适角色时的一次性执行者）**：
 
@@ -216,7 +216,7 @@ bashTimeoutSec: 180
 | `context` | `none` | 上下文注入：`none`、`index`（`index` 追加 workspace 背景、工位记忆索引和当天日志尾部） |
 | `thinkingLevel` | `medium` | 推理强度 |
 | `mutates` | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；显式声明覆盖推定，`bash` 不参与推定 |
-| `workingDirectory` / `purpose` / `taskId` | 同上 | 同 `subagent` |
+| `workingDirectory` / `purpose` / `item` | 同上 | 同 `subagent` |
 
 `tools.subagentInline.enabled`（`tools.json`，默认开）整体开关这个工具；关掉后角色目录覆盖不到的工作没有委派出口，模型只能自己动手或请用户先配一个角色。
 
@@ -258,7 +258,9 @@ bashTimeoutSec: 180
 
 写入型委派（`mutates: write`）结束时，唤醒和结果里会附一行“改了哪些文件”（`git status` 摘要）。派发时会先给工作目录拍一份快照，所以派发前就已经改动、之后没再碰过的文件不会算到这个 run 头上；内置和外部的写入型委派都有这一行。
 
-**`/stop` 不再连带杀掉已派发的委派**（有意变更）。停止一个正在跑的委派永远需要显式调用 `subagent_run op=cancel` 或运行时命令 `/subagents cancel <runId>`；后者不经过模型，在模型不可用或回合卡死时依然能用。
+**`/stop` 只停止聊天，已派发的委派继续运行。** 要终止委派，使用 `/subagents cancel <runId>`；这个命令不经过模型，在模型不可用或回合卡住时也能用。助手侧对应操作为 `subagent_run op=cancel`。
+
+重启接管的外部运行约每 10 秒核实一次，正常退出则主动处理。进程身份暂时无法确认时继续观察；必要的进程清理完成后才释放写锁。结果通知不会等待可选的版本诊断。
 
 ## 控制面：`subagent_list` / `subagent_run` 与 `/subagents`
 
@@ -297,7 +299,7 @@ bashTimeoutSec: 180
 
 `/subagents roles <name>` 详情视图始终渲染 `model` 与 `thinking` 两行，内置和外部角色都遵循上述占位词。外部角色未声明 `thinkingLevel` 时，详情中的 `thinking` 行显示 `未设置（verify 派发默认 medium）`：普通 `work` 委派不由 runtime 代设推理强度，只有 `purpose=verify` 才落到 `medium`；列表视图仍只显示 `未设置`。
 
-`runId` 是短小可读的 `run_` + 6 位字符（例如 `run_a1b2c3`），不再是派发它的那次工具调用自身的 id（后者在某些 provider 上是一长串 `call_…|fc_…` 复合 id）。命令支持不带 `run_` 前缀的简写，只要能唯一匹配即可，例如 `/subagents show a1b2c3`。
+`runId` 是 `run_` 加 6 位字符，例如 `run_a1b2c3`。命令支持不带 `run_` 前缀的简写，只要能唯一匹配即可，例如 `/subagents show a1b2c3`。
 
 ## 关键字段怎么理解（How to Use the Key Fields）
 
@@ -305,7 +307,8 @@ bashTimeoutSec: 180
 
 建议尽量收窄，而不是一上来给满。常见组合：
 
-- `read,bash`：只读检查、分析、审查。
+- `read,grep,glob`：不需要执行命令的只读调查。
+- `read,bash`：需要命令的分析、审查；bash 可写文件，不能据此保证只读。
 - `read,edit,write,bash`：需要实际修改文件。
 
 外部角色没有 `tools` 概念——它的能力边界由目标 CLI 自己的命令行决定（例如 `codex exec --sandbox read-only`），pipiclaw 不在配置层假装能限制它。
@@ -333,7 +336,7 @@ bashTimeoutSec: 180
 - 必须继承会话决策或团队背景的审查、研究任务：`contextMode: contextual` + `memory: index`（外部角色需显式声明 `memory`，不能只靠 `contextMode`）。
 - 任务描述已经自包含、强调独立判断或无需会话背景的角色：`contextMode: isolated` + `memory: none`（外部角色的默认值本就如此）。
 
-外部角色自己也会读取目标仓库的 `CLAUDE.md` / `AGENTS.md` 建立上下文，这条路径不受 pipiclaw 的 `memory` 设置影响，见下文"明确不可控的部分"。
+外部角色自己也会读取目标仓库的 `CLAUDE.md` / `AGENTS.md` 建立上下文，这条路径不受 pipiclaw 的 `memory` 设置影响，见[安全边界](#运行时规则runtime-rules)。
 
 ### `model`
 
@@ -406,14 +409,16 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 ## 运行时规则（Runtime Rules）
 
-- 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见下文"明确不可控的部分"。
+- 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见[安全边界](#运行时规则runtime-rules)。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
 - 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。
 - `purpose: verify`：执行者拿到检查者协议（只判断、不修实现、最后一行 `VERDICT: PASS|FAIL`）。内置验证器结构性移除了 write/edit，但默认工具集仍含 `bash`，所以只有声明 `mutates: read` 且 `tools` 里也不含 `bash` 的角色才是结构性只读；外部验证器只能靠目标 CLI 自己的 sandbox（如 codex `--sandbox read-only`）做到只读。带 `item` 的检查只覆盖该工作项和它引用的 DoD 条目。所有写能力的 verifier 都先持有目标工作区独占 lease。运行时只记录这个结论（run 记录与所属任务的看板），**不是**关闭任务的门禁，也不做工作区快照或 attestation；运行失败或没有 VERDICT 行一律记为 FAIL。是否采信由主代理按风险对照真实产物、diff 和检查输出判断。
-- 带 `taskId` 的委派（任务会话里自动绑定，可再带上对应工作项 `item`）在派发和结算时写进 `desk-<name>/tasks/<id>.jsonl`，成本计入任务预算；普通运行摘要仍写 `desk-<name>/subagent-runs.jsonl`。
+- 任务步骤内的委派（自动绑定任务，可用 `item` 对应工作项）在派发和结算时写进 `desk-<name>/tasks/<id>.jsonl`，成本计入任务预算；普通运行摘要仍写 `desk-<name>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
-> `verify` 不再以任务台账为前提；在任务里使用时的方法（看板、检查与返工裁决）见 [events-and-tasks.md](./events-and-tasks.md#团队看板与工作项) 和 `task-lead.md` playbook。
+独立检查不要求创建任务；任务内的看板与验收见[事件与任务](./events-and-tasks.md#团队看板与工作项)。
+
+## 常见配置错误
 - 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段，或给内置角色写 `harness`、`command`、`shell`、`env`——都会被直接驳回，不是被忽略。
 - 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
 - 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但它会取写 lease 且无法保证没动过产物；不得修改被检查的实现或为了通过测试而修代码，PASS 也不能代替你核对真实产物。
@@ -427,5 +432,3 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - Runtime playbooks 与知识分层：[runtime-playbooks.md](./runtime-playbooks.md)
 - `channel.json`、`auth.json`、`models.json`、`settings.json`：[configuration.md](./configuration.md)
 - 委派纪律（选人、工作目录、等待与验收，运行时读取的版本）：`src/playbooks/agent-delegation.md`
-
-外部进程正常结束通过 close 回调观察；daemon 重启接管后，每约 10 秒核实一次，临近 deadline 提前核实。身份暂不可读时继续观察，不向不明归属的进程发信号；必要进程组清理完成后才释放写锁。CLI 版本诊断不阻塞结果发布，进程身份与 Git 状态探测各有 1 秒执行上限，可选摘要失败时省略。

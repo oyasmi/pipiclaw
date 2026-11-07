@@ -259,14 +259,14 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 `bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道轮次；`job` 工具用来 list/poll/cancel。核心能力，无开关、始终注册。
 
-- 作业进程活在 host 上，通过 shell 命令管理（`nohup` 启动、`kill -0` 探活、退出码写入 `.exit` 文件）；每频道最多 5 个并发运行作业，超时沿用 bash 的 `timeout` 预算。
+- 作业进程活在 host 上，通过 shell 命令管理（`nohup` 启动、`kill -0` 探活、退出码写入 `.exit` 文件）；每工位合计最多 5 个并发运行作业，超时沿用 bash 的 `timeout` 预算。
 - 作业状态持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<name>/`：重启后 runtime 会认领仍在运行的作业，已结束作业保留 7 天供查看。
-- runtime sweeper 约每 30 秒检查一次后台作业；作业完成后会自动唤醒对应 channel 并带上输出尾部，不需要再排 check-in event。
+- 本机完成文件变动会触发结果核实，10 秒扫描负责补漏与超时处理；聊天作业默认通知发起频道，任务作业将结果送入任务。无需另建回访事件。
 - 只发给主 agent；子代理不能起后台作业，也不能使用 `job` 工具。
 
 ### 智能体委派（`subagent` + `subagent_list` + `subagent_run`，恒开）
 
-这三个工具只发给主智能体，没有 `tools.json` 开关。`subagent` 调用内置或外部角色；`subagent_list` 查看 run，`subagent_run` 对单个 run 执行 show/cancel/follow_up（续接已结束的 Claude Code / Codex CLI run）。角色由 `workspace/sub-agents/*.md` 配置，空目录不会关闭 inline 内置委派。
+这三个工具只发给主智能体，没有 `tools.json` 开关。`subagent` 调用内置或外部角色；`subagent_list` 查看 run，`subagent_run` 对单个 run 执行 show/cancel/follow_up（续接有会话标识的已结束 Claude Code / Codex CLI / Cursor CLI run）。角色由 `workspace/sub-agents/*.md` 配置，空目录不会关闭 inline 内置委派。
 
 外部角色不是 `bash async` 的别名：它有统一 run 状态、产物、工作区写锁、并发准入、完成唤醒、用量标记和重启对账。角色字段、调用参数与授权边界统一见 [sub-agents.md](./sub-agents.md)，不在本字段参考中维护第二份副本。
 
@@ -314,7 +314,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 内建任务车道（Task Lane，恒随任务开关）
 
-DingTalk daemon 的任务车道扫描各激活工位的任务。维护本身不调用模型：到时的等待转回排队、有新输入的等待被叫醒、超预算或空转的任务被暂停并通知；然后按执行槽接纳排队中的任务，为每个执行中的任务建一个 runner，在任务自己的会话里跑步骤。暂停和已归档任务不会被执行。是否开新步骤完全由总开关 `tools.tasks.enabled`（tools.json）决定；预算与节奏是内置常量（每任务可在 frontmatter 的 `budget` 里覆盖 `steps`/`usd`）。
+运行时的任务车道扫描各激活工位的任务。维护本身不调用模型：到时的等待转回排队、有新输入的等待被叫醒、超预算或空转的任务被暂停并通知；然后按执行槽接纳排队中的任务，为每个执行中的任务建一个 runner，在任务自己的会话里跑步骤。暂停和已归档任务不会被执行。是否开新步骤完全由总开关 `tools.tasks.enabled`（tools.json）决定；预算与节奏是内置常量（每任务可在 frontmatter 的 `budget` 里覆盖 `steps`/`usd`）。
 
 行为（供理解，非配置项）：
 
@@ -371,7 +371,7 @@ pipiclaw tui --desk news --print "总结今天的进展"  # 一次性，prompt �
 
 ### `tui` 设置（settings.json）
 
-`settings.json` 顶层可选 `tui` 块控制终端显示多少过程（与钉钉的 `channel.json.responseMode` 相互独立）：
+`settings.json` 顶层可选 `tui` 块控制终端显示多少过程（与 `channel.json` 的 `dingtalk.responseMode` 相互独立）：
 
 ```json
 {
@@ -446,7 +446,7 @@ key 命令、字段策略、错误与安全说明见 [Web API](./webapi.md)。
 | `cardTemplateId` | 否 | 留空时不启用 AI Card | AI Card 模板 ID，建议配置 |
 | `cardTemplateKey` | 否 | `"content"` | 写入流式内容的模板字段名 |
 | `allowFrom` | 否 | 留空或省略时允许所有人 | 允许访问的发送者 staff ID 列表 |
-| `busyMessageDefault` | 否 | `"steer"` | Agent 忙碌时普通消息的默认处理模式。`"steer"` 表示插入当前任务，`"followUp"` / `"followup"` 表示排队等当前任务完成后处理 |
+| `busyMessageDefault` | 否 | `"steer"` | 聊天忙碌时普通消息的默认处理模式。`"steer"` 表示插入当前聊天回合，`"followUp"` / `"followup"` 表示排队等当前回合结束后处理 |
 | `responseMode` | 否 | `"full_progress_then_plain_final"` | 输出形态，统一控制「过程展示」与「最终投递方式」，取值见下方矩阵 |
 | `cardAutoLayout` | 否 | `true` | 透传给钉钉 AI Card 模板的 `autoLayout` 渲染开关 |
 
@@ -454,7 +454,7 @@ key 命令、字段策略、错误与安全说明见 [Web API](./webapi.md)。
 
 | 取值 | 过程展示 | 最终答案投递 |
 | --- | --- | --- |
-| `full_progress_then_plain_final`（默认） | 当前周期内累积全部进度，不限制行数；达到约 2.9KB 正文预算时保留最新思考和最近两条活动，再继续累积。正常增长只发增量，进度帧之间至少间隔 800ms | 单独的 Markdown 消息，卡片收成一行摘要 |
+| `full_progress_then_plain_final`（默认） | 当前周期内累积全部进度，不限制行数；达到约 2.9KB 正文预算时保留最新思考和最近两条活动，再继续累积。正常增长只发增量，进度帧之间至少间隔 800ms | 已有进度时另发 Markdown、卡片收成一行；仅有等待卡时答案直接写入卡片 |
 | `rolling_progress_then_plain_final` | 固定显示最近五条进度，包含思考和活动；随新进度滚动，不经历周期性扩展与收缩 | 同上 |
 | `final_card_only` | 不展示任何过程 | 最终答案直接写入 AI Card，不再额外发纯文本 |
 
@@ -462,7 +462,18 @@ key 命令、字段策略、错误与安全说明见 [Web API](./webapi.md)。
 
 两种 `*_then_plain_final` 模式下，用户对话回合开始时立即异步创建非空等待卡（「正在处理…」），同时开始模型处理，不等待建卡完成；即使快速回答也会创建卡片。等待卡直到答复时仍没有任何进度，答复就直接写进这张卡，不再另发纯文本消息。已有进度时，正式答案先作为普通消息发出，卡片再收成一行；静默结束收成「已处理，无需答复。」，停止收成「处理已结束。」。直接返回结果的内置命令不创建等待卡。
 
-进度有新内容才推送：首次进度替换等待文案，正常增长只追加尚未确认的新增完整列表行，同一批事件合并发送。单条最多 180 字节，每帧不超过 1KB，帧间从上次请求结束起至少间隔 800ms。默认模式不限制行数，当前周期正文达到约 2.9KB 后保留最新思考和最近两条活动，用短快照替换并建立新的增量基线，再继续增长。滚动模式始终只留最近五条进度，窗口移动时发送五条的小快照。顶部用时从回合开始计算，包含等待模型首次输出的时间；用时与工具次数在周期内保持不变，在替换时刷新。积压按完整行分帧发送，收缩后不再回放旧周期内容；持续输入不会推迟已排定的更新。结果不确定的增量请求失败后，用新周期短快照恢复；模板拒绝增量时才退回每次不超过 1KB 的完整快照。进度请求连续失败两次后停止，最终答复仍独立投递，并且不等待下一次进度更新；收尾不会额外创建进度卡或发送进度消息。`final_card_only` 不显示等待卡，只在最终答复时建卡。作业与委派完成通知即使标记为 `awaited`，也只展示结果。
+进度只在内容变化时推送，正常增长使用增量，收短或滚动时替换当前视图。以下是内置展示预算，无需额外配置：
+
+| 项目 | 规则 |
+|---|---|
+| 更新节奏 | 同批事件合并；每次请求完成后至少间隔 800ms，最终答案和收尾不等这个间隔 |
+| 单条与单帧 | 单条最多 180 字节，每帧不超过 1KB，按完整列表行发送 |
+| 默认视图 | 当前周期约 2.9KB 后收短，保留最新思考和最近两条活动，再继续增长 |
+| 滚动视图 | 始终保留最近五条进度 |
+| 顶部统计 | 用时从回合开始计算，含等待模型首次输出；用时与工具次数在替换视图时刷新 |
+| 更新失败 | 增量结果不确定时用短快照恢复；模板不支持增量时使用完整快照；连续失败两次停止进度更新，仍尝试交付最终答案 |
+
+高频活动可能在显示前被收短，卡片不是完整执行日志。`final_card_only` 不显示等待卡，最终答复时才建卡。后台作业与委派的完成通知只展示结果。
 
 > 旧字段 `progressDisplay` 与旧值 `responseMode: "progress_then_plain_final"` 已移除，请改用上表取值。
 

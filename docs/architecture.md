@@ -4,11 +4,11 @@
 > **前置**：能跑起来项目；域边界与工程规则见 [../AGENTS.md](../AGENTS.md)。
 > **读完你能**：定位任一子系统的代码位置，并说清一条消息从收到到回复经过了什么。
 >
-> 本文按当前源码整理（本次核对：0.9.3-beta.5），描述“代码现在是什么样”，而非设计愿景。各子系统的历史取舍见 `docs/specs/NNN-*` 与 `docs/archive/specs/NNN-*`；配置细节见 [configuration.md](./configuration.md)。版本行为变化后应同步更新本文，不能把历史 spec 当作当前架构说明。
+> 本文按当前源码整理，描述“代码现在是什么样”，而非设计愿景。各子系统的历史取舍见 `docs/specs/NNN-*` 与 `docs/archive/specs/NNN-*`；配置细节见 [configuration.md](./configuration.md)。版本行为变化后应同步更新本文，不能把历史 spec 当作当前架构说明。
 
 ## 1. 定位与总体形态
 
-Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtime**，个人和团队都可以使用。它包装 `@earendil-works/pi-coding-agent` SDK（`@mariozechner/pi-coding-agent` 的 fork），把一个 coding agent 挂到钉钉（DingTalk Stream 模式）上，并补齐长期运行所需的外围系统——工位（默认工位 `default` 自动初始化，需要分开项目时再创建其他工位；频道只是绑定到工位的地址）、定时事件、持久任务、子代理、安全护栏、用量账本。同一套 agent 内核还有第二个传输前端：终端 TUI。
+Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtime**，个人和团队都可以使用。它包装 `@earendil-works/pi-coding-agent` SDK（`@mariozechner/pi-coding-agent` 的 fork），把一个 coding agent 挂到钉钉（DingTalk Stream 模式）上，并补齐长期运行所需的外围系统——工位（默认工位 `default` 自动初始化，需要分开项目时再创建其他工位；频道只是绑定到工位的地址）、定时事件、持久任务、子代理、安全护栏、用量账本。钉钉与 Web API 是两个渠道，终端 TUI 通过 Web API 连接同一运行时。
 
 ```
 pipiclaw            # 默认：长驻钉钉 daemon（等价 pipiclaw run）
@@ -60,55 +60,52 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 
 ## 3. 运行时拓扑
 
-`bootstrap()`（`src/runtime/bootstrap.ts`）是唯一的装配根：加载配置 → 初始化 `APP_HOME_DIR` → 构造下图所有组件并互相接线。前台是消息驱动的主链路，后台是四个定时服务。
+`bootstrap()`（`src/runtime/bootstrap.ts`）是装配根：加载配置、取得运行时锁、构造共享服务，再启动已启用的渠道。钉钉与 Web API 共用 Ingress；终端连接 Web API，本身不持有 agent 或工位写入逻辑。
 
 ```mermaid
 flowchart TB
-    DT[DingTalk 云端<br/>Stream WebSocket]
+    DT[DingTalk 云端] <--> DTT
+    TUI[终端 TUI] <--> API
+    CLIENT[脚本与其他客户端] <--> API
 
-    subgraph daemon [pipiclaw daemon 进程]
-        BOT["DingTalkBot<br/>(dingtalk/bot.ts)<br/>连接/重连/去重/allowFrom"]
-        CQ["ChannelQueue ×N<br/>每频道消息串行队列"]
-        HANDLER["Ingress<br/>(runtime/ingress.ts)<br/>命令分发 / 准入"]
-        DESKS["DeskRuntime<br/>(runtime/desk-runtime.ts)<br/>绑定表 / 激活与休眠"]
-        RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每个已绑定频道一个，bootstrap 缓存"]
-        SESSION["SDK AgentSession + Agent<br/>(pi-coding-agent)"]
-        TOOLS["工具集<br/>(tools/registry.ts)"]
-        SEC["security/ 护栏<br/>command / path / network"]
-        DELIVERY["ChannelDeliveryController<br/>(dingtalk/delivery.ts)<br/>AI Card 流式 / 纯文本"]
-
-        subgraph bg [后台定时服务]
-            EW["EventsWatcher ×每个激活的工位<br/>desk-&lt;name&gt;/events/*.json"]
-            TL["TaskLane<br/>tasks/*.md 台账 + 任务 runner"]
-            MMS["MemoryMaintenanceScheduler<br/>门控记忆维护"]
-            DD["DurableDispatchService<br/>文件外发箱 at-least-once"]
-        end
+    subgraph daemon [Pipiclaw 运行时]
+        DTT[DingTalk Transport]
+        API[Web API Transport]
+        DTT --> I[Ingress：绑定、准入、命令与忙时路由]
+        API --> I
+        I --> Q[ChannelQueue：每频道串行]
+        Q --> R[ChannelRunner：聊天会话]
+        R --> S[SDK AgentSession：每个 runner 独立]
+        TL[TaskLane：独立任务 runner] --> S
+        S --> TOOLS[工具与领域服务]
+        TOOLS --> GUARD[文件、命令与网络守卫]
+        S --> OUT[结构化 TurnEvent / TurnOutcome]
+        OUT --> DTT
+        OUT --> API
+        EW[EventsWatcher：每激活工位] --> DD[DurableDispatch：持久投递与重试]
+        DD --> I
+        EW -->|任务模板| TL
+        WORK[委派与作业管理器] -->|聊天完成唤醒| DD
+        WORK -->|任务结果落盘与通知| TL
+        TL -->|汇报与回执| PUSH[Transport.push]
+        PUSH --> DTT
+        PUSH --> API
+        MM[记忆维护：空闲与边界反思]
     end
 
-    LLM[(模型供应商<br/>models.json / auth.json)]
-    FS[(APP_HOME_DIR<br/>workspace/ + state/)]
-
-    DT -->|下行消息| BOT --> CQ --> HANDLER --> RUNNER --> SESSION
-    HANDLER -->|先解析绑定| DESKS
-    SESSION --> TOOLS --> SEC
-    SESSION <--> LLM
-    RUNNER -->|会话事件| DELIVERY -->|AI Card / plain| DT
-    EW -->|合成事件| DD
-    TL -->|汇报/回执| DELIVERY
-    DD -->|enqueueEvent| BOT
-    MMS -.->|读 runner 上下文| RUNNER
-    MMS --> FS
-    RUNNER <--> FS
+    S <--> LLM[模型供应商]
+    MM --> LLM
+    TOOLS --> FS[工位文件与 app state]
+    MM <--> FS
+    DD <--> FS
 ```
 
-要点：
-
-- **`DingTalkBot`**（`dingtalk/bot.ts` 只是门面，下面这些职责由 `connection.ts`、`inbound.ts`、`cards.ts`、`media.ts`、`access-token.ts` 各自承担）负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
-- **合成事件不直接进内存队列**：EventsWatcher 和委派/作业的聊天级完成唤醒先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
-- **先解析绑定，再建 runner**（spec 058）：`DeskRuntime` 是 daemon 里唯一回答"这个频道绑在哪个工位上、哪些工位处于激活状态"的地方。安装时初始化 `default`，获准的真实入站消息先为缺少绑定的频道分配会话并持久化到 `default`，再下载附件和路由命令；已有绑定及其故障保持原样。只读解析和合成事件不会创建绑定；合成事件只有在它的频道仍绑定在事件所属的工位（`event.desk`）上时才被接受。没有任何绑定的工位处于休眠：它的事件 watcher 停止，任务车道和记忆调度器不再扫描它，正在跑的 run 和 job 照常结算但不投递唤醒。
-- **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
-- **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到工位目录；完成后同样先经过 durable dispatch，再唤醒发起委派的那个频道（仍绑定在该工位上时）。
-- **执行阶段日志**：`agent/session/execution-trace.ts` 关联 runner generation、task/seq、session、provider request 和工具批次；`tools/contract/execution-trace.ts` 在真实 adapter 入口与出口记录工具调用 id 和耗时。SDK 的准备事件单独记录，不代表工具已经进入执行。内部 worker 采用相同字段并关联 run id，不把参数、结果正文或凭据写进阶段日志。
+- **先解析绑定，再路由消息**：`DeskRuntime` 管理绑定、激活与休眠。获准的钉钉真实入站消息为缺少绑定的频道接入 `default`，再处理附件与命令；已有绑定及故障保持原样。读取和合成唤醒不创建绑定，合成事件还须核对其工位归属。
+- **Ingress 拥有频道队列**：报告命令和停止等控制操作可直接处理，普通回合按频道排队。渠道只接收入站并呈现输出，不维护另一份命令路由或队列。Web API 独立请求通过请求执行入口运行，详见下节。
+- **聊天与任务各有会话**：频道 runner 缓存在运行时并按空闲 LRU 回收；`runner-factory.ts` 只构造实例。TaskLane 为执行中的任务建立独立 runner，任务步骤不进入频道队列。
+- **结果先持久化，再通知消费者**：聊天级完成唤醒和文本事件经 `DurableDispatchService` 写入 `state/dispatch/`，再交 Ingress，语义为 at-least-once。任务绑定的结果直接写入任务记录并通知车道；报告与回执由 `tasks/delivery.ts`、`tasks/receipts.ts` 支持持久重试。
+- **后台执行独立于聊天回合**：`SubAgentRunManager` 管理委派的结算、用量与写锁。外部 detached 进程的执行权限由目标 CLI 和宿主环境决定，不经过 Pipiclaw 工具守卫。无绑定的工位停止事件、任务和记忆调度，在途 run/job 仍可结算。
+- **执行阶段可关联**：`agent/session/execution-trace.ts` 关联 runner generation、任务步、session、模型请求和工具批次；`tools/contract/execution-trace.ts` 记录真实工具入口、出口与耗时。SDK 准备事件单独记录，阶段日志不写参数、结果正文或凭据。
 
 ## 4.0 渠道层（spec 061）
 
@@ -166,7 +163,7 @@ sequenceDiagram
 
 细节补充：
 
-- **忙时语义**：任务流式进行中，内建命令（`/help /stop /steer /followup /events /tasks /status /usage /context /subagents`）仍可用；普通消息按 `busyMessageDefault`（默认 `steer`）注入当前轮；`/stop` 会中止当前轮、丢弃排队消息、暂停关联任务并取消 durable-dispatch 租约——但**不再**连带终止已派发的委派 run（spec 040），停止一个 run 需要显式 `/subagents cancel <runId>`；回执会指名被暂停的任务和 `/tasks resume <id>`，避免用户以为只是打断了一轮。`/new` 是例外，会绕过 busy 检查和旧 channel queue，立即提交新会话边界；其他会话命令（`/model` `/compact` `/session`）只在空闲时可用。
+- **忙时语义**：报告命令直接处理；钉钉普通消息按 `dingtalk.busyMessageDefault` 注入当前聊天或排队。`/stop` 中止聊天、丢弃后续排队消息并取消相关 durable-dispatch 租约，不暂停后台任务或取消委派。任务用 `/tasks pause <id>`，委派用 `/subagents cancel <runId>`。`/new` 绕过旧队列建立新会话边界；`/model`、`/compact`、`/session` 等需聊天空闲。
 - **未知斜杠命令在分发处拒绝**（`isKnownSlashCommand`），避免 `/modle` 这类笔误消耗一整轮 LLM。
 - **模型 fallback**（`models/fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
 - **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到会话区的 `last_prompt.json`。
@@ -179,7 +176,7 @@ sequenceDiagram
 
 `compaction-summary.ts` 复用独立摘要执行：鉴权、快照和全部分段/重试共享 60 秒总期限，20 秒无有效输出取消，off thinking，每次最多 4096 输出 tokens。`compaction-input.ts` 只在摘要请求中缩减大工具载荷，保留头尾、哈希与原 JSONL 引用；普通长历史按完整覆盖、带重叠的片段递进摘要，最多四段，不任意删除中段。空、截断、超预算摘要保留原状态。手动 /compact 和 SDK 阈值/溢出仍有同样的受限恢复路径，现有后台候选可被 SDK 采用；扩展失败显式返回 cancel。自动失败/取消冷却 30 秒，slash command 和 steer 入队不启动额外前台压缩，自动入口遵守 compaction.enabled。
 
-`agent/stop-watchdog.ts` 由所有渠道共用（经 `runtime/ingress.ts`）：停止超过 3 秒未收敛时，宿主退休旧 runner 并更换队列/执行引用，保留活动会话文件。旧 SDK 订阅和投递关闭，迟到的回合不再改变新代次或结算通知；`/new` 仍表示显式新建会话。摘要后台生成和并发采用候选结果不属于当前实现。
+`agent/stop-watchdog.ts` 由所有渠道共用（经 `runtime/ingress.ts`）：停止超过 3 秒未收敛时，宿主退休旧 runner 并更换队列/执行引用，保留活动会话文件。旧 SDK 订阅和投递关闭，迟到的回合不再改变新代次或结算通知；`/new` 仍表示显式新建会话。
 
 ### 投递层（ChannelContext）
 
@@ -448,7 +445,7 @@ playbook 正文不进提示词，agent 触发时用 `read` 按需加载。
 
 ```mermaid
 flowchart LR
-    A[停后台服务<br/>+ bot.stop] --> B[等活跃轮次<br/>≤15s] --> C[超时则 abort<br/>再等 ≤5s] --> D[flush 各 runner 的记忆<br/>≤45s] --> E[重置 runner 缓存]
+    A[停调度与新请求准入<br/>保留出站投递] --> B[等活跃轮次<br/>≤15s] --> C[超时则 abort<br/>再等 ≤5s] --> D[释放空闲 runner<br/>记忆整理 ≤45s] --> E[关闭渠道连接<br/>刷新存储和日志] --> F[释放运行时锁]
 ```
 
 关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
@@ -463,8 +460,8 @@ Pipiclaw 的产品是 CLI/runtime，不是 SDK。`src/index.ts` 因此只支持*
 
 ## 13. 测试与质量门
 
-- `npm run check` = Biome lint + `tsc --noEmit` + knip 死代码 + Vitest 单测；`npm run test:e2e` 用脚本化 mock provider 跑经过真实 bootstrap 的确定性端到端套件。
-- 记忆流水线的每个单元（lifecycle/gates/reflect/reflect-job/state/store/migrate）都有独立测试文件，这是"分层不摊平"原则的另一面。
+- `npm run check` = Biome lint + `tsc --noEmit` + 架构检查 + knip 死代码 + Vitest 单测；`npm run test:e2e` 用脚本化 mock provider 跑经过真实 bootstrap 的确定性端到端套件。
+- unit 验证领域分支与契约，确定性 e2e 验证跨模块时序、持久化和恢复，真实模型 eval 验证行为质量；详细准入规则见 `AGENTS.md`。
 - 领域边界与工程规则的权威描述在 `AGENTS.md`；每个子系统的设计脉络在 `docs/specs/NNN-*` 与 `docs/archive/specs/NNN-*`。
 
 ### 执行完成的及时观察（spec 067 A）
@@ -473,4 +470,4 @@ Pipiclaw 的产品是 CLI/runtime，不是 SDK。`src/index.ts` 因此只支持*
 - `jobs/completion-observer.ts` 通过同一 FileStore 的可选目录观察接收提示，manager 通过批量 probe 和逐 job 队列决定终态；`jobs/runtime.ts` 装配每工位 manager。完成提交的 revision 唤醒 poll，10 秒扫描保留。
 - ingress 绑定 ChannelQueue 实例的容量回调，durable dispatch 只重试索引中的记录并复核磁盘、lease 与退避。停止和队列重置不发容量通知。
 - `runtime/task-input.ts` 合并所属任务的结果；submitted 集合只防止同一步骤重复提交，`input_ack` 仍以真实 transcript 为准。步骤结束等待提交收敛并清空旧步骤未消费队列，下一步骤从持久日志重放。
-- 工具调度遵循官方发布的 SDK 整批策略；批次中存在串行工具时整批串行。spec067 已删除需要自建 SDK 的分段调度方案。
+- 工具调度遵循官方发布的 SDK 整批策略；批次中存在串行工具时整批串行。
