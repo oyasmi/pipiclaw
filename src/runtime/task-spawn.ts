@@ -26,8 +26,9 @@ export interface TaskSpawnerOptions {
  * A second instance of the same event never runs alongside the first: two copies of the same
  * recurring job mostly duplicate work or collide. The occurrence is skipped and the user is told
  * every time (INV-7) — a stuck instance is something they need to know about, not something to
- * hide behind a quiet skip. The stuck instance itself is bounded by its budget and the lane's
- * guards, so the skipping cannot go on forever.
+ * hide behind a quiet skip. Budgets and lane guards bound execution, not the lifetime of an
+ * unfinished instance: a paused instance or one waiting for the user can keep blocking later
+ * occurrences until it is resumed/answered and finishes, or the user cancels it.
  */
 export function createTaskSpawner(
 	options: TaskSpawnerOptions,
