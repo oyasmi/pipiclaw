@@ -4,6 +4,33 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-11-08
+
+Stable release of the 0.9.5 beta series. The summary below describes the final behavior relative to 0.9.4; the beta entries retain the detailed history.
+
+### Breaking
+
+- **Desks and channel configuration replace the per-channel layout.** One assistant shares workspace identity and rules across named desks under `workspace/desk-<name>/`; channels bind through `desk-bindings.json`. New authorized DingTalk chats use `default`, and the terminal opens it unless `--desk` is given. `channel.json` now has `dingtalk` / `webapi` sections with individual `enabled` switches, channel ids carry a transport prefix, and one runtime owns each app home. `/project` and `security.json`'s `projectAccess` are removed; `desk.json` can set a custom absolute `cwd`.
+- **Tasks execute independently of chat.** Each active task has its own runner and session in the background task lane. The runtime derives task state from observed work, questions and time; the old waiting tickets, `task_step_end`, `task_update`, `/tasks steer` and `/tasks reply` are removed. Use `/tasks msg`, `/tasks pause`, `/tasks resume` and `/tasks cancel`; `/stop` stops only chat. Delegations and jobs started in a task return their results to that task.
+- **Existing data needs an offline upgrade.** Stop all runtimes and back up the complete app home, then follow the [desk](docs/desk-migration.md), [channel](docs/channel-migration.md) and [task](docs/task-migration.md) migration notes as applicable. The runtime reads only the current formats and does not migrate old data automatically. Public export names remain stable, but channel types and constructor contracts change as detailed in beta.3.
+- **Provider changes.** Brave search is removed; DuckDuckGo is the default. All four direct Pi SDK dependencies are now 1.4.0; `kimi-coding` uses OpenAI Chat Completions and custom base URLs must include `/v1`. Check the [search migration](docs/channel-migration.md#调整网页搜索配置) and [Pi upgrade notes](docs/configuration-reference.md#pi-140-升级注意事项).
+
+### Added
+
+- **Web API and a shared terminal runtime.** An OpenAI Responses-shaped HTTP / WebSocket API supports streaming, background responses, cancellation, conversations and steering, with local sockets, authenticated TCP, CORS and per-key rate limits. `pipiclaw tui` connects to the daemon or starts an embedded runtime; `--new` starts a fresh conversation. See the [Web API guide](docs/webapi.md).
+- **Cursor CLI delegation and shared skills.** External roles can use `harness: cursor-cli`, with `cursor-high` and `cursor-main` examples. Skills load from `workspace/skills/` and `~/.agents/skills/`, with valid workspace skills taking precedence; reload active sessions after external changes.
+
+### Changed
+
+- Delegations and job completions reach their owner promptly without holding chat or task execution; chat delegations share a 10-second quick-return window. Finished jobs and output are retained for 7 days, settled delegations and runtime-managed artifacts for 30 days.
+- User guides and runtime playbooks now align with desks, task-lane execution, delegation boundaries and verification. Recurring-task guidance explains that a paused instance or one waiting for the user keeps later occurrences blocked until it finishes or is cancelled, and includes a read-only review example.
+
+### Fixed
+
+- DingTalk waiting cards appear immediately; progress appends at a controlled pace, folds without replaying old updates, and leaves the final answer in a normal message after a turn with progress.
+- Task reports, pending questions and interrupted archives recover after a crash. Memory reflection preserves committed progress and applies explicit replacement and forgetting consistently after partial failures.
+- Web API cancellation affects only the caller's response, graceful shutdown lets admitted turns finish delivery, and response chains no longer copy the whole session at every turn. Authorization, steering, attachment limits and terminal conversation handling are hardened.
+
 ## [0.9.5-beta.4] - 2026-11-06
 
 ### Breaking

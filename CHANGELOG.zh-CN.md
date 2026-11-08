@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-11-08
+
+0.9.5 beta 系列的正式版。以下按相对 0.9.4 的最终行为汇总，详细历史保留在各 beta 条目中。
+
+### 不兼容变更
+
+- **工位与渠道配置取代按频道组织的布局。** 一个助手在具名工位之间共享 workspace 的身份与规则，工位位于 `workspace/desk-<名字>/`，频道通过 `desk-bindings.json` 绑定。新的获准钉钉会话使用 `default`，终端未指定 `--desk` 时也打开它。`channel.json` 改为各有 `enabled` 开关的 `dingtalk` / `webapi` 两段，频道 id 带渠道前缀，每个 app home 只由一个运行时管理。移除 `/project` 和 `security.json` 的 `projectAccess`；`desk.json` 可设置绝对路径的自定义 `cwd`。
+- **任务独立于聊天执行。** 每个执行中的任务在后台任务车道里拥有自己的 runner 和会话。运行时根据实际工作、提问与时间推导任务状态；移除旧等待票、`task_step_end`、`task_update`、`/tasks steer` 和 `/tasks reply`。改用 `/tasks msg`、`/tasks pause`、`/tasks resume` 和 `/tasks cancel`；`/stop` 只停聊天。任务中发起的委派与作业将结果直接送回该任务。
+- **既有数据需要离线升级。** 停止全部运行时并完整备份 app home，再按实际源格式阅读[工位](docs/desk-migration.md)、[渠道](docs/channel-migration.md)与[任务](docs/task-migration.md)迁移说明。运行时只读当前格式，不会自动迁移旧数据。公开导出名保持稳定，但频道类型与构造参数有变化，详见 beta.3。
+- **提供方调整。** 移除 Brave 搜索，默认改用 DuckDuckGo。四个直接 Pi SDK 依赖升级到 1.4.0；`kimi-coding` 改用 OpenAI Chat Completions，自定义地址必须包含 `/v1`。请核对[搜索迁移说明](docs/channel-migration.md#调整网页搜索配置)与 [Pi 升级说明](docs/configuration-reference.md#pi-140-升级注意事项)。
+
+### 新增
+
+- **Web API 与共享运行时的终端。** OpenAI Responses 形状的 HTTP / WebSocket API 支持流式、后台响应、取消、会话和执行中追加指示，提供本机 socket、需鉴权的 TCP、CORS 与按 key 限流。`pipiclaw tui` 连接 daemon，或启动内嵌运行时；`--new` 新建会话。见 [Web API 指南](docs/webapi.md)。
+- **Cursor CLI 委派与共享技能。** 外部角色支持 `harness: cursor-cli`，提供 `cursor-high` 和 `cursor-main` 示例。技能从 `workspace/skills/` 与 `~/.agents/skills/` 加载，同名时有效的 workspace 技能优先；外部修改后需重新加载活动会话。
+
+### 变更
+
+- 委派与作业完成后及时通知所属会话或任务，不再占住聊天或任务执行；聊天委派共享 10 秒快速返回窗口。已结束的作业及输出保留 7 天，已结算的委派与运行时管理产物保留 30 天。
+- 用户指南与运行指南统一到工位、任务车道、委派边界和检查方式。周期任务说明明确：旧实例暂停或等待用户时，后续轮次持续跳过，直到该实例完成或取消；补充了只读审查示例。
+
+### 修复
+
+- 钉钉等待卡片立即显示；进度按受控节奏追加，折叠时不重放旧更新，有进度的回合结束后将最终回答作为普通消息发送。
+- 崩溃后恢复任务汇报、待答问题与未完成归档。记忆反思在部分失败后保留已提交的进度，并一致地处理显式替换和遗忘。
+- Web API 取消仅影响调用方自己的响应，正常关闭时允许已接纳回合完成投递，响应链不再每轮复制整份会话；加强了权限校验、执行中追加指示、附件限额与终端会话处理。
+
 ## [0.9.5-beta.4] - 2026-11-06
 
 ### 不兼容变更
