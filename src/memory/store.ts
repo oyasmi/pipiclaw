@@ -427,6 +427,8 @@ export type MemoryStoreOp =
 
 export interface ApplyMemoryOpsResult {
 	added: string[];
+	/** Successful writes and exact-add reuses, with the actual on-disk identity. */
+	retained: MemoryEntry[];
 	updated: string[];
 	deleted: string[];
 	touched: string[];
@@ -444,6 +446,7 @@ export async function applyMemoryOps(
 	const today = options.today ?? localDayKey();
 	const result: ApplyMemoryOpsResult = {
 		added: [],
+		retained: [],
 		updated: [],
 		deleted: [],
 		touched: [],
@@ -493,12 +496,20 @@ export async function applyMemoryOps(
 			// Recording the tombstone before the delete means the worst case after a failure here is
 			// the reverse — file still present, already tombstoned — which is recoverable: the file
 			// is still there to retry deleting, and it is already protected from re-learning either way.
-			await appendMemoryTombstoneRecord(deskDir, {
-				name: op.name,
-				contentHash: hashMemoryContent(entry.description),
-				deletedAt: today,
-				reason: op.reason?.trim() || "deleted",
-			});
+			// Removing a redundant file must not forbid a fact that is still live elsewhere.
+			if (
+				![...byName.values()].some(
+					(other) =>
+						other.name !== op.name &&
+						hashMemoryContent(other.description) === hashMemoryContent(entry.description),
+				)
+			)
+				await appendMemoryTombstoneRecord(deskDir, {
+					name: op.name,
+					contentHash: hashMemoryContent(entry.description),
+					deletedAt: today,
+					reason: op.reason?.trim() || "deleted",
+				});
 			await rm(getMemoryEntryPath(deskDir, op.name), { force: true });
 			byName.delete(op.name);
 			liveNames.delete(op.name);
@@ -536,6 +547,7 @@ export async function applyMemoryOps(
 			if (tombstoned && op.source === "user") await revokeMemoryTombstone(deskDir, description, today);
 			byName.set(op.name, next);
 			result.updated.push(op.name);
+			result.retained.push(next);
 			continue;
 		}
 
@@ -559,16 +571,19 @@ export async function applyMemoryOps(
 		}
 		// Background retries may revisit an already-applied add. Preserve the existing entry,
 		// including its source/expiry; a replay is not independent confirmation or a touch.
-		if (
-			op.source === "agent" &&
-			[...byName.values()].some(
-				(entry) =>
-					hashMemoryContent(entry.description) === hashMemoryContent(description) &&
-					entry.type === (op.type ?? "project") &&
-					entry.body.trim() === (op.details?.trim() ?? ""),
-			)
-		)
+		const duplicate =
+			op.source === "agent"
+				? [...byName.values()].find(
+						(entry) =>
+							hashMemoryContent(entry.description) === hashMemoryContent(description) &&
+							entry.type === (op.type ?? "project") &&
+							entry.body.trim() === (op.details?.trim() ?? ""),
+					)
+				: undefined;
+		if (duplicate) {
+			result.retained.push(duplicate);
 			continue;
+		}
 		const requested = op.name && isValidMemoryName(op.name) ? op.name : slugifyMemoryName(op.name || description);
 		const name = dedupeMemoryName(requested, liveNames);
 		if (name !== requested) {
@@ -592,6 +607,7 @@ export async function applyMemoryOps(
 		byName.set(name, entry);
 		liveNames.add(name);
 		result.added.push(name);
+		result.retained.push(entry);
 	}
 
 	await rebuildMemoryIndex(deskDir);

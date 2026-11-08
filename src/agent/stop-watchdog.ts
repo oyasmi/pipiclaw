@@ -31,8 +31,12 @@ export async function forceEndStuckTurnAfterStop(input: {
 	const graceMs = input.graceMs ?? STOP_FORCE_END_GRACE_MS;
 	const pollMs = input.pollMs ?? STOP_FORCE_END_POLL_MS;
 	const deadline = Date.now() + graceMs;
+	const generation = input.runner.getTurnStatus().generation;
 	const stopped = () =>
-		input.runner.isBusy() && input.runner.getTurnStatus().stopRequested && (input.isCurrent?.() ?? true);
+		input.runner.isBusy() &&
+		input.runner.getTurnStatus().generation === generation &&
+		input.runner.getTurnStatus().stopRequested &&
+		(input.isCurrent?.() ?? true);
 	while (stopped() && Date.now() < deadline) {
 		await sleepUnref(Math.min(pollMs, Math.max(1, deadline - Date.now())));
 	}

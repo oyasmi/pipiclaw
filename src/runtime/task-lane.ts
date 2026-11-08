@@ -763,7 +763,13 @@ export class TaskLane implements TaskControl {
 		live.runner = undefined;
 		if (!runner) return;
 		try {
-			await runner.dispose();
+			const disposal = runner.dispose();
+			this.options.activeTasks.add(disposal);
+			try {
+				await disposal;
+			} finally {
+				this.options.activeTasks.delete(disposal);
+			}
 		} catch (error) {
 			log.logWarn("tasks.runner.dispose_failed", "Task runner dispose failed", {
 				channelId: live.channelId,

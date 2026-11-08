@@ -39,6 +39,8 @@ export interface RunnerStatusSnapshot {
 export type TurnPhase = "idle" | "dispatching" | "preparing" | "streaming" | "finishing";
 
 export interface TurnStatus {
+	/** Monotonic identity within a runner; a watchdog never follows a later turn. */
+	generation?: number;
 	phase: TurnPhase;
 	stopRequested: boolean;
 	/** The message text this turn is processing (set by beginTurn). */

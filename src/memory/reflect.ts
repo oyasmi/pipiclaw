@@ -397,14 +397,27 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	// entire automatic deletion phase unsafe; delaying unrelated cleanup is intentional.
 	const writes = storeOps.filter((op) => op.op !== "delete");
 	const deletes = storeOps.filter((op) => op.op === "delete");
-	const updatedTargets = new Set(writes.flatMap((op) => (op.op === "update" ? [op.name] : [])));
+
 	const applied = await applyMemoryOps(options.deskDir, writes, { today });
+	// A reused add can be the original itself. Protect actual identities, not requested slugs.
+	// Conflicting later writes also cannot serve as evidence for the earlier replacement.
+	const live = new Map((await listMemoryEntries(options.deskDir)).map((entry) => [entry.name, entry]));
+	const retainedNames = new Set(applied.retained.map((entry) => entry.name));
+	const lostReplacement = applied.retained.some((entry) => {
+		const current = live.get(entry.name);
+		return (
+			!current ||
+			current.description !== entry.description ||
+			current.type !== entry.type ||
+			current.body !== entry.body
+		);
+	});
 	const unsafe =
 		rejected.some((op) => op.op === "add" || op.op === "update") ||
 		applied.skippedSecret > 0 ||
 		applied.skippedTombstone > 0 ||
 		applied.missingTarget > 0 ||
-		deletes.some((op) => updatedTargets.has(op.name));
+		lostReplacement;
 	if (unsafe) {
 		rejected.push(
 			...deletes.map((op) => ({
@@ -414,7 +427,16 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 			})),
 		);
 	} else {
-		const removed = await applyMemoryOps(options.deskDir, deletes, { today });
+		const safeDeletes = deletes.filter((op) => {
+			if (!retainedNames.has(op.name)) return true;
+			rejected.push({
+				op: "delete",
+				name: op.name,
+				reason: "deletion deferred: live replacement identity must be retained",
+			});
+			return false;
+		});
+		const removed = await applyMemoryOps(options.deskDir, safeDeletes, { today });
 		applied.deleted.push(...removed.deleted);
 	}
 	// Keep the accepted destructive decisions inspectable, not just a list of names.

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
+import { ChannelRunner } from "../../dist/agent/channel-runner.js";
 import { DingTalkBot } from "../../dist/dingtalk/bot.js";
 import { DingTalkTransport } from "../../dist/dingtalk/transport.js";
 import { createRuntimeContext } from "../../dist/runtime/bootstrap.js";
@@ -10,6 +11,15 @@ import { beginStep } from "../../dist/tasks/store.js";
 import { readTaskDeliveries } from "../../dist/tasks/delivery.js";
 
 const homeDir = process.argv[2];
+const hungShutdown = process.argv[3] === "hung-shutdown";
+if (hungShutdown) {
+    ChannelRunner.prototype.abort = () => new Promise(() => {});
+    const run = ChannelRunner.prototype.run;
+    ChannelRunner.prototype.run = async function (...args) {
+        await run.apply(this, args);
+        await new Promise(() => {});
+    };
+}
 const workspaceDir = join(homeDir, "workspace");
 let clockOffset = 0;
 const realNow = Date.now;
@@ -97,7 +107,7 @@ const runtime = await createRuntimeContext({
 			createBot: (ingress) => new CapturedBot(ingress, config),
 		}),
 	],
-	registerSignalHandlers: false,
+	registerSignalHandlers: hungShutdown,
 	startServices: false,
 	adoptedRunCheckIntervalMs: 50,
 	createEventsWatcher: () => ({ start() {}, stop() {} }),

@@ -65,7 +65,14 @@ export function createIngress(deps: IngressDeps): IngressService {
 		let queue = queues.get(channelId);
 		if (!queue) {
 			queue = new ChannelQueue((current) => {
-				if (stopped || isShuttingDown() || deps.stopWatchdogs.has(channelId) || queues.get(channelId) !== current)
+				const watchdog = deps.stopWatchdogs.get(channelId);
+				const runner = channelRunners.get(channelId);
+				if (
+					stopped ||
+					isShuttingDown() ||
+					(watchdog && watchdog.runner === runner && watchdog.generation === runner?.getTurnStatus().generation) ||
+					queues.get(channelId) !== current
+				)
 					return;
 				deps.getDurableDispatch()?.notifyCapacity(channelId);
 			});

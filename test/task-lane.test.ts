@@ -37,6 +37,7 @@ type StepResult = { text?: string; tools?: string[]; stopReason?: string; error?
 type Script = (context: StepContext) => Promise<StepResult | undefined> | StepResult | undefined;
 
 interface Harness {
+	activeTasks: Set<Promise<void>>;
 	lane: TaskLane;
 	deskDir: string;
 	deliveries: Array<{ channelId: string; text: string }>;
@@ -174,6 +175,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 		briefs,
 		runners,
 		disposed,
+		activeTasks,
 		bound,
 		pending,
 		cancelledRuns,
@@ -764,9 +766,16 @@ describe("restart (D10, D11)", () => {
 	});
 
 	it("stops the step in flight on shutdown without writing its end — the next start does", async () => {
+		// Mutation 2026-11-08: removing dispose's activeTasks registration leaves size=0 at the held write (confirmed red).
 		await harness.task("running");
 		const started = deferred();
+		const disposing = deferred();
+		const disposeGate = deferred();
 		harness.script("running", async ({ runner }) => {
+			vi.mocked(runner.dispose).mockImplementation(async () => {
+				disposing.resolve();
+				await disposeGate.promise;
+			});
 			started.resolve();
 			await new Promise<void>((resolve) => vi.mocked(runner.abort).mockImplementation(async () => resolve()));
 			return { text: "cut", tools: [] };
@@ -775,7 +784,14 @@ describe("restart (D10, D11)", () => {
 		await started.promise;
 		harness.lane.stop();
 		await scanning;
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		await disposing.promise;
+		try {
+			expect(harness.activeTasks.size).toBe(1);
+		} finally {
+			disposeGate.resolve();
+		}
+		await Promise.all([...harness.activeTasks]);
+		expect(harness.activeTasks.size).toBe(0);
 
 		const records = await readTaskLog(harness.deskDir, "running");
 		expect(records.map((record) => record.kind)).toEqual(["step"]);

@@ -1,3 +1,7 @@
+vi.mock("node:fs/promises", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:fs/promises")>()),
+}));
+
 import { chmodSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -54,7 +58,7 @@ describe("DurableDispatchService", () => {
 			notifyFailure = resolve;
 		});
 		const warnSpy = vi.spyOn(log, "logWarn").mockImplementation((event) => {
-			if (event === "dispatch.drain.failed") notifyFailure();
+			if (event === "dispatch.record.failed") notifyFailure();
 		});
 		const rejections: unknown[] = [];
 		const onRejection = (reason: unknown): void => {
@@ -67,7 +71,11 @@ describe("DurableDispatchService", () => {
 			service.start();
 			await failureLogged;
 			expect(rejections).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledWith("dispatch.drain.failed", expect.any(String), expect.anything());
+			expect(warnSpy).toHaveBeenCalledWith(
+				"dispatch.record.failed",
+				expect.any(String),
+				expect.objectContaining({ fields: expect.objectContaining({ classification: "io" }) }),
+			);
 
 			// The record is untouched on disk, so recovery is just the next drain succeeding.
 			chmodSync(stateDir, 0o755);
@@ -643,4 +651,94 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 			"subagent:dingtalk:dm:1:run_c:done",
 		]);
 	});
+});
+
+it("preserves bad wake evidence, rejects direct access faults, and drains healthy records across fresh instances", async () => {
+	// Mutation 2026-11-08: treating corrupt JSON as absent makes dispatch resolve true (confirmed red).
+	// Risk: corrupt/EIO records look absent and get overwritten or accepted; one failed write stops all other wakes.
+	const fs = await import("node:fs/promises");
+	const read = fs.readFile;
+	for (const mode of ["json", "structure", "status", "EIO", "EACCES"]) {
+		const stateDir = tempDir();
+		const bad = { ...event(), dispatchId: "a" };
+		const healthy = { ...event(), dispatchId: "b" };
+		const initial = new DurableDispatchService({ stateDir, bot: { enqueueEvent: () => false } });
+		await initial.dispatch(bad);
+		await initial.dispatch(healthy);
+		const path = join(stateDir, "a.json");
+		const raw = readFileSync(path, "utf-8");
+		const damaged =
+			mode === "json"
+				? "{bad"
+				: mode === "status"
+					? JSON.stringify({ ...JSON.parse(raw), status: ["pending"] })
+					: JSON.stringify({ ...JSON.parse(raw), leaseExpiresAt: "not-a-date" });
+		if (["json", "structure", "status"].includes(mode)) await writeFile(path, damaged);
+		const fault = vi.spyOn(fs, "readFile").mockImplementation((...args: Parameters<typeof read>) => {
+			if (String(args[0]) === path && ["EIO", "EACCES"].includes(mode))
+				return Promise.reject(Object.assign(new Error(mode), { code: mode }));
+			return read(...args);
+		});
+		const received: WakeEvent[] = [];
+		const recovered = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent: (wake) => {
+					received.push(wake);
+					return true;
+				},
+			},
+		});
+		await expect(recovered.dispatch(bad)).rejects.toThrow();
+		await expect(recovered.markStarted("a")).rejects.toThrow();
+		await recovered.drainOnce();
+		expect(received.map((wake) => wake.dispatchId)).toEqual(["b"]);
+		expect(readFileSync(path, "utf-8")).toBe(["json", "structure", "status"].includes(mode) ? damaged : raw);
+		fault.mockRestore();
+		await writeFile(path, raw);
+		await recovered.drainOnce();
+		expect(received.map((wake) => wake.dispatchId)).toEqual(["b", "a"]);
+		const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
+		await expect(recovered.markCompleted("a")).rejects.toThrow("EIO");
+		expect(existsSync(path)).toBe(true);
+		unlink.mockRestore();
+	}
+	// Shutdown must await an already-started atomic write, rather than only clearing the interval.
+	const pendingDir = tempDir();
+	const pendingService = new DurableDispatchService({ stateDir: pendingDir, bot: { enqueueEvent: () => true } });
+	let entered!: () => void;
+	const arrival = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const hold = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const write = atomicFile.writeFileAtomically;
+	const writeFault = vi.spyOn(atomicFile, "writeFileAtomically").mockImplementation(async (...args) => {
+		if (args[0].startsWith(pendingDir)) {
+			entered();
+			await hold;
+		}
+		await write(...args);
+	});
+	const dispatch = pendingService.dispatch(event());
+	await arrival;
+	pendingService.stop();
+	let flushed = false;
+	const flush = pendingService.flush().then(() => {
+		flushed = true;
+	});
+	await Promise.resolve();
+	expect(flushed).toBe(false);
+	expect(await pendingService.dispatch({ ...event(), dispatchId: "late" })).toBe(false);
+	release();
+	await dispatch;
+	await flush;
+	expect(flushed).toBe(true);
+	writeFault.mockRestore();
+	const service = new DurableDispatchService({ stateDir: tempDir(), bot: { enqueueEvent: () => true } });
+	vi.spyOn(fs, "readdir").mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+	await expect(service.drainOnce()).rejects.toThrow("EACCES");
+	await expect(service.cancelChannel("dingtalk:dm:1")).rejects.toThrow("EACCES");
 });

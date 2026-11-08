@@ -8,11 +8,18 @@ describe("TurnStateMachine", () => {
 
 		machine.begin("build the thing");
 		expect(machine.isBusy()).toBe(true);
-		expect(machine.status()).toEqual({ phase: "dispatching", stopRequested: false, taskText: "build the thing" });
+		expect(machine.status()).toEqual({
+			phase: "dispatching",
+			stopRequested: false,
+			taskText: "build the thing",
+			generation: 1,
+		});
 
 		machine.end();
 		expect(machine.isBusy()).toBe(false);
 		expect(machine.status().taskText).toBeUndefined();
+		machine.begin("build the thing");
+		expect(machine.status().generation).toBe(2);
 	});
 
 	describe("force-release", () => {

@@ -336,6 +336,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - `state/subagent-runs/`（委派 run 的状态、pid、实际 argv、结算与唤醒幂等标记；外部 run 重启对账需要）
 - `state/jobs/`（后台作业的持久状态与输出；重启恢复需要）
 - `state/memory/`（反思游标与调度状态）
+- `state/webapi/`（Web API 密钥、显式对话与响应记录，包括 `standalone.jsonl`；`api.sock` 是可重建的监听 socket，无需备份）
 - `state/dingtalk/`（各频道的钉钉路由元数据，重启后主动推送需要）
 - `state/usage/`（可选，LLM 成本账本）与 `state/logs/`（可选，结构化日志）
 

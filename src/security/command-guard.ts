@@ -3,7 +3,7 @@
  * rules and a wrapper-aware scan of every place a command can start.
  */
 import { basename } from "node:path";
-import { stripNullAndNormalize } from "../shared/text-utils.js";
+import { SHELL_DYNAMIC, ShellSyntaxError, shellCommands } from "./shell-parse.js";
 import type { CommandGuardResult, SecurityConfig } from "./types.js";
 
 interface ParsedCommand {
@@ -19,264 +19,27 @@ interface CommandRuleMatch {
 	matchedText: string;
 }
 
-const WHITESPACE = /\s+/;
-
-function stripComments(command: string): string {
-	let result = "";
-	let inSingle = false;
-	let inDouble = false;
-	let escaped = false;
-
-	for (let i = 0; i < command.length; i++) {
-		const char = command[i];
-		if (escaped) {
-			result += char;
-			escaped = false;
-			continue;
-		}
-		if (!inSingle && char === "\\") {
-			result += char;
-			escaped = true;
-			continue;
-		}
-		if (!inDouble && char === "'") {
-			inSingle = !inSingle;
-			result += char;
-			continue;
-		}
-		if (!inSingle && char === '"') {
-			inDouble = !inDouble;
-			result += char;
-			continue;
-		}
-		if (!inSingle && !inDouble && char === "#") {
-			break;
-		}
-		result += char;
-	}
-
-	return result;
+function parseShellWords(command: string): string[] {
+	const commands = shellCommands(command);
+	if (commands.length > 1) throw new ShellSyntaxError("Expected one command");
+	return commands[0] ?? [];
 }
 
 function splitCommandChain(command: string): string[] {
-	const atoms: string[] = [];
-	const normalized = stripComments(stripNullAndNormalize(command));
-
-	function pushAtom(atom: string): void {
-		const trimmed = atom.trim();
-		if (trimmed) {
-			atoms.push(trimmed);
-		}
-	}
-
-	function walk(input: string): void {
-		let buffer = "";
-		let inSingle = false;
-		let inDouble = false;
-		let escaped = false;
-		let parenDepth = 0;
-
-		for (let i = 0; i < input.length; i++) {
-			const char = input[i];
-			const next = input[i + 1];
-
-			if (escaped) {
-				buffer += char;
-				escaped = false;
-				continue;
-			}
-
-			if (char === "\\") {
-				buffer += char;
-				escaped = true;
-				continue;
-			}
-
-			if (!inDouble && char === "'") {
-				inSingle = !inSingle;
-				buffer += char;
-				continue;
-			}
-
-			if (!inSingle && char === '"') {
-				inDouble = !inDouble;
-				buffer += char;
-				continue;
-			}
-
-			if (!inSingle && char === "`") {
-				let j = i + 1;
-				let inner = "";
-				let innerEscaped = false;
-				while (j < input.length) {
-					const innerChar = input[j];
-					if (innerEscaped) {
-						inner += innerChar;
-						innerEscaped = false;
-						j++;
-						continue;
-					}
-					if (innerChar === "\\") {
-						inner += innerChar;
-						innerEscaped = true;
-						j++;
-						continue;
-					}
-					if (innerChar === "`") {
-						break;
-					}
-					inner += innerChar;
-					j++;
-				}
-				if (j < input.length) {
-					walk(inner);
-					buffer += "`subshell`";
-					i = j;
-					continue;
-				}
-			}
-
-			if (!inSingle && char === "$" && next === "(") {
-				let j = i + 2;
-				let inner = "";
-				let depth = 1;
-				let innerSingle = false;
-				let innerDouble = false;
-				let innerEscaped = false;
-				while (j < input.length) {
-					const innerChar = input[j];
-					if (innerEscaped) {
-						inner += innerChar;
-						innerEscaped = false;
-						j++;
-						continue;
-					}
-					if (innerChar === "\\") {
-						inner += innerChar;
-						innerEscaped = true;
-						j++;
-						continue;
-					}
-					if (!innerDouble && innerChar === "'") {
-						innerSingle = !innerSingle;
-						inner += innerChar;
-						j++;
-						continue;
-					}
-					if (!innerSingle && innerChar === '"') {
-						innerDouble = !innerDouble;
-						inner += innerChar;
-						j++;
-						continue;
-					}
-					if (!innerSingle && !innerDouble && innerChar === "(") {
-						depth++;
-						inner += innerChar;
-						j++;
-						continue;
-					}
-					if (!innerSingle && !innerDouble && innerChar === ")") {
-						depth--;
-						if (depth === 0) {
-							break;
-						}
-						inner += innerChar;
-						j++;
-						continue;
-					}
-					inner += innerChar;
-					j++;
-				}
-				if (depth === 0) {
-					walk(inner);
-					buffer += "$(subshell)";
-					i = j;
-					continue;
-				}
-			}
-
-			if (!inSingle && !inDouble) {
-				if (char === "(") {
-					parenDepth++;
-				} else if (char === ")" && parenDepth > 0) {
-					parenDepth--;
-				}
-
-				const separator =
-					parenDepth === 0 &&
-					(char === ";" ||
-						char === "\n" ||
-						(char === "|" && next === "|") ||
-						(char === "&" && next === "&") ||
-						char === "|");
-
-				if (separator) {
-					pushAtom(buffer);
-					buffer = "";
-					if ((char === "|" && next === "|") || (char === "&" && next === "&")) {
-						i++;
-					}
-					continue;
-				}
-			}
-
-			buffer += char;
-		}
-
-		pushAtom(buffer);
-	}
-
-	walk(normalized);
-	return atoms;
-}
-
-function parseShellWords(command: string): string[] {
-	const words: string[] = [];
-	let buffer = "";
-	let inSingle = false;
-	let inDouble = false;
-	let escaped = false;
-
-	function pushWord(): void {
-		if (buffer) {
-			words.push(buffer);
-			buffer = "";
-		}
-	}
-
-	for (let i = 0; i < command.length; i++) {
-		const char = command[i];
-		if (escaped) {
-			buffer += char;
-			escaped = false;
-			continue;
-		}
-		if (!inSingle && char === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (!inDouble && char === "'") {
-			inSingle = !inSingle;
-			continue;
-		}
-		if (!inSingle && char === '"') {
-			inDouble = !inDouble;
-			continue;
-		}
-		if (!inSingle && !inDouble && WHITESPACE.test(char)) {
-			pushWord();
-			continue;
-		}
-		buffer += char;
-	}
-	pushWord();
-	return words;
+	return shellCommands(command).map((words) => words.join(" "));
 }
 
 function parsedFromWords(words: string[]): ParsedCommand | null {
 	if (words.length === 0) {
 		return null;
 	}
+	if (
+		words[0].includes(SHELL_DYNAMIC.substitution) ||
+		words[0].includes(SHELL_DYNAMIC.expansion) ||
+		words[0].includes(SHELL_DYNAMIC.glob) ||
+		/[*?[\]{}]/.test(words[0])
+	)
+		throw new ShellSyntaxError("Dynamic executable is unsupported");
 	const normalizedCommand = basename(words[0]).toLowerCase();
 	const args = words.slice(1);
 	return {
@@ -313,79 +76,191 @@ const WRAPPER_COMMANDS = new Set([
 
 const MAX_GUARD_DEPTH = 6;
 
-// Pull the script bodies out of `sh -c <script>` style invocations. Combined
-// flags such as `-lc` are handled by matching any single-dash cluster ending
-// in `c`. There can be more than one (`bash -c a -c b`), so return all.
+// Shell option clusters may put c anywhere (-lc, -cl). After the first script,
+// further operands are positional parameters, not more shell options.
 function extractShellScripts(parsed: ParsedCommand): string[] {
-	if (!SHELL_COMMANDS.has(parsed.command)) {
-		return [];
-	}
-	const scripts: string[] = [];
+	if (!SHELL_COMMANDS.has(parsed.command)) return [];
 	for (let i = 0; i < parsed.args.length; i++) {
 		const arg = parsed.args[i];
-		if (/^-[a-z]*c$/.test(arg) && i + 1 < parsed.args.length) {
-			scripts.push(parsed.args[i + 1]);
-			i++;
+		if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(arg)) {
+			if (parsed.args[i + 1] === undefined) throw new ShellSyntaxError("Missing shell script");
+			return [parsed.args[i + 1]];
 		}
+		if (!/^-[a-zA-Z]+$/.test(arg) || /^--/.test(arg)) throw new ShellSyntaxError("Unsupported shell invocation");
 	}
-	return scripts;
+	throw new ShellSyntaxError("Shell invocation without a literal -c script");
 }
 
-// Tokens after `find ... -exec`/`-execdir` up to the `;`/`+` terminator form a
-// command run per match. Return each such inner command as word arrays.
-function extractFindExecCommands(parsed: ParsedCommand): string[][] {
-	if (parsed.command !== "find") {
-		return [];
-	}
-	const inner: string[][] = [];
+const FIND_OPERANDS = new Set([
+	"-name",
+	"-iname",
+	"-path",
+	"-ipath",
+	"-wholename",
+	"-iwholename",
+	"-regex",
+	"-iregex",
+	"-type",
+	"-xtype",
+	"-size",
+	"-perm",
+	"-user",
+	"-group",
+	"-uid",
+	"-gid",
+	"-links",
+	"-inum",
+	"-mtime",
+	"-mmin",
+	"-ctime",
+	"-cmin",
+	"-atime",
+	"-amin",
+	"-newer",
+	"-anewer",
+	"-cnewer",
+	"-printf",
+	"-fprint",
+	"-fprint0",
+	"-fls",
+	"-maxdepth",
+	"-mindepth",
+	"-regextype",
+	"-files0-from",
+]);
+function findActions(parsed: ParsedCommand): { commands: string[][]; deletes: boolean } {
+	const actions = { commands: [] as string[][], deletes: false };
+	if (parsed.command !== "find") return actions;
 	for (let i = 0; i < parsed.args.length; i++) {
-		if (parsed.args[i] === "-exec" || parsed.args[i] === "-execdir") {
-			const words: string[] = [];
-			for (let j = i + 1; j < parsed.args.length; j++) {
-				const token = parsed.args[j];
-				if (token === ";" || token === "+" || token === "\\;") {
-					break;
-				}
-				words.push(token);
-			}
-			if (words.length > 0) {
-				inner.push(words);
-			}
+		const arg = parsed.args[i];
+		if (FIND_OPERANDS.has(arg) || /^-newer[acmBt][acmBt]$/.test(arg)) {
+			i++;
+			continue;
 		}
+		if (arg === "-fprintf") {
+			i += 2;
+			continue;
+		}
+		if (arg === "-delete") actions.deletes = true;
+		if (!["-exec", "-execdir", "-ok", "-okdir"].includes(arg)) continue;
+		const words: string[] = [];
+		while (++i < parsed.args.length && ![";", "+"].includes(parsed.args[i])) words.push(parsed.args[i]);
+		if (!words.length || i === parsed.args.length) throw new ShellSyntaxError("Unterminated find execution");
+		actions.commands.push(words);
 	}
-	return inner;
+	return actions;
 }
 
-/**
- * How many suffix positions of a wrapper's arguments are treated as candidate command starts.
- *
- * The scan below is a superset heuristic, not a soundness requirement: the wrapper's own direct
- * rule, `sh -c` bodies and `find -exec` are all matched separately and are unaffected by this
- * bound. Without a bound the scan is quadratic in the argument count — every suffix is sliced and
- * re-joined into a normalized command line — and it recurses, so a wrapper whose arguments contain
- * further wrappers multiplied that cost up to `MAX_GUARD_DEPTH` times. Measured: ~6ms at 200
- * arguments, ~36ms at 800, which a long file list reaches without trying.
- *
- * A real inner command starts within the first few tokens, after the wrapper's own flags; no
- * wrapper in `WRAPPER_COMMANDS` takes anything close to 32 of them. Positions beyond this are
- * operands of the inner command, which has already been inspected from its own start position.
- */
-const MAX_WRAPPER_CANDIDATES = 32;
-
-// For a generic wrapper, the inner command can sit anywhere after the wrapper's
-// own options/operands (whose grammar varies per tool). Rather than parse each
-// wrapper's flags precisely, evaluate the leading suffix positions as candidate
-// command starts — this only ever adds detections, never relaxes them.
+// Only wrapper options with known operand counts are accepted. Never treat an operand as
+// another executable (e.g. env printf '%s' 'rm -rf /'), or stop scanning after a token budget.
+const WRAPPER_OPTIONS: Record<string, [string[], string[]]> = {
+	env: [
+		["-i", "--ignore-environment", "-0", "--null"],
+		["-u", "--unset", "-C", "--chdir"],
+	],
+	time: [
+		["-p", "-v", "--verbose", "-a", "--append"],
+		["-f", "--format", "-o", "--output"],
+	],
+	nice: [[], ["-n", "--adjustment"]],
+	ionice: [
+		["-t", "--ignore"],
+		["-c", "--class", "-n", "--classdata", "-p", "-P", "-u"],
+	],
+	nohup: [[], []],
+	timeout: [
+		["--preserve-status", "--foreground", "-v", "--verbose"],
+		["-s", "--signal", "-k", "--kill-after"],
+	],
+	stdbuf: [[], ["-i", "-o", "-e", "--input", "--output", "--error"]],
+	setsid: [["-c", "--ctty", "-f", "--fork", "-w", "--wait"], []],
+	chrt: [
+		["-b", "-f", "-i", "-o", "-r", "-d", "-R", "-a", "--all-tasks"],
+		["-T", "-P", "-D"],
+	],
+	xargs: [
+		["-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p", "--interactive", "-x"],
+		[
+			"-n",
+			"--max-args",
+			"-P",
+			"--max-procs",
+			"-I",
+			"-d",
+			"--delimiter",
+			"-s",
+			"--max-chars",
+			"-L",
+			"--max-lines",
+			"-E",
+			"--eof",
+		],
+	],
+	parallel: [
+		["--will-cite", "--keep-order", "-k", "-0", "--null"],
+		["-j", "--jobs", "-I", "--replace", "--colsep"],
+	],
+};
 function extractWrapperCandidates(parsed: ParsedCommand): string[][] {
-	if (!WRAPPER_COMMANDS.has(parsed.command)) {
-		return [];
+	if (!WRAPPER_COMMANDS.has(parsed.command)) return [];
+	const [flags, operands] = WRAPPER_OPTIONS[parsed.command];
+	let i = 0;
+	while (i < parsed.args.length) {
+		const arg = parsed.args[i];
+		if (arg === "--") {
+			i++;
+			break;
+		}
+		if (parsed.command === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+			if (Object.values(SHELL_DYNAMIC).some((tag) => arg.includes(tag)))
+				throw new ShellSyntaxError("Dynamic wrapper environment is unsupported");
+			i++;
+			continue;
+		}
+		if (parsed.command === "nice" && /^-\d+$/.test(arg)) {
+			i++;
+			continue;
+		}
+		if (!arg.startsWith("-")) break;
+		if (parsed.command === "xargs" && (arg.startsWith("-I") || arg.startsWith("--replace")))
+			throw new ShellSyntaxError("xargs template substitution is unsupported");
+		if (flags.includes(arg)) {
+			i++;
+			continue;
+		}
+		if (operands.includes(arg)) {
+			if (++i >= parsed.args.length) throw new ShellSyntaxError("Missing wrapper option operand");
+			i++;
+			continue;
+		}
+		if (
+			operands.some((option) =>
+				option.startsWith("--")
+					? arg.startsWith(`${option}=`)
+					: arg.startsWith(option) && arg.length > option.length,
+			)
+		) {
+			i++;
+			continue;
+		}
+		throw new ShellSyntaxError("Unsupported wrapper option");
 	}
-	const candidates: string[][] = [];
-	const limit = Math.min(parsed.args.length, MAX_WRAPPER_CANDIDATES);
-	for (let i = 0; i < limit; i++) {
-		candidates.push(parsed.args.slice(i));
+	if (["timeout", "chrt"].includes(parsed.command)) i++;
+	if (i >= parsed.args.length) return [];
+	const words = parsed.args.slice(i);
+	if (words[0].startsWith("-")) throw new ShellSyntaxError("Unresolved wrapper executable");
+	if (parsed.command === "parallel") {
+		const boundary = words.findIndex((word) => word === ":::" || word === "::::");
+		const template = boundary < 0 ? words : words.slice(0, boundary);
+		if (!template.length) throw new ShellSyntaxError("Missing parallel template");
+		// Literal operands stay operands. GNU parallel's command-template operators and shell
+		// substitution combinations need a richer grammar; do not guess at those boundaries.
+		if (template.slice(1).some((word) => /[;&|`$()<>]/.test(word)))
+			throw new ShellSyntaxError("Complex parallel templates are unsupported");
+		const quote = (word: string) => `'${word.replace(/'/g, "'\\''")}'`;
+		return shellCommands([template[0], ...template.slice(1).map(quote)].join(" "));
 	}
-	return candidates;
+	return [words];
 }
 
 // An allow pattern exempts an atom only when it matches that atom's command
@@ -469,7 +344,8 @@ function matchRule(parsed: ParsedCommand, config: SecurityConfig["commandGuard"]
 		};
 	}
 
-	if (parsed.command === "find" && (argsText.includes(" -delete") || /\s-exec\s+rm(?:\s|$)/.test(` ${argsText}`))) {
+	const find = findActions(parsed);
+	if (find.deletes || find.commands.some((words) => basename(words[0]).toLowerCase() === "rm")) {
 		return {
 			category: "destructive-file-op",
 			rule: "find-delete",
@@ -547,7 +423,6 @@ function matchRule(parsed: ParsedCommand, config: SecurityConfig["commandGuard"]
 		(parsed.command === "wget" && parsed.args.includes("--post-file")) ||
 		(parsed.command === "nc" && parsed.args.some((arg) => /^-[^-]*l/.test(arg) || arg === "--listen")) ||
 		(parsed.command === "socat" && /\bexec\b/i.test(argsText)) ||
-		normalized.includes("/dev/tcp/") ||
 		(normalized.includes("mkfifo") && normalized.includes(" nc")) ||
 		(parsed.command === "bash" && parsed.args.includes("-i") && /[>&]/.test(argsText))
 	) {
@@ -583,9 +458,7 @@ function matchRule(parsed: ParsedCommand, config: SecurityConfig["commandGuard"]
 				/(os\.system|subprocess|exec\(|eval\()/i.test(argsText)) ||
 			(parsed.command === "perl" && parsed.args.includes("-e") && /\b(system|exec)\b/.test(argsText)) ||
 			(parsed.command === "ruby" && parsed.args.includes("-e") && /\b(system|exec)\b/.test(argsText)) ||
-			(parsed.command === "node" && parsed.args.includes("-e") && /\b(child_process|exec|spawn)\b/.test(argsText)) ||
-			/\\x[0-9a-f]{2}/i.test(normalized) ||
-			/\$'/.test(normalized)
+			(parsed.command === "node" && parsed.args.includes("-e") && /\b(child_process|exec|spawn)\b/.test(argsText))
 		) {
 			return {
 				category: "obfuscation",
@@ -616,31 +489,49 @@ function inspectParsed(
 	parsed: ParsedCommand,
 	config: SecurityConfig["commandGuard"],
 	depth: number,
+	templateSubstitution = false,
 ): CommandRuleMatch | null {
-	if (atomAllowed(parsed.normalized, config.allowPatterns)) {
-		return null;
-	}
-
-	const direct = matchRule(parsed, config);
+	if (
+		!WRAPPER_COMMANDS.has(parsed.command) &&
+		!["echo", "printf"].includes(parsed.command) &&
+		parsed.args.some((arg) => arg.includes(SHELL_DYNAMIC.expansion) || arg.includes(SHELL_DYNAMIC.substitution))
+	)
+		throw new ShellSyntaxError("Dynamic command operands are unsupported");
+	if (
+		!WRAPPER_COMMANDS.has(parsed.command) &&
+		!["echo", "printf", "ls", "cat", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "grep", "rg", "sed"].includes(
+			parsed.command,
+		) &&
+		parsed.args.some((arg) => arg.includes(SHELL_DYNAMIC.glob))
+	)
+		throw new ShellSyntaxError("Dynamic pathname operands are unsupported for this command");
+	const direct = atomAllowed(parsed.normalized, config.allowPatterns) ? null : matchRule(parsed, config);
 	if (direct) {
 		return direct;
 	}
 
 	if (depth >= MAX_GUARD_DEPTH) {
-		return null;
+		throw new ShellSyntaxError("Command recursion limit");
 	}
 
 	for (const script of extractShellScripts(parsed)) {
+		if (templateSubstitution && script.includes("{}"))
+			throw new ShellSyntaxError("Template substitution into shell scripts is unsupported");
 		const nested = evaluateCommand(script, config, depth + 1);
 		if (nested) {
 			return nested;
 		}
 	}
 
-	for (const words of [...extractFindExecCommands(parsed), ...extractWrapperCandidates(parsed)]) {
+	for (const words of [...findActions(parsed).commands, ...extractWrapperCandidates(parsed)]) {
 		const innerParsed = parsedFromWords(words);
 		if (innerParsed) {
-			const nested = inspectParsed(innerParsed, config, depth + 1);
+			const nested = inspectParsed(
+				innerParsed,
+				config,
+				depth + 1,
+				templateSubstitution || parsed.command === "find" || parsed.command === "parallel",
+			);
 			if (nested) {
 				return nested;
 			}
@@ -655,32 +546,28 @@ function evaluateCommand(
 	config: SecurityConfig["commandGuard"],
 	depth: number,
 ): CommandRuleMatch | null {
-	const normalizedWhole = stripNullAndNormalize(command);
-
+	const commands = shellCommands(command);
 	if (
 		config.blockObfuscation &&
-		(/\bbase64\b.*(?:-d|--decode).*?\|\s*(bash|sh|exec|eval)\b/i.test(normalizedWhole) ||
-			/\beval\s+\$\(/i.test(normalizedWhole) ||
-			/\\x[0-9a-f]{2}/i.test(normalizedWhole) ||
-			/\$'/.test(normalizedWhole))
+		commands.some(
+			(words, index) =>
+				words[0] === "base64" &&
+				words.some((arg) => arg === "-d" || arg === "--decode") &&
+				SHELL_COMMANDS.has(commands[index + 1]?.[0]),
+		)
 	) {
 		return {
 			category: "obfuscation",
-			rule: "obfuscation-whole-command",
-			reason: "Obfuscated command execution is not allowed",
-			matchedText: normalizedWhole,
+			rule: "decoded-shell",
+			reason: "Decoded shell input is not allowed",
+			matchedText: command,
 		};
 	}
-
-	for (const atom of splitCommandChain(command)) {
-		const parsed = parseCommand(atom);
-		if (!parsed) {
-			continue;
-		}
+	for (const words of commands) {
+		const parsed = parsedFromWords(words);
+		if (!parsed) continue;
 		const match = inspectParsed(parsed, config, depth);
-		if (match) {
-			return match;
-		}
+		if (match) return match;
 	}
 
 	return null;
@@ -691,7 +578,19 @@ export function guardCommand(command: string, config: SecurityConfig["commandGua
 		return { allowed: true };
 	}
 
-	const match = evaluateCommand(command, config, 0);
+	let match: CommandRuleMatch | null;
+	try {
+		match = evaluateCommand(command, config, 0);
+	} catch (error) {
+		if (!(error instanceof ShellSyntaxError)) throw error;
+		return {
+			allowed: false,
+			category: "unsupported-shell",
+			rule: "shell-parse",
+			reason: `${error.message}. Use literal simple commands or separate tool calls.`,
+			matchedText: command,
+		};
+	}
 	if (match) {
 		return {
 			allowed: false,

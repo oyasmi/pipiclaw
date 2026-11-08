@@ -11,7 +11,7 @@ import { join } from "node:path";
 import * as journal from "../src/memory/journal.js";
 import { runReflect } from "../src/memory/reflect.js";
 import { runRetriedSidecarTask } from "../src/memory/sidecar-worker.js";
-import { applyMemoryOps, listMemoryEntries } from "../src/memory/store.js";
+import { applyMemoryOps, isDescriptionTombstoned, listMemoryEntries } from "../src/memory/store.js";
 import { createMemorySaveTool } from "../src/tools/memory-manage.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -236,9 +236,19 @@ describe("reflect — recovery and safe deletion", () => {
 		expect((await listMemoryEntries(deskDir))[0]).toEqual(before);
 	});
 
-	it("keeps originals when replacement writes are blocked, fail, or conflict with deletion", async () => {
+	it("preserves replacement identities through duplication, failures, merges and retries", async () => {
+		// 2026-11-08: duplicate-original failed before repair; removing the identity fence fails conflict mode.
 		// Mutation 2026-10-31: bypassing the unsafe-write guard deletes the original in secret mode.
-		for (const mode of ["secret", "tombstone", "io", "conflict"]) {
+		for (const mode of [
+			"secret",
+			"tombstone",
+			"io",
+			"conflict",
+			"duplicate",
+			"merge",
+			"reuse-other",
+			"update-other",
+		]) {
 			const deskDir = createTempDir();
 			await applyMemoryOps(deskDir, [
 				{ op: "add", name: "original", description: "Original constraint", source: "agent" },
@@ -250,6 +260,19 @@ describe("reflect — recovery and safe deletion", () => {
 				confidence: 0.99,
 				necessity: "high",
 			};
+			const merge = ["merge", "reuse-other", "update-other"].includes(mode);
+			if (mode === "reuse-other" || mode === "update-other") {
+				await applyMemoryOps(deskDir, [
+					{
+						op: "add",
+						name: "merged",
+						description: mode === "reuse-other" ? replacement.description : "Previous summary",
+						source: "agent",
+					},
+				]);
+				if (mode === "update-other") replacement.op = "update";
+			}
+			if (mode === "duplicate") replacement.description = "Original constraint";
 			if (mode === "secret") replacement.description = "api_key = abcdef1234567890";
 			if (mode === "tombstone")
 				await applyMemoryOps(deskDir, [
@@ -263,11 +286,19 @@ describe("reflect — recovery and safe deletion", () => {
 			}
 			scripted({ journal: [], ops: [{ op: "delete", name: "original", confidence: 0.99 }, replacement] });
 			if (mode === "io") await expect(run(deskDir)).rejects.toThrow();
-			else expect((await run(deskDir)).deleted, mode).toEqual([]);
+			else {
+				expect((await run(deskDir)).deleted, mode).toEqual(merge ? ["original"] : []);
+				expect((await run(deskDir)).deleted, `${mode} retry`).toEqual([]);
+			}
 			expect(
 				(await listMemoryEntries(deskDir)).some((entry) => entry.name === "original"),
 				mode,
-			).toBe(true);
+			).toBe(!merge);
+			if (merge || mode === "duplicate") {
+				const description = mode === "duplicate" ? "Original constraint" : replacement.description;
+				expect(await isDescriptionTombstoned(deskDir, description), mode).toBe(false);
+				expect(await listMemoryEntries(deskDir), mode).toHaveLength(1);
+			}
 		}
 	});
 });

@@ -16,6 +16,7 @@ const SHUTDOWN_WAIT_MS = 15000;
 const SHUTDOWN_FLUSH_WAIT_MS = 45000;
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
 const SHUTDOWN_LOG_FLUSH_WAIT_MS = 10_000;
+const SHUTDOWN_TOTAL_MS = 90_000;
 
 function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolean> {
 	if (tasks.length === 0) {
@@ -34,7 +35,7 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 
 export interface ShutdownDeps {
 	taskLane: { stop(): void };
-	getDurableDispatch: () => { stop(): void } | undefined;
+	getDurableDispatch: () => { stop(): void; flush?(): Promise<void> } | undefined;
 	memoryMaintenanceScheduler: { stop(): void };
 	deskRuntime: { stop(): void; flush?(): Promise<void> };
 	runs: { stop(): void };
@@ -74,6 +75,35 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 		}
 
 		shutdownPromise = (async () => {
+			const deadline = Date.now() + SHUTDOWN_TOTAL_MS;
+			let closed = false;
+			let quiescent = true;
+			const wait = (tasks: Promise<void>[], budget: number) =>
+				waitForTasks(tasks, Math.max(0, Math.min(budget, deadline - Date.now())));
+			const phase = async (name: string, work: () => Promise<void>, budget: number) => {
+				const settled = await wait(
+					[
+						Promise.resolve()
+							.then(work)
+							.catch((error) => {
+								quiescent = false;
+								if (!closed)
+									log.logWarn("runtime.shutdown.phase_failed", "Shutdown phase failed", {
+										reason: errorMessage(error),
+										fields: { phase: name },
+									});
+							}),
+					],
+					budget,
+				);
+				if (!settled) {
+					quiescent = false;
+					log.logWarn("runtime.shutdown.phase_timeout", "Shutdown phase failed", {
+						reason: "deadline exceeded",
+						fields: { phase: name },
+					});
+				}
+			};
 			deps.markShuttingDown();
 			log.logInfoEvent("runtime.shutdown.started", "Shutting down", { fields: { reason } });
 
@@ -85,7 +115,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			jobs.stop();
 			// Admission closes first; the transports keep delivering, so a turn that finishes inside
 			// the grace window below still reaches its channel (its card, its Web API response).
-			await transports.stopAcceptingAll();
+			await phase("stop-accepting", () => transports.stopAcceptingAll(), SHUTDOWN_ABORT_WAIT_MS);
 			ingress.stop();
 
 			const runningTasks = Array.from(activeTasks);
@@ -93,7 +123,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 				log.logInfoEvent("runtime.shutdown.waiting", "Waiting for active turns to finish", {
 					fields: { activeTurns: runningTasks.length },
 				});
-				const completed = await waitForTasks(runningTasks, SHUTDOWN_WAIT_MS);
+				const completed = await wait(runningTasks, SHUTDOWN_WAIT_MS);
 
 				if (!completed) {
 					log.logWarn("runtime.shutdown.grace_exceeded", "Shutdown grace period exceeded; aborting active turns", {
@@ -108,23 +138,24 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 						});
 						aborts.push(
 							runner.abort().catch((err) => {
-								log.logWarn("runtime.shutdown.abort_failed", "Turn abort during shutdown failed", {
-									channelId: channelId,
-									reason: errorMessage(err),
-								});
+								if (!closed)
+									log.logWarn("runtime.shutdown.abort_failed", "Turn abort during shutdown failed", {
+										channelId: channelId,
+										reason: errorMessage(err),
+									});
 							}),
 						);
 					}
-					await Promise.allSettled(aborts);
-
+					// abort() can itself hang before reaching the SDK. It shares the same
+					// abort window with the turns; it never extends the shutdown deadline.
+					await wait([...aborts, ...activeTasks], SHUTDOWN_ABORT_WAIT_MS);
 					const remainingTasks = Array.from(activeTasks);
 					if (remainingTasks.length > 0) {
-						const abortedCompleted = await waitForTasks(remainingTasks, SHUTDOWN_ABORT_WAIT_MS);
-						if (!abortedCompleted) {
-							log.logWarn("runtime.shutdown.forced", "Shutdown forced with turns still active", {
-								fields: { activeTurns: remainingTasks.length },
-							});
-						}
+						quiescent = false;
+						log.logWarn("runtime.shutdown.forced", "Shutdown turn drain failed", {
+							reason: "deadline exceeded",
+							fields: { activeTurns: remainingTasks.length },
+						});
 					}
 				}
 			}
@@ -134,13 +165,18 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			// left to unwind on its own as the process exits.
 			const disposals: Promise<void>[] = [];
 			for (const [channelId, runner] of channelRunners) {
-				if (runner.isBusy()) continue;
+				if (runner.isBusy()) {
+					runner.retireForRecovery();
+					continue;
+				}
 				disposals.push(
 					runner.dispose().catch((err) => {
-						log.logWarn("runtime.shutdown.dispose_failed", "Runner dispose during shutdown failed", {
-							channelId: channelId,
-							reason: errorMessage(err),
-						});
+						quiescent = false;
+						if (!closed)
+							log.logWarn("runtime.shutdown.dispose_failed", "Runner dispose during shutdown failed", {
+								channelId: channelId,
+								reason: errorMessage(err),
+							});
 					}),
 				);
 			}
@@ -148,8 +184,9 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 				log.logInfoEvent("runtime.shutdown.disposing", "Disposing idle channel runners", {
 					fields: { count: disposals.length },
 				});
-				const disposed = await waitForTasks(disposals, SHUTDOWN_FLUSH_WAIT_MS);
+				const disposed = await wait(disposals, SHUTDOWN_FLUSH_WAIT_MS);
 				if (!disposed) {
+					quiescent = false;
 					log.logWarn("runtime.shutdown.dispose_timeout", "Runner disposal during shutdown timed out", {
 						fields: { waitMs: SHUTDOWN_FLUSH_WAIT_MS },
 					});
@@ -157,24 +194,49 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			}
 			channelRunners.clear();
 			// Only now do connections close: what is still unfinished ends as interrupted.
-			await transports.stopAll();
+			await phase("stop-transports", () => transports.stopAll(), SHUTDOWN_ABORT_WAIT_MS);
 
-			const storageFlushes = [
-				store.close(),
-				// Cancels the debounce timer and lands the last activity times.
-				channelIndex.close(),
-				getUsageLedger().flush?.() ?? Promise.resolve(),
-				flushSecurityLogs(),
-				...(deskRuntime.flush ? [deskRuntime.flush()] : []),
-			];
-			const storageFlushed = await waitForTasks(storageFlushes, SHUTDOWN_LOG_FLUSH_WAIT_MS);
-			if (!storageFlushed) {
-				log.logWarn("runtime.shutdown.flush_timeout", "Log flush during shutdown timed out", {
-					fields: { waitMs: SHUTDOWN_LOG_FLUSH_WAIT_MS },
+			await phase(
+				"storage",
+				async () => {
+					await Promise.all([
+						deps.getDurableDispatch()?.flush?.() ?? Promise.resolve(),
+						store.close(),
+						channelIndex.close(),
+						getUsageLedger().flush?.() ?? Promise.resolve(),
+						flushSecurityLogs(),
+						...(deskRuntime.flush ? [deskRuntime.flush()] : []),
+					]);
+				},
+				SHUTDOWN_LOG_FLUSH_WAIT_MS,
+			);
+			await phase("logging", () => log.flushLogging(), SHUTDOWN_LOG_FLUSH_WAIT_MS);
+			// A deadline cannot cancel an arbitrary storage promise. Do not hand this home to
+			// a new writer while such work (or an active turn) can still mutate it. Process exit
+			// makes the retained PID lock reclaimable; an embedded caller must exit before reopen.
+			// A task drive can finish by starting its runner's asynchronous disposal. That
+			// cleanup joins activeTasks synchronously and must also fence lock hand-off.
+			quiescent &&= activeTasks.size === 0;
+			closed = true;
+			if (quiescent) {
+				const released = await wait(
+					[
+						deps.releaseDaemonLock().catch((error) => {
+							log.logWarn("runtime.shutdown.unlock_failed", "Daemon lock release failed", {
+								reason: errorMessage(error),
+							});
+						}),
+					],
+					Math.max(0, deadline - Date.now()),
+				);
+				if (!released)
+					log.logWarn("runtime.shutdown.unlock_timeout", "Daemon lock release failed", {
+						reason: "deadline exceeded",
+					});
+			} else
+				log.logWarn("runtime.shutdown.lock_retained", "Shutdown quiescence failed", {
+					reason: "unfinished work may still write; daemon lock retained until process exit",
 				});
-			}
-			await waitForTasks([log.flushLogging()], SHUTDOWN_LOG_FLUSH_WAIT_MS);
-			await deps.releaseDaemonLock();
 		})();
 
 		return shutdownPromise;

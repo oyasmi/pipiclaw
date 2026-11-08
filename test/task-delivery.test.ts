@@ -1,3 +1,7 @@
+vi.mock("node:fs/promises", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:fs/promises")>()),
+}));
+
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,4 +71,49 @@ describe("task delivery persistence", () => {
 		expect(await readTaskDeliveries(dir)).toEqual([]);
 		expect(await taskLog.readTaskLog(dir, "T", { kinds: ["report"] })).toMatchObject([{ delivered: true }]);
 	});
+});
+
+it("isolates corrupt and unreadable predecessors without losing FIFO or blocking new reports", async () => {
+	// Mutation 2026-11-08: removing the corrupt-owner fence sends later before first (confirmed red).
+	// Risk: one corrupt file poisons every task; ignoring it instead lets the same task's final overtake progress.
+	const fs = await import("node:fs/promises");
+	const read = fs.readFile;
+	for (const mode of ["json", "structure", "EIO", "EACCES"]) {
+		const bad = await queueTaskReport(dir, "T", 1, "channel", "first");
+		const path = join(dir, "tasks", ".delivery", `${bad.id}.json`);
+		const raw = await read(path, "utf-8");
+		if (mode === "json") await writeFile(path, "{broken");
+		if (mode === "structure") await writeFile(path, JSON.stringify({ ...bad, order: "bad" }));
+		const fault = vi.spyOn(fs, "readFile").mockImplementation((...args: Parameters<typeof read>) => {
+			if (String(args[0]) === path && ["EIO", "EACCES"].includes(mode))
+				return Promise.reject(Object.assign(new Error(mode), { code: mode }));
+			return read(...args);
+		});
+		await queueTaskReport(dir, "T", 1, "channel", "later");
+		await writeFile(join(dir, "tasks", "H.md"), renderTaskDocument({ state: "running" }, "# H\n"));
+		await queueTaskReport(dir, "H", 1, "channel", "healthy");
+		const send = vi.fn(async () => true);
+		await drainTaskDeliveries(dir, send, () => true);
+		expect(send.mock.calls).toEqual([["channel", "healthy"]]);
+		expect(await read(path, "utf-8")).toBe(
+			mode === "json" ? "{broken" : mode === "structure" ? JSON.stringify({ ...bad, order: "bad" }) : raw,
+		);
+		fault.mockRestore();
+		await writeFile(path, raw);
+		await drainTaskDeliveries(dir, send, () => true);
+		expect(send.mock.calls.slice(1)).toEqual([
+			["channel", "first"],
+			["channel", "later"],
+		]);
+	}
+	// No trustworthy owner (no report journal): preserve the evidence and fence all delivery.
+	const unknown = join(dir, "tasks", ".delivery", "00000000-0000-0000-0000-000000000000.json");
+	await writeFile(unknown, "{unknown");
+	await queueTaskReport(dir, "T", 2, "channel", "new");
+	const send = vi.fn(async () => true);
+	await drainTaskDeliveries(dir, send, () => true);
+	expect(send).not.toHaveBeenCalled();
+	await rm(unknown);
+	await drainTaskDeliveries(dir, send, () => true);
+	expect(send).toHaveBeenCalledOnce();
 });

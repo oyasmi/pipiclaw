@@ -143,20 +143,28 @@ export function createBusyHandlers(
 	 * output is ended at once (the card is closed, late events dropped).
 	 */
 	function abortTurn(channelId: string, runner: AgentRunner): void {
+		if (isShuttingDown()) return;
 		runner.requestStop();
 		void runner.abort().catch((err) => {
-			log.logWarn("agent.turn.abort_failed", "Turn abort failed", {
-				channelId: channelId,
-				reason: errorMessage(err),
-			});
+			if (!isShuttingDown())
+				log.logWarn("agent.turn.abort_failed", "Turn abort failed", {
+					channelId: channelId,
+					reason: errorMessage(err),
+				});
 		});
-		if (stopWatchdogs.has(channelId)) return;
-		stopWatchdogs.add(channelId);
+		const generation = runner.getTurnStatus().generation;
+		const existing = stopWatchdogs.get(channelId);
+		if (existing?.runner === runner && existing.generation === generation) return;
+		const registration = { runner, generation };
+		stopWatchdogs.set(channelId, registration);
 		void forceEndStuckTurnAfterStop({
 			channelId,
 			runner,
 			graceMs: options.stopForceEndGraceMs,
-			isCurrent: () => channelRunners.get(channelId) === runner,
+			isCurrent: () =>
+				!isShuttingDown() &&
+				stopWatchdogs.get(channelId) === registration &&
+				channelRunners.get(channelId) === runner,
 			recover: () => {
 				runner.retireForRecovery();
 				channelRunners.delete(channelId);
@@ -172,7 +180,7 @@ export function createBusyHandlers(
 				});
 			})
 			.finally(() => {
-				stopWatchdogs.delete(channelId);
+				if (!isShuttingDown() && stopWatchdogs.get(channelId) === registration) stopWatchdogs.delete(channelId);
 			});
 	}
 

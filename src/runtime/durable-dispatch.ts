@@ -11,7 +11,7 @@ import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
+import { isPlainObject } from "../shared/type-guards.js";
 
 type DispatchStatus = "pending" | "queued" | "running" | "exhausted";
 
@@ -140,32 +140,55 @@ function dispatchId(event: WakeEvent): string {
 		.digest("hex");
 }
 
-function parseRecord(raw: string): DurableDispatchRecord | undefined {
+class CorruptDispatchError extends Error {}
+
+function parseRecord(raw: string, id: string): DurableDispatchRecord {
+	let value: unknown;
 	try {
-		const value: unknown = JSON.parse(raw);
-		if (
-			!isRecord(value) ||
-			value.version !== 1 ||
-			typeof value.id !== "string" ||
-			typeof value.createdAt !== "string" ||
-			(value.status !== "pending" &&
-				value.status !== "queued" &&
-				value.status !== "running" &&
-				value.status !== "exhausted") ||
-			!isRecord(value.event) ||
-			value.event.source !== "wake" ||
-			typeof value.event.channelId !== "string" ||
-			typeof value.event.producer !== "string" ||
-			typeof value.event.text !== "string" ||
-			typeof value.deliveries !== "number" ||
-			(value.nextAttemptAt !== undefined && typeof value.nextAttemptAt !== "string")
-		) {
-			return undefined;
-		}
-		return value as unknown as DurableDispatchRecord;
-	} catch {
-		return undefined;
+		value = JSON.parse(raw);
+	} catch (cause) {
+		throw new CorruptDispatchError("Invalid dispatch JSON; have the deployer inspect the record.", { cause });
 	}
+	const date = (v: unknown) => typeof v === "string" && Number.isFinite(Date.parse(v));
+	if (
+		!isPlainObject(value) ||
+		value.version !== 1 ||
+		value.id !== id ||
+		!date(value.createdAt) ||
+		typeof value.status !== "string" ||
+		!["pending", "queued", "running", "exhausted"].includes(value.status) ||
+		!isPlainObject(value.event) ||
+		value.event.source !== "wake" ||
+		typeof value.event.channelId !== "string" ||
+		!value.event.channelId ||
+		typeof value.event.desk !== "string" ||
+		!value.event.desk ||
+		typeof value.event.ts !== "string" ||
+		!value.event.ts ||
+		typeof value.event.producer !== "string" ||
+		!value.event.producer ||
+		(value.event.presentation !== undefined && value.event.presentation !== "awaited") ||
+		(value.event.images !== undefined &&
+			(!Array.isArray(value.event.images) ||
+				value.event.images.some(
+					(image: unknown) =>
+						!isPlainObject(image) ||
+						typeof image.path !== "string" ||
+						typeof image.mimeType !== "string" ||
+						!Number.isSafeInteger(image.byteSize) ||
+						(image.byteSize as number) < 0 ||
+						(image.unsupportedFormat !== undefined && typeof image.unsupportedFormat !== "boolean"),
+				))) ||
+		typeof value.event.text !== "string" ||
+		value.event.dispatchId !== id ||
+		!Number.isSafeInteger(value.deliveries) ||
+		(value.deliveries as number) < 0 ||
+		(value.nextAttemptAt !== undefined && !date(value.nextAttemptAt)) ||
+		(value.leaseExpiresAt !== undefined && !date(value.leaseExpiresAt))
+	) {
+		throw new CorruptDispatchError("Invalid dispatch structure; have the deployer inspect the record.");
+	}
+	return value as unknown as DurableDispatchRecord;
 }
 
 /**
@@ -179,6 +202,20 @@ export class DurableDispatchService {
 	private readonly capacityRejected = new Map<string, Set<string>>();
 	private readonly capacityDrains = new Map<string, { dirty: boolean }>();
 	private readonly queue = createSerialQueue<string>();
+	private readonly pendingWrites = new Set<Promise<unknown>>();
+
+	private run<T>(id: string, work: () => Promise<T>): Promise<T> {
+		const pending = this.queue.run(id, work);
+		this.pendingWrites.add(pending);
+		void pending.finally(() => this.pendingWrites.delete(pending)).catch(() => undefined);
+		return pending;
+	}
+
+	/** stop() closes background admission; after active turns settle, wait for started writes
+	 * before another process can acquire the daemon lock. A hung write keeps that lock retained. */
+	async flush(): Promise<void> {
+		await Promise.allSettled([...this.pendingWrites]);
+	}
 	private readonly leaseMs: number;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	/**
@@ -245,7 +282,11 @@ export class DurableDispatchService {
 					drain.dirty = false;
 					for (const id of [...(this.capacityRejected.get(channelId) ?? [])]) {
 						if (this.stopped) return;
-						await this.drainRecord(id, Date.now());
+						try {
+							await this.drainRecord(id, Date.now());
+						} catch (error) {
+							this.reportRecordFault(id, error);
+						}
 					}
 				} while (drain.dirty && !this.stopped);
 			})()
@@ -276,6 +317,7 @@ export class DurableDispatchService {
 	}
 
 	async dispatch(event: WakeEvent): Promise<boolean> {
+		if (this.stopped) return false;
 		// Spec 058, D7: every in-process producer stamps its desk. An event without one cannot be
 		// checked against the channel's binding at admission, so it is refused here, at the door.
 		if (!event.desk) {
@@ -286,7 +328,7 @@ export class DurableDispatchService {
 			return false;
 		}
 		const id = event.dispatchId ?? dispatchId(event);
-		await this.queue.run(id, async () => {
+		await this.run(id, async () => {
 			const existing = await this.read(id);
 			if (existing) return;
 			const record: DurableDispatchRecord = {
@@ -316,25 +358,32 @@ export class DurableDispatchService {
 		let filenames: string[];
 		try {
 			filenames = (await readdir(this.options.stateDir)).filter((name) => name.endsWith(".json"));
-		} catch {
-			return 0;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+			throw error;
 		}
 		let canceled = 0;
 		for (const filename of filenames) {
-			const id = decodeDispatchId(filename.slice(0, -".json".length));
-			await this.queue.run(id, async () => {
-				const record = await this.read(id);
-				if (!record || record.event.channelId !== channelId) return;
-				if (record.status !== "queued" && record.status !== "running") return;
-				// Drop the liveness claim too, or the renew branch above would keep this record
-				// alive forever and the cancelled turn would never be redelivered.
-				this.running.delete(id);
-				// `/stop` already dropped the queued closures; the redelivery must not be turned away.
-				this.absorbed.delete(id);
-				record.leaseExpiresAt = undefined;
-				await this.write(record);
-				canceled++;
-			});
+			if (this.stopped) break;
+			const id = this.idFromFilename(filename);
+			if (id === undefined) continue;
+			try {
+				await this.run(id, async () => {
+					const record = await this.read(id);
+					if (!record || record.event.channelId !== channelId) return;
+					if (record.status !== "queued" && record.status !== "running") return;
+					// Drop the liveness claim too, or the renew branch above would keep this record
+					// alive forever and the cancelled turn would never be redelivered.
+					this.running.delete(id);
+					// `/stop` already dropped the queued closures; the redelivery must not be turned away.
+					this.absorbed.delete(id);
+					record.leaseExpiresAt = undefined;
+					await this.write(record);
+					canceled++;
+				});
+			} catch (error) {
+				this.reportRecordFault(id, error);
+			}
 		}
 		return canceled;
 	}
@@ -363,13 +412,13 @@ export class DurableDispatchService {
 	async markStarted(id: string | undefined): Promise<boolean> {
 		if (!id) return true;
 		if (this.absorbed.delete(id)) return false;
-		this.running.add(id);
-		await this.queue.run(id, async () => {
+		await this.run(id, async () => {
 			const record = await this.read(id);
 			if (!record) return;
 			record.status = "running";
 			record.leaseExpiresAt = new Date(Date.now() + this.leaseMs).toISOString();
 			await this.write(record);
+			this.running.add(id);
 		});
 		return true;
 	}
@@ -394,23 +443,29 @@ export class DurableDispatchService {
 		let filenames: string[];
 		try {
 			filenames = (await readdir(this.options.stateDir)).filter((name) => name.endsWith(".json"));
-		} catch {
-			return [];
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+			throw error;
 		}
 		const candidates: Array<{ id: string; createdAt: string }> = [];
 		for (const filename of filenames) {
-			const id = decodeDispatchId(filename.slice(0, -".json".length));
+			const id = this.idFromFilename(filename);
+			if (id === undefined) continue;
 			if (id === primaryId || this.running.has(id)) continue;
-			const record = await this.read(id);
-			if (record && this.isAbsorbable(record, channelId, accept))
-				candidates.push({ id, createdAt: record.createdAt });
+			try {
+				const record = await this.read(id);
+				if (record && this.isAbsorbable(record, channelId, accept))
+					candidates.push({ id, createdAt: record.createdAt });
+			} catch (error) {
+				this.reportRecordFault(id, error);
+			}
 		}
 		candidates.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
 		const events: WakeEvent[] = [];
 		for (const { id } of candidates.slice(0, limit)) {
 			try {
-				await this.queue.run(id, async () => {
+				await this.run(id, async () => {
 					// Re-checked under the record's own lock: a drain or its own delivery may have moved it.
 					const record = await this.read(id);
 					if (!record || this.running.has(id) || !this.isAbsorbable(record, channelId, accept)) return;
@@ -460,8 +515,13 @@ export class DurableDispatchService {
 		if (!id) return;
 		this.running.delete(id);
 		this.untrack(id);
-		await this.queue.run(id, async () => {
-			await unlink(recordPath(this.options.stateDir, id)).catch(() => undefined);
+		await this.run(id, async () => {
+			if (!(await this.read(id))) return;
+			try {
+				await unlink(recordPath(this.options.stateDir, id));
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
 		});
 	}
 
@@ -477,7 +537,7 @@ export class DurableDispatchService {
 	async markRetryable(id: string | undefined): Promise<void> {
 		if (!id) return;
 		this.running.delete(id);
-		await this.queue.run(id, async () => {
+		await this.run(id, async () => {
 			const record = await this.read(id);
 			if (!record) return;
 			const backoffMs = Math.min(
@@ -495,18 +555,28 @@ export class DurableDispatchService {
 		let filenames: string[];
 		try {
 			filenames = (await readdir(this.options.stateDir)).filter((name) => name.endsWith(".json")).sort();
-		} catch {
-			return;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
 		}
 		for (const filename of filenames) {
-			const id = decodeDispatchId(filename.slice(0, -".json".length));
-			await this.drainRecord(id, now);
+			if (this.stopped) break;
+			const id = this.idFromFilename(filename);
+			if (id === undefined) continue;
+			try {
+				await this.drainRecord(id, now);
+			} catch (error) {
+				this.reportRecordFault(id, error);
+			}
 		}
 	}
 
 	private async drainRecord(id: string, now: number): Promise<void> {
-		await this.queue.run(id, async () => {
+		if (this.stopped) return;
+		await this.run(id, async () => {
+			if (this.stopped) return;
 			const record = await this.read(id);
+			if (this.stopped) return;
 			if (!record) {
 				this.untrack(id);
 				return;
@@ -580,12 +650,37 @@ export class DurableDispatchService {
 		});
 	}
 
+	private idFromFilename(filename: string): string | undefined {
+		const id = decodeDispatchId(filename.slice(0, -".json".length));
+		if (`${encodeDispatchId(id)}.json` === filename) return id;
+		log.logWarn("dispatch.record.failed", "Dispatch record failed", {
+			reason: "Invalid dispatch filename; have the deployer inspect the record.",
+			fields: { path: join(this.options.stateDir, filename), classification: "corrupt" },
+		});
+		return undefined;
+	}
+
+	private reportRecordFault(id: string, error: unknown): void {
+		log.logWarn("dispatch.record.failed", "Dispatch record failed", {
+			reason: errorMessage(error),
+			fields: {
+				dispatchId: id,
+				path: recordPath(this.options.stateDir, id),
+				classification: error instanceof CorruptDispatchError ? "corrupt" : "io",
+				code: (error as NodeJS.ErrnoException).code,
+			},
+		});
+	}
+
 	private async read(id: string): Promise<DurableDispatchRecord | undefined> {
+		let raw: string;
 		try {
-			return parseRecord(await readFile(recordPath(this.options.stateDir, id), "utf-8"));
-		} catch {
-			return undefined;
+			raw = await readFile(recordPath(this.options.stateDir, id), "utf-8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			throw error;
 		}
+		return parseRecord(raw, id);
 	}
 
 	private async write(record: DurableDispatchRecord): Promise<void> {

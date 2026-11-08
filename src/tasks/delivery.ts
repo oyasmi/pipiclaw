@@ -38,20 +38,104 @@ const pathFor = (deskDir: string, id: string) => {
 	return join(directory(deskDir), `${id}.json`);
 };
 
-export async function readTaskDeliveries(deskDir: string): Promise<TaskDelivery[]> {
+interface DeliveryFault {
+	path: string;
+	taskId?: string;
+	error: unknown;
+}
+
+/** Faults are retained in place. A known owner fences only that task; an unknowable owner
+ * fences delivery globally because its FIFO predecessor relation cannot be established. */
+async function scanDeliveries(deskDir: string): Promise<{ messages: TaskDelivery[]; faults: DeliveryFault[] }> {
 	let names: string[];
 	try {
 		names = await readdir(directory(deskDir));
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { messages: [], faults: [] };
 		throw error;
 	}
 	const messages: TaskDelivery[] = [];
+	const faults: DeliveryFault[] = [];
 	for (const name of names.filter((name) => name.endsWith(".json"))) {
-		const message = await readDelivery(deskDir, name.slice(0, -5));
-		if (message) messages.push(message);
+		try {
+			const message = await readDelivery(deskDir, name.slice(0, -5));
+			if (message) messages.push(message);
+		} catch (error) {
+			const taskId = undefined;
+			const path = join(directory(deskDir), name);
+			faults.push({ path, taskId, error });
+		}
 	}
-	return messages.sort((a, b) => a.taskId.localeCompare(b.taskId) || a.order - b.order);
+	// The report journal independently records ownership. It can still identify a file whose
+	// JSON is truncated or unreadable; never infer ownership from unparseable text fragments.
+	if (faults.length) {
+		const taskNames = new Set((await readdir(join(deskDir, "tasks"))).filter((name) => name.endsWith(".md")));
+		try {
+			for (const file of await readdir(join(deskDir, "tasks", "archive")))
+				if (file.endsWith(".md")) taskNames.add(file);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		for (const file of taskNames) {
+			const taskId = file.slice(0, -3);
+			if (!validTaskId(taskId)) continue;
+			try {
+				const records = await readTaskLog(deskDir, taskId, { strict: true });
+				for (const fault of faults) {
+					if (
+						!fault.taskId &&
+						records.some(
+							(record) =>
+								(record.kind === "report" || record.kind === "close") &&
+								fault.path ===
+									join(directory(deskDir), `${record.kind === "close" ? "close-" : ""}${record.id}.json`),
+						)
+					)
+						fault.taskId = taskId;
+				}
+			} catch (error) {
+				log.logWarn("tasks.delivery.owner_failed", "Delivery ownership lookup failed", {
+					reason: errorMessage(error),
+					fields: { taskId },
+				});
+			}
+		}
+	}
+	for (const { path, taskId, error } of faults)
+		log.logWarn("tasks.delivery.read_failed", "Task delivery read failed", {
+			reason: errorMessage(error),
+			fields: {
+				path,
+				taskId,
+				code: (error as NodeJS.ErrnoException).code,
+				classification: error instanceof InvalidDeliveryError ? "corrupt" : "io",
+			},
+		});
+	return { messages: messages.sort((a, b) => a.taskId.localeCompare(b.taskId) || a.order - b.order), faults };
+}
+
+export async function readTaskDeliveries(deskDir: string): Promise<TaskDelivery[]> {
+	const { messages, faults } = await scanDeliveries(deskDir);
+	if (faults.length)
+		throw new AggregateError(
+			faults.map((fault) => fault.error),
+			"Task delivery queue contains unreadable records; have the deployer inspect the logged paths.",
+		);
+	return messages;
+}
+
+class InvalidDeliveryError extends Error {
+	constructor(path: string, cause?: unknown) {
+		super(`Invalid task delivery: ${path}; have the deployer inspect it before retrying.`, { cause });
+	}
+}
+
+function validTaskId(value: string): boolean {
+	try {
+		return normalizeTaskId(value) === value;
+	} catch {
+		return false;
+	}
 }
 
 async function readDelivery(deskDir: string, id: string): Promise<TaskDelivery | undefined> {
@@ -63,23 +147,32 @@ async function readDelivery(deskDir: string, id: string): Promise<TaskDelivery |
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
-	const value: unknown = JSON.parse(raw);
+	let value: unknown;
+	try {
+		value = JSON.parse(raw);
+	} catch (error) {
+		throw new InvalidDeliveryError(path, error);
+	}
 	if (
 		!isPlainObject(value) ||
 		value.id !== id ||
 		typeof value.taskId !== "string" ||
-		normalizeTaskId(value.taskId) !== value.taskId ||
+		!validTaskId(value.taskId) ||
 		typeof value.channel !== "string" ||
 		(value.kind !== "report" && value.kind !== "receipt") ||
 		typeof value.text !== "string" ||
 		typeof value.createdAt !== "string" ||
-		!Number.isInteger(value.order) ||
-		!Number.isFinite(value.attempts) ||
+		!Number.isSafeInteger(value.order) ||
+		(value.order as number) < 0 ||
+		!Number.isSafeInteger(value.attempts) ||
+		(value.attempts as number) < 0 ||
 		!Number.isFinite(value.nextAttemptAt) ||
-		(value.kind === "report" && !Number.isInteger(value.seq)) ||
-		(value.sentAt !== undefined && typeof value.sentAt !== "string")
+		(value.nextAttemptAt as number) < 0 ||
+		!Number.isFinite(Date.parse(value.createdAt)) ||
+		(value.kind === "report" && (!Number.isSafeInteger(value.seq) || (value.seq as number) < 1)) ||
+		(value.sentAt !== undefined && (typeof value.sentAt !== "string" || !Number.isFinite(Date.parse(value.sentAt))))
 	) {
-		throw new Error(`Invalid task delivery: ${path}; have the deployer inspect it before retrying.`);
+		throw new InvalidDeliveryError(path);
 	}
 	return value as unknown as TaskDelivery;
 }
@@ -118,10 +211,12 @@ export async function queueTaskReport(
 			);
 		}
 		const records = await readTaskLog(deskDir, taskId, { strict: true });
-		const queued = (await readTaskDeliveries(deskDir)).filter(
+		const queued = (await scanDeliveries(deskDir)).messages.filter(
 			(record) => record.taskId === taskId && record.kind === "report",
 		);
+		const reports = records.filter((record) => record.kind === "report");
 		message.order = Math.max(
+			...reports.map((record) => record.seq * 4 + reports.length),
 			seq * 4 + records.filter((record) => record.kind === "report" && record.seq === seq).length,
 			...queued.map((record) => record.order + 1),
 		);
@@ -251,13 +346,30 @@ export async function drainTaskDeliveries(
 ): Promise<number | undefined> {
 	const blocked = new Set<string>();
 	let next: number | undefined;
-	for (const message of await readTaskDeliveries(deskDir)) {
-		if (blocked.has(message.taskId) || !allowed(message.channel)) continue;
-		if (!(await deliverTaskMessage(deskDir, message.id, send, now))) {
+	const { messages, faults } = await scanDeliveries(deskDir);
+	if (faults.length) next = now + RETRY_MIN_MS;
+	if (faults.some((fault) => !fault.taskId)) return next;
+	for (const fault of faults) blocked.add(fault.taskId!);
+	for (const message of messages) {
+		if (blocked.has(message.taskId)) continue;
+		if (!allowed(message.channel)) {
 			blocked.add(message.taskId);
-			const current = await readDelivery(deskDir, message.id);
-			const at = Math.max(now + 1_000, current?.nextAttemptAt ?? now + RETRY_MIN_MS);
-			next = Math.min(next ?? at, at);
+			continue;
+		}
+		try {
+			if (!(await deliverTaskMessage(deskDir, message.id, send, now))) {
+				blocked.add(message.taskId);
+				const current = await readDelivery(deskDir, message.id);
+				const at = Math.max(now + 1_000, current?.nextAttemptAt ?? now + RETRY_MIN_MS);
+				next = Math.min(next ?? at, at);
+			}
+		} catch (error) {
+			blocked.add(message.taskId);
+			next = Math.min(next ?? now + RETRY_MIN_MS, now + RETRY_MIN_MS);
+			log.logWarn("tasks.delivery.drain_failed", "Task delivery drain failed", {
+				reason: errorMessage(error),
+				fields: { taskId: message.taskId, deliveryId: message.id, path: pathFor(deskDir, message.id) },
+			});
 		}
 	}
 	return next;

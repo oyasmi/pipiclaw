@@ -34,7 +34,7 @@ export interface IngressDeps {
 	channelRunners: Map<string, AgentRunner>;
 	sessionResetChains: Map<string, Promise<void>>;
 	activeTasks: Set<Promise<void>>;
-	stopWatchdogs: Set<string>;
+	stopWatchdogs: Map<string, { runner: AgentRunner; generation?: number }>;
 	channelIndex: ChannelIndex;
 	archiveIncomingMessage: (channelId: string, message: ArchivedMessage, contextLabel: string) => Promise<void>;
 	/** The channel's runner; `undefined` when it is not bound to an available desk — none is ever built then. */

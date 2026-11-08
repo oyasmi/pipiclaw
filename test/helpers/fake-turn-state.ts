@@ -8,9 +8,10 @@ import type { TurnStatus } from "../../src/agent/types.js";
 export function createFakeTurnState() {
 	let status: TurnStatus = { phase: "idle", stopRequested: false };
 	let abandoned = 0;
+	let generation = 0;
 	return {
 		beginTurn(taskText: string): void {
-			status = { phase: "dispatching", stopRequested: false, taskText };
+			status = { phase: "dispatching", stopRequested: false, taskText, generation: ++generation };
 		},
 		endTurn(): void {
 			if (abandoned > 0) {

@@ -135,6 +135,29 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		threw: boolean;
 	}
 
+	const reportDispatchFailure = (
+		phase: "admit" | "settle",
+		event: ChannelEvent,
+		dispatchId: string | undefined,
+		operation: string,
+		error: unknown,
+	): void => {
+		log.logWarn(
+			`dispatch.turn.${phase}_failed`,
+			phase === "admit" ? "Wake admission failed" : "Wake settlement failed",
+			{
+				channelId: event.channelId,
+				reason: errorMessage(error),
+				fields: {
+					dispatchId,
+					primaryDispatchId: event.dispatchId,
+					operation,
+					code: (error as NodeJS.ErrnoException | undefined)?.code,
+				},
+			},
+		);
+	};
+
 	/**
 	 * Dispatch admission: refuse a stale redelivery of a wake an earlier turn already handled (the
 	 * turn is released), and fold other pending completion wakes into this one. `undefined` = skip.
@@ -142,50 +165,53 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 	const admitTurn = async (inboundEvent: ChannelEvent, runner: AgentRunner): Promise<TurnState | undefined> => {
 		let event = inboundEvent;
 		const durable = getDurableDispatch();
-		// Sampled synchronously, before any await: `/stop` after this point cleared the queued closures.
 		const stopEpoch = durable?.stopEpoch(inboundEvent.channelId) ?? 0;
+		const claimedIds: string[] = [];
+		let operation = "markStarted";
+		let admitted = false;
 		deps.reservedTurns.delete(inboundEvent);
-		if (durable && !(await durable.markStarted(event.dispatchId))) {
-			// A stale delivery of a wake an earlier turn already absorbed and handled.
-			runner.endTurn();
-			return undefined;
-		}
-		let absorbedDispatchIds: string[] = [];
-		if (durable && event.source === "wake" && event.dispatchId && isCoalescableWake(event)) {
-			const primary = event;
-			const absorbed = await durable
-				.absorbPending(
+		try {
+			if (durable && !(await durable.markStarted(event.dispatchId))) return undefined;
+			if (durable && event.dispatchId) claimedIds.push(event.dispatchId);
+			let absorbedDispatchIds: string[] = [];
+			if (durable && event.source === "wake" && event.dispatchId && isCoalescableWake(event)) {
+				operation = "absorbPending";
+				const primary = event;
+				const absorbed = await durable.absorbPending(
 					event.channelId,
 					event.dispatchId,
 					(candidate) => canAbsorbWake(primary, candidate),
 					MAX_COALESCED_WAKES - 1,
 					stopEpoch,
-				)
-				.catch((error: unknown) => {
-					log.logWarn("dispatch.wake.absorb_failed", "Wake coalescing failed", {
-						channelId: event.channelId,
-						reason: errorMessage(error),
-					});
-					return [] as WakeEvent[];
-				});
-			if (absorbed.length > 0) {
-				event = mergeCompletionWakes(event, absorbed);
-				absorbedDispatchIds = absorbed.flatMap((absorbedEvent) =>
-					absorbedEvent.dispatchId ? [absorbedEvent.dispatchId] : [],
 				);
-				log.logInfoEvent("dispatch.wake.coalesced", "Completion wakes coalesced", {
-					channelId: event.channelId,
-					fields: { primary: event.dispatchId, absorbed: absorbedDispatchIds.length },
-				});
+				absorbedDispatchIds = absorbed.flatMap((item) => (item.dispatchId ? [item.dispatchId] : []));
+				claimedIds.push(...absorbedDispatchIds);
+				if (absorbed.length > 0) {
+					event = mergeCompletionWakes(event, absorbed);
+					log.logInfoEvent("dispatch.wake.coalesced", "Completion wakes coalesced", {
+						channelId: event.channelId,
+						fields: { primary: event.dispatchId, absorbed: absorbedDispatchIds.length },
+					});
+				}
 			}
+			admitted = true;
+			return { event, output: undefined, absorbedDispatchIds, mergedWakesHandled: false, threw: false };
+		} catch (error) {
+			reportDispatchFailure("admit", inboundEvent, inboundEvent.dispatchId, operation, error);
+			// Admission never reached execution. Release successful claims for redelivery, not
+			// completion. A failed rollback keeps its original record and is diagnosed separately.
+			for (const id of claimedIds) {
+				if (!deps.isCurrentRunner(runner)) break;
+				try {
+					await durable?.markRetryable(id);
+				} catch (retryError) {
+					reportDispatchFailure("settle", inboundEvent, id, "markRetryable", retryError);
+				}
+			}
+			throw error;
+		} finally {
+			if (!admitted) runner.endTurn();
 		}
-		return {
-			event,
-			output: undefined,
-			absorbedDispatchIds,
-			mergedWakesHandled: false,
-			threw: false,
-		};
 	};
 
 	/** Say something to the channel in answer to `event`, carrying its reference back to the transport. */
@@ -328,42 +354,55 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 	/** Always runs: finish the output, settle the dispatch records, release the turn. */
 	const finishTurn = async (turn: TurnState, runner: AgentRunner): Promise<void> => {
 		const { event } = turn;
-		// The runner finishes the output when it runs; a command, or a turn that failed before the
-		// runner took over, finishes here so the transport never keeps one open. A human message that
-		// threw before any output was opened still gets one, so its transport sees it end.
-		if (!turn.output && turn.threw && event.source === "human") {
-			const transport = transports.forChannel(event.channelId);
-			if (transport) turn.output = trackOutput(transport.openTurn(turnInfoOf(event), { quiet: true }));
-		}
-		if (turn.output && !turn.output.finished) {
-			const outcome: TurnOutcome = turn.threw
-				? {
-						kind: "failed",
-						message: TURN_FAILED_MESSAGE,
-						usage: createEmptyUsageTotals(),
-						executionDesk: runner.conversation.desk,
-					}
-				: { kind: "completed", usage: createEmptyUsageTotals(), executionDesk: runner.conversation.desk };
-			await turn.output.ctx.finish(outcome).catch((error: unknown) => {
-				log.logWarn("delivery.close.failed", "Delivery close failed", {
-					channelId: event.channelId,
-					reason: errorMessage(error),
+		const errors: unknown[] = [];
+		const settle = async (id: string | undefined, operation: "markCompleted" | "markRetryable") => {
+			if (!deps.isCurrentRunner(runner)) return;
+			try {
+				await getDurableDispatch()?.[operation](id);
+			} catch (error) {
+				errors.push(error);
+				reportDispatchFailure("settle", event, id, operation, error);
+			}
+		};
+		try {
+			// The runner finishes the output when it runs; a command, or a turn that failed before the
+			// runner took over, finishes here so the transport never keeps one open. A human message that
+			// threw before any output was opened still gets one, so its transport sees it end.
+			if (!turn.output && turn.threw && event.source === "human") {
+				const transport = transports.forChannel(event.channelId);
+				if (transport) turn.output = trackOutput(transport.openTurn(turnInfoOf(event), { quiet: true }));
+			}
+			if (turn.output && !turn.output.finished) {
+				const outcome: TurnOutcome = turn.threw
+					? {
+							kind: "failed",
+							message: TURN_FAILED_MESSAGE,
+							usage: createEmptyUsageTotals(),
+							executionDesk: runner.conversation.desk,
+						}
+					: { kind: "completed", usage: createEmptyUsageTotals(), executionDesk: runner.conversation.desk };
+				await turn.output.ctx.finish(outcome).catch((error: unknown) => {
+					log.logWarn("delivery.close.failed", "Delivery close failed", {
+						channelId: event.channelId,
+						reason: errorMessage(error),
+					});
 				});
-			});
-		}
-		if (!deps.isCurrentRunner(runner)) {
+			}
+			if (!deps.isCurrentRunner(runner)) return;
+			await settle(event.dispatchId, "markCompleted");
+			// Failure of one record must not strand later absorbed claims. Re-check ownership
+			// before each await: /new or watchdog recovery may replace the runner meanwhile.
+			const stopped = !turn.mergedWakesHandled || runner.getTurnStatus().stopRequested;
+			for (const id of turn.absorbedDispatchIds) await settle(id, stopped ? "markRetryable" : "markCompleted");
+			if (errors.length)
+				throw new AggregateError(
+					errors,
+					"Durable wake settlement failed; inspect the logged dispatch ids and storage errors before retrying.",
+				);
+		} finally {
+			// Release the captured runner, never whichever generation now owns the channel.
 			runner.endTurn();
-			return;
 		}
-		await getDurableDispatch()?.markCompleted(event.dispatchId);
-		// A stopped turn has not finished handling its merged notifications. Release their
-		// claims even if /stop's asynchronous cancelChannel reset raced admission or failed.
-		const stopped = !turn.mergedWakesHandled || runner.getTurnStatus().stopRequested;
-		for (const absorbedId of turn.absorbedDispatchIds) {
-			if (stopped) await getDurableDispatch()?.markRetryable(absorbedId);
-			else await getDurableDispatch()?.markCompleted(absorbedId);
-		}
-		runner.endTurn();
 	};
 
 	/** Release a turn `reserveEvent` began for an event that admission then refused. */

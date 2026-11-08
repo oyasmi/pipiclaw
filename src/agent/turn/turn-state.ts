@@ -7,6 +7,7 @@ import type { TurnPhase, TurnStatus } from "../types.js";
  */
 export interface TurnHandle {
 	phase: TurnPhase;
+	generation?: number;
 	stopRequested: boolean;
 	taskText?: string;
 }
@@ -36,6 +37,7 @@ function idleTurn(): TurnHandle {
  */
 export class TurnStateMachine {
 	private turn: TurnHandle = idleTurn();
+	private generation = 0;
 	/** Turns released by `forceEnd` whose owner has not called `end()` yet. */
 	private abandoned = 0;
 
@@ -46,7 +48,7 @@ export class TurnStateMachine {
 		if (this.turn.phase !== "idle") {
 			this.onWarn(`beginTurn while phase=${this.turn.phase}; turns must be serialized`);
 		}
-		this.turn = { phase: "dispatching", stopRequested: false, taskText };
+		this.turn = { phase: "dispatching", stopRequested: false, taskText, generation: ++this.generation };
 	}
 
 	/** Release the turn. Ignored when the turn was already released by `forceEnd`. */

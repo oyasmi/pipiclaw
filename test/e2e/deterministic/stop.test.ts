@@ -102,16 +102,52 @@ describe("E2E deterministic: /stop", () => {
 			}
 			return result;
 		});
+		// Mutation 2026-11-08: unconditional old-watchdog cleanup prevents B recovery (confirmed red at a reduced 12s test deadline).
+		// A→B regression: A's notification is held while B is stopped. Releasing A then
+		// must not remove B's watchdog. Both provider and notification windows are test-owned.
+		let releaseNotice!: () => void;
+		const noticeGate = new Promise<void>((resolve) => {
+			releaseNotice = resolve;
+		});
+		let noticeEntered!: () => void;
+		const noticeArrival = new Promise<void>((resolve) => {
+			noticeEntered = resolve;
+		});
+		let retiredB!: () => void;
+		const recoveryB = new Promise<void>((resolve) => {
+			retiredB = resolve;
+		});
+		let retireCount = 0;
+		let noticeHeld = false;
+		const transport = harness.runtime.transports.forChannel(harness.channelId)!;
+		const push = transport.push.bind(transport);
+		vi.spyOn(transport, "push").mockImplementation(async (channel, message) => {
+			const sent = await push(channel, message);
+			if (retireCount === 1 && !noticeHeld) {
+				noticeHeld = true;
+				noticeEntered();
+				await noticeGate;
+			}
+			return sent;
+		});
+		const abort = ChannelRunner.prototype.abort;
+		vi.spyOn(ChannelRunner.prototype, "abort").mockImplementation(function (this: ChannelRunner) {
+			return this.getTurnStatus().taskText === "AFTER_RECOVERY" ? new Promise<void>(() => {}) : abort.call(this);
+		});
 		const retire = ChannelRunner.prototype.retireForRecovery;
 		vi.spyOn(ChannelRunner.prototype, "retireForRecovery").mockImplementation(function (this: ChannelRunner) {
 			retire.call(this);
-			recovered();
+			retireCount++;
+			if (retireCount === 1) recovered();
+			else retiredB();
 		});
 		let oldTurn: Promise<void> = Promise.resolve();
+		let newTurn: Promise<void> = Promise.resolve();
 		const handle = harness.runtime.ingress.handleEvent.bind(harness.runtime.ingress);
 		vi.spyOn(harness.runtime.ingress, "handleEvent").mockImplementation((event) => {
 			const pending = handle(event);
 			if (event.text === "WEDGE_RETURN") oldTurn = pending;
+			if (event.text === "AFTER_RECOVERY") newTurn = pending;
 			return pending;
 		});
 		const nextGate = harness.model.script.hold({
@@ -122,6 +158,7 @@ describe("E2E deterministic: /stop", () => {
 			await epilogue;
 			await harness.sendUserMessageNoWait("/stop");
 			await recovery;
+			await noticeArrival;
 			expect(harness.runtime.ingress.isIdle()).toBe(true);
 			await harness.sendUserMessageNoWait("AFTER_RECOVERY");
 			const nextRequest = await nextGate.arrived;
@@ -129,7 +166,15 @@ describe("E2E deterministic: /stop", () => {
 			releaseEpilogue();
 			await oldTurn;
 			expect(harness.runtime.ingress.isRunning(harness.channelId)).toBe(true);
+			await harness.sendUserMessageNoWait("/stop");
+			releaseNotice();
+			await recoveryB;
+			expect(retireCount).toBe(2);
+			expect(harness.runtime.ingress.isIdle()).toBe(true);
+			nextGate.release();
+			await newTurn;
 		} finally {
+			releaseNotice();
 			releaseEpilogue();
 			nextGate.release();
 		}

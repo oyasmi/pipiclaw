@@ -3,6 +3,7 @@
  * dispatch, jobs, delegation runs, the events, memory and task services, then wires the ordered
  * shutdown (`shutdown.ts`).
  */
+
 import { join } from "path";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
@@ -54,6 +55,7 @@ import { acquireDaemonLock, tryAcquireDaemonLock } from "./daemon-lock.js";
 import { DeskRuntime } from "./desk-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createIngress, type IngressService } from "./ingress.js";
+import type { IngressDeps } from "./ingress-deps.js";
 import { createRequestExecution } from "./request-execution.js";
 import { createShutdown } from "./shutdown.js";
 import { TaskLane, type TaskLaneOptions } from "./task-lane.js";
@@ -214,7 +216,7 @@ async function buildRuntimeContext(
 	const sessionResetChains = new Map<string, Promise<void>>();
 	const activeTasks = new Set<Promise<void>>();
 	/** Channels with a `/stop` watchdog in flight, so a burst of `/stop` starts only one. */
-	const stopWatchdogs = new Set<string>();
+	const stopWatchdogs: IngressDeps["stopWatchdogs"] = new Map();
 	let durableDispatch: DurableDispatchService | undefined;
 	let shuttingDown = false;
 	const executor = options.executor ?? createExecutor();

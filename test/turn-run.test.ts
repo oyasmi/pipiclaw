@@ -1,0 +1,177 @@
+import { afterEach, expect, it, vi } from "vitest";
+import type { AgentRunner } from "../src/agent/types.js";
+import type { WakeEvent } from "../src/channel/channel-event.js";
+import type { ChannelStore } from "../src/channel/store.js";
+import * as log from "../src/log.js";
+import type { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
+import { createTransportRegistry } from "../src/runtime/transports.js";
+import { createEventTurnRunner, type EventTurnDeps } from "../src/runtime/turn-run.js";
+import { createFakeRunner } from "./support/fake-runner.js";
+import { RecordingTransport } from "./support/recording-transport.js";
+
+const wake = (id: string): WakeEvent => ({
+	source: "wake",
+	channelId: "dingtalk:dm:1",
+	desk: "news",
+	ts: "1",
+	producer: "SUBAGENT",
+	dispatchId: `subagent:news:${id}:done`,
+	text: `[SUBAGENT:${id}] done`,
+});
+function fixture() {
+	const runner = createFakeRunner();
+	const end = vi.spyOn(runner, "endTurn");
+	let current: AgentRunner = runner;
+	const durable = {
+		stopEpoch: () => 0,
+		markStarted: vi.fn(async (_id?: string) => true),
+		absorbPending: vi.fn(async () => [] as WakeEvent[]),
+		markCompleted: vi.fn(async (_id?: string) => {}),
+		markRetryable: vi.fn(async (_id?: string) => {}),
+	};
+	const reservedTurns = new WeakSet<WakeEvent>();
+	const activeTasks = new Set<Promise<void>>();
+	const deps: EventTurnDeps = {
+		transports: createTransportRegistry([new RecordingTransport()]),
+		store: {} as ChannelStore,
+		activeTasks,
+		archiveIncomingMessage: vi.fn(async () => {}),
+		getRunner: () => current,
+		isCurrentRunner: (candidate) => candidate === current,
+		resolveChannel: () => ({ kind: "bound", conversation: current.conversation }),
+		reservedTurns,
+		isShuttingDown: () => false,
+		getDurableDispatch: () => durable as unknown as DurableDispatchService,
+		getTaskControl: () => undefined,
+		runRuntimeCommand: async () => "",
+	};
+	const run = createEventTurnRunner(deps);
+	return {
+		runner,
+		end,
+		durable,
+		activeTasks,
+		reservedTurns,
+		replace() {
+			runner.forceEndTurn("test replacement");
+			current = createFakeRunner();
+			current.beginTurn("new generation");
+			return current;
+		},
+		run(event: WakeEvent) {
+			runner.beginTurn(event.text);
+			reservedTurns.add(event);
+			return run(event);
+		},
+	};
+}
+afterEach(() => vi.restoreAllMocks());
+
+it("releases a reserved runner on failed durable admission and retries only a successfully claimed primary", async () => {
+	// Risk: markStarted/absorbPending rejects before the turn task exists, leaving the channel busy forever.
+	const warn = vi.spyOn(log, "logWarn").mockImplementation(() => {});
+	for (const stage of ["markStarted", "absorbPending"] as const) {
+		const f = fixture();
+		const event = wake("primary");
+		const error = Object.assign(new Error("injected admission EIO"), { code: "EIO" });
+		f.durable[stage].mockRejectedValueOnce(error);
+		const retryError = Object.assign(new Error("retry EACCES"), { code: "EACCES" });
+		if (stage === "absorbPending") f.durable.markRetryable.mockRejectedValueOnce(retryError);
+		await expect(f.run(event)).rejects.toBe(error);
+		expect(f.runner.isBusy(), stage).toBe(false);
+		expect(f.end).toHaveBeenCalledOnce();
+		expect(f.reservedTurns.has(event)).toBe(false);
+		expect(f.runner.run).not.toHaveBeenCalled();
+		expect(f.durable.markCompleted).not.toHaveBeenCalled();
+		expect(f.durable.markRetryable.mock.calls).toEqual(stage === "absorbPending" ? [[event.dispatchId]] : []);
+		expect(warn).toHaveBeenCalledWith(
+			"dispatch.turn.admit_failed",
+			expect.any(String),
+			expect.objectContaining({
+				channelId: event.channelId,
+				reason: error.message,
+				fields: expect.objectContaining({ dispatchId: event.dispatchId, operation: stage, code: "EIO" }),
+			}),
+		);
+		if (stage === "absorbPending")
+			expect(warn).toHaveBeenCalledWith(
+				"dispatch.turn.settle_failed",
+				expect.any(String),
+				expect.objectContaining({
+					channelId: event.channelId,
+					reason: retryError.message,
+					fields: expect.objectContaining({
+						dispatchId: event.dispatchId,
+						operation: "markRetryable",
+						code: "EACCES",
+					}),
+				}),
+			);
+		expect(f.activeTasks.size).toBe(0);
+	}
+});
+
+it("settles subsequent absorbed wakes after errors and releases only the original runner", async () => {
+	// Risk: an unlink/write failure in primary or absorbed settlement prevents endTurn and strands other claims.
+	const warn = vi.spyOn(log, "logWarn").mockImplementation(() => {});
+	for (const stopped of [false, true]) {
+		const f = fixture();
+		const primary = wake("primary");
+		const first = wake("first");
+		const second = wake("second");
+		f.durable.absorbPending.mockResolvedValueOnce([first, second]);
+		vi.mocked(f.runner.run).mockResolvedValueOnce({ stopReason: stopped ? "aborted" : "stop" });
+		const primaryError = new Error("primary unlink EIO");
+		const absorbedError = new Error("absorbed write EACCES");
+		f.durable.markCompleted.mockRejectedValueOnce(primaryError);
+		const absorbed = stopped ? f.durable.markRetryable : f.durable.markCompleted;
+		absorbed.mockRejectedValueOnce(absorbedError);
+		await expect(f.run(primary)).rejects.toMatchObject({ errors: [primaryError, absorbedError] });
+		expect(f.runner.isBusy(), String(stopped)).toBe(false);
+		expect(f.end).toHaveBeenCalledOnce();
+		expect(f.activeTasks.size).toBe(0);
+		expect(f.durable.markCompleted.mock.calls).toEqual(
+			stopped ? [[primary.dispatchId]] : [[primary.dispatchId], [first.dispatchId], [second.dispatchId]],
+		);
+		if (stopped) expect(f.durable.markRetryable.mock.calls).toEqual([[first.dispatchId], [second.dispatchId]]);
+		for (const [id, operation, error] of [
+			[primary.dispatchId, "markCompleted", primaryError],
+			[first.dispatchId, stopped ? "markRetryable" : "markCompleted", absorbedError],
+		]) {
+			expect(warn).toHaveBeenCalledWith(
+				"dispatch.turn.settle_failed",
+				expect.any(String),
+				expect.objectContaining({
+					channelId: primary.channelId,
+					reason: (error as Error).message,
+					fields: expect.objectContaining({ dispatchId: id, operation }),
+				}),
+			);
+		}
+	}
+	// A replacement while settlement awaits must not let the old finally release the new runner,
+	// or let subsequent absorbed settlement mutate claims now owned by that replacement.
+	const f = fixture();
+	f.durable.absorbPending.mockResolvedValueOnce([wake("absorbed")]);
+	let entered!: () => void;
+	let reject!: (error: Error) => void;
+	const arrived = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	f.durable.markCompleted.mockImplementationOnce(() => {
+		entered();
+		return new Promise<void>((_resolve, fail) => {
+			reject = fail;
+		});
+	});
+	const pending = f.run(wake("primary"));
+	const failed = expect(pending).rejects.toBeInstanceOf(AggregateError);
+	await arrived;
+	const replacement = f.replace();
+	reject(new Error("late unlink failure"));
+	await failed;
+	expect(f.end).toHaveBeenCalledOnce();
+	expect(replacement.isBusy()).toBe(true);
+	expect(f.durable.markCompleted).toHaveBeenCalledOnce();
+	expect(f.durable.markRetryable).not.toHaveBeenCalled();
+});
