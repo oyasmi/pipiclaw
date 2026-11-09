@@ -62,7 +62,7 @@
 		"croner": "^9.1.0",
 		"diff": "^8.0.2",
 		"dingtalk-stream": "2.1.5",
-		"fastify": "5.12.5",
+		"fastify": "5.12.8",
 		"http-proxy-agent": "^7.0.2",
 		"https-proxy-agent": "^7.0.6",
 		"jsdom": "^26.1.0",
@@ -78,10 +78,10 @@
 		"@types/jsdom": "^28.0.1",
 		"@types/node": "^24.3.0",
 		"@types/ws": "8.18.2",
-		"@vitest/coverage-v8": "^3.2.4",
+		"@vitest/coverage-v8": "^5.1.0",
 		"knip": "^6.24.0",
 		"typescript": "^5.7.3",
-		"vitest": "^3.2.4"
+		"vitest": "^5.1.0"
 	},
 	"keywords": [
 		"dingtalk",

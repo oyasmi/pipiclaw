@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
 import { getBindingsPath, getDeskDir } from "../src/desk/paths.js";
 import { createDeskRecord } from "../src/desk/registry.js";
 import { DeskRuntime } from "../src/runtime/desk-runtime.js";
@@ -12,8 +12,8 @@ const tempDir = useTempDirs("pipiclaw-desk-runtime-");
 function runtimeFor(workspaceDir: string) {
 	const watchers: Array<{
 		desk: string;
-		start: ReturnType<typeof vi.fn>;
-		stop: ReturnType<typeof vi.fn>;
+		start: Mock<() => void>;
+		stop: Mock<() => void>;
 		/** The desk each channel was bound to when this watcher started (and ran its recovery scan). */
 		bindingsAtStart?: Record<string, string>;
 	}> = [];

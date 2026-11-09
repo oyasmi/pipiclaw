@@ -7,16 +7,24 @@ let stateMessages: unknown[] = [];
 const recordUsage = vi.fn();
 
 vi.mock("@earendil-works/pi-agent-core", () => ({
-	Agent: vi.fn().mockImplementation(() => ({
-		state: {
-			get messages() {
-				return stateMessages;
-			},
+	Agent: vi.fn(
+		class {
+			state = {
+				get messages() {
+					return stateMessages;
+				},
+			};
+			prompt(input: string) {
+				return promptImpl(input);
+			}
+			waitForIdle() {
+				return waitForIdleImpl();
+			}
+			abort() {
+				return abortImpl();
+			}
 		},
-		prompt: (input: string) => promptImpl(input),
-		waitForIdle: () => waitForIdleImpl(),
-		abort: () => abortImpl(),
-	})),
+	),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
