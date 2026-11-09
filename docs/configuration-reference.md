@@ -1330,3 +1330,16 @@ API 标识 `azure-openai-responses` 和 `AZURE_OPENAI_*` 环境变量保持原�
 
 此次 Pi 依赖升级无需重写历史会话文件；配置调整由部署者离线完成，运行时不提供旧协议或旧模型名称的兼容别名。
 上游变更见 [Pi 1.3.0](https://github.com/earendil-works/pi/releases/tag/v1.3.0) 和 [Pi 1.4.0](https://github.com/earendil-works/pi/releases/tag/v1.4.0)。
+
+## pi 1.5.0 升级注意事项
+
+以下针对 Pi SDK 1.4.0 → 1.5.0 的依赖升级；四个直接 pi 包统一锁定官方发布版本 `1.5.0`。
+
+- 核对 `settings.json` 的默认、备用和内部子代理模型，以及 `workspace/sub-agents/` 的内部模型引用。目录移除了部分旧、免费和 batch 模型，例如 `openrouter/openai/o3-mini`、`openrouter/nvidia/nemotron-3-super-120b-a12b:free`；另将部分 realtime、image 模型移出聊天目录。外部 coding CLI 的模型支持由对应 CLI 决定。
+- OpenRouter 的 `~anthropic/claude-*-latest` 别名改用 Anthropic Messages，以保留工具调用间的 thinking。若 `models.json` 覆盖 `baseUrl` 或 `api`，核对代理是否支持对应协议与路由；不要仅更换模型名称而保留不匹配的端点。
+- OpenRouter 返回完整计费信息时，成本合计采用提供方报告的金额；输入、输出和缓存分项仍可能来自目录估算，分项之和不再必然等于合计。当前界面尚不区分合计的实报或估算来源。
+- 工具参数改由上游 `pi-schema` 校验，现有 TypeBox 工具定义保留。1.5.0 对部分非有限数值的校验有已知缺陷；Pipiclaw 的相关任务预算与网页长度仍由独立领域校验保护。后续新增复杂 schema 或 MCP 工具时应重新评估，详见[升级评估](reviews/2026-11-09-pi-1.5.0-upgrade-assessment.md)。
+
+此次依赖升级无需改写历史会话文件。会话写入失败后，SDK 会回滚失败条目的内存状态；Pipiclaw 继续隔离部分写入失败的会话，避免把多次写入误当作一个事务。配置调整由部署者离线完成；本次升级不会替换默认模型或修改认证配置。
+
+上游变更见 [Pi 1.5.0](https://github.com/earendil-works/pi/releases/tag/v1.5.0)。

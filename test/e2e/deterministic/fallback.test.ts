@@ -63,6 +63,7 @@ describe("E2E deterministic: model fallback", () => {
 
 	it("quarantines a partially edited SDK instance until a disk rebuild", async () => {
 		// Spec 055 mutation (executed 2026-10-13; restored green): removing host's fault check lets NEXT_TURN reach the provider.
+		// Pi 1.5 mutation (2026-11-09): removing SDK append rollback leaves two edits in memory and fails the persistence assertion.
 		// The first edit is durable; inject the second failure at the real persistence seam.
 		harness = await createDeterministicHarness();
 		writeFileSync(join(harness.workspaceDir, "MEMORY.md"), "## Fixture\nRESTORED_BOOTSTRAP\n");
@@ -72,7 +73,7 @@ describe("E2E deterministic: model fallback", () => {
 			respond: [reply.text("ok")],
 			repeat: true,
 		});
-		// The SDK indexes an entry before _persist; this fault leaves its cache ahead of disk.
+		// Pi 1.5 rolls back the failed append; the first edit is still committed, so quarantine remains necessary.
 		const prototype = SessionManager.prototype as unknown as { _persist(entry: SessionEntry): void };
 		const persist = prototype._persist;
 		let edits = 0;
@@ -97,7 +98,7 @@ describe("E2E deterministic: model fallback", () => {
 		vi.restoreAllMocks();
 		const disk = SessionManager.open(join(harness.conversationDir, "context.jsonl"));
 		expect(disk.getBranch().filter((entry) => entry.type === "context_edit")).toHaveLength(1);
-		expect(faultedHost.sessionManager.getBranch().filter((entry) => entry.type === "context_edit")).toHaveLength(2);
+		expect(faultedHost.sessionManager.getBranch().filter((entry) => entry.type === "context_edit")).toHaveLength(1);
 		vi.spyOn(AgentSession.prototype, "reload").mockRejectedValue(new Error("injected reload failure"));
 		await faultedHost.refreshSessionResources();
 		const beforeRefused = readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8");

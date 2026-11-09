@@ -4,6 +4,14 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Pi SDK 1.5.0 model catalog and routing.** Some old, free and batch model entries are removed. OpenRouter's `~anthropic/claude-*-latest` aliases now use Anthropic Messages; check custom gateway routes and configured primary, fallback and internal sub-agent models. See the [upgrade notes](docs/configuration-reference.md#pi-150-升级注意事项).
+
+### Changed
+
+- Upgrade all four direct Pi SDK dependencies from 1.4.0 to 1.5.0 for incremental parsing of large tool calls, session-write rollback, provider compatibility and terminal rendering fixes. Keep existing TypeBox tool definitions and partial-write isolation. OpenRouter cost totals can now use provider-reported billing while component costs remain estimates.
+
 ## [0.9.5] - 2026-11-08
 
 Stable release of the 0.9.5 beta series. The summary below describes the final behavior relative to 0.9.4; the beta entries retain the detailed history.
