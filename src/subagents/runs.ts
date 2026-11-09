@@ -12,7 +12,7 @@ import { logTaskDispatch, logTaskStall } from "../tasks/bound-work.js";
 import { readStoredTask } from "../tasks/store.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
-import { buildRunCompletionWake, countWakeSiblings } from "./completion-wake.js";
+import { buildRunCompletionWake, countWakeSiblings, runWakeDispatchId } from "./completion-wake.js";
 import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
 import { processIdentity, reconcileExternalRun } from "./external/reconciliation.js";
 import { AdoptedRunObserver } from "./external/recovery.js";
@@ -135,11 +135,6 @@ export class SubAgentRunManager {
 		);
 	}
 
-	/** The completion wake's dispatch id (a chat-level run; a task-bound run never wakes a channel). */
-	private wakeDispatchId(runId: string): string {
-		return `subagent:${this.target.desk}:${runId}:done`;
-	}
-
 	/** Release observation timers without cancelling dispatched work or its settlement. */
 	stop(): void {
 		this.stopped = true;
@@ -197,7 +192,7 @@ export class SubAgentRunManager {
 		const notify = this.options.notify;
 		if (!notify) return;
 		void Promise.resolve()
-			.then(() => notify(this.target.desk, record.channelId, notice))
+			.then(() => notify(this.target.desk, record.channelId, { ...notice, scopeRef: record.scopeRef }))
 			.catch((error) =>
 				log.logWarn("subagent.notice.failed", "Run notice failed", {
 					reason: errorMessage(error),
@@ -348,9 +343,10 @@ export class SubAgentRunManager {
 	}
 
 	/** Register the run's lifecycle before any work starts, and persist it immediately (D1). */
-	async register(input: RegisterRunInput): Promise<RunRecord> {
+	async register(input: RegisterRunInput, signal?: AbortSignal): Promise<RunRecord> {
 		return hostAdmissionQueue.run("host", () =>
 			this.queue.run(input.runId, async () => {
+				signal?.throwIfAborted();
 				// D10.2: a per-desk and a host-wide cap, both code constants (a local response to a
 				// runaway model, not a global cross-subsystem admission scheme — see the design doc's
 				// non-goals). Checked before anything is persisted, so a rejected run costs nothing.
@@ -658,7 +654,7 @@ export class SubAgentRunManager {
 		const siblingCount = countWakeSiblings(record, this.runs.values());
 		const event = buildRunCompletionWake({
 			desk: this.target.desk,
-			dispatchId: this.wakeDispatchId(record.runId),
+			dispatchId: runWakeDispatchId(this.target.desk, record.runId),
 			record,
 			outputText,
 			outputSaved,

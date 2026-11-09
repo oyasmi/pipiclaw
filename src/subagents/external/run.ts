@@ -116,6 +116,9 @@ function closeFd(fd: number | undefined): void {
  */
 
 export interface LaunchExternalRunInput {
+	/** Admission only: stopping a turn never cancels an already registered run. */
+	signal?: AbortSignal;
+	scopeRef?: import("../../channel/delivery-scope.js").DeliveryScopeRef;
 	runManager: SubAgentRunManager;
 	runId: string;
 	channelId: string;
@@ -242,26 +245,30 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	// never existed. `external-agent` records what was *executed* (D8.1), so the record must not
 	// precede the point where this run is actually admitted to run.
 	const runManager = input.runManager;
-	await runManager.register({
-		runId: input.runId,
-		channelId: input.channelId,
-		runtime: "external",
-		harness: harness.id as "claude-code" | "codex-cli" | "cursor-cli" | "exec",
-		agent: input.agent,
-		label: input.label,
-		source: input.source,
-		tools: [],
-		model: input.externalModelRef,
-		purpose: input.purpose,
-		taskId: input.taskId,
-		item: input.item,
-		workingDirectory: input.workingDirectory,
-		artifactDir: input.artifactDir,
-		deskDir: input.deskDir,
-		leaseKey: input.leaseKey,
-		mutates: input.mutates,
-		workspaceBaseline: input.workspaceBaseline,
-	});
+	await runManager.register(
+		{
+			scopeRef: input.scopeRef,
+			runId: input.runId,
+			channelId: input.channelId,
+			runtime: "external",
+			harness: harness.id as "claude-code" | "codex-cli" | "cursor-cli" | "exec",
+			agent: input.agent,
+			label: input.label,
+			source: input.source,
+			tools: [],
+			model: input.externalModelRef,
+			purpose: input.purpose,
+			taskId: input.taskId,
+			item: input.item,
+			workingDirectory: input.workingDirectory,
+			artifactDir: input.artifactDir,
+			deskDir: input.deskDir,
+			leaseKey: input.leaseKey,
+			mutates: input.mutates,
+			workspaceBaseline: input.workspaceBaseline,
+		},
+		input.signal,
+	);
 
 	// The final executable/argv/cwd/capability record must be durable before a process can exist.
 	// `external-agent` uses the strict appender path and rejects on queue or I/O failure; a failure

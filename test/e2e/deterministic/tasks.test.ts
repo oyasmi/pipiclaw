@@ -1,9 +1,11 @@
 import { existsSync, readFileSync, renameSync, utimesSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { deliveryScopeKey } from "../../../src/channel/delivery-scope.js";
 import type { EventHistoryAction, EventHistoryRecord } from "../../../src/events/types.js";
 import * as runtimeLog from "../../../src/log.js";
 import { readActiveTasks } from "../../../src/tasks/contract.js";
+import { readTaskDeliveries } from "../../../src/tasks/delivery.js";
 import { readTaskLog } from "../../../src/tasks/loop-log.js";
 import { readStoredTask } from "../../../src/tasks/store.js";
 import { heldCommand } from "../../support/held-command.js";
@@ -55,6 +57,7 @@ describe("E2E deterministic: the task lane", () => {
 		r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #${n}]`);
 
 	it("T-lane-1: a chat message is answered while a task step is in flight — the task never holds the chat", async () => {
+		// Mutation 2026-11-09: bypass scoped deliverTask -> no owned final/progress (confirmed red).
 		// The incident: a long task step (a delegation, a stuck tool) used to occupy the channel queue,
 		// and the user's question waited behind it. Mutation check (2026-10-28): return the channel's own
 		// runner from `createTaskRunner` in bootstrap (the step then runs in the chat's session with the
@@ -70,7 +73,7 @@ describe("E2E deterministic: the task lane", () => {
 			name: "step",
 			when: stepOf(1),
 			respond: [
-				reply.toolCall("task_report", { text: "done" }),
+				...["first", "second", "done"].map((text) => reply.toolCall("task_report", { text })),
 				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "done" }),
 				reply.text("unused"),
 			],
@@ -94,7 +97,16 @@ describe("E2E deterministic: the task lane", () => {
 		expect(chatRequest?.tools).not.toContain("task_report");
 
 		gate.release();
-		await waitFor("the task to be archived", () => existsSync(archived()), { intervalMs: 25 });
+		await lane().drained();
+		expect(existsSync(archived())).toBe(true);
+		const scopeKey = `scope:${deliveryScopeKey({ desk: harness.desk, channelId: harness.channelId, scopeId: `task:${taskId}` })}`;
+		const deliveries = harness.deliveries.filter((delivery) => delivery.scopeKey === scopeKey);
+		expect(deliveries.filter((delivery) => delivery.method === "sendPlain")).toHaveLength(1);
+		expect(deliveries.filter((delivery) => delivery.method === "replaceCard").length).toBeGreaterThan(0);
+		const records = await readTaskLog(harness.deskDir, taskId);
+		expect(records.filter((record) => record.kind === "report")).toHaveLength(3);
+		expect(records.filter((record) => record.kind === "report_delivered")).toHaveLength(3);
+		expect(await readTaskDeliveries(harness.deskDir)).toEqual([]);
 		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).not.toContain("TASK_STEP");
 	});
 

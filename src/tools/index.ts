@@ -17,6 +17,7 @@ import { createSubAgentInlineTool, createSubAgentTool } from "./subagent.js";
 import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
 
 export interface CreatePipiclawToolsOptions {
+	getDeliveryScope?: () => import("../channel/delivery-scope.js").DeliveryScopeRef | undefined;
 	jobManager: DeskJobManager;
 	runManager: SubAgentRunManager;
 	executor: Executor;
@@ -72,6 +73,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		securityConfig,
 		securityContext,
 		channelId: options.channelId,
+		getDeliveryScope: options.getDeliveryScope,
 		desk: options.desk,
 		deskDir: options.deskDir,
 		describeConversation: options.describeConversation,
@@ -90,6 +92,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		taskControl: options.taskControl,
 	});
 	const subAgentToolOptions = {
+		getDeliveryScope: options.getDeliveryScope,
 		buildWorkerTools: (request: WorkerToolRequest) => buildToolSet(request, { forSubagent: true }),
 		getRunManager: () => options.runManager,
 		executor: options.executor,
@@ -117,6 +120,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		boundTaskId: options.taskSession?.taskId,
 	};
 	const subAgentManageOptions = {
+		getDeliveryScope: options.getDeliveryScope,
 		runManager: options.runManager,
 		channelId: options.channelId,
 		desk: options.desk,

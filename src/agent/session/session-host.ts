@@ -675,6 +675,7 @@ export class SessionHost {
 		this.tasksEnabled = toolsLoad.config.tools.tasks.enabled;
 
 		const tools = createPipiclawTools({
+			getDeliveryScope: () => this.runState.scopeRef,
 			jobManager: this.jobManager,
 			runManager: this.runManager,
 			executor: this.executor,

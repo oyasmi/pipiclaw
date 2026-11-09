@@ -27,6 +27,7 @@ export interface IngressOptions {
 }
 
 export interface IngressDeps {
+	getDeliveryScopes?: () => import("./delivery-scopes.js").DeliveryScopes | undefined;
 	requestExecution?: import("./request-execution.js").RequestExecution;
 	options: IngressOptions;
 	transports: TransportRegistry;

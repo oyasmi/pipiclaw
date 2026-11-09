@@ -6,7 +6,8 @@ import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { DeskJobManager, type JobManagerOptions } from "./manager.js";
+import { DeskJobManager } from "./manager.js";
+import type { JobManagerOptions } from "./types.js";
 
 interface JobRuntimeConfig {
 	/** Root of the per-desk record directories (`<jobsStateDir>/<desk>/`). */

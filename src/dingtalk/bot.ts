@@ -33,6 +33,17 @@ const CHANNEL_CACHE_TTL_MS = 60 * 60 * 1000;
 const CHANNEL_CACHE_SWEEP_MS = 10 * 60 * 1000;
 
 export class DingTalkBot implements DeliveryPort {
+	private readonly cardRoutes = new Map<string, string>();
+	private readonly cardGuards = new Map<string, () => boolean>();
+	/** Scope keys isolate card state while metadata stays addressed by the real channel. */
+	bindScopeCard(key: string, channelId: string, canWrite?: () => boolean): void {
+		this.cardRoutes.set(key, channelId);
+		if (canWrite) this.cardGuards.set(key, canWrite);
+	}
+	/** Resolve a card owner key for adapters/observers; it is never a transport address. */
+	cardChannel(key: string): string {
+		return this.cardRoutes.get(key) ?? key;
+	}
 	private config: DingTalkConfig;
 
 	private tokens: AccessTokenProvider;
@@ -64,13 +75,17 @@ export class DingTalkBot implements DeliveryPort {
 		this.cards = new CardController({
 			config: this.config,
 			getAccessToken,
-			getConversationMeta: (channelId) => this.conversations.get(channelId),
-			sendPlain: (channelId, text) => this.sendPlain(channelId, text),
+			getConversationMeta: (channelId) => this.conversations.get(this.cardRoutes.get(channelId) ?? channelId),
+			canWrite: (key) => this.cardGuards.get(key)?.() ?? true,
+			sendPlain: (channelId, text) =>
+				this.sendPlain(this.cardRoutes.get(channelId) ?? channelId, text, {
+					canWrite: this.cardGuards.get(channelId),
+				}),
 		});
 		this.media = new DingTalkMedia({
 			config: this.config,
 			getAccessToken,
-			getConversationMeta: (channelId) => this.conversations.get(channelId),
+			getConversationMeta: (channelId) => this.conversations.get(this.cardRoutes.get(channelId) ?? channelId),
 			sendRobotMessage: sendRobot,
 			downloadMessageFile: (downloadCode) => this.downloadMessageFile(downloadCode),
 		});
@@ -215,6 +230,10 @@ export class DingTalkBot implements DeliveryPort {
 		return this.cards.finalizeExistingCard(channelId, content, generation);
 	}
 
+	hasUnconfirmedCard(channelId: string): boolean {
+		return this.cards.hasUnconfirmedCreation(channelId);
+	}
+
 	/** Invalidate this turn's local state. This is not a remote message deletion. */
 	discardCard(channelId: string, generation?: symbol): void {
 		this.cards.discardCard(channelId, generation);
@@ -231,7 +250,16 @@ export class DingTalkBot implements DeliveryPort {
 	 * notices, `replaceWithFinal` — that do not know their own content ahead of time (review
 	 * 2026-08-24 §1.3c).
 	 */
-	async sendPlain(channelId: string, text: string, opts?: { title?: string; markdown?: boolean }): Promise<boolean> {
+	async sendPlain(
+		channelId: string,
+		text: string,
+		opts?: {
+			canWrite?: () => boolean;
+			title?: string;
+			markdown?: boolean;
+			scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
+		},
+	): Promise<boolean> {
 		const meta = this.conversations.get(channelId);
 		if (!meta) {
 			log.logWarn("dingtalk.send.no_metadata", "Plain message not sent: no conversation metadata", {
@@ -245,7 +273,12 @@ export class DingTalkBot implements DeliveryPort {
 		const msgKey = hasMarkdown ? "sampleMarkdown" : "sampleText";
 		const msgParam = hasMarkdown ? JSON.stringify({ text, title }) : JSON.stringify({ content: text });
 
-		return sendRobotMessage({ config: this.config, getAccessToken: () => this.tokens.get() }, meta, msgKey, msgParam);
+		return sendRobotMessage(
+			{ config: this.config, getAccessToken: () => this.tokens.get(), canWrite: opts?.canWrite },
+			meta,
+			msgKey,
+			msgParam,
+		);
 	}
 
 	// ==========================================================================

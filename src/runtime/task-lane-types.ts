@@ -55,6 +55,9 @@ export interface TaskLaneOptions {
 	store: ChannelStore;
 	/** Say something to a report channel without a model; resolves whether it was delivered. */
 	deliver: (desk: string, channelId: string, text: string) => Promise<boolean>;
+	/** Structured outbox delivery; immediate asks/warnings still use deliver. */
+	deliverTask?: (desk: string, message: import("../tasks/delivery.js").TaskDelivery) => Promise<boolean>;
+	closeProgress?: (desk: string, channelId: string, taskId: string) => Promise<void>;
 	/** `tools.tasks.enabled`, re-read on every scan. Off: no new steps, maintenance continues. */
 	isEnabled?: () => boolean;
 	/** Steps in flight register here so shutdown can wait for them. */

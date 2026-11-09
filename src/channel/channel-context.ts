@@ -12,7 +12,7 @@ import type { UsageTotals } from "../usage/totals.js";
 export interface ChannelContext {
 	/** Called in order of occurrence and never blocks; a transport serializes its own delivery. */
 	emit(event: TurnEvent): void;
-	/** Called once when the turn ends; the transport closes its card or settles its response here. */
+	/** Ends this writer once. A runtime-owned scope may keep its progress open across turns. */
 	finish(outcome: TurnOutcome): Promise<void>;
 }
 

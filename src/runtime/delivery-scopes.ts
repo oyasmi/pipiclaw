@@ -1,0 +1,305 @@
+/** Request/task delivery coordination. Work facts stay in the run/job/task domains. */
+import { randomUUID } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
+import {
+	type DeliveryScopeRef,
+	deliveryScopeKey,
+	type FinalIntent,
+	isDeliveryScopeRef,
+	type ScopeWork,
+	type ScopeWriter,
+} from "../channel/delivery-scope.js";
+import * as log from "../log.js";
+import { writeFileAtomically } from "../shared/atomic-file.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
+import { errorMessage } from "../shared/text-utils.js";
+import { isRecord } from "../shared/type-guards.js";
+import type { TaskDelivery } from "../tasks/delivery.js";
+import type { TransportRegistry } from "./transports.js";
+
+interface ScopeState {
+	owner: DeliveryScopeRef;
+	epoch: string;
+	revision: number;
+	consumed: string[];
+	reports: string[];
+	closed?: boolean;
+	final?: FinalIntent & {
+		confirmed?: boolean;
+		attempts: number;
+		nextAttemptAt: number;
+		result?: "confirmed" | "unknown" | "blocked";
+	};
+}
+
+export class DeliveryScopes {
+	private readonly epoch = randomUUID();
+	private readonly states = new Map<string, ScopeState>();
+	private readonly writers = new Map<string, symbol>();
+	private readonly queue = createSerialQueue();
+	private readonly operations = new Set<Promise<unknown>>();
+	private serial<T>(key: string, work: () => Promise<T>): Promise<T> {
+		const operation = this.queue.run(key, work);
+		this.operations.add(operation);
+		void operation.finally(() => this.operations.delete(operation)).catch(() => undefined);
+		return operation;
+	}
+	private timer?: NodeJS.Timeout;
+	private stopped = false;
+	constructor(
+		private readonly options: {
+			directory: string;
+			transports: TransportRegistry;
+			isBoundTo: (channel: string, desk: string) => boolean;
+			work: (owner: DeliveryScopeRef) => ScopeWork[];
+		},
+	) {}
+
+	private path(owner: DeliveryScopeRef): string {
+		return join(this.options.directory, `${deliveryScopeKey(owner)}.json`);
+	}
+	private save(state: ScopeState): Promise<void> {
+		return writeFileAtomically(this.path(state.owner), JSON.stringify(state));
+	}
+	/** Publish to memory only after the atomic disk commit succeeds. Callers hold the owner queue. */
+	private async commit(state: ScopeState, next: ScopeState): Promise<void> {
+		await this.save(next);
+		Object.assign(state, next);
+	}
+	private reachable(owner: DeliveryScopeRef): boolean {
+		return (
+			this.options.isBoundTo(owner.channelId, owner.desk) && this.options.transports.isReachable(owner.channelId)
+		);
+	}
+	private port(state: ScopeState): ScopeWriter | undefined {
+		if (!this.reachable(state.owner)) return undefined;
+		return this.options.transports
+			.forChannel(state.owner.channelId)
+			?.scopes?.open(state.owner, state.epoch !== this.epoch, () => this.reachable(state.owner));
+	}
+	private async state(owner: DeliveryScopeRef): Promise<ScopeState> {
+		if (!isDeliveryScopeRef(owner))
+			throw new Error("Invalid delivery owner; inspect the scope record before retrying.");
+		const key = deliveryScopeKey(owner);
+		const existing = this.states.get(key);
+		if (existing) return existing;
+		const state: ScopeState = { owner: { ...owner }, epoch: this.epoch, revision: 0, consumed: [], reports: [] };
+		// Required persistence before any card creation or final send.
+		await this.save(state);
+		this.states.set(key, state);
+		return state;
+	}
+
+	/** Corruption refuses startup. Never overwrite an unreadable owner's pending final. */
+	async restore(): Promise<void> {
+		let names: string[];
+		try {
+			names = await readdir(this.options.directory);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+		for (const name of names.filter((name) => name.endsWith(".json"))) {
+			const value = JSON.parse(await readFile(join(this.options.directory, name), "utf-8")) as ScopeState;
+			if (
+				!isDeliveryScopeRef(value?.owner) ||
+				name !== `${deliveryScopeKey(value.owner)}.json` ||
+				typeof value.epoch !== "string" ||
+				(value.closed !== undefined && typeof value.closed !== "boolean") ||
+				!Number.isSafeInteger(value.revision) ||
+				value.revision < 0 ||
+				!Array.isArray(value.consumed) ||
+				!value.consumed.every((id) => typeof id === "string") ||
+				!Array.isArray(value.reports) ||
+				!value.reports.every((id) => typeof id === "string") ||
+				(value.final !== undefined &&
+					(!isRecord(value.final) ||
+						typeof value.final.id !== "string" ||
+						!value.final.id ||
+						(value.final.confirmed !== undefined && typeof value.final.confirmed !== "boolean") ||
+						typeof value.final.text !== "string" ||
+						!value.final.text.trim() ||
+						(value.final.confirmed === true && value.final.result !== "confirmed") ||
+						!Number.isSafeInteger(value.final.attempts) ||
+						value.final.attempts < 0 ||
+						!Number.isFinite(value.final.nextAttemptAt) ||
+						value.final.nextAttemptAt < 0))
+			)
+				throw new Error(`Invalid delivery scope ${name}; have the deployer inspect it before restarting.`);
+			this.states.set(deliveryScopeKey(value.owner), value);
+		}
+	}
+
+	/** A writer ends with the SDK turn; its scope can outlive it without holding a runner. */
+	async openTurn(owner: DeliveryScopeRef, completionIds: string[]): Promise<ChannelContext> {
+		const key = deliveryScopeKey(owner);
+		const state = await this.serial(key, () => this.state(owner));
+		const generation = Symbol(key);
+		this.writers.set(key, generation);
+		const writer = state.closed || state.final ? undefined : this.port(state);
+		let ended = false;
+		let finishing: Promise<void> | undefined;
+		let answer: string | undefined;
+		const current = () => !ended && this.writers.get(key) === generation;
+		return {
+			emit: (event) => {
+				if (!current() || !this.reachable(owner)) return;
+				if (event.type === "answer") answer = event.text.trim() || undefined;
+				else writer?.emit(event);
+			},
+			finish: (outcome) => {
+				if (finishing) return finishing;
+				if (!current()) return Promise.resolve();
+				ended = true; // Fence callbacks immediately, before the first await.
+				finishing = this.serial(key, async () => {
+					if (this.writers.get(key) !== generation) return;
+					await this.finish(state, writer, answer, completionIds, outcome);
+				});
+				return finishing;
+			},
+		};
+	}
+
+	private async finish(
+		state: ScopeState,
+		writer: ScopeWriter | undefined,
+		answer: string | undefined,
+		ids: string[],
+		outcome: TurnOutcome,
+	): Promise<void> {
+		if (state.closed || state.final) return;
+		const successful = outcome.kind === "completed" || outcome.kind === "silent";
+		const consumed = successful ? [...new Set([...state.consumed, ...ids])] : state.consumed;
+		const work = this.options.work(state.owner);
+		const unsettled = work.some(
+			(item) => item.pending || (item.completionId && !consumed.includes(item.completionId)),
+		);
+		const next: ScopeState = { ...state, consumed, revision: state.revision + 1 };
+		if (successful && answer && !unsettled)
+			next.final = { id: `request-final:${randomUUID()}`, text: answer, attempts: 0, nextAttemptAt: 0 };
+		// Consuming inputs and retaining their final are one commit. A rejected commit leaves
+		// both memory and disk retryable; another finish cannot acknowledge an unsaved answer.
+		await this.commit(state, next);
+		if (next.final) {
+			// Once the intent is durable, retry delivery only. An attempt/ack storage fault must
+			// not replay the model to manufacture another answer for this same completion.
+			await this.publishFinal(state).catch((error) =>
+				log.logWarn("delivery.scope.final_failed", "Scope final delivery failed", {
+					reason: errorMessage(error),
+					fields: { owner: state.owner, intentId: state.final?.id },
+				}),
+			);
+		} else {
+			if (answer) writer?.emit({ type: "commentary", text: answer });
+			if (outcome.kind === "failed" && outcome.message)
+				writer?.emit({ type: "commentary", level: "notice", text: outcome.message });
+			if (!unsettled) {
+				await writer?.close();
+				// /stop can finish before an already-entered tool finishes registration. Close its
+				// writer now, but let a later owned completion deliver a final without opening a card.
+				await this.commit(state, { ...state, closed: successful });
+			} else await writer?.flush();
+		}
+	}
+
+	/** Best-effort run notices are progress, with an explicit stalled interaction handled by caller. */
+	async activity(owner: DeliveryScopeRef, event: TurnEvent): Promise<void> {
+		if (this.stopped) return;
+		await this.serial(deliveryScopeKey(owner), async () => {
+			const state = await this.state(owner);
+			if (!state.closed && !state.final) this.port(state)?.emit(event);
+		});
+	}
+
+	/** The task outbox keeps ownership of retry/FIFO and its report-delivered gate. */
+	async task(desk: string, message: TaskDelivery): Promise<boolean> {
+		if (this.stopped) return false;
+		const owner: DeliveryScopeRef = { desk, channelId: message.channel, scopeId: `task:${message.taskId}` };
+		return this.serial(deliveryScopeKey(owner), async () => {
+			const state = await this.state(owner);
+			if (message.kind === "report") {
+				if (state.reports.includes(message.id)) return true;
+				if (state.closed || state.final) return false;
+				const port = this.port(state);
+				if (!port) return false;
+				if ((await port.report({ id: message.id, text: message.text })).status !== "confirmed") return false;
+				await this.commit(state, {
+					...state,
+					reports: [...state.reports, message.id],
+					revision: state.revision + 1,
+				});
+				return true;
+			}
+			if (state.final && state.final.id !== message.id)
+				throw new Error("Task has a different final intent; inspect the delivery queue before retrying.");
+			if (!state.final) {
+				await this.commit(state, {
+					...state,
+					final: { id: message.id, text: message.text, attempts: 0, nextAttemptAt: 0 },
+				});
+			}
+			return this.publishFinal(state);
+		});
+	}
+
+	/** Same-channel user cancel already has a command receipt: close progress without another final. */
+	async close(owner: DeliveryScopeRef): Promise<void> {
+		await this.serial(deliveryScopeKey(owner), async () => {
+			const state = await this.state(owner);
+			if (state.final) return;
+			await this.port(state)?.close();
+			await this.commit(state, { ...state, closed: true });
+		});
+	}
+
+	private async publishFinal(state: ScopeState): Promise<boolean> {
+		const intent = state.final!;
+		if (intent.confirmed) {
+			await this.save(state);
+			return true;
+		}
+		if (intent.nextAttemptAt > Date.now()) return false;
+		const attempt = {
+			...intent,
+			attempts: intent.attempts + 1,
+			nextAttemptAt: Date.now() + Math.min(900_000, 60_000 * 2 ** Math.min(intent.attempts, 4)),
+			result: "unknown" as const,
+			confirmed: false,
+		};
+		await this.commit(state, { ...state, final: attempt });
+		let result: "confirmed" | "unknown" | "blocked" = "unknown";
+		try {
+			result = (await this.port(state)?.finalize({ id: intent.id, text: intent.text }))?.status ?? "blocked";
+		} catch (error) {
+			log.logWarn("delivery.scope.final_failed", "Scope final delivery failed", {
+				reason: errorMessage(error),
+				fields: { owner: state.owner, intentId: intent.id },
+			});
+		}
+		await this.commit(state, { ...state, final: { ...attempt, result, confirmed: result === "confirmed" } });
+		return result === "confirmed";
+	}
+
+	start(): void {
+		this.timer = setInterval(() => {
+			void this.retry().catch((error) =>
+				log.logWarn("delivery.scope.retry_failed", "Scope retry failed", { reason: errorMessage(error) }),
+			);
+		}, 30_000);
+		this.timer.unref();
+	}
+	/** Retry only durable final intents; never replay a model turn. */
+	async retry(): Promise<void> {
+		for (const [key, state] of this.states) {
+			if (this.stopped) return;
+			if (state.final && !state.final.confirmed) await this.serial(key, () => this.publishFinal(state));
+		}
+	}
+	async stop(): Promise<void> {
+		this.stopped = true;
+		if (this.timer) clearInterval(this.timer);
+		await Promise.allSettled([...this.operations]);
+	}
+}

@@ -351,8 +351,10 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 	it("tells a chat-level wake how many sibling runs on the channel are still running", async () => {
 		const { dispatch, events } = makeDispatch();
 		const manager = new SubAgentRunManager(DESK, { dispatch });
-		await register(manager, { runId: "run-a" });
-		await register(manager, { runId: "run-b" });
+		const scopeRef = { desk: DESK.desk, channelId: "dingtalk:dm:123", scopeId: "request:one" as const };
+		await register(manager, { runId: "run-a", scopeRef });
+		await register(manager, { runId: "run-b", scopeRef });
+		await register(manager, { runId: "run-other-scope", scopeRef: { ...scopeRef, scopeId: "request:two" } });
 		await register(manager, { runId: "run-task", taskId: "T-1" });
 		// Another channel of the same desk: its wake goes there, so it is no sibling of this one's
 		// (counting it would leave this channel waiting, [SILENT], for a wake it never gets).
@@ -361,7 +363,8 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		await manager.settle("run-a", baseSettleInput(), { announce: true });
 		await manager.settle("run-b", baseSettleInput(), { announce: true });
 
-		// Neither a task's run nor another channel's is a chat-level sibling.
+		// Task, other-channel, and other-request runs are not siblings of this owner.
+		expect(events.map((event) => event.scopeRef)).toEqual([scopeRef, scopeRef]);
 		expect(events[0]?.text).toContain("1 other run(s) on this channel are still running.");
 		expect(events[1]?.text).not.toContain("other run(s)");
 	});

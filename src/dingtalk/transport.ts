@@ -18,6 +18,7 @@ import { DingTalkBot } from "./bot.js";
 import { describeDingTalkChannel, parseDingTalkChannelId } from "./channel-ids.js";
 import type { DingTalkConfig } from "./config.js";
 import { type ArchiveBotResponse, createDingTalkContext } from "./delivery.js";
+import { DingTalkScopeDelivery } from "./scope-delivery.js";
 
 export interface DingTalkTransportDeps {
 	config: DingTalkConfig;
@@ -31,6 +32,7 @@ export class DingTalkTransport implements Transport {
 	readonly name = "dingtalk" as const;
 	readonly policy: TransportPolicy;
 	readonly bot: DingTalkBot;
+	readonly scopes: DingTalkScopeDelivery;
 	private ingress: Ingress | undefined;
 	private stopping: Promise<void> | undefined;
 
@@ -39,6 +41,7 @@ export class DingTalkTransport implements Transport {
 			receive: (message: Parameters<Ingress["receive"]>[0]) => this.requireIngress().receive(message),
 		};
 		this.bot = deps.createBot ? deps.createBot(ingress, deps.config) : new DingTalkBot(ingress, deps.config);
+		this.scopes = new DingTalkScopeDelivery(this.bot, deps.archiveBotResponse, Boolean(deps.config.cardTemplateId));
 		this.policy = { whenBusy: this.bot.busyMessageDefault, textControlCommands: true };
 	}
 
@@ -65,8 +68,9 @@ export class DingTalkTransport implements Transport {
 		return this.stopping;
 	}
 
-	stop(): Promise<void> {
-		return this.stopAccepting();
+	async stop(): Promise<void> {
+		await this.scopes.stop();
+		await this.stopAccepting();
 	}
 
 	openTurn(turn: TurnInfo, opts: { quiet: boolean }): ChannelContext {

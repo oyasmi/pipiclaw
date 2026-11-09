@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WakeEvent } from "../channel/channel-event.js";
 import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -14,10 +13,11 @@ import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
 import { readStoredTask } from "../tasks/store.js";
 import { JobCompletionObserver } from "./completion-observer.js";
 import { CompletionSignal } from "./completion-signal.js";
-import { buildJobCompletionWake } from "./completion-wake.js";
+import { buildJobCompletionWake, jobScopeWork } from "./completion-wake.js";
 import { buildLaunchScript, type JobArtifacts, jobArtifacts, parseLaunchOutput } from "./launch.js";
 import { probeJobs } from "./probe.js";
 import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobRecord, toSnapshot } from "./record.js";
+import type { JobManagerOptions, JobStartOptions } from "./types.js";
 
 /**
  * Per-desk manager for background bash jobs. A long command that ran synchronously would hold
@@ -56,32 +56,6 @@ const KILL_CONFIRMED_GONE: ReadonlySet<KillOutcome> = new Set<KillOutcome>([
 	"identity-mismatch",
 	"no-target",
 ]);
-
-export interface JobStartOptions {
-	/** The channel the job was started from: its completion wake goes back there (spec 058, D7). */
-	channelId: string;
-	signal?: AbortSignal;
-	notify?: boolean;
-	/** The task whose step starts the job (spec 064, INV-8): its completion is recorded there instead of waking `channelId`. */
-	taskId?: string;
-}
-
-export interface JobManagerOptions {
-	/** Directory for this desk's persisted job records. Omit to run without persistence. */
-	stateDir?: string;
-	/** Is a job's channel still bound to this desk (spec 058, D7)? Omitted (TUI, tests): always. */
-	isBoundTo?: (channelId: string, desk: string) => boolean;
-	/** Delivers the completion wake. Omit to disable waking (sub-agent and test paths). */
-	dispatch?: (event: WakeEvent) => boolean | Promise<boolean>;
-	/** A task-bound job settled and its record is in the task's log; the lane recomputes from it (spec 064, D19). */
-	onTaskInput?: (desk: string, taskId: string) => void;
-	sweepIntervalMs?: number;
-	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
-	fileStore?: FileStore;
-	/** Directory the full-output spill (and its `.exit`/`.ready`/`.meta` siblings) is written to.
-	 * Defaults to the OS temp dir; the runtime passes `<deskDir>/logs` so the model can read it. */
-	spillDir?: string;
-}
 
 /** Cap on concurrently running jobs per desk, so a runaway model can't spawn unbounded processes. */
 export const MAX_RUNNING_JOBS = 5;
@@ -341,6 +315,7 @@ export class DeskJobManager {
 			timeoutSeconds,
 			contract: { notify: options.notify ?? true, ...(options.taskId ? { taskId: options.taskId } : {}) },
 			channelId: options.channelId,
+			scopeRef: options.scopeRef,
 		};
 		this.jobs.set(id, record);
 		// The persisted record is the only thing that survives a restart — a detached process
@@ -636,6 +611,7 @@ export class DeskJobManager {
 	/** Move a job to a terminal status: record it, persist it, and wake the channel once. */
 	private async finish(record: JobRecord, status: JobStatus, signal?: AbortSignal, announce = true): Promise<void> {
 		this.pendingCompletion.add(record.id);
+		record.completionMode = announce ? "wake" : "inline";
 		record.status = status;
 		record.durationMs = Date.now() - record.startedAt;
 		record.finishedAt = Date.now();
@@ -800,6 +776,11 @@ export class DeskJobManager {
 			default:
 				return "not-submitted";
 		}
+	}
+
+	/** Read completion facts without refreshing or changing their consumption mode. */
+	scopeWork(): ReturnType<typeof jobScopeWork> {
+		return [...this.jobs.values()].flatMap((record) => jobScopeWork(this.target.desk, record));
 	}
 
 	async list(signal?: AbortSignal): Promise<JobSnapshot[]> {

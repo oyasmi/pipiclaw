@@ -34,6 +34,7 @@ export interface InboundImage {
 export type ChannelEvent = HumanEvent | WakeEvent;
 
 interface EventBase {
+	scopeRef?: import("./delivery-scope.js").DeliveryScopeRef;
 	channelId: string;
 	ts: string;
 	text: string;

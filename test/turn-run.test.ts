@@ -6,6 +6,7 @@ import * as log from "../src/log.js";
 import type { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import { createTransportRegistry } from "../src/runtime/transports.js";
 import { createEventTurnRunner, type EventTurnDeps } from "../src/runtime/turn-run.js";
+import { createEmptyUsageTotals } from "../src/usage/totals.js";
 import { createFakeRunner } from "./support/fake-runner.js";
 import { RecordingTransport } from "./support/recording-transport.js";
 
@@ -31,8 +32,9 @@ function fixture() {
 	};
 	const reservedTurns = new WeakSet<WakeEvent>();
 	const activeTasks = new Set<Promise<void>>();
+	const transport = new RecordingTransport();
 	const deps: EventTurnDeps = {
-		transports: createTransportRegistry([new RecordingTransport()]),
+		transports: createTransportRegistry([transport]),
 		store: {} as ChannelStore,
 		activeTasks,
 		archiveIncomingMessage: vi.fn(async () => {}),
@@ -48,6 +50,7 @@ function fixture() {
 	const run = createEventTurnRunner(deps);
 	return {
 		runner,
+		transport,
 		end,
 		durable,
 		activeTasks,
@@ -174,4 +177,39 @@ it("settles subsequent absorbed wakes after errors and releases only the origina
 	expect(replacement.isBusy()).toBe(true);
 	expect(f.durable.markCompleted).toHaveBeenCalledOnce();
 	expect(f.durable.markRetryable).not.toHaveBeenCalled();
+});
+
+it("does not acknowledge a completion whose final intent failed to persist, even if the runner absorbs finish rejection", async () => {
+	// New risk: TurnOutput logs a finish error, then runtime deletes the only durable completion.
+	const f = fixture();
+	const error = new Error("injected final intent ENOSPC");
+	vi.spyOn(f.transport, "openTurn").mockReturnValue({
+		emit: () => {},
+		finish: async () => {
+			throw error;
+		},
+	});
+	vi.mocked(f.runner.run).mockImplementationOnce(async (_info, output) => {
+		await output.finish({ kind: "completed", usage: createEmptyUsageTotals() }).catch(() => undefined);
+		return { stopReason: "stop" };
+	});
+	const event = wake("unpersisted");
+	await expect(f.run(event)).rejects.toMatchObject({ errors: [error] });
+	expect(f.durable.markCompleted).not.toHaveBeenCalled();
+	expect(f.durable.markRetryable).toHaveBeenCalledWith(event.dispatchId);
+	expect(f.runner.isBusy()).toBe(false);
+});
+
+it("retains a failed scoped primary completion for retry instead of deleting its unconsumed result", async () => {
+	// Review R3: the scoped consumer does not consume failed inputs, so deletion strands its final gate.
+	const f = fixture();
+	const event = {
+		...wake("failed"),
+		scopeRef: { desk: "news", channelId: "dingtalk:dm:1", scopeId: "request:failed" as const },
+	};
+	vi.mocked(f.runner.run).mockResolvedValueOnce({ stopReason: "error" });
+	await f.run(event);
+	expect(f.durable.markCompleted).not.toHaveBeenCalled();
+	expect(f.durable.markRetryable).toHaveBeenCalledWith(event.dispatchId);
+	expect(f.runner.isBusy()).toBe(false);
 });

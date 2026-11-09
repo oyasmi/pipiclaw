@@ -82,7 +82,8 @@ describe("E2E deterministic: progress & silent turns", () => {
 		}
 		expect(harness.deliveries.slice(before).map((d) => d.method)).toEqual([
 			"replaceCard",
-			"finalizeCard",
+			"sendPlain",
+			"finalizeExistingCard",
 			"discardCard",
 		]);
 

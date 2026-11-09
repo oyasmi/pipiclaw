@@ -170,6 +170,7 @@ export interface RunLogContext {
 }
 
 export interface RunState {
+	scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
 	ctx: TurnOutput | null;
 	logCtx: RunLogContext | null;
 	store: ChannelStore | null;

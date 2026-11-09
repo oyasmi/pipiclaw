@@ -1,3 +1,4 @@
+import { deliveryScopeKey } from "../../src/channel/delivery-scope.js";
 import { DingTalkBot } from "../../src/dingtalk/bot.js";
 import type { DingTalkConfig } from "../../src/dingtalk/config.js";
 import type { DingTalkIngress } from "../../src/dingtalk/inbound.js";
@@ -13,6 +14,7 @@ export interface CapturedDelivery {
 		| "discardCard"
 		| "sendPlain";
 	channelId: string;
+	scopeKey?: string;
 	text?: string;
 	ts: number;
 }
@@ -38,8 +40,14 @@ export class HarnessDingTalkBot extends DingTalkBot {
 		super(ingress, config);
 	}
 
-	private capture(method: CapturedDelivery["method"], channelId: string, text?: string): void {
-		const delivery = { method, channelId, text, ts: Date.now() };
+	private capture(method: CapturedDelivery["method"], channelId: string, text?: string, scopeKey?: string): void {
+		const delivery: CapturedDelivery = {
+			method,
+			channelId: this.cardChannel(channelId),
+			...(scopeKey ? { scopeKey } : channelId.startsWith("scope:") ? { scopeKey: channelId } : {}),
+			text,
+			ts: Date.now(),
+		};
 		this.deliveries.push(delivery);
 		for (const waiter of this.deliveryWaiters) {
 			if (!waiter.predicate(delivery)) continue;
@@ -71,8 +79,17 @@ export class HarnessDingTalkBot extends DingTalkBot {
 	/** No socket in the deterministic harness. */
 	override async start(): Promise<void> {}
 
-	override async sendPlain(channelId: string, text: string): Promise<boolean> {
-		this.capture("sendPlain", channelId, text);
+	override async sendPlain(
+		channelId: string,
+		text: string,
+		opts?: Parameters<DingTalkBot["sendPlain"]>[2],
+	): Promise<boolean> {
+		this.capture(
+			"sendPlain",
+			channelId,
+			text,
+			opts?.scopeRef ? `scope:${deliveryScopeKey(opts.scopeRef)}` : undefined,
+		);
 		return true;
 	}
 

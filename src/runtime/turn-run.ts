@@ -3,6 +3,7 @@
  * admission, built-in commands, the agent run, and the settle-and-release epilogue that runs
  * whatever happens. Task steps never come through here — they run in the task lane (spec 064).
  */
+import { randomUUID } from "node:crypto";
 import type { AgentRunner } from "../agent/types.js";
 import type { ChannelContext, TurnOutcome } from "../channel/channel-context.js";
 import { type ChannelEvent, senderOf, type WakeEvent } from "../channel/channel-event.js";
@@ -70,6 +71,7 @@ export interface ArchivedMessage {
 interface TrackedOutput {
 	ctx: ChannelContext;
 	finished: boolean;
+	settlement?: Promise<void>;
 }
 
 function trackOutput(ctx: ChannelContext): TrackedOutput {
@@ -78,7 +80,12 @@ function trackOutput(ctx: ChannelContext): TrackedOutput {
 		emit: (event) => ctx.emit(event),
 		finish: (outcome) => {
 			tracked.finished = true;
-			return ctx.finish(outcome);
+			try {
+				tracked.settlement ??= ctx.finish(outcome);
+			} catch (error) {
+				tracked.settlement ??= Promise.reject(error);
+			}
+			return tracked.settlement;
 		},
 	};
 	return tracked;
@@ -93,10 +100,12 @@ function turnInfoOf(event: ChannelEvent): TurnInfo {
 		...(event.images ? { images: event.images } : {}),
 		...(event.source === "human" && event.ref !== undefined ? { ref: event.ref } : {}),
 		ts: event.ts,
+		scopeRef: event.scopeRef,
 	};
 }
 
 export interface EventTurnDeps {
+	getDeliveryScopes?: () => import("./delivery-scopes.js").DeliveryScopes | undefined;
 	transports: TransportRegistry;
 	store: ChannelStore;
 	activeTasks: Set<Promise<void>>;
@@ -340,8 +349,27 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		// Background wakes deliver their result, not their process: no progress card, no
 		// thinking stream, nothing to clean up when a check-in ends `[SILENT]`. Awaited completions
 		// deliver their result too, without opening another progress card.
+		if (event.source === "human" && !event.scopeRef)
+			event.scopeRef = {
+				desk: runner.conversation.desk,
+				channelId: event.channelId,
+				scopeId: `request:${randomUUID()}`,
+			};
+		if (
+			event.scopeRef &&
+			(event.scopeRef.desk !== runner.conversation.desk || event.scopeRef.channelId !== event.channelId)
+		)
+			throw new Error("消息的工作台已变化，请重新发送消息。");
 		const info = turnInfoOf(turn.event);
-		turn.output = trackOutput(transport.openTurn(info, { quiet: backgroundOnly }));
+		const scopes = transport.scopes && deps.getDeliveryScopes?.();
+		turn.output = trackOutput(
+			scopes && event.scopeRef
+				? await scopes.openTurn(
+						event.scopeRef,
+						[event.dispatchId, ...turn.absorbedDispatchIds].filter((id): id is string => id !== undefined),
+					)
+				: transport.openTurn(info, { quiet: backgroundOnly }),
+		);
 		const result = await runner.run(info, turn.output.ctx, store);
 		if (!deps.isCurrentRunner(runner)) return;
 		turn.mergedWakesHandled = result.stopReason !== "aborted" && result.stopReason !== "error";
@@ -381,18 +409,30 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 							executionDesk: runner.conversation.desk,
 						}
 					: { kind: "completed", usage: createEmptyUsageTotals(), executionDesk: runner.conversation.desk };
-				await turn.output.ctx.finish(outcome).catch((error: unknown) => {
-					log.logWarn("delivery.close.failed", "Delivery close failed", {
-						channelId: event.channelId,
-						reason: errorMessage(error),
-					});
-				});
+				// Keep the original settlement even when the agent's TurnOutput logs and absorbs it.
+				void turn.output.ctx.finish(outcome).catch(() => undefined);
 			}
+			let outputFailed = false;
+			await turn.output?.settlement?.catch((error: unknown) => {
+				outputFailed = true;
+				errors.push(error);
+				log.logWarn("delivery.close.failed", "Delivery close failed", {
+					channelId: event.channelId,
+					reason: errorMessage(error),
+				});
+			});
 			if (!deps.isCurrentRunner(runner)) return;
-			await settle(event.dispatchId, "markCompleted");
+			const stopped = outputFailed || turn.threw || !turn.mergedWakesHandled || runner.getTurnStatus().stopRequested;
+			// Scoped failed inputs remain unconsumed in DeliveryScopes; keep their producer wake.
+			const retryPrimary = outputFailed || (event.source === "wake" && event.scopeRef !== undefined && stopped);
+			await settle(event.dispatchId, retryPrimary ? "markRetryable" : "markCompleted");
+			if (outputFailed && event.source === "human") {
+				const transport = transports.forChannel(event.channelId);
+				if (transport)
+					await replyTo(transport, event, "这一轮的答复未能保存。请联系部署者检查服务器存储，再重新发送消息。");
+			}
 			// Failure of one record must not strand later absorbed claims. Re-check ownership
 			// before each await: /new or watchdog recovery may replace the runner meanwhile.
-			const stopped = !turn.mergedWakesHandled || runner.getTurnStatus().stopRequested;
 			for (const id of turn.absorbedDispatchIds) await settle(id, stopped ? "markRetryable" : "markCompleted");
 			if (errors.length)
 				throw new AggregateError(

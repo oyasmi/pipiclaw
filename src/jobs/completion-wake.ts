@@ -22,6 +22,7 @@ export function buildJobCompletionWake(input: {
 	const dispatchId = jobWakeDispatchId(desk, record.id);
 	return {
 		source: "wake",
+		scopeRef: record.scopeRef,
 		channelId,
 		producer: "JOB",
 		text:
@@ -36,4 +37,26 @@ export function buildJobCompletionWake(input: {
 		// The result is awaited; the wake itself still runs without a progress card.
 		presentation: "awaited",
 	};
+}
+
+/** Inline poll results never create a synthetic completion the scope would wait for forever. */
+export function jobScopeWork(
+	desk: string,
+	record: JobRecord,
+): Array<{
+	owner: import("../channel/delivery-scope.js").DeliveryScopeRef;
+	work: import("../channel/delivery-scope.js").ScopeWork;
+}> {
+	return record.scopeRef && record.contract.notify && !record.contract.taskId
+		? [
+				{
+					owner: record.scopeRef,
+					work: {
+						ref: record.id,
+						pending: record.status === "running",
+						...(record.completionMode === "inline" ? {} : { completionId: jobWakeDispatchId(desk, record.id) }),
+					},
+				},
+			]
+		: [];
 }

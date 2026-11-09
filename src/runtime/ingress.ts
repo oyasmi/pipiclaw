@@ -5,6 +5,7 @@
  * every transport. It also takes the synthetic wakes (`enqueueEvent`) that durable dispatch and
  * the event watchers hand in.
  */
+import { randomUUID } from "node:crypto";
 import type { AgentRunner } from "../agent/types.js";
 import type { ChannelEvent, ChannelEventSink, HumanEvent, WakeEvent } from "../channel/channel-event.js";
 import type { InboundMessage, Ingress, IngressResult, SteerResult } from "../channel/ingress.js";
@@ -112,6 +113,7 @@ export function createIngress(deps: IngressDeps): IngressService {
 		isShuttingDown,
 		getDurableDispatch: deps.getDurableDispatch,
 		getTaskControl: deps.getTaskControl,
+		getDeliveryScopes: deps.getDeliveryScopes,
 		runRuntimeCommand: commands.runRuntimeCommand,
 	});
 
@@ -139,6 +141,10 @@ export function createIngress(deps: IngressDeps): IngressService {
 		if (queue.size() >= limit) {
 			onFull();
 			return { kind: "rejected", reason: { code: "queue_full" } };
+		}
+		if (event.source === "human" && !event.scopeRef && !event.text.trim().startsWith("/")) {
+			const desk = resolvedDesk(resolveChannel(event.channelId));
+			if (desk) event.scopeRef = { desk, channelId: event.channelId, scopeId: `request:${randomUUID()}` };
 		}
 		const ref = event.source === "human" ? event.ref : undefined;
 		queue.enqueue(async () => {

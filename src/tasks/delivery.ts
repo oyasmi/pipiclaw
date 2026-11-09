@@ -28,7 +28,7 @@ export interface TaskDelivery {
 	sentAt?: string;
 }
 
-export type TaskSender = (channel: string, text: string) => Promise<boolean>;
+export type TaskSender = (message: TaskDelivery) => Promise<boolean>;
 const RETRY_MIN_MS = 60_000;
 const RETRY_MAX_MS = 15 * 60_000;
 const ID_PATTERN = /^(?:close-)?[a-f0-9-]{36}$/;
@@ -294,7 +294,7 @@ export async function deliverTaskMessage(
 						now + Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** Math.min(message.attempts - 1, 4));
 					await save(deskDir, message);
 					try {
-						if (!(await send(message.channel, message.text))) return false;
+						if (!(await send(message))) return false;
 					} catch (error) {
 						log.logWarn("tasks.delivery.send_failed", "Task delivery failed", {
 							reason: errorMessage(error),

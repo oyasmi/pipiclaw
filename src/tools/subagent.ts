@@ -110,6 +110,8 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 			"Delegate a task to a configured sub-agent (see the Sub-Agents directory in the system prompt). Prefer this over `subagent_inline` whenever a role fits — its tools, model, budget and context policy all come from the role file. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
 		parameters: subagentSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
+			const scopeRef = options.getDeliveryScope?.();
+			const capturedOptions = { ...options, getDeliveryScope: () => scopeRef };
 			if (signal?.aborted) {
 				throw new Error("Sub-agent aborted");
 			}
@@ -136,7 +138,15 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					`${invocation.error}\n\nAvailable configured sub-agents:\n${formatSubAgentList(discovery.agents)}`,
 				);
 			}
-			return dispatchSubAgentRun(options, currentModel, invocation.config, undefined, params, signal, onUpdate);
+			return dispatchSubAgentRun(
+				capturedOptions,
+				currentModel,
+				invocation.config,
+				undefined,
+				params,
+				signal,
+				onUpdate,
+			);
 		},
 	};
 }
@@ -151,6 +161,8 @@ export function createSubAgentInlineTool(
 			"Advanced fallback only, not the default: use `subagent` first whenever any configured role in the workspace `sub-agents/` can do the work. `subagent` is the normal role-based path: pass its `agent` and complete `task`; the role file supplies the tools, model, budget and context policy. Use `subagent_inline` only when no configured role is suitable. It is a raw one-shot meta-executor, not a shorthand for `subagent`: there is no role file to supply those settings. Build a complete valid inline call yourself — `task` and `systemPrompt` are required; choose valid values for any needed `tools`, `model`, `effort`, `context`, `thinkingLevel`, `mutates`, `workingDirectory`, and `purpose` fields. Do not send a partial role-style payload or choose this tool just because it is available. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
 		parameters: subagentInlineSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
+			const scopeRef = options.getDeliveryScope?.();
+			const capturedOptions = { ...options, getDeliveryScope: () => scopeRef };
 			if (signal?.aborted) {
 				throw new Error("Sub-agent aborted");
 			}
@@ -179,7 +191,7 @@ export function createSubAgentInlineTool(
 				throw new RecoverableToolError(invocation.error ?? "Unable to resolve inline sub-agent.");
 			}
 			return dispatchSubAgentRun(
-				options,
+				capturedOptions,
 				currentModel,
 				invocation.config,
 				invocation.warning,

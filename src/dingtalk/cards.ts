@@ -6,11 +6,13 @@
 import axios from "axios";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isRecord } from "../shared/type-guards.js";
 import { type ConversationMeta, DINGTALK_API, http } from "./api.js";
 import type { DingTalkConfig } from "./config.js";
 import { CARD_REQUEST_MAX_BYTES } from "./progress.js";
 
 interface AICard {
+	canWrite: () => boolean;
 	instanceId: string;
 	conversationId: string;
 	accessToken: string;
@@ -39,6 +41,7 @@ function rejectsMarkdownAppend(data: unknown): boolean {
 }
 
 export interface CardControllerDeps {
+	canWrite?: (key: string) => boolean;
 	config: DingTalkConfig;
 	getAccessToken: () => Promise<string | null>;
 	getConversationMeta: (channelId: string) => ConversationMeta | null;
@@ -77,7 +80,7 @@ export class CardController {
 	}
 
 	isCardGenerationCurrent(channelId: string, generation: symbol): boolean {
-		return this.cardGenerations.get(channelId) === generation;
+		return this.cardGenerations.get(channelId) === generation && this.deps.canWrite?.(channelId) !== false;
 	}
 
 	/** Get or create an AI card without joining an earlier turn's in-flight creation. */
@@ -201,6 +204,17 @@ export class CardController {
 		}
 	}
 
+	/** A possibly delivered CREATE must never be retried with a fresh outTrackId. */
+	hasUnconfirmedCreation(key: string): boolean {
+		const generation = this.cardGenerations.get(key);
+		return (
+			generation !== undefined &&
+			this.cardCreationAttempted.has(generation) &&
+			!this.activeCards.has(key) &&
+			!this.cardCreationInFlight.has(key)
+		);
+	}
+
 	/** True while this channel has a card being created (the idle-cache sweep must not reclaim it). */
 	hasCreationInFlight(channelId: string): boolean {
 		return this.cardCreationInFlight.has(channelId);
@@ -294,12 +308,25 @@ export class CardController {
 		}
 
 		try {
-			await http.post(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, body, {
+			const response = await http.post<unknown>(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, body, {
 				headers: {
 					"x-acs-dingtalk-access-token": token,
 					"Content-Type": "application/json",
 				},
 			});
+			const data = response.data;
+			if (
+				!isRecord(data) ||
+				data.success !== true ||
+				!isRecord(data.result) ||
+				data.result.outTrackId !== instanceId ||
+				!Array.isArray(data.result.deliverResults) ||
+				data.result.deliverResults.length === 0 ||
+				!data.result.deliverResults.every((result: unknown) => isRecord(result) && result.success === true)
+			) {
+				log.logWarn("dingtalk.card.create_unconfirmed", "Card creation confirmation failed", { channelId });
+				return null;
+			}
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
 				log.logWarn("dingtalk.card.create_failed", "Card create failed", {
@@ -313,6 +340,7 @@ export class CardController {
 		}
 
 		const card: AICard = {
+			canWrite: () => this.deps.canWrite?.(channelId) !== false,
 			instanceId,
 			conversationId: meta.conversationId,
 			accessToken: token,
@@ -347,6 +375,7 @@ export class CardController {
 	}
 
 	private async streamCardRequest(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
+		if (!card.canWrite()) return false;
 		// Refresh token if needed
 		const ageSecs = Date.now() / 1000 - card.createdAt;
 		if (ageSecs > TOKEN_REFRESH_SECS) {
@@ -355,6 +384,8 @@ export class CardController {
 				card.accessToken = token;
 			}
 		}
+
+		if (!card.canWrite()) return false;
 
 		// Progress updates stay within one request. A finalized answer is the model's own markdown
 		// and may be longer; a failed finalize falls back to a normal message.
@@ -380,13 +411,17 @@ export class CardController {
 
 		const start = Date.now();
 		try {
-			await http.put(`${DINGTALK_API}/v1.0/card/streaming`, body, {
+			const response = await http.put<unknown>(`${DINGTALK_API}/v1.0/card/streaming`, body, {
 				headers: {
 					"x-acs-dingtalk-access-token": card.accessToken,
 					"Content-Type": "application/json",
 				},
 			});
 
+			if (!isRecord(response.data) || response.data.success !== true || response.data.result !== true) {
+				log.logWarn("dingtalk.card.stream_unconfirmed", "Card streaming confirmation failed", {});
+				return false;
+			}
 			const duration = Date.now() - start;
 			if (duration > 1000) {
 				log.logWarn("dingtalk.card.stream_slow", "Card streaming request slow", {

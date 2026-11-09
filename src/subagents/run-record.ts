@@ -3,6 +3,7 @@
  * minting and matching, the pending-settlement transform and the record parser. No state and no I/O,
  * so the run manager and the external-run helpers can share it without an import cycle (spec 054 D9/D12).
  */
+import { isDeliveryScopeRef } from "../channel/delivery-scope.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../usage/totals.js";
 import type { WorkspaceBaseline } from "./workspace-summary.js";
@@ -45,6 +46,8 @@ export interface RunUsage {
 }
 
 export interface RunRecord extends RunUsage {
+	completionMode?: "inline" | "wake";
+	scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
 	runId: string;
 	channelId: string;
 	runtime: RunRuntime;
@@ -135,6 +138,7 @@ export interface RunRecord extends RunUsage {
 }
 
 export interface RegisterRunInput {
+	scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
 	runId: string;
 	channelId: string;
 	runtime: RunRuntime;
@@ -186,10 +190,11 @@ export interface SettleInput {
 /**
  * A best-effort, out-of-band notice about a run — distinct from the completion wake (`dispatch`).
  * The wake is an LLM turn (its delivery latency is whatever the model takes to respond); a notice
- * is plain text rendered straight to the channel, so it reaches the user in roughly the time the
- * run itself takes to settle, not the wake turn's latency on top of that.
+ * is rendered without a model turn: scoped progress when supported, otherwise an explicit
+ * interaction/legacy push. It does not decide whether the scope may finalize.
  */
 export interface RunNotice {
+	scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
 	kind: "settled" | "progress" | "stalled";
 	runId: string;
 	agent: string;
@@ -273,6 +278,7 @@ export function createPendingSettlement(input: SettleInput, finishedAt: number, 
 }
 
 export function applyPendingSettlement(record: RunRecord, pending: PendingSettlement): void {
+	record.completionMode = pending.announce ? "wake" : "inline";
 	record.status = pending.status;
 	record.failureReason = pending.failureReason;
 	record.usage = pending.usage;
@@ -296,6 +302,8 @@ export function parseRunRecord(raw: string): RunRecord | undefined {
 	if (
 		!isRecord(value) ||
 		typeof value.runId !== "string" ||
+		(value.scopeRef !== undefined &&
+			(!isDeliveryScopeRef(value.scopeRef) || value.scopeRef.channelId !== value.channelId)) ||
 		typeof value.channelId !== "string" ||
 		(value.runtime !== "internal" && value.runtime !== "external") ||
 		typeof value.agent !== "string" ||

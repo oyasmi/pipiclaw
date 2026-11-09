@@ -630,7 +630,8 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 	it("never wakes for suppressed jobs: notify:false, explicit cancels, and inline polls", async () => {
 		const { events, dispatch } = collectingDispatch();
 		const executor = new FakeJobExecutor();
-		const manager = managedJobManager({ desk: "news" }, executor, { stateDir: tempDir(), dispatch });
+		const stateDir = tempDir();
+		const manager = managedJobManager({ desk: "news" }, executor, { stateDir, dispatch });
 
 		const quiet = await manager.start("sleep 100", "quiet", 300, { channelId: "dingtalk:dm:1", notify: false });
 		executor.probeResult = "EXIT:0";
@@ -644,13 +645,25 @@ describe("DeskJobManager persistence and completion wakes (spec 031, D6)", () =>
 		expect(quiet.id).not.toBe(cancelled.id);
 
 		// A result already handed back inline by poll() must not wake later either.
-		await manager.start("make", "build", 300, { channelId: "dingtalk:dm:1" });
+		const scopeRef = { desk: "news", channelId: "dingtalk:dm:1", scopeId: "request:poll" as const };
+		const inline = await manager.start("make", "build", 300, { channelId: scopeRef.channelId, scopeRef });
 		executor.probeResult = "EXIT:0";
 		await manager.poll(undefined);
+		expect(manager.scopeWork()).toEqual([{ owner: scopeRef, work: { ref: inline.id, pending: false } }]);
 		expect(events).toHaveLength(0);
 
 		// A later reconcile must not resurrect the suppressed wake.
 		await manager.list();
+		expect(events).toHaveLength(0);
+
+		expect(JSON.parse(readFileSync(join(stateDir, `${inline.id}.json`), "utf-8"))).toMatchObject({
+			completionMode: "inline",
+			notified: true,
+		});
+		manager.stop();
+		const restored = managedJobManager({ desk: "news" }, executor, { stateDir, dispatch });
+		await restored.restore();
+		expect(restored.scopeWork()).toEqual(manager.scopeWork());
 		expect(events).toHaveLength(0);
 
 		// Spec 058, D8: the starting channel was rebound to another desk. The job still settles, but

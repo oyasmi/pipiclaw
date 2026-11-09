@@ -108,7 +108,7 @@ async function prepareRunContext(
 	}
 	const artifactDir = await prepareArtifactDir(options.deskDir, runId);
 	const workingDirectory = resolveRunWorkingDirectory(params.workingDirectory, options);
-	return { runId, purpose, taskId, item, workingDirectory, artifactDir };
+	return { runId, purpose, taskId, item, workingDirectory, artifactDir, scopeRef: options.getDeliveryScope?.() };
 }
 
 /**
@@ -170,6 +170,7 @@ export async function dispatchSubAgentRun(
 
 	if (config.runtime === "external") {
 		return dispatchExternalRun({
+			signal,
 			options,
 			currentModel,
 			config,

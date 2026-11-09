@@ -34,6 +34,7 @@ const subagentRunSchema = Type.Object({
 });
 
 export interface SubAgentManageToolOptions {
+	getDeliveryScope?: () => import("../channel/delivery-scope.js").DeliveryScopeRef | undefined;
 	runManager: SubAgentRunManager;
 	channelId: string;
 	/**
@@ -184,7 +185,8 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			"Operate on one delegation run by runId. show: full detail for self-diagnosis. cancel: stop a running one " +
 			"(no wake — your decision, not a failure). follow_up: continue a resumable run with a new instruction (new runId).",
 		parameters: subagentRunSchema,
-		execute: async (_toolCallId: string, { op, runId, task }: SubAgentRunArgs) => {
+		execute: async (_toolCallId: string, { op, runId, task }: SubAgentRunArgs, signal) => {
+			const scopeRef = options.getDeliveryScope?.();
 			const resolution = manager.resolveRef(runId);
 			if (resolution.kind === "ambiguous") {
 				throw new RecoverableToolError(
@@ -331,9 +333,11 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				const workspaceBaseline =
 					role.mutates === "write" ? await snapshotWorkspace(record.workingDirectory) : undefined;
 				launchResult = await launchExternalRun({
+					scopeRef: record.taskId ? record.scopeRef : scopeRef,
+					signal,
 					runManager: manager,
 					runId: newRunId,
-					channelId: options.channelId,
+					channelId: record.taskId ? record.channelId : options.channelId,
 					deskDir: options.deskDir,
 					label: `follow-up: ${task.slice(0, 80)}`,
 					agent: role.name,

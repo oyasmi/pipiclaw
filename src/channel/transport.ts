@@ -20,6 +20,7 @@ export interface TransportPolicy {
 
 /** What one turn is about; the transport needs it to find the right conversation to answer into. */
 export interface TurnInfo {
+	scopeRef?: import("./delivery-scope.js").DeliveryScopeRef;
 	channelId: string;
 	user: string;
 	userName?: string;
@@ -66,6 +67,8 @@ export interface MediaSendResult {
 export interface Transport {
 	readonly name: TransportName;
 	readonly policy: TransportPolicy;
+	/** Optional addressed progress: the runtime supplies a per-turn ChannelContext over this port. */
+	readonly scopes?: import("./delivery-scope.js").ScopeDeliveryPort;
 	/** Start receiving. `ingress` is the one place inbound messages go. */
 	start(ingress: Ingress): Promise<void>;
 	/**
@@ -78,9 +81,9 @@ export interface Transport {
 	stop(): Promise<void>;
 	/**
 	 * One turn's output port. A `quiet` turn shows no progress; only its answer is delivered.
-	 * Every human message the ingress accepted (`started` or `queued`) gets exactly one `openTurn`
-	 * and one `finish`, whether it runs the agent or only answers a command — unless it is
-	 * `dropped` first, or the process ends.
+	 * Without a scope capability, every accepted human message gets one openTurn/finish pair
+	 * (unless dropped first or the process ends). Scoped agent turns use the runtime's scope
+	 * ChannelContext instead; commands and unowned wakes still use this port.
 	 */
 	openTurn(turn: TurnInfo, opts: { quiet: boolean }): ChannelContext;
 	/** Outside any turn: command replies, receipts, task reports, wake-failure notices. Whether it was delivered. */

@@ -71,6 +71,7 @@ export async function createRuntimeHarness(options?: {
 	const { conversationDir, deskDir } = await bindChannelOnDisk(home.workspaceDir, channelId);
 	const deliveries: CapturedDelivery[] = [];
 	const dingtalkConfig = {
+		cardTemplateId: "offline-fixture",
 		clientId: "e2e-client-id",
 		clientSecret: "e2e-client-secret",
 		robotCode: "e2e-client-id",
@@ -252,6 +253,7 @@ export async function createDeterministicHarness(options?: {
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
 	const dingtalkConfig = {
+		cardTemplateId: "offline-fixture",
 		clientId: "e2e-client-id",
 		clientSecret: "e2e-client-secret",
 		robotCode: "e2e-client-id",

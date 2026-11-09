@@ -4,6 +4,7 @@ const http = vi.hoisted(() => ({ post: vi.fn(), put: vi.fn(), defaults: {} }));
 vi.mock("axios", () => ({ default: { ...http, create: () => http, isAxiosError: () => false } }));
 
 import type { TurnEvent, TurnOutcome } from "../src/channel/channel-context.js";
+import { deliveryScopeKey } from "../src/channel/delivery-scope.js";
 import type { TurnInfo } from "../src/channel/transport.js";
 import { DingTalkBot } from "../src/dingtalk/bot.js";
 import { createDingTalkContext, type DeliveryPort } from "../src/dingtalk/delivery.js";
@@ -15,6 +16,7 @@ import {
 	progressStyleOf,
 	type ResponseMode,
 } from "../src/dingtalk/response-mode.js";
+import { DingTalkScopeDelivery } from "../src/dingtalk/scope-delivery.js";
 import * as log from "../src/log.js";
 import { createEmptyUsageTotals } from "../src/usage/totals.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -503,7 +505,11 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 				if (createGate) await createGate.promise;
 				if (loseCreateResponse) throw new Error("lost create response");
 			}
-			return { data: {} };
+			return {
+				data: url.endsWith("createAndDeliver")
+					? { success: true, result: { outTrackId: body.outTrackId, deliverResults: [{ success: true }] } }
+					: { processQueryKey: "fixture-receipt" },
+			};
 		});
 		http.put.mockReset().mockImplementation(async (_url: string, body: StreamBody) => {
 			if (streamGate) await streamGate.promise;
@@ -512,7 +518,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 			if (!card) throw new Error("unknown card");
 			card.content = body.isFull ? body.content : card.content + body.content;
 			card.finished = body.isFinalize;
-			return { data: {} };
+			return { data: { success: true, result: true } };
 		});
 	});
 
@@ -566,13 +572,31 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		expect(plainCalls()).toHaveLength(1);
 	});
 
-	it("does not create another instance when the create response is lost", async () => {
-		const { ctx } = remote("template", "final_card_only");
-		loseCreateResponse = true;
-		ctx.emit(answer("answer"));
-		await ctx.finish(outcome("completed"));
-		expect(onlyCard().content.trim()).not.toBe("");
-		expect(plainCalls()).toHaveLength(1);
+	it("does not create another instance when creation is unconfirmed", async () => {
+		const post = http.post.getMockImplementation()!;
+		for (const mode of ["lost", "empty", "rejected", "wrong-owner"]) {
+			cards.clear();
+			http.post.mockClear().mockImplementation(async (url: string, body: CreateBody) => {
+				const response = await post(url, body);
+				if (!url.endsWith("createAndDeliver") || mode === "lost") return response;
+				return {
+					data:
+						mode === "empty"
+							? {}
+							: {
+									success: mode !== "rejected",
+									result: { outTrackId: "another-owner", deliverResults: [{ success: true }] },
+								},
+				};
+			});
+			const { ctx } = remote("template", "final_card_only");
+			loseCreateResponse = mode === "lost";
+			ctx.emit(answer("answer"));
+			await ctx.finish(outcome("completed"));
+			expect(onlyCard().content.trim()).not.toBe("");
+			expect(http.post.mock.calls.filter(([url]) => String(url).endsWith("createAndDeliver"))).toHaveLength(1);
+			expect(plainCalls()).toHaveLength(1);
+		}
 	});
 
 	it("repeatedly folds and regrows a bounded window without replaying removed content", async () => {
@@ -718,6 +742,158 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		void context;
 		expect(cards.size).toBe(2);
 		expect([...cards.values()].every((c) => c.finished && c.content.trim())).toBe(true);
+	});
+
+	it("keeps concurrent scopes on separate remote cards and rejects unconfirmed update/final responses", async () => {
+		// New risk: a channel-keyed publisher overwrites another scope; 2xx alone opens delivery gates.
+		// Mutation 2026-11-09: key by channelId only -> one remote card instead of two (confirmed red).
+		const { bot, ctx } = remote();
+		await ctx.finish(outcome("silent"));
+		cards.clear();
+		http.post.mockClear();
+		http.put.mockClear();
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined, true);
+		const owner = { desk: "default", channelId: CHANNEL, scopeId: "request:first" as const };
+		createGate = deferred();
+		const first = scopes.open(owner, false);
+		first.emit(progress("first scope"));
+		await vi.advanceTimersByTimeAsync(0);
+		const firstId = [...cards.keys()][0]!;
+		const gate = createGate;
+		createGate = undefined;
+		const second = scopes.open({ ...owner, scopeId: "task:second" }, false);
+		second.emit(progress("second scope"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(cards.size).toBe(2);
+		const secondId = [...cards.keys()].find((id) => id !== firstId)!;
+		expect(cards.get(secondId)?.content).toContain("second scope");
+		gate.resolve();
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(cards.size).toBe(2);
+		expect(cards.get(firstId)?.content).toContain("first scope");
+		expect(cards.get(firstId)?.content).not.toContain("second scope");
+		expect(bot.cardChannel(`scope:${deliveryScopeKey(owner)}`)).toBe(CHANNEL);
+		const put = http.put.getMockImplementation()!;
+		let rejectReport = true;
+		http.put.mockImplementation((url: string, body: StreamBody) =>
+			body.outTrackId === secondId && rejectReport
+				? Promise.resolve({ data: { success: false, result: false } })
+				: put(url, body),
+		);
+		const report = second.report({ id: "report", text: "new report" });
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(await report).toEqual({ status: "unknown" });
+		rejectReport = false;
+		const retry = second.report({ id: "report", text: "new report" });
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(await retry).toEqual({ status: "confirmed" });
+		// Missing send receipt is unknown; retry is the same business final, never a new card.
+		http.post.mockResolvedValueOnce({ data: {} });
+		const intent = { id: "final", text: "final answer" };
+		expect(await first.finalize(intent)).toEqual({ status: "unknown" });
+		expect(await first.finalize(intent)).toEqual({ status: "confirmed" });
+		expect(await first.finalize(intent)).toEqual({ status: "confirmed" });
+		first.emit(progress("late first writer"));
+		await scopes.stop();
+		expect(cards.size).toBe(2);
+		expect(plainCalls()).toHaveLength(2);
+		expect(cards.get(secondId)?.content).not.toContain("late first writer");
+	});
+
+	it("revokes queued scope writes before HTTP when its binding changes", async () => {
+		// Review R4: a paced frame or queued stream must not execute under another desk's binding.
+		// Mutation 2026-11-09: remove streamCardRequest guard -> queued write succeeds (red, restored).
+		const { bot, ctx } = remote();
+		await ctx.finish(outcome("silent"));
+		cards.clear();
+		http.post.mockClear();
+		http.put.mockClear();
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined, true);
+		let bound = true;
+		const scope = scopes.open({ desk: "default", channelId: CHANNEL, scopeId: "task:bound" }, false, () => bound);
+		await vi.advanceTimersByTimeAsync(0);
+		const before = http.put.mock.calls.length;
+		scope.emit(progress("queued old desk"));
+		bound = false;
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(http.put).toHaveBeenCalledTimes(before);
+		expect(await scope.report({ id: "report", text: "old report" })).toEqual({ status: "blocked" });
+		expect(await scope.finalize({ id: "final", text: "old answer" })).toEqual({ status: "blocked" });
+		expect(plainCalls()).toHaveLength(0);
+		bound = true;
+		expect(await scope.finalize({ id: "final", text: "late old answer" })).toEqual({ status: "blocked" });
+		expect(http.put).toHaveBeenCalledTimes(before);
+		// A second write can already be inside CardController's per-card queue when rebinding.
+		let queuedBound = true;
+		const queuedOwner = { desk: "default", channelId: CHANNEL, scopeId: "task:queued-http" as const };
+		scopes.open(queuedOwner, false, () => queuedBound);
+		await vi.advanceTimersByTimeAsync(0);
+		const key = `scope:${deliveryScopeKey(queuedOwner)}`;
+		const generation = bot.getCardGeneration(key);
+		streamGate = deferred();
+		const puts = http.put.mock.calls.length;
+		const inFlight = bot.replaceCard(key, "already submitted", false, false, generation);
+		await vi.advanceTimersByTimeAsync(0);
+		const queued = bot.replaceCard(key, "not submitted", false, false, generation);
+		queuedBound = false;
+		streamGate.resolve();
+		await inFlight;
+		expect(await queued).toBe(false);
+		expect(http.put).toHaveBeenCalledTimes(puts + 1);
+		streamGate = undefined;
+		// A binding can change while CREATE or SEND waits for a token, after the adapter entry check.
+		const tokens = (bot as unknown as { tokens: { get(): Promise<string | null> } }).tokens;
+		for (const kind of ["create", "send"]) {
+			let allowed = true;
+			const entered = deferred();
+			const release = deferred();
+			vi.spyOn(tokens, "get").mockImplementation(async () => {
+				entered.resolve();
+				await release.promise;
+				return "test-token";
+			});
+			const posts = http.post.mock.calls.length;
+			const writer = scopes.open(
+				{ desk: "default", channelId: CHANNEL, scopeId: `task:token-${kind}` },
+				kind === "send",
+				() => allowed,
+			);
+			const sending = kind === "send" ? writer.finalize({ id: "final", text: "old owner" }) : undefined;
+			await entered.promise;
+			allowed = false;
+			release.resolve();
+			await vi.advanceTimersByTimeAsync(0);
+			if (sending) expect(await sending).toEqual({ status: "blocked" });
+			expect(http.post).toHaveBeenCalledTimes(posts);
+		}
+		await scopes.stop();
+	});
+
+	it("recovers a report after an ambiguous CREATE by a confirmed plain retry without creating another card", async () => {
+		// Review R5: CREATE may have reached the platform; retry must unblock the report without a second card.
+		// Mutation 2026-11-09: disable fallback -> retry stays unknown (confirmed red, restored).
+		const { bot, ctx } = remote();
+		await ctx.finish(outcome("silent"));
+		cards.clear();
+		http.post.mockClear();
+		http.put.mockClear();
+		loseCreateResponse = true;
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined, true);
+		const scope = scopes.open({ desk: "default", channelId: CHANNEL, scopeId: "task:create-failed" }, false);
+		const first = scope.report({ id: "report", text: "retained result" });
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(await first).toEqual({ status: "unknown" });
+		loseCreateResponse = false;
+		const retried = scope.report({ id: "report", text: "retained result" });
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(await retried).toEqual({ status: "confirmed" });
+		const intent = { id: "close", text: "completed" };
+		expect(await scope.finalize(intent)).toEqual({ status: "confirmed" });
+		expect(await scope.finalize(intent)).toEqual({ status: "confirmed" });
+		expect(cards.size).toBe(1);
+		expect(http.post.mock.calls.filter(([url]) => String(url).endsWith("createAndDeliver"))).toHaveLength(1);
+		expect(plainCalls()).toHaveLength(2);
+		await scopes.stop();
 	});
 
 	it("a failed final card falls back to one plain message; when that fails too, delivery is reported failed", async () => {

@@ -215,13 +215,24 @@ export class LaneControl implements TaskControl {
 					: undefined,
 		});
 		if (live) await ctx.release(live);
+		if (reportChannel && reportChannel === input.channel && ctx.options.closeProgress) {
+			try {
+				await ctx.options.closeProgress(desk, reportChannel, id);
+			} catch (error) {
+				log.logWarn("tasks.progress.close_failed", "Task progress close failed", {
+					reason: errorMessage(error),
+					fields: { desk, taskId: id },
+				});
+			}
+		}
 		ctx.notify();
 		// A cancel typed in another channel of the desk leaves the report channel told (D29); one typed
 		// there is answered by the command's own reply.
 		if (reportChannel && reportChannel !== input.channel) {
 			await drainTaskDeliveries(
 				deskDir,
-				(channel, text) => ctx.options.deliver(desk, channel, text),
+				(message) =>
+					ctx.options.deliverTask?.(desk, message) ?? ctx.options.deliver(desk, message.channel, message.text),
 				(channel) => ctx.options.isBoundTo(channel, desk) && ctx.options.isReachable(channel),
 				ctx.now(),
 			).catch((error: unknown) =>

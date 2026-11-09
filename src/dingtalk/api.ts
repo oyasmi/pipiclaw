@@ -5,6 +5,7 @@
 import axios from "axios";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isRecord } from "../shared/type-guards.js";
 import type { DingTalkConfig } from "./config.js";
 
 export const DINGTALK_API = "https://api.dingtalk.com";
@@ -36,13 +37,13 @@ export interface ConversationMeta {
  * plain text/markdown, images, and files.
  */
 export async function sendRobotMessage(
-	deps: { config: DingTalkConfig; getAccessToken: () => Promise<string | null> },
+	deps: { config: DingTalkConfig; getAccessToken: () => Promise<string | null>; canWrite?: () => boolean },
 	meta: ConversationMeta,
 	msgKey: string,
 	msgParam: string,
 ): Promise<boolean> {
 	const token = await deps.getAccessToken();
-	if (!token) return false;
+	if (!token || deps.canWrite?.() === false) return false;
 
 	const robotCode = deps.config.robotCode || deps.config.clientId;
 	const isGroup = meta.conversationType === "2";
@@ -58,13 +59,23 @@ export async function sendRobotMessage(
 	}
 
 	try {
-		await http.post(url, body, {
+		const response = await http.post<unknown>(url, body, {
 			headers: {
 				"x-acs-dingtalk-access-token": token,
 				"Content-Type": "application/json",
 			},
 		});
-		return true;
+		// The API returns a query receipt even though delivery/read status may still be pending.
+		// An empty 2xx response or a recipient rejected by batchSend is not confirmation.
+		const data = response.data;
+		return (
+			isRecord(data) &&
+			typeof data.processQueryKey === "string" &&
+			data.processQueryKey.length > 0 &&
+			["invalidStaffIdList", "flowControlledStaffIdList", "filteredStaffIdList"].every(
+				(field) => data[field] === undefined || (Array.isArray(data[field]) && data[field].length === 0),
+			)
+		);
 	} catch (err) {
 		if (axios.isAxiosError(err) && err.response) {
 			log.logWarn("dingtalk.send.failed", "Message send failed", {

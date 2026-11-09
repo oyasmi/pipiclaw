@@ -736,7 +736,9 @@ export class TaskLane implements TaskControl {
 			this.noteHorizon(
 				await drainTaskDeliveries(
 					deskDir,
-					(channel, text) => this.options.deliver(desk, channel, text),
+					(message) =>
+						this.options.deliverTask?.(desk, message) ??
+						this.options.deliver(desk, message.channel, message.text),
 					(channel) => this.options.isBoundTo(channel, desk) && this.options.isReachable(channel),
 					this.ctx.now(),
 				),

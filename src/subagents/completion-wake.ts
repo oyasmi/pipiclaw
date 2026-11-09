@@ -1,10 +1,17 @@
 /**
  * Rendering of the completion wake a settled delegation run sends to its channel (spec 040 D7).
  */
+
 import { join } from "node:path";
 import type { WakeEvent } from "../channel/channel-event.js";
+import { sameDeliveryScope } from "../channel/delivery-scope.js";
 import { formatDuration } from "../shared/format.js";
 import type { RunRecord } from "./run-record.js";
+
+/** Stable identity shared by producer dispatch and delivery consumption. */
+export function runWakeDispatchId(desk: string, runId: string): string {
+	return `subagent:${desk}:${runId}:done`;
+}
 
 /** Chars of the reply text carried inline in the completion wake. P2-1: `output.md` bodies are
  *  routinely 3-10KB — a 2,000-char tail truncated most of them and regularly cost the reader an
@@ -17,14 +24,14 @@ export const WAKE_OUTPUT_TAIL_CHARS = 6_000;
  */
 /**
  * Running runs that share this wake's question, "was this the last one?": the other runs of its
- * task, or — for a chat-level run — the other chat-level runs of the same channel. The desk's other
- * channels get their own wakes, so counting them would leave this channel waiting for nothing.
+ * task, or — for a chat-level run — the other chat-level runs of the same channel and owner.
+ * Unrelated requests get their own wakes; counting them could leave this scope waiting for nothing.
  */
 export function countWakeSiblings(record: RunRecord, runs: Iterable<RunRecord>): number {
 	let count = 0;
 	for (const other of runs) {
 		if (other.runId === record.runId || other.status !== "running" || other.taskId !== record.taskId) continue;
-		if (record.taskId === undefined && other.channelId !== record.channelId) continue;
+		if (other.channelId !== record.channelId || !sameDeliveryScope(record.scopeRef, other.scopeRef)) continue;
 		count++;
 	}
 	return count;
@@ -67,6 +74,7 @@ export function buildRunCompletionWake(input: {
 			: "";
 	return {
 		source: "wake",
+		scopeRef: record.scopeRef,
 		channelId: record.channelId,
 		producer: "SUBAGENT",
 		text:

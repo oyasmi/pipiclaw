@@ -638,6 +638,7 @@ export class ChannelRunner implements AgentRunner {
 	private resetRunState(info: TurnInfo, ctx: TurnOutput, store: ChannelStore): void {
 		this.runState = createEmptyRunState();
 		this.runState.ctx = ctx;
+		this.runState.scopeRef = info.scopeRef;
 		this.runState.logCtx = {
 			channelId: info.channelId,
 			userName: info.userName,

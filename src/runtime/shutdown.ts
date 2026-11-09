@@ -34,6 +34,7 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 }
 
 export interface ShutdownDeps {
+	deliveryScopes?: { stop(): Promise<void> };
 	taskLane: { stop(): void };
 	getDurableDispatch: () => { stop(): void; flush?(): Promise<void> } | undefined;
 	memoryMaintenanceScheduler: { stop(): void };
@@ -194,6 +195,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			}
 			channelRunners.clear();
 			// Only now do connections close: what is still unfinished ends as interrupted.
+			await phase("delivery-scopes", () => deps.deliveryScopes?.stop() ?? Promise.resolve(), SHUTDOWN_FLUSH_WAIT_MS);
 			await phase("stop-transports", () => transports.stopAll(), SHUTDOWN_ABORT_WAIT_MS);
 
 			await phase(

@@ -48,6 +48,7 @@ import { createWriteTool } from "./write.js";
  * dependency into a loud error instead of a silent undefined.
  */
 export interface ToolBuildContext {
+	getDeliveryScope?: () => import("../channel/delivery-scope.js").DeliveryScopeRef | undefined;
 	executor: Executor;
 	/** File-content port for the generic file tools (spec 044, D1); `Executor` stays command-only. */
 	fileStore: FileStore;
@@ -176,6 +177,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "bash",
 		create: (ctx) =>
 			createBashTool(ctx.executor, {
+				getDeliveryScope: ctx.getDeliveryScope,
 				...fileToolOptions(ctx),
 				rtkEnabled: ctx.rtkEnabled === true,
 				interceptorEnabled: ctx.toolsConfig?.tools.bashInterceptor.enabled === true,

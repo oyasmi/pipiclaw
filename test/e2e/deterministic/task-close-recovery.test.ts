@@ -152,14 +152,27 @@ describe("E2E deterministic: task closure recovery", () => {
 				{ delivered: true },
 			]);
 			expect((await readTaskLog(deskDir, id)).filter((record) => record.kind === "close")).toHaveLength(1);
-			const deliveries = readFileSync(join(home.homeDir, "state", "captured-deliveries.jsonl"), "utf-8")
+			const deliveries = readFileSync(join(home.homeDir, "state", "captured-task-deliveries.jsonl"), "utf-8")
 				.trim()
 				.split("\n")
-				.map((line) => JSON.parse(line) as { kind: string; accepted: boolean; text: string });
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							kind: string;
+							accepted: boolean;
+							text: string;
+							owner: { desk: string; channelId: string; scopeId: string };
+							id: string;
+						},
+				);
 			expect(deliveries.filter((delivery) => delivery.kind === "report" && delivery.accepted)).toHaveLength(1);
 			expect(deliveries.filter((delivery) => delivery.kind === "receipt" && delivery.accepted)).toHaveLength(2);
 			const receipts = deliveries.filter((delivery) => delivery.kind === "receipt" && delivery.accepted);
 			expect(receipts[0]!.text).toBe(receipts[1]!.text);
+			expect(receipts[0]!.id).toBe(receipts[1]!.id);
+			expect(receipts.map((receipt) => receipt.owner)).toEqual(
+				Array(2).fill({ desk: E2E_DESK, channelId: channel, scopeId: `task:${id}` }),
+			);
 			expect(model.requests).toHaveLength(requests);
 			expect(model.unmatched()).toEqual([]);
 		} finally {

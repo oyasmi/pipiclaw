@@ -1,4 +1,5 @@
 import type { WakeEvent } from "../channel/channel-event.js";
+import { sameDeliveryScope } from "../channel/delivery-scope.js";
 
 /**
  * Consumer-side merging of completion wakes. K parallel delegations (or background jobs) used to
@@ -28,7 +29,11 @@ export function isCoalescableWake(event: WakeEvent): boolean {
  * and its own admission drops it.
  */
 export function canAbsorbWake(primary: WakeEvent, candidate: WakeEvent): boolean {
-	return isCoalescableWake(candidate) && candidate.desk === primary.desk;
+	return (
+		isCoalescableWake(candidate) &&
+		candidate.desk === primary.desk &&
+		sameDeliveryScope(primary.scopeRef, candidate.scopeRef)
+	);
 }
 
 /** The primary wake keeps its own text (and `[KIND:id]` tag) first; the others follow it. */

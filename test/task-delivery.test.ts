@@ -45,8 +45,8 @@ describe("task delivery persistence", () => {
 		const accepted = vi.fn(async () => true);
 		await drainTaskDeliveries(dir, accepted, () => true, next! + 1);
 		expect(accepted.mock.calls).toEqual([
-			["channel", "progress"],
-			["channel", "final"],
+			[expect.objectContaining({ channel: "channel", text: "progress", id: first.id, kind: "report", taskId: "T" })],
+			[expect.objectContaining({ channel: "channel", text: "final", id: second.id, kind: "report", taskId: "T" })],
 		]);
 		expect(await readTaskDeliveries(dir)).toEqual([]);
 		expect(await taskLog.readTaskLog(dir, "T", { kinds: ["report"], limit: 1 })).toMatchObject([
@@ -94,7 +94,9 @@ it("isolates corrupt and unreadable predecessors without losing FIFO or blocking
 		await queueTaskReport(dir, "H", 1, "channel", "healthy");
 		const send = vi.fn(async () => true);
 		await drainTaskDeliveries(dir, send, () => true);
-		expect(send.mock.calls).toEqual([["channel", "healthy"]]);
+		expect(send.mock.calls).toEqual([
+			[expect.objectContaining({ channel: "channel", text: "healthy", taskId: "H" })],
+		]);
 		expect(await read(path, "utf-8")).toBe(
 			mode === "json" ? "{broken" : mode === "structure" ? JSON.stringify({ ...bad, order: "bad" }) : raw,
 		);
@@ -102,8 +104,8 @@ it("isolates corrupt and unreadable predecessors without losing FIFO or blocking
 		await writeFile(path, raw);
 		await drainTaskDeliveries(dir, send, () => true);
 		expect(send.mock.calls.slice(1)).toEqual([
-			["channel", "first"],
-			["channel", "later"],
+			[expect.objectContaining({ channel: "channel", text: "first", id: bad.id })],
+			[expect.objectContaining({ channel: "channel", text: "later", taskId: "T" })],
 		]);
 	}
 	// No trustworthy owner (no report journal): preserve the evidence and fence all delivery.

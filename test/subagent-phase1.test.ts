@@ -923,37 +923,43 @@ describe("sub-agent convergence turn (D6)", () => {
 		expect(wakes[0]).toContain("Confirmed: found the entrypoint despite /stop.");
 	});
 
-	it("rejects immediately without launching when the signal is already aborted before the call starts", async () => {
-		const workspaceDir = createTempWorkspace();
-		const deskDir = join(workspaceDir, "dingtalk:dm:123");
-		mkdirSync(deskDir, { recursive: true });
-		const controller = new AbortController();
-		controller.abort();
-		let started = false;
-		const tool = createSubAgentTool({
-			...testManagers("dingtalk:dm:123"),
-			executor: fakeExecutor,
-			fileStore: createFileStore(),
-			getCurrentModel: () => model,
-			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
-			workspaceDir,
-			deskDir,
-			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
-			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
-			createWorker: () =>
-				new FakeWorker((_input, worker) => {
-					started = true;
-					const message = createAssistantMessage("should not run");
-					worker.state.messages = [message];
-					worker.emit({ type: "message_end", message });
-				}),
-		});
+	it("rejects without launching when stopped before entry or during admission", async () => {
+		// A delayed registration after /stop must not introduce work behind an already-final scope.
+		for (const stage of ["entry", "admission"]) {
+			const workspaceDir = createTempWorkspace();
+			const deskDir = join(workspaceDir, "dingtalk:dm:123");
+			mkdirSync(deskDir, { recursive: true });
+			const controller = new AbortController();
+			if (stage === "entry") controller.abort();
+			let started = false;
+			const tool = createSubAgentTool({
+				...testManagers("dingtalk:dm:123"),
+				executor: fakeExecutor,
+				fileStore: createFileStore(),
+				getCurrentModel: () => model,
+				getAvailableModels: () => [model],
+				resolveApiKey: async () => {
+					if (stage === "admission") controller.abort();
+					return "test-key";
+				},
+				workspaceDir,
+				deskDir,
+				getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
+				runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
+				createWorker: () =>
+					new FakeWorker((_input, worker) => {
+						started = true;
+						const message = createAssistantMessage("should not run");
+						worker.state.messages = [message];
+						worker.emit({ type: "message_end", message });
+					}),
+			});
 
-		await expect(
-			tool.execute("converge-call-4", { agent: "explorer", task: "Map the whole repo." }, controller.signal),
-		).rejects.toThrow("Sub-agent aborted");
-		expect(started).toBe(false);
+			await expect(
+				tool.execute("converge-call-4", { agent: "explorer", task: "Map the whole repo." }, controller.signal),
+			).rejects.toThrow(stage === "entry" ? "Sub-agent aborted" : /aborted/i);
+			expect(started).toBe(false);
+		}
 	});
 });
 

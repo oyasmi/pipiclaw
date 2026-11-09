@@ -73,25 +73,29 @@ export async function dispatchInternalRun(input: InternalRunInput): Promise<Dele
 	const handle: WorkerHandle = {};
 
 	try {
-		await runManager.register({
-			runId: runContext.runId,
-			channelId: options.runtimeContext.channelId,
-			runtime: "internal",
-			agent: config.name,
-			label: runLabel,
-			source: config.source,
-			tools: [...config.tools],
-			model: formatModelReference(config.model),
-			purpose: runContext.purpose,
-			taskId: runContext.taskId,
-			item: runContext.item,
-			workingDirectory: runContext.workingDirectory,
-			artifactDir: runContext.artifactDir,
-			deskDir: options.deskDir,
-			leaseKey,
-			mutates: config.mutates,
-			workspaceBaseline: input.workspaceBaseline,
-		});
+		await runManager.register(
+			{
+				scopeRef: runContext.scopeRef,
+				runId: runContext.runId,
+				channelId: options.runtimeContext.channelId,
+				runtime: "internal",
+				agent: config.name,
+				label: runLabel,
+				source: config.source,
+				tools: [...config.tools],
+				model: formatModelReference(config.model),
+				purpose: runContext.purpose,
+				taskId: runContext.taskId,
+				item: runContext.item,
+				workingDirectory: runContext.workingDirectory,
+				artifactDir: runContext.artifactDir,
+				deskDir: options.deskDir,
+				leaseKey,
+				mutates: config.mutates,
+				workspaceBaseline: input.workspaceBaseline,
+			},
+			signal,
+		);
 	} catch (error) {
 		// Until the durable running record exists, setup still owns the lease. A channel/host
 		// admission rejection or required persist failure must leave no invisible writer lock.

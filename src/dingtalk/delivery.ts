@@ -11,6 +11,7 @@ import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
+import { createEmptyUsageTotals } from "../usage/totals.js";
 import { type ProgressActivity, ProgressWindow, type ProgressWrite, renderCardStatus } from "./progress.js";
 import type { FinalDelivery, ProgressStyle } from "./response-mode.js";
 
@@ -19,9 +20,19 @@ import type { FinalDelivery, ProgressStyle } from "./response-mode.js";
  * send. `DingTalkBot` implements it; the shape stays structural so this file does not import it.
  */
 export interface DeliveryPort {
+	canWrite?: () => boolean;
 	readonly progressStyle: ProgressStyle;
 	readonly finalDelivery: FinalDelivery;
-	sendPlain(channelId: string, text: string, opts?: { title?: string; markdown?: boolean }): Promise<boolean>;
+	sendPlain(
+		channelId: string,
+		text: string,
+		opts?: {
+			canWrite?: () => boolean;
+			title?: string;
+			markdown?: boolean;
+			scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
+		},
+	): Promise<boolean>;
 	getCardGeneration(channelId: string): symbol;
 	isCardGenerationCurrent(channelId: string, generation: symbol): boolean;
 	replaceCard(
@@ -58,7 +69,7 @@ const SILENT_STATUS = "已处理，无需答复。";
 // an unforeseen stall so run()'s finally can never hang the channel forever.
 const FLUSH_DEADLINE_MS = 60_000;
 
-type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
+type DeliveryMode = "suspended" | "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
 
 class ChannelDeliveryController {
 	private readonly progress: ProgressWindow;
@@ -72,6 +83,7 @@ class ChannelDeliveryController {
 	private running = false;
 	private closed = false;
 	private finalResponseDelivered = false;
+	private progressConfirmed = false;
 	private ending = false;
 	private progressFailures = 0;
 	private readonly cardGeneration: symbol;
@@ -103,7 +115,9 @@ class ChannelDeliveryController {
 	}
 
 	private get isCurrent(): boolean {
-		return this.bot.isCardGenerationCurrent(this.event.channelId, this.cardGeneration);
+		return (
+			this.bot.canWrite?.() !== false && this.bot.isCardGenerationCurrent(this.event.channelId, this.cardGeneration)
+		);
 	}
 
 	/** The style this turn actually delivers with. */
@@ -123,6 +137,50 @@ class ChannelDeliveryController {
 				this.finished ??= this.enqueueFinish(outcome);
 				return this.finished;
 			},
+		};
+	}
+
+	/** A scope keeps this paced controller across turns; only its runtime chooses a final. */
+	scopeWriter(): Omit<import("../channel/delivery-scope.js").ScopeWriter, "report"> {
+		return {
+			emit: (event) => this.enqueue(() => this.deliver(event), event.type),
+			flush: async () => {
+				await this.chain;
+				if (this.bot.canWrite?.() === false || this.closed || this.ending || this.progressStyle === "none")
+					return { status: "blocked" };
+				this.progressFailures = 0;
+				this.bumpRevision(false);
+				await this.flush();
+				return {
+					status: this.bot.canWrite?.() === false ? "blocked" : this.progressConfirmed ? "confirmed" : "unknown",
+				};
+			},
+			finalize: async (intent) => {
+				await this.chain;
+				if (this.bot.canWrite?.() === false) return { status: "blocked" };
+				if (this.finalResponseDelivered) return { status: "confirmed" };
+				this.ending = true;
+				// Supersede throttled dirty progress immediately. An in-flight write still drains,
+				// but final delivery never waits for the next 800ms progress interval.
+				this.mode = "suspended";
+				this.bumpRevision(true);
+				await this.flush();
+				if (this.bot.canWrite?.() === false) return { status: "blocked" };
+				const useCard = this.bot.finalDelivery === "card" && !this.closed;
+				const ok = useCard
+					? await this.bot.finalizeCard(this.event.channelId, intent.text, this.cardGeneration)
+					: await this.bot.sendPlain(this.event.channelId, intent.text, { markdown: true });
+				if (!ok) return { status: this.bot.canWrite?.() === false ? "blocked" : "unknown" };
+				this.finalResponseDelivered = true;
+				this.archiveBotResponse(intent.text);
+				// A failed card close never triggers another plain answer.
+				if (!useCard)
+					await this.bot.finalizeExistingCard(this.event.channelId, this.buildSummaryText(), this.cardGeneration);
+				this.mode = "silent";
+				await this.close();
+				return { status: "confirmed" };
+			},
+			close: () => this.enqueueFinish({ kind: "silent", usage: createEmptyUsageTotals() }),
 		};
 	}
 
@@ -498,10 +556,11 @@ class ChannelDeliveryController {
 					this.bot.supportsStreamingAppend(),
 				)
 			: { epoch: -1, content: WAITING_TEXT, append: false, document: "", complete: true };
-		if (!planned) return false;
+		if (!planned) return this.progressConfirmed;
 		try {
 			const write = planned.append ? this.bot.appendToCard.bind(this.bot) : this.bot.replaceCard.bind(this.bot);
 			const ok = await write(this.event.channelId, planned.content, false, false, this.cardGeneration);
+			this.progressConfirmed = ok;
 			if (ok) {
 				if (hasProgress) {
 					// Apply this immutable request's baseline, even if newer events folded the desired
@@ -566,4 +625,14 @@ export function createDingTalkContext(
 ): ChannelContext {
 	const controller = new ChannelDeliveryController(turn, port, archive, quiet);
 	return controller.buildContext();
+}
+
+/** A scope writer shares the existing pacing, byte windows and late-card safeguards. */
+export function createDingTalkScopeWriter(
+	turn: TurnInfo,
+	port: DeliveryPort,
+	archive: ArchiveBotResponse,
+	recovered: boolean,
+): Omit<import("../channel/delivery-scope.js").ScopeWriter, "report"> {
+	return new ChannelDeliveryController(turn, port, archive, recovered).scopeWriter();
 }

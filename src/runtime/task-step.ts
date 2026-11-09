@@ -49,7 +49,9 @@ function sessionContextOf(ctx: LaneContext, live: LiveTask): TaskSessionContext 
 			const message = await queueTaskReport(live.deskDir, live.taskId, live.seq, live.channelId, text);
 			await drainTaskDeliveries(
 				live.deskDir,
-				(channel, text) => ctx.options.deliver(live.desk, channel, text),
+				(message) =>
+					ctx.options.deliverTask?.(live.desk, message) ??
+					ctx.options.deliver(live.desk, message.channel, message.text),
 				(channel) => ctx.options.isBoundTo(channel, live.desk) && ctx.options.isReachable(channel),
 				ctx.now(),
 			);
@@ -199,6 +201,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	step.timer = setTimeout(() => abortStep(ctx, live, "timeout"), ctx.timing.stepTimeLimitMs);
 	step.timer.unref?.();
 	const info: TurnInfo = {
+		scopeRef: { desk: live.desk, channelId: live.channelId, scopeId: `task:${live.taskId}` },
 		channelId: live.channelId,
 		user: "TASK",
 		userName: "TASK",

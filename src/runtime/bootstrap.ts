@@ -23,6 +23,7 @@ import {
 import { prepareAppServices } from "../app/services.js";
 import type { WakeEvent } from "../channel/channel-event.js";
 import { CHANNELS_INDEX_FILENAME, type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
+import { sameDeliveryScope } from "../channel/delivery-scope.js";
 import { ChannelStore } from "../channel/store.js";
 import type { OutboundMedia, PushMessage, Transport } from "../channel/transport.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
@@ -47,11 +48,13 @@ import type { FileLockHandle } from "../shared/file-lock.js";
 import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
+import { runWakeDispatchId } from "../subagents/completion-wake.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
 import type { TaskControl } from "../tasks/control.js";
 import { taskSessionPath } from "../tasks/session-path.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { acquireDaemonLock, tryAcquireDaemonLock } from "./daemon-lock.js";
+import { DeliveryScopes } from "./delivery-scopes.js";
 import { DeskRuntime } from "./desk-runtime.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createIngress, type IngressService } from "./ingress.js";
@@ -218,6 +221,7 @@ async function buildRuntimeContext(
 	/** Channels with a `/stop` watchdog in flight, so a burst of `/stop` starts only one. */
 	const stopWatchdogs: IngressDeps["stopWatchdogs"] = new Map();
 	let durableDispatch: DurableDispatchService | undefined;
+	let deliveryScopes: DeliveryScopes;
 	let shuttingDown = false;
 	const executor = options.executor ?? createExecutor();
 	const fileStore = options.fileStore ?? createFileStore();
@@ -388,6 +392,7 @@ async function buildRuntimeContext(
 	const getTaskControl = (): TaskControl | undefined => taskLane;
 
 	const ingress = createIngress({
+		getDeliveryScopes: () => deliveryScopes,
 		requestExecution: createRequestExecution({
 			workspaceDir,
 			runners: channelRunners,
@@ -492,7 +497,13 @@ async function buildRuntimeContext(
 			if (level === "off") return;
 			if (level === "settled" && notice.kind === "progress") return;
 			const text = renderRunNotice(notice);
-			if (text) void deskRuntime.sendFromDesk(desk, channelId, text);
+			if (!text) return;
+			if (notice.scopeRef && transports.forChannel(channelId)?.scopes) {
+				if (notice.scopeRef.desk !== desk || notice.scopeRef.channelId !== channelId) return;
+				if (notice.kind !== "stalled")
+					return deliveryScopes.activity(notice.scopeRef, { type: "commentary", text });
+			}
+			return deskRuntime.sendFromDesk(desk, channelId, text).then(() => undefined);
 		},
 		ledger: getUsageLedger(),
 		store,
@@ -535,6 +546,13 @@ async function buildRuntimeContext(
 		getRuns: (desk) => runs.get(desk),
 		getJobs: (desk) => jobs.get(desk),
 		store,
+		deliverTask: async (desk, message) => {
+			if (transports.forChannel(message.channel)?.scopes) return deliveryScopes.task(desk, message);
+			const delivered = await deskRuntime.sendFromDesk(desk, message.channel, message.text);
+			if (delivered) await store.logBotResponse(message.channel, message.text, Date.now().toString());
+			return delivered;
+		},
+		closeProgress: (desk, channelId, taskId) => deliveryScopes.close({ desk, channelId, scopeId: `task:${taskId}` }),
 		deliver: async (desk, channelId, text) => {
 			const delivered = await deskRuntime.sendFromDesk(desk, channelId, text);
 			if (delivered) await store.logBotResponse(channelId, text, Date.now().toString());
@@ -544,6 +562,29 @@ async function buildRuntimeContext(
 		activeTasks,
 		onStep: options.onTaskStep,
 	});
+
+	deliveryScopes = new DeliveryScopes({
+		directory: join(appHomeDir, "state", "delivery-scopes"),
+		transports,
+		isBoundTo,
+		work: (owner) => [
+			...runs
+				.get(owner.desk)
+				.list()
+				.filter((run) => sameDeliveryScope(run.scopeRef, owner) && !run.taskId)
+				.map((run) => ({
+					ref: run.runId,
+					pending: run.status === "running",
+					...(run.completionMode === "wake" ? { completionId: runWakeDispatchId(owner.desk, run.runId) } : {}),
+				})),
+			...jobs
+				.get(owner.desk)
+				.scopeWork()
+				.filter((item) => sameDeliveryScope(item.owner, owner))
+				.map((item) => item.work),
+		],
+	});
+	await deliveryScopes.restore();
 
 	// Admission (bot.start() below) must not open until every persisted job and run is back in
 	// memory, and restore is independent of bindings (D6): a dormant desk's runs still settle.
@@ -582,6 +623,7 @@ async function buildRuntimeContext(
 			});
 
 	const shutdownWithReason = createShutdown({
+		deliveryScopes,
 		taskLane,
 		getDurableDispatch,
 		memoryMaintenanceScheduler,
@@ -619,6 +661,7 @@ async function buildRuntimeContext(
 		memoryMaintenanceScheduler.start();
 		taskLane.start();
 		durableDispatch.start();
+		deliveryScopes.start();
 		await transports.startAll(ingress);
 	}
 

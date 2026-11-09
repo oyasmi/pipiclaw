@@ -29,7 +29,8 @@ export async function finishTaskClose(
 			noteHorizon(
 				await drainTaskDeliveries(
 					deskDir,
-					(channel, text) => ctx.options.deliver(desk, channel, text),
+					(message) =>
+						ctx.options.deliverTask?.(desk, message) ?? ctx.options.deliver(desk, message.channel, message.text),
 					(channel) => ctx.options.isBoundTo(channel, desk) && ctx.options.isReachable(channel),
 					ctx.now(),
 				),

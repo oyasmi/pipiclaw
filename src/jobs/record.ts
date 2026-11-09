@@ -2,11 +2,13 @@
  * Background-job record vocabulary: status, the snapshot handed to callers, the persisted record
  * and its parser. No state and no I/O, shared by the job manager and its tool/callers (spec 054 D11).
  */
+import { isDeliveryScopeRef } from "../channel/delivery-scope.js";
 import { isRecord } from "../shared/type-guards.js";
 
 export type JobStatus = "running" | "completed" | "failed" | "cancelled" | "lost";
 
 export interface JobSnapshot {
+	scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
 	id: string;
 	label: string;
 	command: string;
@@ -31,6 +33,8 @@ export interface JobWakeContract {
 }
 
 export interface JobRecord extends JobSnapshot {
+	/** Whether terminal output was returned inline or requires the durable completion wake. */
+	completionMode?: "inline" | "wake";
 	pid: number;
 	/** Process-group id of the launched job, as `ps` reported it right after spawn. `setsid` makes
 	 *  the job its own session/group leader, so this normally equals `pid` — the precondition for a
@@ -68,6 +72,8 @@ export function parseJobRecord(raw: string): JobRecord | undefined {
 	if (
 		!isRecord(value) ||
 		typeof value.id !== "string" ||
+		(value.scopeRef !== undefined &&
+			(!isDeliveryScopeRef(value.scopeRef) || value.scopeRef.channelId !== value.channelId)) ||
 		typeof value.channelId !== "string" ||
 		typeof value.pid !== "number" ||
 		typeof value.spillFile !== "string" ||
@@ -84,6 +90,7 @@ export function parseJobRecord(raw: string): JobRecord | undefined {
 export function toSnapshot(record: JobRecord): JobSnapshot {
 	return {
 		id: record.id,
+		scopeRef: record.scopeRef,
 		label: record.label,
 		command: record.command,
 		status: record.status,

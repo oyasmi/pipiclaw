@@ -47,6 +47,7 @@ export interface SubAgentToolFields {
 /** Exported for `subagent_run op=follow_up` (spec 042 D7), which constructs one of these for
  *  its own new run rather than a hand-rolled envelope. */
 export interface SubAgentRunContext {
+	scopeRef?: import("../channel/delivery-scope.js").DeliveryScopeRef;
 	runId: string;
 	purpose: "work" | "verify";
 	taskId?: string;
@@ -101,6 +102,7 @@ export interface WorkerToolRequest {
 export type BuildWorkerTools = (request: WorkerToolRequest) => AgentTool<any>[];
 
 export interface SubAgentToolOptions {
+	getDeliveryScope?: () => import("../channel/delivery-scope.js").DeliveryScopeRef | undefined;
 	/** Builds a sub-agent's scoped tool set from the shared registry; injected by `tools/index.ts`. */
 	buildWorkerTools: BuildWorkerTools;
 	executor: Executor;

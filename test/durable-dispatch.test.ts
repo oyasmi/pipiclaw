@@ -1,3 +1,5 @@
+import { canAbsorbWake } from "../src/runtime/wake-coalescing.js";
+
 vi.mock("node:fs/promises", async (importOriginal) => ({
 	...(await importOriginal<typeof import("node:fs/promises")>()),
 }));
@@ -579,14 +581,26 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 	it("folds this channel's waiting wakes into the starting turn and turns their stale deliveries away", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const { service, delivered } = capturingService(stateDir);
-		await service.dispatch(wake("dingtalk:dm:1", "run_a"));
-		await service.dispatch(wake("dingtalk:dm:1", "run_b"));
+		const owner = { desk: "news", channelId: "dingtalk:dm:1", scopeId: "request:one" as const };
+		const primaryWake = { ...wake(owner.channelId, "run_a"), scopeRef: owner };
+		await service.dispatch(primaryWake);
+		await service.dispatch({ ...wake(owner.channelId, "run_b"), scopeRef: owner });
+		await service.dispatch({
+			...wake(owner.channelId, "run_another_scope"),
+			scopeRef: { ...owner, scopeId: "request:two" },
+		});
+		await service.dispatch(wake(owner.channelId, "run_unknown_scope"));
 		await service.dispatch(wake("dingtalk:dm:2", "run_other"));
 		await service.dispatch({ ...event(), dispatchId: "event:dingtalk:dm:1:x" });
 		const primary = delivered[0]?.dispatchId as string;
 
 		expect(await service.markStarted(primary)).toBe(true);
-		const absorbed = await service.absorbPending("dingtalk:dm:1", primary, isWake, 5);
+		const absorbed = await service.absorbPending(
+			"dingtalk:dm:1",
+			primary,
+			(candidate) => canAbsorbWake(primaryWake, candidate),
+			5,
+		);
 
 		// Only the same channel's matching wakes; never the primary, another channel, or an event.
 		expect(absorbed.map((item) => item.dispatchId)).toEqual(["subagent:dingtalk:dm:1:run_b:done"]);
@@ -598,7 +612,13 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 		expect(remaining).toEqual(
 			expect.arrayContaining(["subagent:dingtalk:dm:2:run_other:done.json", "event:dingtalk:dm:1:x.json"]),
 		);
-		expect(remaining).toHaveLength(2);
+		expect(remaining).toEqual(
+			expect.arrayContaining([
+				"subagent:dingtalk:dm:1:run_another_scope:done.json",
+				"subagent:dingtalk:dm:1:run_unknown_scope:done.json",
+			]),
+		);
+		expect(remaining).toHaveLength(4);
 	});
 
 	it("claims a never-delivered wake too, and the drain does not deliver it underneath the turn", async () => {

@@ -22,6 +22,7 @@ import { type ExternalLaunchResult, launchExternalRun } from "./run.js";
  */
 export async function dispatchExternalRun(input: {
 	runManager: SubAgentRunManager;
+	signal?: AbortSignal;
 	options: SubAgentToolOptions;
 	currentModel: Model<Api>;
 	config: ExternalSubAgentConfig;
@@ -46,6 +47,8 @@ export async function dispatchExternalRun(input: {
 			runContext,
 		);
 		launchResult = await launchExternalRun({
+			scopeRef: runContext.scopeRef,
+			signal: input.signal,
 			runManager: input.runManager,
 			runId: runContext.runId,
 			channelId: options.runtimeContext.channelId,

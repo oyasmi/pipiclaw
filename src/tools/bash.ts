@@ -110,6 +110,7 @@ interface BashToolDetails {
 }
 
 export interface BashToolOptions {
+	getDeliveryScope?: () => import("../channel/delivery-scope.js").DeliveryScopeRef | undefined;
 	defaultTimeoutSeconds?: number;
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
@@ -239,6 +240,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			}: { command: string; timeout?: number; async?: boolean; notify?: boolean },
 			signal?: AbortSignal,
 		) => {
+			const scopeRef = options.getDeliveryScope?.();
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
 				const guardResult = guardCommand(command, securityConfig.commandGuard);
 				if (!guardResult.allowed) {
@@ -299,6 +301,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				const jobLabel = clipText(effectiveCommand, 60, { collapseWhitespace: true });
 				const job = await options.jobManager.start(effectiveCommand, jobLabel, effectiveTimeout, {
 					channelId: options.channelId,
+					scopeRef,
 					signal,
 					notify: willNotify,
 					...(effectiveTaskId ? { taskId: effectiveTaskId } : {}),

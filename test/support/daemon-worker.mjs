@@ -8,7 +8,6 @@ import { DingTalkBot } from "../../dist/dingtalk/bot.js";
 import { DingTalkTransport } from "../../dist/dingtalk/transport.js";
 import { createRuntimeContext } from "../../dist/runtime/bootstrap.js";
 import { beginStep } from "../../dist/tasks/store.js";
-import { readTaskDeliveries } from "../../dist/tasks/delivery.js";
 
 const homeDir = process.argv[2];
 const hungShutdown = process.argv[3] === "hung-shutdown";
@@ -35,20 +34,13 @@ const config = {
 	clientSecret: "e2e",
 	robotCode: "e2e",
 	cardTemplateKey: "content",
+	cardTemplateId: "offline-fixture",
 	stateDir: join(homeDir, "state"),
 };
 class CapturedBot extends DingTalkBot {
 	async start() {}
 	async sendPlain(channelId, text) {
-		const queued = await readTaskDeliveries(join(workspaceDir, "desk-e2e"));
-		const kind = queued.find((message) => message.text === text)?.kind;
-		const mode = deliveryMode && deliveryMode.kind === kind ? deliveryMode.mode : undefined;
-		fs.appendFileSync(join(homeDir, "state", "captured-deliveries.jsonl"), `${JSON.stringify({ channelId, kind, text, accepted: mode !== "fail" })}\n`);
-		if (mode === "fail") return false;
-		if (mode === "hold") {
-			process.send({ value: "task-delivery-held" });
-			await new Promise(() => {});
-		}
+        fs.appendFileSync(join(homeDir, "state", "captured-deliveries.jsonl"), `${JSON.stringify({ channelId, text })}\n`);
 		return true;
 	}
 	async ensureCard() {}
@@ -98,15 +90,38 @@ fs.promises.appendFile = async (path, data, options) => {
 };
 syncBuiltinESMExports();
 
+// Simulated remote acceptance is controlled at the structured scope boundary, never by copy.
+function captureTransport() {
+    const transport = new DingTalkTransport({
+        config,
+        archiveBotResponse: (channelId, text) => runtime.store.logBotResponse(channelId, text, String(Date.now())),
+        createBot: (ingress) => new CapturedBot(ingress, config),
+    });
+    const open = transport.scopes.open.bind(transport.scopes);
+    transport.scopes.open = (owner, recovered, canWrite) => {
+        const inner = open(owner, recovered, canWrite);
+        const deliver = async (kind, intent, publish) => {
+            const mode = deliveryMode?.kind === kind ? deliveryMode.mode : undefined;
+            const result = mode === "fail" ? { status: "unknown" } : await publish();
+            fs.appendFileSync(join(homeDir, "state", "captured-task-deliveries.jsonl"), `${JSON.stringify({ owner, id: intent.id, kind, text: intent.text, accepted: result.status === "confirmed" })}\n`);
+            if (mode === "hold") {
+                process.send({ value: "task-delivery-held" });
+                await new Promise(() => {});
+            }
+            return result;
+        };
+        return owner.scopeId.startsWith("task:") ? {
+            ...inner,
+            report: (intent) => deliver("report", intent, () => inner.report(intent)),
+            finalize: (intent) => deliver("receipt", intent, () => inner.finalize(intent)),
+        } : inner;
+    };
+    return transport;
+}
+
 const runtime = await createRuntimeContext({
 	paths,
-	transports: [
-		new DingTalkTransport({
-			config,
-			archiveBotResponse: (channelId, text) => runtime.store.logBotResponse(channelId, text, String(Date.now())),
-			createBot: (ingress) => new CapturedBot(ingress, config),
-		}),
-	],
+    transports: [captureTransport()],
 	registerSignalHandlers: hungShutdown,
 	startServices: false,
 	adoptedRunCheckIntervalMs: 50,

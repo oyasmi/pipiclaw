@@ -473,7 +473,7 @@ describe("dingtalk", () => {
 		const privateApi = getPrivateApi(bot);
 		getPrivateApi(bot).tokens.accessToken = "cached-token";
 		getPrivateApi(bot).tokens.tokenExpiry = Date.now() / 1000 + 3600;
-		axiosMock.post.mockResolvedValue({ data: {} });
+		axiosMock.post.mockResolvedValue({ data: { processQueryKey: "test-receipt" } });
 
 		privateApi.conversations.set("dingtalk:dm:staff_1", {
 			conversationId: "conv_1",
@@ -504,6 +504,14 @@ describe("dingtalk", () => {
 			}),
 			expect.any(Object),
 		);
+		for (const data of [
+			{},
+			{ processQueryKey: "receipt", invalidStaffIdList: ["staff_1"] },
+			{ processQueryKey: "receipt", flowControlledStaffIdList: ["staff_1"] },
+		]) {
+			axiosMock.post.mockResolvedValueOnce({ data });
+			await expect(bot.sendPlain("dingtalk:dm:staff_1", "hello")).resolves.toBe(false);
+		}
 	});
 
 	it("appends a fragment, keeps append after a network error, and stops appending when markdown rejects it", async () => {
@@ -511,8 +519,10 @@ describe("dingtalk", () => {
 		const privateApi = getPrivateApi(bot);
 		getPrivateApi(bot).tokens.accessToken = "cached-token";
 		getPrivateApi(bot).tokens.tokenExpiry = Date.now() / 1000 + 3600;
-		axiosMock.post.mockResolvedValue({ data: {} });
-		axiosMock.put.mockResolvedValue({ data: {} });
+		axiosMock.post.mockImplementation(async (_url: string, body: { outTrackId: string }) => ({
+			data: { success: true, result: { outTrackId: body.outTrackId, deliverResults: [{ success: true }] } },
+		}));
+		axiosMock.put.mockResolvedValue({ data: { success: true, result: true } });
 
 		privateApi.conversations.set("dingtalk:dm:staff_1", {
 			conversationId: "conv_1",
