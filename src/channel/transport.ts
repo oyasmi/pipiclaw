@@ -69,6 +69,11 @@ export interface Transport {
 	readonly policy: TransportPolicy;
 	/** Optional addressed progress: the runtime supplies a per-turn ChannelContext over this port. */
 	readonly scopes?: import("./delivery-scope.js").ScopeDeliveryPort;
+	/**
+	 * Keep a live connection alive for one turn (DingTalk Stream). Scoped turns and openTurn share
+	 * this; release once when the turn's finish settles. Absent means the transport needs no hold.
+	 */
+	hold?(): () => void;
 	/** Start receiving. `ingress` is the one place inbound messages go. */
 	start(ingress: Ingress): Promise<void>;
 	/**

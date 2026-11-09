@@ -47,13 +47,18 @@ export interface ScopeWriter {
 	/** Confirms final body delivery only; progress closure is a separate acknowledgement. */
 	finalize(intent: FinalIntent): Promise<ScopeDeliveryResult>;
 	/** Only confirmed permits the runtime to forget its close responsibility. */
-	close(): Promise<ScopeDeliveryResult>;
+	close(summary?: string): Promise<ScopeDeliveryResult>;
 }
 export interface ScopeDeliveryPort {
 	/** Called synchronously after a channel binding commits, even if no writer is active. */
 	invalidate?(channelId: string): void;
 	/** Recovered scopes must not blindly create a replacement for a possibly visible old card. */
-	open(owner: DeliveryScopeRef, recovered: boolean, canWrite: () => boolean): ScopeWriter;
+	open(
+		owner: DeliveryScopeRef,
+		recovered: boolean,
+		canWrite: () => boolean,
+		opts?: { deferCard?: boolean },
+	): ScopeWriter;
 }
 
 /** Read from the existing run/job records, which remain the sole owners of work settlement. */

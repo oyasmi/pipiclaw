@@ -688,6 +688,8 @@ export class SubAgentRunManager {
 			channelId: record.channelId,
 			fields: { runId: record.runId, desk: this.target.desk },
 		});
+		// No wake will arrive; do not leave a phantom completionId on the delivery scope gate.
+		record.completionMode = "inline";
 		record.wakeEnqueued = true;
 		await this.persist(record);
 	}

@@ -32,7 +32,7 @@ function fixture() {
 	};
 	const reservedTurns = new WeakSet<WakeEvent>();
 	const activeTasks = new Set<Promise<void>>();
-	const transport = new RecordingTransport();
+	const transport = new RecordingTransport().withScopes();
 	const deps: EventTurnDeps = {
 		transports: createTransportRegistry([transport]),
 		store: {} as ChannelStore,
@@ -213,21 +213,39 @@ it("retains a failed scoped primary completion for retry instead of deleting its
 	expect(f.durable.markCompleted).not.toHaveBeenCalled();
 	expect(f.durable.markRetryable).toHaveBeenCalledWith(event.dispatchId);
 	expect(f.runner.isBusy()).toBe(false);
+	// /stop consumes and closes: user-aborted scoped wakes must not auto-replay.
+	f.durable.markRetryable.mockClear();
+	f.durable.markCompleted.mockClear();
+	const stopped = {
+		...wake("stopped"),
+		scopeRef: { desk: "news", channelId: "dingtalk:dm:1", scopeId: "request:stopped" as const },
+	};
+	vi.mocked(f.runner.run).mockImplementationOnce(async () => {
+		f.runner.requestStop();
+		return { stopReason: "aborted" };
+	});
+	await f.run(stopped);
+	expect(f.durable.markRetryable).not.toHaveBeenCalled();
+	expect(f.durable.markCompleted).toHaveBeenCalledWith(stopped.dispatchId);
 	// W2: consumed inputs are settled before model admission, including a mixed batch.
 	const consumed = new Set([event.dispatchId]);
 	f.deps.getDeliveryScopes = () =>
 		({
-			isConsumed: (_owner, id) => consumed.has(id),
-		}) as import("../src/runtime/delivery-scopes.js").DeliveryScopes;
+			isConsumed: (_owner: unknown, id: string) => consumed.has(id),
+			openTurn: async () => ({
+				emit: () => {},
+				finish: async () => {},
+			}),
+		}) as unknown as import("../src/runtime/delivery-scopes.js").DeliveryScopes;
 	await f.run(event);
-	expect(f.runner.run).toHaveBeenCalledTimes(1);
+	expect(f.runner.run).toHaveBeenCalledTimes(2);
 	expect(f.durable.markCompleted).toHaveBeenCalledWith(event.dispatchId);
 	const primary = { ...wake("fresh"), scopeRef: event.scopeRef };
 	const sibling = { ...wake("sibling"), scopeRef: event.scopeRef };
 	f.durable.absorbPending.mockResolvedValueOnce([event, sibling]);
 	await f.run(primary);
-	expect(f.runner.run).toHaveBeenCalledTimes(2);
-	const info = vi.mocked(f.runner.run).mock.calls[1]![0];
+	expect(f.runner.run).toHaveBeenCalledTimes(3);
+	const info = vi.mocked(f.runner.run).mock.calls[2]![0];
 	expect(info.text).toContain(primary.text);
 	expect(info.text).toContain(sibling.text);
 	expect(info.text).not.toContain(event.text);

@@ -31,8 +31,23 @@ export class RecordingTransport implements Transport {
 	readonly media: Array<{ channelId: string; media: OutboundMedia }> = [];
 	ingress: Ingress | undefined;
 	pushResult = true;
+	/** Opt-in: scoped turn-run tests need the capability without a real DingTalk adapter. */
+	scopes?: Transport["scopes"];
 
 	constructor(public policy: TransportPolicy = { whenBusy: "steer", textControlCommands: true }) {}
+
+	withScopes(): this {
+		this.scopes = {
+			open: () => ({
+				emit: () => {},
+				flush: async () => ({ status: "confirmed" as const }),
+				report: async () => ({ status: "confirmed" as const }),
+				finalize: async () => ({ status: "confirmed" as const }),
+				close: async () => ({ status: "confirmed" as const }),
+			}),
+		};
+		return this;
+	}
 
 	async start(ingress: Ingress): Promise<void> {
 		this.ingress = ingress;

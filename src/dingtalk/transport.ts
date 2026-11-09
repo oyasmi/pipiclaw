@@ -73,19 +73,13 @@ export class DingTalkTransport implements Transport {
 		await this.stopAccepting();
 	}
 
+	/** Shared by openTurn and scoped turns in turn-run so connection hold has one owner. */
+	hold(): () => void {
+		return this.bot.holdConnection();
+	}
+
 	openTurn(turn: TurnInfo, opts: { quiet: boolean }): ChannelContext {
-		const releaseConnection = this.bot.holdConnection();
-		const inner = createDingTalkContext(turn, this.bot, this.deps.archiveBotResponse, opts.quiet);
-		return {
-			emit: (event) => inner.emit(event),
-			finish: async (outcome) => {
-				try {
-					await inner.finish(outcome);
-				} finally {
-					releaseConnection();
-				}
-			},
-		};
+		return createDingTalkContext(turn, this.bot, this.deps.archiveBotResponse, opts.quiet);
 	}
 
 	push(channelId: string, message: PushMessage): Promise<boolean> {

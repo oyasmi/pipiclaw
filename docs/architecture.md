@@ -52,7 +52,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 9 | `src/agent/` | 单频道 agent 编排：SDK 会话、一轮对话、提示词、内置会话命令 | `channel-runner.ts`（门面）、`session/`（`session-host.ts`、`model-selection.ts`、`session-events.ts`、`command-extension.ts`）、`turn/`（`turn-pipeline.ts`、`turn-finish.ts`、`turn-state.ts`、`run-queue.ts`）、`prompt/`（system prompt 流水线）、`builtin-commands.ts` |
 | 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |
 | 10 | `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
-| 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `transport.ts`（`Transport` 实现）、`bot.ts`（门面）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（回合输出口） |
+| 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `transport.ts`（`Transport` 实现）、`bot.ts`（门面）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（回合输出口）、`scope-delivery.ts`（按 owner 复用的进度写口） |
 | 11 | `src/webapi/` | Web API 渠道：OpenAI Responses 形状的 HTTP / WebSocket 服务（本机 socket + 可选 TCP）、key、会话与 Response 的存储（`state/webapi/`）、`pipiclaw webapi key` 命令 | `transport.ts`、`server.ts`、`service.ts`、`response-state.ts`、`store.ts`、`routes/` |
 | 11 | `src/tui/` | 终端：Web API 本地 socket 的客户端（官方 SDK）、前端与渲染 | `cli.ts`、`client.ts`、`session.ts`、`render.ts`、`frontend.ts` |
 | 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`ingress.ts`、`transports.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-lane.ts` |
@@ -193,6 +193,8 @@ sequenceDiagram
 聊天侧后台唤醒（JOB / SUBAGENT / EVENT）不受上表约束；TASK_STEP 默认静音，只投递显式通知和运行时回执。对聊天侧后台唤醒，`handleEvent` 给它们的 `ChannelContext` 传 `progressStyle: "none"`，因此不建卡、不推思考流、`[SILENT]` 收尾也没有卡片要删；最终答案仍按 `finalDelivery` 正常投递。用户消息不受影响。
 
 `ChannelDeliveryController` 维护 revision 计数的同步循环：进度更新合并、卡片预热（`primeCard`）、进度连续失败两次后停止更新（最终答复仍会发出，卡片失败时改走普通消息）、`flush()` 有 60s 兜底死线保证 `run()` 的 finally 不会永久挂起频道。
+
+钉钉另有可选的 **delivery scope**（`channel/delivery-scope.ts` + `runtime/delivery-scopes.ts`）：仅当 transport 暴露 `scopes` 时，human 请求与 task 会冻结不可由模型指定的 owner `(desk, channelId, scopeId)`，把跨 turn 的进度卡与一条 plain final 收束到同一 owner。final 意图先落盘再投递（at-least-once；超过尝试上限后本地放弃重试）；`confirmed` 只表示适配器核对了协议响应，不是已读。Web API 无 `scopes`，仍走每回合 `openTurn`。`/stop` 消费当前 wake 并收口进度，不自动重放。
 
 ## 5. 并发模型：谁在串行化什么
 
@@ -389,6 +391,8 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
     ├── auth/identity.json         # OpenAI OAuth 安装身份（首次登录创建）
     ├── daemon.lock                # 一个 app home 同时只有一个运行时进程
     ├── dingtalk/conversations.json # 各频道的钉钉路由元数据
+    ├── dingtalk/card-handles/     # 待终止的远端卡片句柄（无 token / 正文）
+    ├── delivery-scopes/           # 钉钉 request/task owner 与 durable final 意图
     ├── webapi/                    # Web API：api.sock（0600）、conversations/<conv_id>/（会话与 Response 快照）、standalone.jsonl（独立响应快照）
     ├── tui/conversations.json     # 终端客户端：工位 → 上次用的 Web API 会话
     ├── dispatch/                  # durable-dispatch 外发箱

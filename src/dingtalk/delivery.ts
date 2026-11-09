@@ -86,6 +86,7 @@ class ChannelDeliveryController {
 	private finalResponseDelivered = false;
 	private progressConfirmed = false;
 	private ending = false;
+	private closeSummary = "";
 	private progressFailures = 0;
 	private readonly cardGeneration: symbol;
 	private readonly progressStartedAt = Date.now();
@@ -106,13 +107,18 @@ class ChannelDeliveryController {
 		private archive: ArchiveBotResponse,
 		/** A quiet turn (a background wake) shows no progress, whatever the channel is configured for. */
 		private readonly quiet: boolean,
+		/**
+		 * Scope writers open without a waiting card so cancel/close of an idle owner never creates
+		 * one; the first real progress/final frame still bumps as before.
+		 */
+		private readonly deferCard = false,
 	) {
 		this.event = { channelId: turn.channelId };
 		this.progress = new ProgressWindow(this.progressStyle === "rolling" ? "rolling" : "full");
 		this.cardGeneration = bot.getCardGeneration(turn.channelId);
 		// Start the waiting card in the same sync loop as progress and completion. Do not await
 		// its HTTP request: the caller can start the model while card creation is in flight.
-		if (this.progressStyle !== "none") this.bumpRevision(true);
+		if (!this.deferCard && this.progressStyle !== "none") this.bumpRevision(true);
 	}
 
 	private get isCurrent(): boolean {
@@ -178,20 +184,25 @@ class ChannelDeliveryController {
 				// closure has its own acknowledgement and must never downgrade this one.
 				return { status: "confirmed" };
 			},
-			close: () => this.closeScopeProgress(),
+			close: (summary) => this.closeScopeProgress(summary),
 		};
 	}
 
-	private async closeScopeProgress(): Promise<ScopeDeliveryResult> {
+	private async closeScopeProgress(summary?: string): Promise<ScopeDeliveryResult> {
 		await this.chain;
 		if (this.bot.canWrite?.() === false) return { status: "blocked" };
 		if (this.closed) return { status: "confirmed" };
 		this.ending = true;
 		this.mode = "suspended";
-		this.bumpRevision(true);
-		await this.flush();
-		if (this.progressStyle !== "none")
-			await this.bot.finalizeExistingCard(this.event.channelId, this.buildSummaryText(), this.cardGeneration);
+		if (summary) this.closeSummary = summary;
+		// Idle scopes never opened a card; still run closeCard so recovered/retired handles can finish.
+		const hadProgress = this.desiredRevision > 0 || this.progressConfirmed;
+		if (hadProgress) {
+			this.bumpRevision(true);
+			await this.flush();
+			if (this.progressStyle !== "none")
+				await this.bot.finalizeExistingCard(this.event.channelId, this.buildSummaryText(), this.cardGeneration);
+		}
 		const ok = await this.bot.closeCard(this.event.channelId, this.buildSummaryText(), this.cardGeneration);
 		if (ok) {
 			this.closed = true;
@@ -626,6 +637,7 @@ class ChannelDeliveryController {
 	}
 
 	private buildSummaryText(): string {
+		if (this.closeSummary) return renderCardStatus(this.closeSummary);
 		return renderCardStatus(`完成 · 工具调用 ${this.toolCallCount} 次 · ${formatElapsedZh(this.elapsedMs())}`);
 	}
 }
@@ -650,6 +662,8 @@ export function createDingTalkScopeWriter(
 	port: DeliveryPort,
 	archive: ArchiveBotResponse,
 	recovered: boolean,
+	deferCard = false,
 ): Omit<import("../channel/delivery-scope.js").ScopeWriter, "report"> {
-	return new ChannelDeliveryController(turn, port, archive, recovered).scopeWriter();
+	// recovered => quiet (plain finals only). deferCard => cancel/close must not CREATE a waiting card.
+	return new ChannelDeliveryController(turn, port, archive, recovered, deferCard).scopeWriter();
 }

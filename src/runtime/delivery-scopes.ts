@@ -19,6 +19,11 @@ import { isRecord } from "../shared/type-guards.js";
 import type { TaskDelivery } from "../tasks/delivery.js";
 import type { TransportRegistry } from "./transports.js";
 
+/** After this many unconfirmed final attempts the intent is retained for inspection but never retried. */
+const MAX_FINAL_ATTEMPTS = 8;
+/** Sentinel nextAttemptAt: retry() skips forever without a new state field. */
+const ABANDONED_ATTEMPT_AT = Number.MAX_SAFE_INTEGER;
+
 interface ScopeState {
 	owner: DeliveryScopeRef;
 	epoch: string;
@@ -77,11 +82,11 @@ export class DeliveryScopes {
 			this.options.isBoundTo(owner.channelId, owner.desk) && this.options.transports.isReachable(owner.channelId)
 		);
 	}
-	private port(state: ScopeState): ScopeWriter | undefined {
+	private port(state: ScopeState, opts?: { deferCard?: boolean }): ScopeWriter | undefined {
 		if (!this.reachable(state.owner)) return undefined;
 		return this.options.transports
 			.forChannel(state.owner.channelId)
-			?.scopes?.open(state.owner, state.epoch !== this.epoch, () => this.reachable(state.owner));
+			?.scopes?.open(state.owner, state.epoch !== this.epoch, () => this.reachable(state.owner), opts);
 	}
 	private async state(owner: DeliveryScopeRef): Promise<ScopeState> {
 		if (!isDeliveryScopeRef(owner))
@@ -143,6 +148,17 @@ export class DeliveryScopes {
 		return this.states.get(deliveryScopeKey(owner))?.consumed.includes(id) ?? false;
 	}
 
+	/** Exhausted/suppressed wakes will never arrive; drop them from the final gate without a model turn. */
+	async acknowledge(owner: DeliveryScopeRef, ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
+		await this.serial(deliveryScopeKey(owner), async () => {
+			const state = await this.state(owner);
+			const consumed = [...new Set([...state.consumed, ...ids])];
+			if (consumed.length === state.consumed.length) return;
+			await this.commit(state, { ...state, consumed, revision: state.revision + 1 });
+		});
+	}
+
 	/** A writer ends with the SDK turn; its scope can outlive it without holding a runner. */
 	async openTurn(owner: DeliveryScopeRef, completionIds: string[]): Promise<ChannelContext> {
 		const key = deliveryScopeKey(owner);
@@ -186,7 +202,9 @@ export class DeliveryScopes {
 	): Promise<void> {
 		if (state.closed || state.final) return;
 		const successful = outcome.kind === "completed" || outcome.kind === "silent";
-		const consumed = successful ? [...new Set([...state.consumed, ...ids])] : state.consumed;
+		// /stop consumes the current wake ids and closes progress; a later owned completion may still final.
+		const stopped = outcome.kind === "cancelled";
+		const consumed = successful || stopped ? [...new Set([...state.consumed, ...ids])] : state.consumed;
 		const work = this.options.work(state.owner);
 		const unsettled = work.some(
 			(item) => item.pending || (item.completionId && !consumed.includes(item.completionId)),
@@ -207,13 +225,19 @@ export class DeliveryScopes {
 				}),
 			);
 		} else {
-			if (answer) writer?.emit({ type: "commentary", text: answer });
+			if (answer && !stopped) writer?.emit({ type: "commentary", text: answer });
 			if (outcome.kind === "failed" && outcome.message)
 				writer?.emit({ type: "commentary", level: "notice", text: outcome.message });
-			if (!unsettled) {
-				// A cancelled turn can still receive a late owned completion. Closing progress
-				// must neither consume that wake nor forget an unconfirmed remote close.
-				await this.closeProgress(state, writer ?? this.port(state), successful);
+			const summary =
+				outcome.kind === "failed"
+					? "未完成"
+					: stopped
+						? "已停止"
+						: outcome.kind === "silent"
+							? "已处理，无需答复。"
+							: undefined;
+			if (!unsettled || stopped) {
+				await this.closeProgress(state, writer ?? this.port(state), successful, summary);
 			} else await writer?.flush();
 		}
 	}
@@ -264,12 +288,18 @@ export class DeliveryScopes {
 			const state = await this.state(owner);
 			if (state.final) return;
 			await this.commit(state, { ...state, closeRequested: true });
-			await this.closeProgress(state, this.port(state), true);
+			// deferCard: cancel must not CREATE a waiting card just to close it.
+			await this.closeProgress(state, this.port(state, { deferCard: true }), true, "已停止");
 		});
 	}
 
-	private async closeProgress(state: ScopeState, writer: ScopeWriter | undefined, terminal: boolean): Promise<void> {
-		if ((await writer?.close())?.status !== "confirmed") return;
+	private async closeProgress(
+		state: ScopeState,
+		writer: ScopeWriter | undefined,
+		terminal: boolean,
+		summary?: string,
+	): Promise<void> {
+		if ((await writer?.close(summary))?.status !== "confirmed") return;
 		await this.commit(state, {
 			...state,
 			progressClosed: true,
@@ -284,6 +314,19 @@ export class DeliveryScopes {
 			return true;
 		}
 		if (intent.nextAttemptAt > Date.now()) return false;
+		if (intent.attempts >= MAX_FINAL_ATTEMPTS) {
+			log.logWarn("delivery.scope.final_abandoned", "Scope final delivery abandoned", {
+				fields: { owner: state.owner, intentId: intent.id, attempts: intent.attempts },
+			});
+			await this.commit(state, {
+				...state,
+				final: { ...intent, result: "blocked", nextAttemptAt: ABANDONED_ATTEMPT_AT, confirmed: false },
+				progressClosed: true,
+				closed: true,
+				closeRequested: false,
+			});
+			return false;
+		}
 		const attempt = {
 			...intent,
 			attempts: intent.attempts + 1,
@@ -327,33 +370,40 @@ export class DeliveryScopes {
 	async retry(): Promise<void> {
 		for (const [key, state] of this.states) {
 			if (this.stopped) return;
-			await this.serial(key, async () => {
-				if (state.final) {
-					if (!state.final.confirmed || !state.progressClosed) await this.publishFinal(state);
-					return;
-				}
-				if (state.closeRequested) {
-					await this.closeProgress(state, this.port(state), true);
-					return;
-				}
-				// Tasks retain their outbox close gate. A request's active turn or an unseen
-				// completion still owns progress; cancellation/removal needs no copied work state.
-				if (
-					state.owner.scopeId.startsWith("task:") ||
-					state.closed ||
-					state.progressClosed ||
-					this.writers.has(key) ||
-					!this.reachable(state.owner)
-				)
-					return;
-				if (
-					this.options
-						.work(state.owner)
-						.some((item) => item.pending || (item.completionId && !state.consumed.includes(item.completionId)))
-				)
-					return;
-				await this.closeProgress(state, this.port(state), false);
-			});
+			try {
+				await this.serial(key, async () => {
+					if (state.final) {
+						if (!state.final.confirmed || !state.progressClosed) await this.publishFinal(state);
+						return;
+					}
+					if (state.closeRequested) {
+						await this.closeProgress(state, this.port(state, { deferCard: true }), true, "已停止");
+						return;
+					}
+					// Tasks retain their outbox close gate. A request's active turn or an unseen
+					// completion still owns progress; cancellation/removal needs no copied work state.
+					if (
+						state.owner.scopeId.startsWith("task:") ||
+						state.closed ||
+						state.progressClosed ||
+						this.writers.has(key) ||
+						!this.reachable(state.owner)
+					)
+						return;
+					if (
+						this.options
+							.work(state.owner)
+							.some((item) => item.pending || (item.completionId && !state.consumed.includes(item.completionId)))
+					)
+						return;
+					await this.closeProgress(state, this.port(state), false);
+				});
+			} catch (error) {
+				log.logWarn("delivery.scope.retry_failed", "Scope retry failed", {
+					reason: errorMessage(error),
+					fields: { owner: state.owner },
+				});
+			}
 		}
 	}
 	async stop(): Promise<void> {

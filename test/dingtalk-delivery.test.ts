@@ -6,7 +6,7 @@ vi.mock("axios", () => ({ default: { ...http, create: () => http, isAxiosError: 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { TurnEvent, TurnOutcome } from "../src/channel/channel-context.js";
-import { deliveryScopeKey } from "../src/channel/delivery-scope.js";
+import { deliveryScopeKey, type ScopeDeliveryResult } from "../src/channel/delivery-scope.js";
 import type { TurnInfo } from "../src/channel/transport.js";
 import { DingTalkBot } from "../src/dingtalk/bot.js";
 import { CardHandles } from "../src/dingtalk/card-handles.js";
@@ -747,6 +747,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		const owner = { desk: "default", channelId: CHANNEL, scopeId: "request:late-reset" as const };
 		createGate = deferred();
 		const old = scopes.open(owner, false);
+		old.emit(progress("starting"));
 		await vi.advanceTimersByTimeAsync(0);
 		const retiredId = [...cards.keys()].at(-1)!;
 		const pendingCreate = createGate;
@@ -808,6 +809,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 			{ desk: "default", channelId: CHANNEL, scopeId: "request:final-close-retry" },
 			false,
 		);
+		finalRetry.emit(progress("final progress"));
 		await vi.advanceTimersByTimeAsync(FRAME_MS);
 		const finalCard = [...cards.values()].at(-1)!;
 		const beforeFinal = plainCalls().length;
@@ -1046,7 +1048,11 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 				kind === "send",
 				() => allowed,
 			);
-			const sending = kind === "send" ? writer.finalize({ id: "final", text: "old owner" }) : undefined;
+			// Scope writers defer CREATE until the first real frame (cancel must not mint a card).
+			let sending: Promise<ScopeDeliveryResult> | undefined;
+			if (kind === "send") sending = writer.finalize({ id: "final", text: "old owner" });
+			else writer.emit(progress("start create"));
+			await vi.advanceTimersByTimeAsync(0);
 			await entered.promise;
 			allowed = false;
 			release.resolve();

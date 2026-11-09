@@ -34,6 +34,8 @@ interface CardStreamOptions {
 }
 
 const TOKEN_REFRESH_SECS = 90 * 60; // 1.5 hours (tokens expire after 2 hours)
+/** Definite remote termination / CREATE-close retries before the local handle is abandoned. */
+const MAX_TERMINATION_ATTEMPTS = 5;
 
 /** A streaming variable that is markdown rejects `isFull: false`. The message names one of these. */
 function rejectsMarkdownAppend(data: unknown): boolean {
@@ -64,6 +66,8 @@ export class CardController {
 	private cardCreationAttempted = new Set<symbol>();
 	/** A CREATE may reach DingTalk even when its response is lost. Keep its concrete handle. */
 	private readonly unconfirmedCards = new Map<symbol, AICard>();
+	/** Per-instance close/CREATE-unknown retries; abandoned handles are forgotten. */
+	private readonly terminationAttempts = new Map<string, number>();
 	// Share creation within a turn, but never let a late old turn own a new turn's card.
 	private cardCreationInFlight = new Map<string, { generation: symbol; promise: Promise<AICard | null> }>();
 	/**
@@ -263,7 +267,7 @@ export class CardController {
 		if (!this.activeCards.has(channelId)) {
 			const uncertain = this.unconfirmedCards.get(generation);
 			if (!uncertain) return retiredClosed && !this.cardCreationAttempted.has(generation);
-			const confirmed = await this.streamCard(uncertain, content, { append: false, finalize: true, failed: false });
+			const confirmed = await this.terminateCard(uncertain);
 			if (confirmed) {
 				this.unconfirmedCards.delete(generation);
 				this.cardCreationAttempted.delete(generation);
@@ -406,6 +410,7 @@ export class CardController {
 		this.unconfirmedCards.set(generation, card);
 		this.creating.add(card);
 		let confirmed = false;
+		let definiteFailure = false;
 		try {
 			const response = await http.post<unknown>(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, body, {
 				headers: {
@@ -427,9 +432,12 @@ export class CardController {
 			} else confirmed = true;
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
+				const status = err.response.status;
+				// 4xx except 429 means the card was not created; do not retire it for endless PUT.
+				definiteFailure = status >= 400 && status < 500 && status !== 429;
 				log.logWarn("dingtalk.card.create_failed", "Card create failed", {
 					reason: JSON.stringify(err.response.data),
-					fields: { status: err.response.status },
+					fields: { status },
 				});
 			} else {
 				log.logWarn("dingtalk.card.create_failed", "Card create failed", { reason: errorMessage(err) });
@@ -439,8 +447,15 @@ export class CardController {
 		this.creating.delete(card);
 		if (!this.isCardGenerationCurrent(channelId, generation)) {
 			this.unconfirmedCards.delete(generation);
-			this.retainRetired(card);
+			if (!definiteFailure) this.retainRetired(card);
+			else this.abandonHandle(card);
 			await this.retryRetired(channelId);
+			return null;
+		}
+		if (definiteFailure) {
+			this.unconfirmedCards.delete(generation);
+			this.cardCreationAttempted.delete(generation);
+			this.abandonHandle(card);
 			return null;
 		}
 		if (!confirmed) return null;
@@ -451,13 +466,35 @@ export class CardController {
 
 	/** Fixed termination only: never routes by key or admits stale producer content. */
 	private async terminateCard(card: AICard): Promise<boolean> {
+		const attempts = (this.terminationAttempts.get(card.instanceId) ?? 0) + 1;
+		this.terminationAttempts.set(card.instanceId, attempts);
 		const confirmed = await this.streamCard(
 			card,
 			"处理已结束。",
 			{ append: false, finalize: true, failed: false },
 			true,
 		);
-		return confirmed && this.forgetFinishedCard(card);
+		if (confirmed) {
+			this.terminationAttempts.delete(card.instanceId);
+			return this.forgetFinishedCard(card);
+		}
+		if (attempts < MAX_TERMINATION_ATTEMPTS) return false;
+		log.logWarn("dingtalk.card.terminate_abandoned", "Card termination abandoned", {
+			fields: { instanceId: card.instanceId, attempts },
+		});
+		this.terminationAttempts.delete(card.instanceId);
+		this.abandonHandle(card);
+		return true;
+	}
+
+	private abandonHandle(card: AICard): void {
+		this.retired.get(card.key)?.delete(card.instanceId);
+		if (!this.retired.get(card.key)?.size) this.retired.delete(card.key);
+		try {
+			this.handles.forget(card.instanceId);
+		} catch (error) {
+			log.logWarn("dingtalk.card.handle_failed", "Card handle cleanup failed", { reason: errorMessage(error) });
+		}
 	}
 
 	private forgetFinishedCard(card: AICard): boolean {
@@ -481,7 +518,8 @@ export class CardController {
 		// Order writes by instance so that close remains the last update to the old card.
 		const pending = (card.pendingWrite ?? Promise.resolve(true))
 			.then(async () => {
-				if (card.finished) return this.forgetFinishedCard(card);
+				// A finished card must not acknowledge a later body write as delivered.
+				if (card.finished) return termination ? this.forgetFinishedCard(card) : false;
 				return this.streamCardRequest(card, content, options, termination);
 			})
 			.catch((error: unknown) => {

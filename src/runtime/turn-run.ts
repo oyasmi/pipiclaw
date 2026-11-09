@@ -366,7 +366,8 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		// Background wakes deliver their result, not their process: no progress card, no
 		// thinking stream, nothing to clean up when a check-in ends `[SILENT]`. Awaited completions
 		// deliver their result too, without opening another progress card.
-		if (event.source === "human" && !event.scopeRef)
+		// Scope owners are DingTalk-only; Web API keeps the legacy per-turn openTurn path.
+		if (event.source === "human" && !event.scopeRef && transport.scopes)
 			event.scopeRef = {
 				desk: runner.conversation.desk,
 				channelId: event.channelId,
@@ -379,13 +380,27 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 			throw new Error("消息的工作台已变化，请重新发送消息。");
 		const info = turnInfoOf(turn.event);
 		const scopes = transport.scopes && deps.getDeliveryScopes?.();
-		turn.output = trackOutput(
+		const releaseHold = transport.hold?.();
+		const inner =
 			scopes && event.scopeRef
 				? await scopes.openTurn(
 						event.scopeRef,
 						[event.dispatchId, ...turn.absorbedDispatchIds].filter((id): id is string => id !== undefined),
 					)
-				: transport.openTurn(info, { quiet: backgroundOnly }),
+				: transport.openTurn(info, { quiet: backgroundOnly });
+		turn.output = trackOutput(
+			releaseHold
+				? {
+						emit: (event) => inner.emit(event),
+						finish: async (outcome) => {
+							try {
+								await inner.finish(outcome);
+							} finally {
+								releaseHold();
+							}
+						},
+					}
+				: inner,
 		);
 		const result = await runner.run(info, turn.output.ctx, store);
 		if (!deps.isCurrentRunner(runner)) return;
@@ -439,9 +454,16 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 				});
 			});
 			if (!deps.isCurrentRunner(runner)) return;
-			const stopped = outputFailed || turn.threw || !turn.mergedWakesHandled || runner.getTurnStatus().stopRequested;
-			// Scoped failed inputs remain unconsumed in DeliveryScopes; keep their producer wake.
-			const retryPrimary = outputFailed || (event.source === "wake" && event.scopeRef !== undefined && stopped);
+			const userStopped = runner.getTurnStatus().stopRequested;
+			const stopped = outputFailed || turn.threw || !turn.mergedWakesHandled || userStopped;
+			// Scoped infrastructure failures stay retryable. /stop consumes and closes; Web API has no scopes.
+			const retryPrimary =
+				outputFailed ||
+				(event.source === "wake" &&
+					event.scopeRef !== undefined &&
+					!!transports.forChannel(event.channelId)?.scopes &&
+					stopped &&
+					!userStopped);
 			await settle(event.dispatchId, retryPrimary ? "markRetryable" : "markCompleted");
 			if (outputFailed && event.source === "human") {
 				const transport = transports.forChannel(event.channelId);

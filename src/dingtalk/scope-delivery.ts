@@ -1,6 +1,8 @@
 /** One paced controller per immutable owner; a wake borrows it instead of opening a card. */
 import type { DeliveryScopeRef, ScopeDeliveryPort, ScopeWriter } from "../channel/delivery-scope.js";
 import { deliveryScopeKey } from "../channel/delivery-scope.js";
+import * as log from "../log.js";
+import { errorMessage } from "../shared/text-utils.js";
 import type { DingTalkBot } from "./bot.js";
 import { type ArchiveBotResponse, createDingTalkScopeWriter, type DeliveryPort } from "./delivery.js";
 
@@ -21,7 +23,12 @@ export class DingTalkScopeDelivery implements ScopeDeliveryPort {
 		}
 	}
 
-	open(owner: DeliveryScopeRef, recovered: boolean, allowed: () => boolean = () => true): ScopeWriter {
+	open(
+		owner: DeliveryScopeRef,
+		recovered: boolean,
+		allowed: () => boolean = () => true,
+		opts?: { deferCard?: boolean },
+	): ScopeWriter {
 		const key = `scope:${deliveryScopeKey(owner)}`;
 		const existing = this.writers.get(key);
 		if (existing?.canWrite()) return existing.writer;
@@ -65,6 +72,7 @@ export class DingTalkScopeDelivery implements ScopeDeliveryPort {
 			port,
 			this.archive,
 			recovered,
+			opts?.deferCard === true,
 		);
 		const writer: ScopeWriter = {
 			...inner,
@@ -77,6 +85,14 @@ export class DingTalkScopeDelivery implements ScopeDeliveryPort {
 					scopeRef: owner,
 					canWrite,
 				});
+				if (ok) {
+					await this.archive(owner.channelId, report.text).catch((error) =>
+						log.logWarn("channel.archive.write_failed", "Bot response archive failed", {
+							channelId: owner.channelId,
+							reason: errorMessage(error),
+						}),
+					);
+				}
 				return { status: ok ? "confirmed" : !canWrite() ? "blocked" : "unknown" };
 			},
 		};

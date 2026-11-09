@@ -123,56 +123,63 @@ it("keeps concurrent owners and late writers apart, and requires consumption of 
 	expect(f.finals.map((item) => item.owner)).toEqual([other, owner]);
 	expect((await f.snapshot()).consumed).toEqual(["run:done", "job:done"]);
 	expect((await f.snapshot(other)).final.id).not.toBe((await f.snapshot()).final.id);
-	// /stop may beat an already-entered tool's registration; its later wake still owns a result.
+	// /stop consumes current ids and closes progress; a later owned completion may still final.
 	const stoppedOwner = { ...owner, scopeId: "request:stopped" as const };
-	const stopped = await scopes.openTurn(stoppedOwner, []);
+	const stopped = await scopes.openTurn(stoppedOwner, ["stop-wake"]);
 	await stopped.finish({ ...done, kind: "cancelled" });
+	expect(scopes.isConsumed(stoppedOwner, "stop-wake")).toBe(true);
+	expect(f.closes).toContainEqual(stoppedOwner);
 	stopped.emit({ type: "answer", text: "stale after stop" });
 	const late = await scopes.openTurn(stoppedOwner, ["late-job:done"]);
 	late.emit({ type: "answer", text: "owned completion after stop" });
 	await late.finish(done);
 	expect(f.finals.map((item) => item.owner)).toEqual([other, owner, stoppedOwner]);
-	// W2: removed/cancelled work must close progress without consuming unseen late wakes.
-	const f2 = fixture();
-	const quiet = f2.build();
-	f2.setWork([{ ref: "cancelled-job", pending: true }]);
+	await scopes.acknowledge(owner, ["phantom:done"]);
+	expect(scopes.isConsumed(owner, "phantom:done")).toBe(true);
+	await scopes.stop();
+});
+
+it("closes quiescent progress only after confirmed remote close, and recovers an explicit cancel", async () => {
+	// Distinct from the final-gate case: unknown/blocked must not open progressClosed, and
+	// closeRequested must survive restart.
+	const f = fixture();
+	const quiet = f.build();
+	f.setWork([{ ref: "cancelled-job", pending: true }]);
 	const active = await quiet.openTurn(owner, []);
 	await quiet.retry();
-	expect(f2.closes).toHaveLength(0);
+	expect(f.closes).toHaveLength(0);
 	await active.finish(done);
-	f2.setWork([{ ref: "unseen-result", pending: false, completionId: "unseen:done" }]);
+	f.setWork([{ ref: "unseen-result", pending: false, completionId: "unseen:done" }]);
 	await quiet.retry();
-	expect(f2.closes).toHaveLength(0);
-	f2.setWork([]);
-	// W3: neither unknown nor blocked is evidence that remote progress was closed.
+	expect(f.closes).toHaveLength(0);
+	f.setWork([]);
 	for (const status of ["unknown", "blocked"] as const) {
-		f2.setResult({ status });
+		f.setResult({ status });
 		await quiet.retry();
-		expect((await f2.snapshot()).progressClosed).toBeUndefined();
+		expect((await f.snapshot()).progressClosed).toBeUndefined();
 	}
-	f2.setResult({ status: "confirmed" });
+	f.setResult({ status: "confirmed" });
 	await quiet.retry();
 	await quiet.retry();
-	expect(f2.closes).toEqual([owner, owner, owner]);
-	expect((await f2.snapshot()).progressClosed).toBe(true);
+	expect(f.closes).toEqual([owner, owner, owner]);
+	expect((await f.snapshot()).progressClosed).toBe(true);
 	const lateQuiet = await quiet.openTurn(owner, ["late:done"]);
 	lateQuiet.emit({ type: "answer", text: "late result" });
 	await lateQuiet.finish(done);
 	expect(quiet.isConsumed(owner, "late:done")).toBe(true);
-	expect(f2.finals).toHaveLength(1);
+	expect(f.finals).toHaveLength(1);
 	const explicit = { ...owner, scopeId: "request:explicit-close" as const };
-	f2.setResult({ status: "unknown" });
+	f.setResult({ status: "unknown" });
 	await quiet.close(explicit);
-	expect((await f2.snapshot(explicit)).closed).toBeUndefined();
-	expect((await f2.snapshot(explicit)).closeRequested).toBe(true);
+	expect((await f.snapshot(explicit)).closed).toBeUndefined();
+	expect((await f.snapshot(explicit)).closeRequested).toBe(true);
 	await quiet.stop();
-	const recovered = f2.build();
+	const recovered = f.build();
 	await recovered.restore();
-	f2.setResult({ status: "confirmed" });
+	f.setResult({ status: "confirmed" });
 	await recovered.retry();
-	expect((await f2.snapshot(explicit)).closed).toBe(true);
+	expect((await f.snapshot(explicit)).closed).toBe(true);
 	await recovered.stop();
-	await scopes.stop();
 });
 
 it("retains unknown finals, blocks a rebound owner and retries the same durable intent after recovery", async () => {
@@ -207,6 +214,28 @@ it("retains unknown finals, blocks a rebound owner and retries the same durable 
 	});
 	expect((await f.snapshot()).final.confirmed).toBe(true);
 	await scopes.stop();
+	// Unconfirmed finals stop after a fixed attempt budget instead of retrying forever.
+	const abandoned = fixture();
+	const dying = abandoned.build();
+	abandoned.setResult({ status: "unknown" });
+	const dyingTurn = await dying.openTurn(owner, []);
+	dyingTurn.emit({ type: "answer", text: "never lands" });
+	await dyingTurn.finish(done);
+	for (let i = 0; i < 8; i++) {
+		vi.setSystemTime(Date.now() + 900_001);
+		await dying.retry();
+	}
+	expect((await abandoned.snapshot()).final).toMatchObject({
+		confirmed: false,
+		result: "blocked",
+		attempts: 8,
+	});
+	expect((await abandoned.snapshot()).closed).toBe(true);
+	const before = abandoned.finals.length;
+	vi.setSystemTime(Date.now() + 900_001);
+	await dying.retry();
+	expect(abandoned.finals).toHaveLength(before);
+	await dying.stop();
 	for (const bad of [
 		{ ...saved, owner: { ...owner, channelId: "dingtalk:dm:other" } },
 		{ ...saved, final: false },

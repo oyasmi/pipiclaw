@@ -713,6 +713,8 @@ export class DeskJobManager {
 			channelId: record.channelId,
 			fields: { jobId: record.id, desk: this.target.desk },
 		});
+		// No wake will arrive; do not leave a phantom completionId on the delivery scope gate.
+		record.completionMode = "inline";
 		record.notified = true;
 		await this.persist(record);
 	}

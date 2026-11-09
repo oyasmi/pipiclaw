@@ -468,6 +468,13 @@ async function buildRuntimeContext(
 				details: record.event.text.slice(0, 500),
 				fields: { dispatchId: record.id, deliveries: record.deliveries, producer: record.event.producer },
 			});
+			if (record.event.scopeRef)
+				await deliveryScopes.acknowledge(record.event.scopeRef, [record.id]).catch((error) =>
+					log.logWarn("delivery.scope.ack_failed", "Exhausted wake acknowledgement failed", {
+						reason: errorMessage(error),
+						fields: { dispatchId: record.id },
+					}),
+				);
 			await deskRuntime.sendFromDesk(
 				record.event.desk,
 				record.event.channelId,
@@ -555,7 +562,10 @@ async function buildRuntimeContext(
 			if (delivered) await store.logBotResponse(message.channel, message.text, Date.now().toString());
 			return delivered;
 		},
-		closeProgress: (desk, channelId, taskId) => deliveryScopes.close({ desk, channelId, scopeId: `task:${taskId}` }),
+		closeProgress: async (desk, channelId, taskId) => {
+			if (!transports.forChannel(channelId)?.scopes) return;
+			await deliveryScopes.close({ desk, channelId, scopeId: `task:${taskId}` });
+		},
 		deliver: async (desk, channelId, text) => {
 			const delivered = await deskRuntime.sendFromDesk(desk, channelId, text);
 			if (delivered) await store.logBotResponse(channelId, text, Date.now().toString());

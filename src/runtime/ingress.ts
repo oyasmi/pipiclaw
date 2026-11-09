@@ -142,7 +142,12 @@ export function createIngress(deps: IngressDeps): IngressService {
 			onFull();
 			return { kind: "rejected", reason: { code: "queue_full" } };
 		}
-		if (event.source === "human" && !event.scopeRef && !event.text.trim().startsWith("/")) {
+		if (
+			event.source === "human" &&
+			!event.scopeRef &&
+			!event.text.trim().startsWith("/") &&
+			transports.forChannel(event.channelId)?.scopes
+		) {
 			const desk = resolvedDesk(resolveChannel(event.channelId));
 			if (desk) event.scopeRef = { desk, channelId: event.channelId, scopeId: `request:${randomUUID()}` };
 		}
