@@ -608,6 +608,10 @@ describe("DurableDispatchService.absorbPending (completion-wake coalescing)", ()
 		expect(await service.markStarted("subagent:dingtalk:dm:1:run_b:done")).toBe(false);
 		await service.markCompleted(primary);
 		await service.markCompleted("subagent:dingtalk:dm:1:run_b:done");
+		// W2: an absorbed closure may already have used its in-memory stale mark.
+		// Once the record is deleted, its next stale admission must still be refused.
+		expect(await service.markStarted("subagent:dingtalk:dm:1:run_b:done")).toBe(false);
+		expect(await service.markStarted(primary)).toBe(false);
 		const remaining = readdirSync(stateDir).map((name) => decodeURIComponent(name));
 		expect(remaining).toEqual(
 			expect.arrayContaining(["subagent:dingtalk:dm:2:run_other:done.json", "event:dingtalk:dm:1:x.json"]),

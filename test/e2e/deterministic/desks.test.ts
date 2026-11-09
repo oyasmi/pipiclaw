@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { deliveryScopeKey } from "../../../src/channel/delivery-scope.js";
 import { getBindingsPath, getDeskDir } from "../../../src/desk/paths.js";
 import type { InboundMessages } from "../../../src/dingtalk/inbound.js";
 import type { DurableDispatchRecord } from "../../../src/runtime/durable-dispatch.js";
@@ -131,6 +132,16 @@ describe("E2E deterministic: desks and bindings", () => {
 		const running = harness.model.script.hold({ when: (r) => r.lastUserText.includes(`[TASK_STEP:${taskId} #1]`) });
 		await harness.runtime.taskLane.runOnce();
 		await running.arrived;
+		// W3: exercise the real binding producer → bootstrap callback → scope adapter path.
+		// No old writer call occurs between leaving and returning to its desk.
+		// Mutation 2026-11-09: omit bootstrap invalidation -> same writer reused (confirmed red, restored).
+		const scopes = harness.runtime.transports.forChannel(harness.channelId)!.scopes!;
+		const owner = { desk: harness.desk, channelId: harness.channelId, scopeId: "request:binding-probe" as const };
+		const allowed = () => harness.runtime.desks.isBoundTo(harness.channelId, harness.desk);
+		const oldWriter = scopes.open(owner, false, allowed);
+		await oldWriter.flush();
+		const key = `scope:${deliveryScopeKey(owner)}`;
+		const oldGeneration = harness.bot.getCardGeneration(key);
 		await harness.sendUserMessage("/desk new lab");
 		await harness.sendUserMessage("/desk bind lab");
 		expect(JSON.parse(readFileSync(getBindingsPath(harness.workspaceDir), "utf8")).bindings).toMatchObject({
@@ -182,6 +193,13 @@ describe("E2E deterministic: desks and bindings", () => {
 
 		// Bound back, the old desk's task resumes on the lane's next pass.
 		await harness.sendUserMessage("/desk bind e2e");
+		const freshWriter = scopes.open(owner, false, allowed);
+		expect(freshWriter).not.toBe(oldWriter);
+		expect(harness.bot.isCardGenerationCurrent(key, oldGeneration)).toBe(false);
+		expect(await oldWriter.report({ id: "stale", text: "old report" })).toEqual({ status: "blocked" });
+		expect(await oldWriter.finalize({ id: "stale-final", text: "old final" })).toEqual({ status: "blocked" });
+		expect(await freshWriter.report({ id: "fresh", text: "new report" })).toEqual({ status: "confirmed" });
+		expect(await freshWriter.finalize({ id: "fresh-final", text: "new final" })).toEqual({ status: "confirmed" });
 		await harness.runtime.taskLane.runOnce();
 		await waitFor("the frozen task to run", () => harness.mainTurnRequests().some((r) => r.matchedRoute === "step"), {
 			intervalMs: 25,

@@ -41,7 +41,7 @@ export class DingTalkTransport implements Transport {
 			receive: (message: Parameters<Ingress["receive"]>[0]) => this.requireIngress().receive(message),
 		};
 		this.bot = deps.createBot ? deps.createBot(ingress, deps.config) : new DingTalkBot(ingress, deps.config);
-		this.scopes = new DingTalkScopeDelivery(this.bot, deps.archiveBotResponse, Boolean(deps.config.cardTemplateId));
+		this.scopes = new DingTalkScopeDelivery(this.bot, deps.archiveBotResponse);
 		this.policy = { whenBusy: this.bot.busyMessageDefault, textControlCommands: true };
 	}
 

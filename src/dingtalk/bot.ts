@@ -8,6 +8,7 @@
  */
 import type { MediaSendResult, OutboundMedia } from "../channel/transport.js";
 import * as log from "../log.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { AccessTokenProvider } from "./access-token.js";
 import { type ConversationMeta, sendRobotMessage } from "./api.js";
 import { CardController } from "./cards.js";
@@ -40,6 +41,13 @@ export class DingTalkBot implements DeliveryPort {
 		this.cardRoutes.set(key, channelId);
 		if (canWrite) this.cardGuards.set(key, canWrite);
 	}
+	retryRetiredCards(key?: string): Promise<boolean> {
+		return this.cards.retryRetired(key);
+	}
+	resetScopeCard(key: string): void {
+		this.cards.resetGeneration(key);
+	}
+
 	/** Resolve a card owner key for adapters/observers; it is never a transport address. */
 	cardChannel(key: string): string {
 		return this.cardRoutes.get(key) ?? key;
@@ -230,8 +238,8 @@ export class DingTalkBot implements DeliveryPort {
 		return this.cards.finalizeExistingCard(channelId, content, generation);
 	}
 
-	hasUnconfirmedCard(channelId: string): boolean {
-		return this.cards.hasUnconfirmedCreation(channelId);
+	closeCard(channelId: string, content: string, generation?: symbol): Promise<boolean> {
+		return this.cards.closeCard(channelId, content, generation);
 	}
 
 	/** Invalidate this turn's local state. This is not a remote message deletion. */
@@ -303,6 +311,11 @@ export class DingTalkBot implements DeliveryPort {
 	}
 
 	private cleanupIdleChannelCaches(now = Date.now()): void {
+		void this.retryRetiredCards().catch((error) =>
+			log.logWarn("dingtalk.card.retire_failed", "Card termination failed", {
+				reason: errorMessage(error),
+			}),
+		);
 		const cutoff = now - CHANNEL_CACHE_TTL_MS;
 		for (const [channelId, lastActiveAt] of this.channelLastActiveAt) {
 			if (lastActiveAt > cutoff) continue;

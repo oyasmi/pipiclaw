@@ -50,6 +50,7 @@ function fixture() {
 	const run = createEventTurnRunner(deps);
 	return {
 		runner,
+		deps,
 		transport,
 		end,
 		durable,
@@ -212,4 +213,22 @@ it("retains a failed scoped primary completion for retry instead of deleting its
 	expect(f.durable.markCompleted).not.toHaveBeenCalled();
 	expect(f.durable.markRetryable).toHaveBeenCalledWith(event.dispatchId);
 	expect(f.runner.isBusy()).toBe(false);
+	// W2: consumed inputs are settled before model admission, including a mixed batch.
+	const consumed = new Set([event.dispatchId]);
+	f.deps.getDeliveryScopes = () =>
+		({
+			isConsumed: (_owner, id) => consumed.has(id),
+		}) as import("../src/runtime/delivery-scopes.js").DeliveryScopes;
+	await f.run(event);
+	expect(f.runner.run).toHaveBeenCalledTimes(1);
+	expect(f.durable.markCompleted).toHaveBeenCalledWith(event.dispatchId);
+	const primary = { ...wake("fresh"), scopeRef: event.scopeRef };
+	const sibling = { ...wake("sibling"), scopeRef: event.scopeRef };
+	f.durable.absorbPending.mockResolvedValueOnce([event, sibling]);
+	await f.run(primary);
+	expect(f.runner.run).toHaveBeenCalledTimes(2);
+	const info = vi.mocked(f.runner.run).mock.calls[1]![0];
+	expect(info.text).toContain(primary.text);
+	expect(info.text).toContain(sibling.text);
+	expect(info.text).not.toContain(event.text);
 });

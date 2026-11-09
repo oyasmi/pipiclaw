@@ -30,7 +30,9 @@ afterEach(() => {
 function fixture(directory = temp()) {
 	let bound = true;
 	let result: ScopeDeliveryResult = { status: "confirmed" };
+	let closeResult: ScopeDeliveryResult | undefined;
 	let work: ScopeWork[] = [];
+	const closes: DeliveryScopeRef[] = [];
 	const events: Array<{ owner: DeliveryScopeRef; event: TurnEvent }> = [];
 	const finals: Array<{ owner: DeliveryScopeRef; intent: FinalIntent; recovered: boolean }> = [];
 	const path = (ref = owner) => join(directory, `${deliveryScopeKey(ref)}.json`);
@@ -40,7 +42,10 @@ function fixture(directory = temp()) {
 			emit: (event) => events.push({ owner: ref, event }),
 			flush: async () => result,
 			report: async () => result,
-			close: async () => {},
+			close: async () => {
+				closes.push(ref);
+				return closeResult ?? result;
+			},
 			finalize: async (intent) => {
 				// A remote attempt with no durable intent is a lost-final crash window.
 				expect((await snapshot(ref)).final).toMatchObject(intent);
@@ -62,11 +67,15 @@ function fixture(directory = temp()) {
 	return {
 		build,
 		events,
+		closes,
 		finals,
 		path,
 		snapshot,
 		setWork: (value: ScopeWork[]) => {
 			work = value;
+		},
+		setCloseResult: (value: ScopeDeliveryResult) => {
+			closeResult = value;
 		},
 		setResult: (value: ScopeDeliveryResult) => {
 			result = value;
@@ -123,6 +132,46 @@ it("keeps concurrent owners and late writers apart, and requires consumption of 
 	late.emit({ type: "answer", text: "owned completion after stop" });
 	await late.finish(done);
 	expect(f.finals.map((item) => item.owner)).toEqual([other, owner, stoppedOwner]);
+	// W2: removed/cancelled work must close progress without consuming unseen late wakes.
+	const f2 = fixture();
+	const quiet = f2.build();
+	f2.setWork([{ ref: "cancelled-job", pending: true }]);
+	const active = await quiet.openTurn(owner, []);
+	await quiet.retry();
+	expect(f2.closes).toHaveLength(0);
+	await active.finish(done);
+	f2.setWork([{ ref: "unseen-result", pending: false, completionId: "unseen:done" }]);
+	await quiet.retry();
+	expect(f2.closes).toHaveLength(0);
+	f2.setWork([]);
+	// W3: neither unknown nor blocked is evidence that remote progress was closed.
+	for (const status of ["unknown", "blocked"] as const) {
+		f2.setResult({ status });
+		await quiet.retry();
+		expect((await f2.snapshot()).progressClosed).toBeUndefined();
+	}
+	f2.setResult({ status: "confirmed" });
+	await quiet.retry();
+	await quiet.retry();
+	expect(f2.closes).toEqual([owner, owner, owner]);
+	expect((await f2.snapshot()).progressClosed).toBe(true);
+	const lateQuiet = await quiet.openTurn(owner, ["late:done"]);
+	lateQuiet.emit({ type: "answer", text: "late result" });
+	await lateQuiet.finish(done);
+	expect(quiet.isConsumed(owner, "late:done")).toBe(true);
+	expect(f2.finals).toHaveLength(1);
+	const explicit = { ...owner, scopeId: "request:explicit-close" as const };
+	f2.setResult({ status: "unknown" });
+	await quiet.close(explicit);
+	expect((await f2.snapshot(explicit)).closed).toBeUndefined();
+	expect((await f2.snapshot(explicit)).closeRequested).toBe(true);
+	await quiet.stop();
+	const recovered = f2.build();
+	await recovered.restore();
+	f2.setResult({ status: "confirmed" });
+	await recovered.retry();
+	expect((await f2.snapshot(explicit)).closed).toBe(true);
+	await recovered.stop();
 	await scopes.stop();
 });
 
@@ -190,12 +239,27 @@ it("leaves an unconfirmed report in the task outbox and acknowledges it only aft
 	]);
 	const taskOwner: DeliveryScopeRef = { ...owner, scopeId: "task:T" };
 	expect((await f.snapshot(taskOwner)).reports).toEqual([report.id]);
+	// An empty work snapshot must never close a task ahead of its durable receipt.
+	await scopes.retry();
+	expect((await f.snapshot(taskOwner)).progressClosed).toBeUndefined();
+	expect(f.closes).toHaveLength(0);
 	const receipt = { ...report, id: "close-unique", kind: "receipt" as const };
+	f.setCloseResult({ status: "unknown" });
 	expect(await scopes.task(owner.desk, receipt)).toBe(true);
 	expect(await scopes.task(owner.desk, receipt)).toBe(true);
 	expect(f.finals).toHaveLength(1);
 	await expect(scopes.task(owner.desk, { ...receipt, id: "another-close" })).rejects.toThrow("different final intent");
+	expect((await f.snapshot(taskOwner)).final.confirmed).toBe(true);
+	expect((await f.snapshot(taskOwner)).progressClosed).toBeUndefined();
 	await scopes.stop();
+	const restored = f.build();
+	await restored.restore();
+	f.setCloseResult({ status: "confirmed" });
+	await restored.retry();
+	expect(await restored.task(owner.desk, receipt)).toBe(true);
+	expect(f.finals).toHaveLength(1);
+	expect((await f.snapshot(taskOwner)).progressClosed).toBe(true);
+	await restored.stop();
 });
 
 it("rejects every finish acknowledgement after the first final-intent save fails and recovers through wake replay", async () => {

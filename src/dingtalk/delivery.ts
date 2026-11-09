@@ -6,12 +6,12 @@
  * is a normal message and the card then folds to one line.
  */
 import type { ChannelContext, TurnEvent, TurnOutcome } from "../channel/channel-context.js";
+import type { ScopeDeliveryResult } from "../channel/delivery-scope.js";
 import type { TurnInfo } from "../channel/transport.js";
 import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
-import { createEmptyUsageTotals } from "../usage/totals.js";
 import { type ProgressActivity, ProgressWindow, type ProgressWrite, renderCardStatus } from "./progress.js";
 import type { FinalDelivery, ProgressStyle } from "./response-mode.js";
 
@@ -52,6 +52,7 @@ export interface DeliveryPort {
 	supportsStreamingAppend(): boolean;
 	finalizeCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
 	finalizeExistingCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
+	closeCard(channelId: string, content: string, generation?: symbol): Promise<boolean>;
 	discardCard(channelId: string, generation?: symbol): void;
 }
 
@@ -173,15 +174,31 @@ class ChannelDeliveryController {
 				if (!ok) return { status: this.bot.canWrite?.() === false ? "blocked" : "unknown" };
 				this.finalResponseDelivered = true;
 				this.archiveBotResponse(intent.text);
-				// A failed card close never triggers another plain answer.
-				if (!useCard)
-					await this.bot.finalizeExistingCard(this.event.channelId, this.buildSummaryText(), this.cardGeneration);
-				this.mode = "silent";
-				await this.close();
+				// Persisting the body acknowledgement is the runtime's next step. Progress
+				// closure has its own acknowledgement and must never downgrade this one.
 				return { status: "confirmed" };
 			},
-			close: () => this.enqueueFinish({ kind: "silent", usage: createEmptyUsageTotals() }),
+			close: () => this.closeScopeProgress(),
 		};
+	}
+
+	private async closeScopeProgress(): Promise<ScopeDeliveryResult> {
+		await this.chain;
+		if (this.bot.canWrite?.() === false) return { status: "blocked" };
+		if (this.closed) return { status: "confirmed" };
+		this.ending = true;
+		this.mode = "suspended";
+		this.bumpRevision(true);
+		await this.flush();
+		if (this.progressStyle !== "none")
+			await this.bot.finalizeExistingCard(this.event.channelId, this.buildSummaryText(), this.cardGeneration);
+		const ok = await this.bot.closeCard(this.event.channelId, this.buildSummaryText(), this.cardGeneration);
+		if (ok) {
+			this.closed = true;
+			// Preserve ordinary close bookkeeping, but only after the remote close is confirmed.
+			this.bot.discardCard(this.event.channelId, this.cardGeneration);
+		}
+		return { status: ok ? "confirmed" : this.bot.canWrite?.() === false ? "blocked" : "unknown" };
 	}
 
 	private enqueue(work: () => Promise<void>, context: string): void {

@@ -27,7 +27,7 @@ describe("E2E deterministic: scoped completion recovery", () => {
 		harness = undefined;
 	});
 
-	it.each(["final-save", "failed-wake"] as const)(
+	it.each(["final-save", "failed-wake", "consumed-unlink"] as const)(
 		"retains and replays the primary after %s without losing the unique final",
 		async (fault) => {
 			// Review R1/R3: deleting a failed primary, or retaining an unsaved in-memory final,
@@ -60,6 +60,11 @@ describe("E2E deterministic: scoped completion recovery", () => {
 				this: DurableDispatchService,
 				id,
 			) {
+				if (fault === "consumed-unlink" && inject && id === target) {
+					inject = false;
+					retried.resolve();
+					throw new Error("injected dispatch unlink EIO after durable consumption");
+				}
 				await complete.call(this, id);
 				// The barrier observes both outcomes: a regression fails on disk state, not a timeout.
 				if (id === target) retried.resolve();
@@ -110,7 +115,20 @@ describe("E2E deterministic: scoped completion recovery", () => {
 			current.model.script.route({
 				name: "completion",
 				when: (r) => r.isMainTurn && r.lastUserText.includes("[JOB:"),
-				respond: [reply.text("result")],
+				respond: [
+					...(fault === "consumed-unlink"
+						? [
+								reply.toolCall(
+									"bash",
+									{
+										command: `printf x >> '${join(current.homeDir, "completion-effects")}'`,
+									},
+									"call_w2_completion",
+								),
+							]
+						: []),
+					reply.text("result"),
+				],
 				repeat: true,
 			});
 			try {
@@ -127,6 +145,22 @@ describe("E2E deterministic: scoped completion recovery", () => {
 				await retried.promise;
 				await current.waitForIdle();
 				expect(existsSync(wakePath)).toBe(true);
+				if (fault === "consumed-unlink") {
+					// W2 (+1 case): scope consumption can commit before dispatch deletion. Neither
+					// runner admission nor a tool side effect may repeat after runtime recovery.
+					// Mutation 2026-11-09: bypass consumed admission -> runner 2→3 (confirmed red, restored).
+					expect(state().consumed).toContain(target);
+					expect(state().final).toMatchObject({ confirmed: true });
+					const calls = vi.mocked(ChannelRunner.prototype.run).mock.calls.length;
+					expect(readFileSync(join(current.homeDir, "completion-effects"), "utf-8")).toBe("x");
+					await current.restart();
+					await durable.drainOnce(Date.now() + 16 * 60_000);
+					await current.waitForIdle();
+					expect(existsSync(wakePath)).toBe(false);
+					expect(vi.mocked(ChannelRunner.prototype.run)).toHaveBeenCalledTimes(calls);
+					expect(readFileSync(join(current.homeDir, "completion-effects"), "utf-8")).toBe("x");
+					return;
+				}
 				expect(state().consumed).not.toContain(target);
 				expect(state().final).toBeUndefined();
 				const beforeRetry = current.deliveries.filter((d) => d.method === "sendPlain").length;

@@ -53,6 +53,7 @@ class CapturedBot extends DingTalkBot {
 	async finalizeCard() {
 		return true;
 	}
+	async closeCard() { return true; }
 	async finalizeExistingCard() {
 		return true;
 	}

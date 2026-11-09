@@ -3,10 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const http = vi.hoisted(() => ({ post: vi.fn(), put: vi.fn(), defaults: {} }));
 vi.mock("axios", () => ({ default: { ...http, create: () => http, isAxiosError: () => false } }));
 
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { TurnEvent, TurnOutcome } from "../src/channel/channel-context.js";
 import { deliveryScopeKey } from "../src/channel/delivery-scope.js";
 import type { TurnInfo } from "../src/channel/transport.js";
 import { DingTalkBot } from "../src/dingtalk/bot.js";
+import { CardHandles } from "../src/dingtalk/card-handles.js";
 import { createDingTalkContext, type DeliveryPort } from "../src/dingtalk/delivery.js";
 import { CARD_DOCUMENT_MAX_BYTES, CARD_REQUEST_MAX_BYTES } from "../src/dingtalk/progress.js";
 import {
@@ -17,7 +20,10 @@ import {
 	type ResponseMode,
 } from "../src/dingtalk/response-mode.js";
 import { DingTalkScopeDelivery } from "../src/dingtalk/scope-delivery.js";
+import { DingTalkTransport } from "../src/dingtalk/transport.js";
 import * as log from "../src/log.js";
+import { DeliveryScopes } from "../src/runtime/delivery-scopes.js";
+import { createTransportRegistry } from "../src/runtime/transports.js";
 import { createEmptyUsageTotals } from "../src/usage/totals.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -86,6 +92,10 @@ class RecordingPort implements DeliveryPort {
 	async finalizeExistingCard(channelId: string, content: string): Promise<boolean> {
 		this.calls.push({ method: "finalizeExistingCard", args: [channelId, content] });
 		return this.result("finalizeExistingCard", true);
+	}
+
+	async closeCard(): Promise<boolean> {
+		return this.result("closeCard", true);
 	}
 
 	discardCard(channelId: string): void {
@@ -522,10 +532,15 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		});
 	});
 
-	function remote(template = "template", mode: ResponseMode = "full_progress_then_plain_final") {
+	function remote(
+		template = "template",
+		mode: ResponseMode = "full_progress_then_plain_final",
+		stateDir = temp(),
+		prime = true,
+	) {
 		const bot = new DingTalkBot(
 			{ receive: async () => ({ kind: "started" }) },
-			{ clientId: "test", clientSecret: "test", cardTemplateId: template, responseMode: mode, stateDir: temp() },
+			{ clientId: "test", clientSecret: "test", cardTemplateId: template, responseMode: mode, stateDir },
 		);
 		const privateApi = bot as unknown as {
 			tokens: { accessToken: string; tokenExpiry: number };
@@ -536,7 +551,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		privateApi.tokens.accessToken = "test-token";
 		privateApi.tokens.tokenExpiry = Date.now() / 1000 + 3600;
 		privateApi.conversations.set(CHANNEL, { conversationId: "test", conversationType: "1", senderId: "123" });
-		const context = () => createDingTalkContext(turn, bot, async () => undefined, false);
+		const context = () => createDingTalkContext(turn, bot, async () => undefined, !prime);
 		return { bot, context, ctx: context() };
 	}
 	const plainCalls = () => http.post.mock.calls.filter(([url]) => String(url).endsWith("batchSend"));
@@ -723,6 +738,40 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		// The answer folds the new card in place. The late create must not have replaced it.
 		expect(cards.get(nextId ?? "")?.content).toMatch(/^完成 · 工具调用 0 次 · /);
 		expect(cards.get(nextId ?? "")?.finished).toBe(true);
+		// W3: resetting a generation while CREATE is in flight must still terminate its
+		// remote card, even after a reopened writer has already delivered its plain final.
+		// A mutation 2026-11-09: deleting a failed retired handle makes retry falsely succeed (red).
+		const { bot, ctx: initial } = remote();
+		await initial.finish(outcome("silent"));
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined);
+		const owner = { desk: "default", channelId: CHANNEL, scopeId: "request:late-reset" as const };
+		createGate = deferred();
+		const old = scopes.open(owner, false);
+		await vi.advanceTimersByTimeAsync(0);
+		const retiredId = [...cards.keys()].at(-1)!;
+		const pendingCreate = createGate;
+		createGate = undefined;
+		scopes.invalidate(CHANNEL);
+		const fresh = scopes.open(owner, false);
+		expect(await fresh.finalize({ id: "fresh-final", text: "fresh final" })).toEqual({ status: "confirmed" });
+		const unaffected = scopes.open({ ...owner, scopeId: "request:unaffected" }, false);
+		unaffected.emit(progress("unaffected progress"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		const unaffectedId = [...cards.keys()].at(-1)!;
+		failWrites = true;
+		pendingCreate.resolve();
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		expect(cards.get(retiredId)?.finished).toBe(false);
+		expect(await bot.retryRetiredCards()).toBe(false);
+		failWrites = false;
+		expect(await bot.retryRetiredCards()).toBe(true);
+		expect(cards.get(retiredId)?.finished).toBe(true);
+		expect(cards.get(retiredId)?.content).not.toContain("fresh final");
+		expect(cards.get(unaffectedId)?.content).toContain("unaffected progress");
+		expect(cards.get(unaffectedId)?.finished).toBe(false);
+		expect(await old.report({ id: "old-report", text: "stale business content" })).toEqual({ status: "blocked" });
+		expect(JSON.parse(plainCalls().at(-1)![1].msgParam).text).toBe("fresh final");
+		await scopes.stop();
 	});
 
 	it("stop is serialized after the old write and stale progress cannot create another card", async () => {
@@ -742,6 +791,123 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		void context;
 		expect(cards.size).toBe(2);
 		expect([...cards.values()].every((c) => c.finished && c.content.trim())).toBe(true);
+		// W3: a swallowed/unconfirmed close must retain the live card for a real retry.
+		const { bot } = remote();
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined);
+		const writer = scopes.open({ desk: "default", channelId: CHANNEL, scopeId: "request:close-retry" }, false);
+		writer.emit(progress("must finish"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		const retained = [...cards.values()].at(-1)!;
+		failWrites = true;
+		expect(await writer.close()).toEqual({ status: "unknown" });
+		expect(retained.finished).toBe(false);
+		failWrites = false;
+		expect(await writer.close()).toEqual({ status: "confirmed" });
+		expect(retained.finished).toBe(true);
+		const finalRetry = scopes.open(
+			{ desk: "default", channelId: CHANNEL, scopeId: "request:final-close-retry" },
+			false,
+		);
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		const finalCard = [...cards.values()].at(-1)!;
+		const beforeFinal = plainCalls().length;
+		failWrites = true;
+		const intent = { id: "retained-final", text: "delivered once" };
+		expect(await finalRetry.finalize(intent)).toEqual({ status: "confirmed" });
+		expect(await finalRetry.close()).toEqual({ status: "unknown" });
+		expect(plainCalls()).toHaveLength(beforeFinal + 1);
+		expect(finalCard.finished).toBe(false);
+		failWrites = false;
+		expect(await finalRetry.close()).toEqual({ status: "confirmed" });
+		expect(plainCalls()).toHaveLength(beforeFinal + 1);
+		expect(finalCard.finished).toBe(true);
+		await scopes.stop();
+	});
+
+	it("restores body confirmation and retries only card closure after rebuilding both runtime and transport", async () => {
+		// New risk (+1 unit case): fake scope ports cannot catch lost transport handles or
+		// duplicate body SENDs across reconstruction; assert real disk and remote-card state.
+		// B mutation 2026-11-09: bypass durable body ack -> SEND count 1→2 (red, restored).
+
+		// B: durable body ack survives reconstruction of both runtime scopes and the bot/card
+		// transport. Only persisted card handles can close the old remote card at this point.
+		const stateDir = temp();
+		const directory = temp();
+		const readHandles = async () => {
+			const handlesDir = join(stateDir, "dingtalk", "card-handles");
+			return (
+				await Promise.all((await readdir(handlesDir)).map((name) => readFile(join(handlesDir, name), "utf-8")))
+			).join("\n");
+		};
+		const owner = { desk: "default", channelId: CHANNEL, scopeId: "request:body-ack" as const };
+		const build = () => {
+			const { bot } = remote("template", "full_progress_then_plain_final", stateDir, false);
+			const transport = new DingTalkTransport({
+				config: { clientId: "test", clientSecret: "test", stateDir },
+				archiveBotResponse: async () => undefined,
+				createBot: () => bot,
+			});
+			return new DeliveryScopes({
+				directory,
+				transports: createTransportRegistry([transport]),
+				isBoundTo: () => true,
+				work: () => [],
+			});
+		};
+		let runtime = build();
+		const active = await runtime.openTurn(owner, ["completion:once"]);
+		active.emit(progress("retained card"));
+		await vi.advanceTimersByTimeAsync(FRAME_MS);
+		const oldCard = [...cards.values()].at(-1)!;
+		const oldId = [...cards.keys()].at(-1)!;
+		const before = plainCalls().length;
+		failWrites = true;
+		active.emit(answer("body confirmed before close"));
+		await active.finish(outcome("completed"));
+		const snapshot = async () =>
+			JSON.parse(await readFile(join(directory, `${deliveryScopeKey(owner)}.json`), "utf-8"));
+		expect((await snapshot()).final.confirmed).toBe(true);
+		expect((await snapshot()).progressClosed).toBeUndefined();
+		expect(plainCalls()).toHaveLength(before + 1);
+		expect(oldCard.finished).toBe(false);
+		const retainedHandles = await readHandles();
+		expect(retainedHandles).toContain(oldId);
+		expect(retainedHandles).not.toContain("test-token");
+		expect(retainedHandles).not.toContain("body confirmed before close");
+		await runtime.stop();
+		runtime = build();
+		await runtime.restore();
+		vi.setSystemTime(Date.now() + 60_001);
+		await runtime.retry(); // Failed close after reconstruction also retains its handle.
+		expect((await snapshot()).progressClosed).toBeUndefined();
+		failWrites = false;
+		await runtime.retry();
+		await runtime.retry();
+		expect(plainCalls()).toHaveLength(before + 1);
+		expect(oldCard.finished).toBe(true);
+		expect((await snapshot()).progressClosed).toBe(true);
+		expect((await snapshot()).closed).toBe(true);
+		expect(await readHandles()).not.toContain(oldId);
+		await runtime.stop();
+
+		// A local handle-cleanup fault must not downgrade a confirmed card-body delivery
+		// into a plain fallback SEND; its cleanup responsibility remains independently retryable.
+		const cardMode = remote("template", "final_card_only", temp(), false);
+		const adapter = new DingTalkScopeDelivery(cardMode.bot, async () => undefined);
+		const cardWriter = adapter.open({ ...owner, scopeId: "request:card-ack" }, false);
+		const forget = vi.spyOn(CardHandles.prototype, "forget").mockImplementation(() => {
+			throw new Error("injected card handle cleanup EIO");
+		});
+		const beforeCardBody = plainCalls().length;
+		expect(await cardWriter.finalize({ id: "card-body", text: "confirmed card body" })).toEqual({
+			status: "confirmed",
+		});
+		expect(plainCalls()).toHaveLength(beforeCardBody);
+		expect([...cards.values()].at(-1)?.finished).toBe(true);
+		expect(await cardWriter.close()).toEqual({ status: "unknown" });
+		forget.mockRestore();
+		expect(await cardWriter.close()).toEqual({ status: "confirmed" });
+		await adapter.stop();
 	});
 
 	it("keeps concurrent scopes on separate remote cards and rejects unconfirmed update/final responses", async () => {
@@ -752,7 +918,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		cards.clear();
 		http.post.mockClear();
 		http.put.mockClear();
-		const scopes = new DingTalkScopeDelivery(bot, async () => undefined, true);
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined);
 		const owner = { desk: "default", channelId: CHANNEL, scopeId: "request:first" as const };
 		createGate = deferred();
 		const first = scopes.open(owner, false);
@@ -773,20 +939,9 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		expect(cards.get(firstId)?.content).toContain("first scope");
 		expect(cards.get(firstId)?.content).not.toContain("second scope");
 		expect(bot.cardChannel(`scope:${deliveryScopeKey(owner)}`)).toBe(CHANNEL);
-		const put = http.put.getMockImplementation()!;
-		let rejectReport = true;
-		http.put.mockImplementation((url: string, body: StreamBody) =>
-			body.outTrackId === secondId && rejectReport
-				? Promise.resolve({ data: { success: false, result: false } })
-				: put(url, body),
-		);
-		const report = second.report({ id: "report", text: "new report" });
-		await vi.advanceTimersByTimeAsync(FRAME_MS);
-		expect(await report).toEqual({ status: "unknown" });
-		rejectReport = false;
-		const retry = second.report({ id: "report", text: "new report" });
-		await vi.advanceTimersByTimeAsync(FRAME_MS);
-		expect(await retry).toEqual({ status: "confirmed" });
+		http.post.mockResolvedValueOnce({ data: {} });
+		expect(await second.report({ id: "report", text: "new report" })).toEqual({ status: "unknown" });
+		expect(await second.report({ id: "report", text: "new report" })).toEqual({ status: "confirmed" });
 		// Missing send receipt is unknown; retry is the same business final, never a new card.
 		http.post.mockResolvedValueOnce({ data: {} });
 		const intent = { id: "final", text: "final answer" };
@@ -796,7 +951,7 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		first.emit(progress("late first writer"));
 		await scopes.stop();
 		expect(cards.size).toBe(2);
-		expect(plainCalls()).toHaveLength(2);
+		expect(plainCalls()).toHaveLength(4);
 		expect(cards.get(secondId)?.content).not.toContain("late first writer");
 	});
 
@@ -808,9 +963,10 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		cards.clear();
 		http.post.mockClear();
 		http.put.mockClear();
-		const scopes = new DingTalkScopeDelivery(bot, async () => undefined, true);
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined);
 		let bound = true;
-		const scope = scopes.open({ desk: "default", channelId: CHANNEL, scopeId: "task:bound" }, false, () => bound);
+		const owner = { desk: "default", channelId: CHANNEL, scopeId: "task:bound" as const };
+		const scope = scopes.open(owner, false, () => bound);
 		await vi.advanceTimersByTimeAsync(0);
 		const before = http.put.mock.calls.length;
 		scope.emit(progress("queued old desk"));
@@ -823,10 +979,35 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		bound = true;
 		expect(await scope.finalize({ id: "final", text: "late old answer" })).toEqual({ status: "blocked" });
 		expect(http.put).toHaveBeenCalledTimes(before);
+		const oldGeneration = bot.getCardGeneration(`scope:${deliveryScopeKey(owner)}`);
+		const reopened = scopes.open(owner, false, () => bound);
+		expect(reopened).not.toBe(scope);
+		expect(bot.isCardGenerationCurrent(`scope:${deliveryScopeKey(owner)}`, oldGeneration)).toBe(false);
+		expect(await reopened.report({ id: "new", text: "new owner report" })).toEqual({ status: "confirmed" });
+		expect(await reopened.finalize({ id: "new-final", text: "new owner answer" })).toEqual({ status: "confirmed" });
+		expect(await scope.report({ id: "old", text: "must stay revoked" })).toEqual({ status: "blocked" });
+		expect(await scope.finalize({ id: "old-final", text: "must stay revoked" })).toEqual({ status: "blocked" });
+		const untouchedOwner = { ...owner, scopeId: "request:untouched" as const };
+		const untouched = scopes.open(untouchedOwner, false, () => bound);
+		await vi.advanceTimersByTimeAsync(0);
+		const untouchedKey = `scope:${deliveryScopeKey(untouchedOwner)}`;
+		const untouchedGeneration = bot.getCardGeneration(untouchedKey);
+		bound = false;
+		scopes.invalidate(CHANNEL); // The binding callback, not a call through the old writer.
+		bound = true;
+		scopes.invalidate(CHANNEL);
+		const newWriter = scopes.open(untouchedOwner, false, () => bound);
+		expect(newWriter).not.toBe(untouched);
+		expect(bot.isCardGenerationCurrent(untouchedKey, untouchedGeneration)).toBe(false);
+		expect(await untouched.report({ id: "old", text: "must stay blocked" })).toEqual({ status: "blocked" });
+		expect(await untouched.finalize({ id: "old-final", text: "must stay blocked" })).toEqual({ status: "blocked" });
+		expect(await newWriter.report({ id: "new", text: "fresh report" })).toEqual({ status: "confirmed" });
+		expect(await newWriter.finalize({ id: "new-final", text: "fresh answer" })).toEqual({ status: "confirmed" });
+
 		// A second write can already be inside CardController's per-card queue when rebinding.
 		let queuedBound = true;
 		const queuedOwner = { desk: "default", channelId: CHANNEL, scopeId: "task:queued-http" as const };
-		scopes.open(queuedOwner, false, () => queuedBound);
+		const queuedWriter = scopes.open(queuedOwner, false, () => queuedBound);
 		await vi.advanceTimersByTimeAsync(0);
 		const key = `scope:${deliveryScopeKey(queuedOwner)}`;
 		const generation = bot.getCardGeneration(key);
@@ -836,10 +1017,17 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		const queued = bot.replaceCard(key, "not submitted", false, false, generation);
 		queuedBound = false;
+		expect(await queuedWriter.report({ id: "revoked", text: "blocked" })).toEqual({ status: "blocked" });
+		queuedBound = true;
+		const freshWriter = scopes.open(queuedOwner, false, () => queuedBound);
+		expect(await freshWriter.finalize({ id: "fresh", text: "fresh plain final" })).toEqual({ status: "confirmed" });
+		// Replacing the guard must not revive a write already queued on the old card instance.
 		streamGate.resolve();
 		await inFlight;
 		expect(await queued).toBe(false);
-		expect(http.put).toHaveBeenCalledTimes(puts + 1);
+		expect(http.put).toHaveBeenCalledTimes(puts + 2);
+		expect(http.put.mock.calls.slice(puts).some(([, body]) => body.content === "not submitted")).toBe(false);
+		expect(http.put.mock.calls.at(-1)![1].isFinalize).toBe(true);
 		streamGate = undefined;
 		// A binding can change while CREATE or SEND waits for a token, after the adapter entry check.
 		const tokens = (bot as unknown as { tokens: { get(): Promise<string | null> } }).tokens;
@@ -866,31 +1054,56 @@ describe("DingTalk turn delivery against a stateful card API", () => {
 			if (sending) expect(await sending).toEqual({ status: "blocked" });
 			expect(http.post).toHaveBeenCalledTimes(posts);
 		}
+		// C: no CREATE was sent, so token/metadata failures must not poison this generation.
+		// Mutation 2026-11-09: marking attempted before token -> safe no-card close fails (red, restored).
+		for (const fault of ["token", "metadata"]) {
+			const { bot } = remote("template", "full_progress_then_plain_final", temp(), false);
+			const key = `scope:preflight-${fault}`;
+			bot.bindScopeCard(key, CHANNEL);
+			const api = bot as unknown as {
+				tokens: { get(): Promise<string | null> };
+				conversations: { get(channelId: string): import("../src/dingtalk/api.js").ConversationMeta | null };
+			};
+			const injected =
+				fault === "token"
+					? vi.spyOn(api.tokens, "get").mockResolvedValueOnce(null)
+					: vi.spyOn(api.conversations, "get").mockReturnValueOnce(null);
+			const generation = bot.getCardGeneration(key);
+			const before = http.post.mock.calls.length;
+			await bot.ensureCard(key, generation);
+			expect(http.post).toHaveBeenCalledTimes(before);
+			expect(await bot.closeCard(key, "no remote card", generation)).toBe(true);
+			injected.mockRestore();
+			await bot.ensureCard(key, generation);
+			expect(http.post).toHaveBeenCalledTimes(before + 1);
+			expect(await bot.closeCard(key, "recovered close", generation)).toBe(true);
+			expect([...cards.values()].at(-1)?.finished).toBe(true);
+		}
+
 		await scopes.stop();
 	});
 
-	it("recovers a report after an ambiguous CREATE by a confirmed plain retry without creating another card", async () => {
-		// Review R5: CREATE may have reached the platform; retry must unblock the report without a second card.
-		// Mutation 2026-11-09: disable fallback -> retry stays unknown (confirmed red, restored).
+	it("retains a long report independently of ambiguous progress creation and final summaries", async () => {
+		// W2: progress compaction/final replacement used to destroy the only full task report.
 		const { bot, ctx } = remote();
 		await ctx.finish(outcome("silent"));
 		cards.clear();
 		http.post.mockClear();
 		http.put.mockClear();
 		loseCreateResponse = true;
-		const scopes = new DingTalkScopeDelivery(bot, async () => undefined, true);
+		const scopes = new DingTalkScopeDelivery(bot, async () => undefined);
 		const scope = scopes.open({ desk: "default", channelId: CHANNEL, scopeId: "task:create-failed" }, false);
-		const first = scope.report({ id: "report", text: "retained result" });
+		scope.emit(progress("short progress"));
 		await vi.advanceTimersByTimeAsync(FRAME_MS);
-		expect(await first).toEqual({ status: "unknown" });
+		const text = `${"完整报告正文与证据\n".repeat(1200)}REPORT_END`;
+		expect(await scope.report({ id: "report", text })).toEqual({ status: "confirmed" });
+		const reportSend = plainCalls()[0]!;
+		expect(JSON.parse(reportSend[1].msgParam).text).toBe(text);
 		loseCreateResponse = false;
-		const retried = scope.report({ id: "report", text: "retained result" });
-		await vi.advanceTimersByTimeAsync(FRAME_MS);
-		expect(await retried).toEqual({ status: "confirmed" });
 		const intent = { id: "close", text: "completed" };
 		expect(await scope.finalize(intent)).toEqual({ status: "confirmed" });
 		expect(await scope.finalize(intent)).toEqual({ status: "confirmed" });
-		expect(cards.size).toBe(1);
+		expect(JSON.parse(reportSend[1].msgParam).text).toBe(text);
 		expect(http.post.mock.calls.filter(([url]) => String(url).endsWith("createAndDeliver"))).toHaveLength(1);
 		expect(plainCalls()).toHaveLength(2);
 		await scopes.stop();

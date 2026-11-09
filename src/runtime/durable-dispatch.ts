@@ -412,15 +412,15 @@ export class DurableDispatchService {
 	async markStarted(id: string | undefined): Promise<boolean> {
 		if (!id) return true;
 		if (this.absorbed.delete(id)) return false;
-		await this.run(id, async () => {
+		return this.run(id, async () => {
 			const record = await this.read(id);
-			if (!record) return;
+			if (!record) return false;
 			record.status = "running";
 			record.leaseExpiresAt = new Date(Date.now() + this.leaseMs).toISOString();
 			await this.write(record);
 			this.running.add(id);
+			return true;
 		});
-		return true;
 	}
 
 	/**

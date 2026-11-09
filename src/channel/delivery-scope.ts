@@ -40,14 +40,18 @@ export interface FinalIntent {
 	text: string;
 }
 export interface ScopeWriter {
-	/** A task report acknowledges a remote card update or an explicit compatibility send. */
+	/** A task report acknowledges an independent full markdown send. */
 	report(intent: FinalIntent): Promise<ScopeDeliveryResult>;
 	emit(event: TurnEvent): void;
 	flush(): Promise<ScopeDeliveryResult>;
+	/** Confirms final body delivery only; progress closure is a separate acknowledgement. */
 	finalize(intent: FinalIntent): Promise<ScopeDeliveryResult>;
-	close(): Promise<void>;
+	/** Only confirmed permits the runtime to forget its close responsibility. */
+	close(): Promise<ScopeDeliveryResult>;
 }
 export interface ScopeDeliveryPort {
+	/** Called synchronously after a channel binding commits, even if no writer is active. */
+	invalidate?(channelId: string): void;
 	/** Recovered scopes must not blindly create a replacement for a possibly visible old card. */
 	open(owner: DeliveryScopeRef, recovered: boolean, canWrite: () => boolean): ScopeWriter;
 }

@@ -8,10 +8,12 @@ import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { type ConversationMeta, DINGTALK_API, http } from "./api.js";
+import { CardHandles } from "./card-handles.js";
 import type { DingTalkConfig } from "./config.js";
 import { CARD_REQUEST_MAX_BYTES } from "./progress.js";
 
 interface AICard {
+	key: string;
 	canWrite: () => boolean;
 	instanceId: string;
 	conversationId: string;
@@ -50,10 +52,18 @@ export interface CardControllerDeps {
 }
 
 export class CardController {
+	// Rebind fences queued HTTP too; ordinary /stop may still close its old card.
+	private readonly handles: CardHandles;
+	private readonly retired = new Map<string, Map<string, AICard>>();
+	private readonly creating = new Set<AICard>();
+	private readonly retiring = new Map<AICard, Promise<boolean>>();
+	private readonly resetEpochs = new Map<string, symbol>();
 	// Active AI cards: channelId → AICard
 	private activeCards = new Map<string, AICard>();
 	private cardGenerations = new Map<string, symbol>();
 	private cardCreationAttempted = new Set<symbol>();
+	/** A CREATE may reach DingTalk even when its response is lost. Keep its concrete handle. */
+	private readonly unconfirmedCards = new Map<symbol, AICard>();
 	// Share creation within a turn, but never let a late old turn own a new turn's card.
 	private cardCreationInFlight = new Map<string, { generation: symbol; promise: Promise<AICard | null> }>();
 	/**
@@ -67,7 +77,60 @@ export class CardController {
 		return this.appendSupported;
 	}
 
-	constructor(private deps: CardControllerDeps) {}
+	constructor(private deps: CardControllerDeps) {
+		this.handles = new CardHandles(deps.config.stateDir);
+		for (const handle of this.handles.list())
+			this.retainRetired({
+				...handle,
+				canWrite: () => false,
+				accessToken: "",
+				conversationId: "",
+				createdAt: 0,
+				lastUpdated: 0,
+				content: "",
+				finished: false,
+			});
+	}
+
+	private retainRetired(card: AICard): void {
+		let cards = this.retired.get(card.key);
+		if (!cards) {
+			cards = new Map();
+			this.retired.set(card.key, cards);
+		}
+		cards.set(card.instanceId, card);
+	}
+
+	/** Retired handles admit only fixed termination, independently of current binding/generation. */
+	async retryRetired(key?: string): Promise<boolean> {
+		let confirmed = true;
+		for (const [owner, cards] of this.retired) {
+			if (key !== undefined && owner !== key) continue;
+			for (const card of cards.values()) {
+				if (this.creating.has(card)) {
+					confirmed = false;
+					continue;
+				}
+				let pending = this.retiring.get(card);
+				if (!pending) {
+					pending = this.terminateCard(card).finally(() => this.retiring.delete(card));
+					this.retiring.set(card, pending);
+				}
+				if (await pending) cards.delete(card.instanceId);
+				else confirmed = false;
+			}
+			if (!cards.size) this.retired.delete(owner);
+		}
+		return confirmed;
+	}
+
+	private retryRetiredSoon(key: string): void {
+		void this.retryRetired(key).catch((error) =>
+			log.logWarn("dingtalk.card.retire_failed", "Card termination failed", {
+				reason: errorMessage(error),
+			}),
+		);
+	}
 
 	/** Capture the current turn's identity; close, /stop and /new invalidate it. */
 	getCardGeneration(channelId: string): symbol {
@@ -155,6 +218,7 @@ export class CardController {
 		const streamed = await this.streamCard(card, snapshot, { append, finalize, failed });
 		if (streamed && (finalize || failed) && this.activeCards.get(channelId) === card) {
 			this.activeCards.delete(channelId);
+			this.cardCreationAttempted.delete(generation);
 		}
 		return streamed;
 	}
@@ -185,34 +249,43 @@ export class CardController {
 		return this.replaceCard(channelId, content, true, false, generation);
 	}
 
+	/** Confirm no card remains open. Failed writes retain the same handle for retry. */
+	async closeCard(
+		channelId: string,
+		content: string,
+		generation = this.getCardGeneration(channelId),
+	): Promise<boolean> {
+		if (!this.isCardGenerationCurrent(channelId, generation)) return false;
+		const retiredClosed = await this.retryRetired(channelId);
+		const creation = this.cardCreationInFlight.get(channelId);
+		if (creation?.generation === generation) await creation.promise;
+		if (!this.isCardGenerationCurrent(channelId, generation)) return false;
+		if (!this.activeCards.has(channelId)) {
+			const uncertain = this.unconfirmedCards.get(generation);
+			if (!uncertain) return retiredClosed && !this.cardCreationAttempted.has(generation);
+			const confirmed = await this.streamCard(uncertain, content, { append: false, finalize: true, failed: false });
+			if (confirmed) {
+				this.unconfirmedCards.delete(generation);
+				this.cardCreationAttempted.delete(generation);
+			}
+			return confirmed && retiredClosed;
+		}
+		const currentClosed = await this.finalizeExistingCard(channelId, content, generation);
+		return retiredClosed && currentClosed;
+	}
+
 	/** Invalidate this turn's local state. This is not a remote message deletion. */
 	discardCard(channelId: string, generation = this.cardGenerations.get(channelId)): void {
 		if (!generation || !this.isCardGenerationCurrent(channelId, generation)) return;
-		this.cardGenerations.delete(channelId);
-		this.cardCreationAttempted.delete(generation);
-		const card = this.activeCards.get(channelId);
-		this.activeCards.delete(channelId);
-		// /stop and /new may invalidate a turn before its controller gets to finish.
-		if (card && !card.finished) {
-			// One plain line. Keeping the transcript would leave an unfinished markdown document
-			// in the chat, and a card cannot be deleted.
-			void this.streamCard(card, "处理已结束。", {
-				append: false,
-				finalize: true,
-				failed: false,
-			});
-		}
+		this.dropChannel(channelId);
 	}
 
-	/** A possibly delivered CREATE must never be retried with a fresh outTrackId. */
-	hasUnconfirmedCreation(key: string): boolean {
-		const generation = this.cardGenerations.get(key);
-		return (
-			generation !== undefined &&
-			this.cardCreationAttempted.has(generation) &&
-			!this.activeCards.has(key) &&
-			!this.cardCreationInFlight.has(key)
-		);
+	/** Rebinding cannot reuse a revoked guard or any active/in-flight old generation. */
+	resetGeneration(key: string): void {
+		this.resetEpochs.set(key, Symbol(key));
+		this.dropChannel(key);
+		this.cardCreationInFlight.delete(key);
+		this.cardGenerations.set(key, Symbol(key));
 	}
 
 	/** True while this channel has a card being created (the idle-cache sweep must not reclaim it). */
@@ -228,10 +301,18 @@ export class CardController {
 
 	/** Forget everything held for an idle channel. */
 	dropChannel(channelId: string): void {
+		const active = this.activeCards.get(channelId);
+		if (active) this.retainRetired(active);
 		this.activeCards.delete(channelId);
 		const generation = this.cardGenerations.get(channelId);
-		if (generation) this.cardCreationAttempted.delete(generation);
+		if (generation) {
+			const uncertain = this.unconfirmedCards.get(generation);
+			if (uncertain) this.retainRetired(uncertain);
+			this.cardCreationAttempted.delete(generation);
+			this.unconfirmedCards.delete(generation);
+		}
 		this.cardGenerations.delete(channelId);
+		this.retryRetiredSoon(channelId);
 	}
 
 	private async createCard(channelId: string, generation: symbol): Promise<AICard | null> {
@@ -247,7 +328,6 @@ export class CardController {
 		}
 		// A failed create may already have reached DingTalk. Never mint another ID in this turn.
 		if (this.cardCreationAttempted.has(generation)) return null;
-		this.cardCreationAttempted.add(generation);
 		const creation = this.createCardUncached(channelId, generation).finally(() => {
 			if (this.cardCreationInFlight.get(channelId)?.generation === generation) {
 				this.cardCreationInFlight.delete(channelId);
@@ -258,6 +338,7 @@ export class CardController {
 	}
 
 	private async createCardUncached(channelId: string, generation: symbol): Promise<AICard | null> {
+		const resetEpoch = this.resetEpochs.get(channelId);
 		const { config } = this.deps;
 		const token = await this.deps.getAccessToken();
 		if (!token || !this.isCardGenerationCurrent(channelId, generation)) return null;
@@ -307,6 +388,24 @@ export class CardController {
 			body.imRobotOpenDeliverModel = { spaceType: "IM_ROBOT" };
 		}
 
+		const card: AICard = {
+			key: channelId,
+			canWrite: () => this.resetEpochs.get(channelId) === resetEpoch && this.deps.canWrite?.(channelId) !== false,
+			instanceId,
+			conversationId: meta.conversationId,
+			accessToken: token,
+			templateKey: config.cardTemplateKey || "content",
+			createdAt: Date.now() / 1000,
+			lastUpdated: Date.now() / 1000,
+			content: "正在处理…",
+			finished: false,
+		};
+		// Write ahead of CREATE: a lost response or process cannot erase its termination handle.
+		this.handles.remember({ key: channelId, instanceId, templateKey: card.templateKey });
+		this.cardCreationAttempted.add(generation);
+		this.unconfirmedCards.set(generation, card);
+		this.creating.add(card);
+		let confirmed = false;
 		try {
 			const response = await http.post<unknown>(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, body, {
 				headers: {
@@ -325,8 +424,7 @@ export class CardController {
 				!data.result.deliverResults.every((result: unknown) => isRecord(result) && result.success === true)
 			) {
 				log.logWarn("dingtalk.card.create_unconfirmed", "Card creation confirmation failed", { channelId });
-				return null;
-			}
+			} else confirmed = true;
 		} catch (err) {
 			if (axios.isAxiosError(err) && err.response) {
 				log.logWarn("dingtalk.card.create_failed", "Card create failed", {
@@ -336,35 +434,55 @@ export class CardController {
 			} else {
 				log.logWarn("dingtalk.card.create_failed", "Card create failed", { reason: errorMessage(err) });
 			}
-			return null;
 		}
 
-		const card: AICard = {
-			canWrite: () => this.deps.canWrite?.(channelId) !== false,
-			instanceId,
-			conversationId: meta.conversationId,
-			accessToken: token,
-			templateKey: config.cardTemplateKey || "content",
-			createdAt: Date.now() / 1000,
-			lastUpdated: Date.now() / 1000,
-			content: "正在处理…",
-			finished: false,
-		};
+		this.creating.delete(card);
 		if (!this.isCardGenerationCurrent(channelId, generation)) {
-			await this.streamCard(card, "处理已结束。", { append: false, finalize: true, failed: false });
+			this.unconfirmedCards.delete(generation);
+			this.retainRetired(card);
+			await this.retryRetired(channelId);
 			return null;
 		}
+		if (!confirmed) return null;
+		this.unconfirmedCards.delete(generation);
 		this.activeCards.set(channelId, card);
 		return card;
 	}
 
-	private async streamCard(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
+	/** Fixed termination only: never routes by key or admits stale producer content. */
+	private async terminateCard(card: AICard): Promise<boolean> {
+		const confirmed = await this.streamCard(
+			card,
+			"处理已结束。",
+			{ append: false, finalize: true, failed: false },
+			true,
+		);
+		return confirmed && this.forgetFinishedCard(card);
+	}
+
+	private forgetFinishedCard(card: AICard): boolean {
+		try {
+			this.handles.forget(card.instanceId);
+			return true;
+		} catch (error) {
+			this.retainRetired(card);
+			log.logWarn("dingtalk.card.handle_failed", "Card handle cleanup failed", { reason: errorMessage(error) });
+			return false;
+		}
+	}
+
+	private async streamCard(
+		card: AICard,
+		content: string,
+		options: CardStreamOptions,
+		termination = false,
+	): Promise<boolean> {
 		// A stop/new-session close can arrive while the prior HTTP write is in flight.
 		// Order writes by instance so that close remains the last update to the old card.
 		const pending = (card.pendingWrite ?? Promise.resolve(true))
 			.then(async () => {
-				if (card.finished) return false;
-				return this.streamCardRequest(card, content, options);
+				if (card.finished) return this.forgetFinishedCard(card);
+				return this.streamCardRequest(card, content, options, termination);
 			})
 			.catch((error: unknown) => {
 				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", { reason: errorMessage(error) });
@@ -374,18 +492,22 @@ export class CardController {
 		return pending;
 	}
 
-	private async streamCardRequest(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
-		if (!card.canWrite()) return false;
+	private async streamCardRequest(
+		card: AICard,
+		content: string,
+		options: CardStreamOptions,
+		termination: boolean,
+	): Promise<boolean> {
+		if (!termination && !card.canWrite()) return false;
 		// Refresh token if needed
 		const ageSecs = Date.now() / 1000 - card.createdAt;
-		if (ageSecs > TOKEN_REFRESH_SECS) {
+		if (!card.accessToken || ageSecs > TOKEN_REFRESH_SECS) {
 			const token = await this.deps.getAccessToken();
-			if (token) {
-				card.accessToken = token;
-			}
+			if (!token) return false;
+			card.accessToken = token;
 		}
 
-		if (!card.canWrite()) return false;
+		if (!termination && !card.canWrite()) return false;
 
 		// Progress updates stay within one request. A finalized answer is the model's own markdown
 		// and may be longer; a failed finalize falls back to a normal message.
@@ -433,6 +555,8 @@ export class CardController {
 			card.content = options.append ? card.content + content : content;
 			if (options.finalize || options.failed) {
 				card.finished = true;
+				// Cleanup I/O cannot revoke an observed body delivery acknowledgement.
+				this.forgetFinishedCard(card);
 			}
 			return true;
 		} catch (err) {

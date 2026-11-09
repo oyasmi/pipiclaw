@@ -292,7 +292,10 @@ async function buildRuntimeContext(
 		send: (channelId, text) => pushTo(channelId, { text }),
 		isChannelBusy: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 		releaseRunner: (channelId) => releaseCachedRunner(channelRunners, channelId),
-		onBindingChanged: () => channelIndex.noteBindingChanged(),
+		onBindingChanged: (channelId) => {
+			transports.forChannel(channelId)?.scopes?.invalidate?.(channelId);
+			channelIndex.noteBindingChanged();
+		},
 	});
 	await deskRuntime.load();
 	const isBoundTo = (channelId: string, desk: string) => deskRuntime.isBoundTo(channelId, desk);

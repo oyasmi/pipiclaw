@@ -182,19 +182,36 @@ export function createEventTurnRunner(deps: EventTurnDeps): (inboundEvent: Chann
 		try {
 			if (durable && !(await durable.markStarted(event.dispatchId))) return undefined;
 			if (durable && event.dispatchId) claimedIds.push(event.dispatchId);
+			const consumed = (wake: ChannelEvent) =>
+				wake.source === "wake" &&
+				wake.scopeRef &&
+				wake.dispatchId &&
+				deps.getDeliveryScopes?.()?.isConsumed(wake.scopeRef, wake.dispatchId);
+			if (consumed(event)) {
+				operation = "markCompleted";
+				await durable?.markCompleted(event.dispatchId);
+				return undefined;
+			}
 			let absorbedDispatchIds: string[] = [];
 			if (durable && event.source === "wake" && event.dispatchId && isCoalescableWake(event)) {
 				operation = "absorbPending";
 				const primary = event;
-				const absorbed = await durable.absorbPending(
+				const candidates = await durable.absorbPending(
 					event.channelId,
 					event.dispatchId,
 					(candidate) => canAbsorbWake(primary, candidate),
 					MAX_COALESCED_WAKES - 1,
 					stopEpoch,
 				);
+				claimedIds.push(...candidates.flatMap((item) => (item.dispatchId ? [item.dispatchId] : [])));
+				const absorbed = [];
+				for (const candidate of candidates) {
+					if (consumed(candidate)) {
+						operation = "markCompleted";
+						await durable.markCompleted(candidate.dispatchId);
+					} else absorbed.push(candidate);
+				}
 				absorbedDispatchIds = absorbed.flatMap((item) => (item.dispatchId ? [item.dispatchId] : []));
-				claimedIds.push(...absorbedDispatchIds);
 				if (absorbed.length > 0) {
 					event = mergeCompletionWakes(event, absorbed);
 					log.logInfoEvent("dispatch.wake.coalesced", "Completion wakes coalesced", {

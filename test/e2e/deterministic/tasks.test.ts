@@ -101,10 +101,15 @@ describe("E2E deterministic: the task lane", () => {
 		expect(existsSync(archived())).toBe(true);
 		const scopeKey = `scope:${deliveryScopeKey({ desk: harness.desk, channelId: harness.channelId, scopeId: `task:${taskId}` })}`;
 		const deliveries = harness.deliveries.filter((delivery) => delivery.scopeKey === scopeKey);
-		expect(deliveries.filter((delivery) => delivery.method === "sendPlain")).toHaveLength(1);
+		// W2: each durable report is a separate full send before the final receipt.
+		const sends = deliveries.filter((delivery) => delivery.method === "sendPlain");
+		expect(sends).toHaveLength(4);
 		expect(deliveries.filter((delivery) => delivery.method === "replaceCard").length).toBeGreaterThan(0);
 		const records = await readTaskLog(harness.deskDir, taskId);
 		expect(records.filter((record) => record.kind === "report")).toHaveLength(3);
+		expect(sends.slice(0, 3).map((delivery) => delivery.text)).toEqual(
+			records.filter((record) => record.kind === "report").map((record) => record.text),
+		);
 		expect(records.filter((record) => record.kind === "report_delivered")).toHaveLength(3);
 		expect(await readTaskDeliveries(harness.deskDir)).toEqual([]);
 		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).not.toContain("TASK_STEP");

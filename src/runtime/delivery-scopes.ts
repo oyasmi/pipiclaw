@@ -26,6 +26,10 @@ interface ScopeState {
 	consumed: string[];
 	reports: string[];
 	closed?: boolean;
+	/** Progress ended after work disappeared; late owned completions still remain admissible. */
+	progressClosed?: boolean;
+	/** An explicit cancel retains its close responsibility across retries/restart. */
+	closeRequested?: boolean;
 	final?: FinalIntent & {
 		confirmed?: boolean;
 		attempts: number;
@@ -108,6 +112,8 @@ export class DeliveryScopes {
 				name !== `${deliveryScopeKey(value.owner)}.json` ||
 				typeof value.epoch !== "string" ||
 				(value.closed !== undefined && typeof value.closed !== "boolean") ||
+				(value.progressClosed !== undefined && typeof value.progressClosed !== "boolean") ||
+				(value.closeRequested !== undefined && typeof value.closeRequested !== "boolean") ||
 				!Number.isSafeInteger(value.revision) ||
 				value.revision < 0 ||
 				!Array.isArray(value.consumed) ||
@@ -132,13 +138,18 @@ export class DeliveryScopes {
 		}
 	}
 
+	/** Only committed consumption suppresses model admission; an unsaved final must replay. */
+	isConsumed(owner: DeliveryScopeRef, id: string): boolean {
+		return this.states.get(deliveryScopeKey(owner))?.consumed.includes(id) ?? false;
+	}
+
 	/** A writer ends with the SDK turn; its scope can outlive it without holding a runner. */
 	async openTurn(owner: DeliveryScopeRef, completionIds: string[]): Promise<ChannelContext> {
 		const key = deliveryScopeKey(owner);
 		const state = await this.serial(key, () => this.state(owner));
 		const generation = Symbol(key);
 		this.writers.set(key, generation);
-		const writer = state.closed || state.final ? undefined : this.port(state);
+		const writer = state.closed || state.final || state.progressClosed ? undefined : this.port(state);
 		let ended = false;
 		let finishing: Promise<void> | undefined;
 		let answer: string | undefined;
@@ -155,7 +166,11 @@ export class DeliveryScopes {
 				ended = true; // Fence callbacks immediately, before the first await.
 				finishing = this.serial(key, async () => {
 					if (this.writers.get(key) !== generation) return;
-					await this.finish(state, writer, answer, completionIds, outcome);
+					try {
+						await this.finish(state, writer, answer, completionIds, outcome);
+					} finally {
+						if (this.writers.get(key) === generation) this.writers.delete(key);
+					}
 				});
 				return finishing;
 			},
@@ -196,10 +211,9 @@ export class DeliveryScopes {
 			if (outcome.kind === "failed" && outcome.message)
 				writer?.emit({ type: "commentary", level: "notice", text: outcome.message });
 			if (!unsettled) {
-				await writer?.close();
-				// /stop can finish before an already-entered tool finishes registration. Close its
-				// writer now, but let a later owned completion deliver a final without opening a card.
-				await this.commit(state, { ...state, closed: successful });
+				// A cancelled turn can still receive a late owned completion. Closing progress
+				// must neither consume that wake nor forget an unconfirmed remote close.
+				await this.closeProgress(state, writer ?? this.port(state), successful);
 			} else await writer?.flush();
 		}
 	}
@@ -249,15 +263,24 @@ export class DeliveryScopes {
 		await this.serial(deliveryScopeKey(owner), async () => {
 			const state = await this.state(owner);
 			if (state.final) return;
-			await this.port(state)?.close();
-			await this.commit(state, { ...state, closed: true });
+			await this.commit(state, { ...state, closeRequested: true });
+			await this.closeProgress(state, this.port(state), true);
+		});
+	}
+
+	private async closeProgress(state: ScopeState, writer: ScopeWriter | undefined, terminal: boolean): Promise<void> {
+		if ((await writer?.close())?.status !== "confirmed") return;
+		await this.commit(state, {
+			...state,
+			progressClosed: true,
+			...(terminal ? { closed: true, closeRequested: false } : {}),
 		});
 	}
 
 	private async publishFinal(state: ScopeState): Promise<boolean> {
 		const intent = state.final!;
 		if (intent.confirmed) {
-			await this.save(state);
+			await this.closeFinalProgress(state);
 			return true;
 		}
 		if (intent.nextAttemptAt > Date.now()) return false;
@@ -279,7 +302,17 @@ export class DeliveryScopes {
 			});
 		}
 		await this.commit(state, { ...state, final: { ...attempt, result, confirmed: result === "confirmed" } });
+		if (result === "confirmed") await this.closeFinalProgress(state);
 		return result === "confirmed";
+	}
+
+	private async closeFinalProgress(state: ScopeState): Promise<void> {
+		if (state.progressClosed) return;
+		try {
+			await this.closeProgress(state, this.port(state), true);
+		} catch (error) {
+			log.logWarn("delivery.scope.close_failed", "Scope progress close failed", { reason: errorMessage(error) });
+		}
 	}
 
 	start(): void {
@@ -290,11 +323,37 @@ export class DeliveryScopes {
 		}, 30_000);
 		this.timer.unref();
 	}
-	/** Retry only durable final intents; never replay a model turn. */
+	/** Retry durable finals and close quiescent request progress; never replay a model turn. */
 	async retry(): Promise<void> {
 		for (const [key, state] of this.states) {
 			if (this.stopped) return;
-			if (state.final && !state.final.confirmed) await this.serial(key, () => this.publishFinal(state));
+			await this.serial(key, async () => {
+				if (state.final) {
+					if (!state.final.confirmed || !state.progressClosed) await this.publishFinal(state);
+					return;
+				}
+				if (state.closeRequested) {
+					await this.closeProgress(state, this.port(state), true);
+					return;
+				}
+				// Tasks retain their outbox close gate. A request's active turn or an unseen
+				// completion still owns progress; cancellation/removal needs no copied work state.
+				if (
+					state.owner.scopeId.startsWith("task:") ||
+					state.closed ||
+					state.progressClosed ||
+					this.writers.has(key) ||
+					!this.reachable(state.owner)
+				)
+					return;
+				if (
+					this.options
+						.work(state.owner)
+						.some((item) => item.pending || (item.completionId && !state.consumed.includes(item.completionId)))
+				)
+					return;
+				await this.closeProgress(state, this.port(state), false);
+			});
 		}
 	}
 	async stop(): Promise<void> {
