@@ -273,7 +273,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 				name: "roles",
 				args: "[name]",
 				description: "角色目录；带 name 时查看单个角色的详情",
-				example: "/subagents roles builder-hard",
+				example: "/subagents roles codex-high",
 			},
 		],
 	},

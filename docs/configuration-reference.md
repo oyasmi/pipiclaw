@@ -1167,7 +1167,7 @@ Pipiclaw 只有一套人格。所有工位共同使用 workspace 根目录的 `S
 
 ## 子代理目录 `workspace/sub-agents/`（`workspace/sub-agents/`）
 
-放工作区智能体角色。运行时只加载这个目录中实际存在且有效的配置，不自动启用默认角色。仓库和 npm 包中的 [`examples/sub-agents/`](../examples/sub-agents/) 分为两组：`agents/` 是按能力与成本组织的推荐入口，`roles/` 是 explorer、builder、reviewer 等按职责拆分的参考模板。
+放工作区智能体角色。运行时只加载这个目录中实际存在且有效的配置，不自动启用默认角色。仓库和 npm 包中的 [`examples/sub-agents/agents/`](../examples/sub-agents/agents/) 按执行器、能力与成本提供配置示例；本轮目标、职责和验收由 task 指定。
 
 详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 

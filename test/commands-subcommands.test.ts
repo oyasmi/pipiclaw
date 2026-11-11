@@ -52,7 +52,7 @@ const EXPECTED_EXAMPLES: Record<string, unknown> = {
 	"/subagents show run_a1b2c3": { action: "show", ref: "run_a1b2c3" },
 	"/subagents output run_a1b2c3": { action: "output", ref: "run_a1b2c3" },
 	"/subagents cancel run_a1b2c3": { action: "cancel", ref: "run_a1b2c3" },
-	"/subagents roles builder-hard": { action: "roles", name: "builder-hard" },
+	"/subagents roles codex-high": { action: "roles", name: "codex-high" },
 	"/skills": { action: "list" },
 	"/skills show release-checklist": { action: "show", name: "release-checklist" },
 };

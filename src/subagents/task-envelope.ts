@@ -57,9 +57,10 @@ export function buildVerificationProtocol(taskPath: string | undefined, item?: s
 	return [
 		"Verification protocol:",
 		scope,
-		"- You are the checker, not the maker. Do not modify the implementation or fix failures to make a check pass; report them.",
+		"- Check against the requirements, not the maker's success claims. Do not modify the implementation or fix failures; report them.",
 		"- You may run npm tests/builds and other deterministic checks; keep any generated output out of tracked files and product directories.",
-		"- Run deterministic checks when available and distinguish observed evidence from assumptions.",
+		"- Identify the inspected version or changes, evidence for each requirement, and unverified items. Reuse verified checks only while relevant artifacts and environment remain unchanged; run missing checks or investigate concrete risks.",
+		"- PASS requires sufficient evidence for this scope. For FAIL, distinguish proven defects from blocked verification so the leader can choose repair or further checking.",
 		"- End the response with exactly one final line: VERDICT: PASS or VERDICT: FAIL.",
 	].join("\n");
 }

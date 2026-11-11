@@ -1,24 +1,13 @@
 # 工作区智能体配置示例
 
-这里的文件是配置示例，Pipiclaw **不会自动加载**。只有复制到 `~/.pipiclaw/workspace/sub-agents/` 才会生效，而且加载是**平铺**的——只读该目录下的 `*.md`，不会递归子目录。所以本目录的两个子目录只是分类方式，复制时要把文件放到 `sub-agents/` 下，不要连目录一起复制。
+[`agents/`](./agents/) 按执行器、能力与成本组织，不按 planner / builder / reviewer 等岗位预设工作。每次做什么、范围多大、怎样验收，由主代理在 `task` 中交代；配置文件只绑定模型、工具、权限姿态、预算与跨任务的交付约定。
 
-- [`agents/`](./agents/) — **推荐**。按能力与成本组织：把 agent、模型和推理档直接交给 Pipiclaw，由它按需选择。
-- [`roles/`](./roles/) — 早期的岗位角色（planner / builder / reviewer / verifier …），保留作参考和迁移对照。
+这些文件**不会自动加载**。只安装自己需要且有账号的条目，平铺复制到 `~/.pipiclaw/workspace/sub-agents/`；运行时只读该目录下的 `*.md`，不会递归子目录。
 
-以能力条目为基础，只安装自己需要的一两个；岗位模板在提供真实执行边界或操作纪律时按需选用，也可以与个别能力条目一起使用。
-
-## 为什么从「角色」改成「能力条目」
-
-一个角色文件过去同时承担三件事：能力与成本绑定（harness / command / model / thinkingLevel）、权限姿态（sandbox + `mutates`）、以及一段岗位说明书式的正文。前两件属于部署者，第三件不属于——它是在不知道本轮任务的情况下提前写死的任务框架，而真正掌握上下文的是发起委派的主代理。
-
-结果就是路由变成「任务 → 猜别人起的职位名」，而且正文会反过来限制场景：让 codex 读一张图，`worker` 的正文开头是"你负责交付独立的数据分析、批处理、报告或文档产物"；想让实现者顺带提交，`builder` 的正文写死"不 commit、push"。
-
-`agents/` 把岗位说明书去掉，只留能力声明和一段与任务无关的交付约定。路由变成「任务 → 需要什么能力、能付多少代价」，这是主代理做得了的判断，因为它知道任务是什么。
-
-## 安装 `agents/`
+## 安装
 
 ```bash
-# 源码 checkout（先创建目标目录）：
+# 源码 checkout：
 mkdir -p ~/.pipiclaw/workspace/sub-agents
 cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 
@@ -27,35 +16,34 @@ PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
 cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
-只装你真的有账号的那几个：条目里的 CLI 不在 PATH 上时不会被丢弃，而是标成 `unavailable` 并在调用时才报错。
+CLI 不在 PATH 上时条目仍会列出，但标为 `unavailable`，调用时给出安装提示。删除包内示例不会删除已经复制到工作区的配置；现有配置由部署者自行管理。删除条目或更改其 command/model/shell 后，旧 run 不能再原样续接。
 
-| 条目 | harness | `model` | `thinkingLevel` | 多模态 | 定位 |
-|---|---|---|---|---|---|
-| `claude-high` | claude-code | `opus` | high | 否 | 代码与推理最强，成本最高：设计、取舍分析、根因不明的疑难 |
-| `claude-main` | claude-code | `sonnet` | medium | 否 | 代码能力最强的主力档：实现、修改、文档、排查 |
-| `codex-high` | codex-cli | `gpt-6.1-sol` | high | 是 | 高智能档，可读图片：设计、方案权衡、复杂分析 |
-| `codex-main` | codex-cli | `gpt-6.1-terra` | high | 是 | 主力档，可读图片：常规实现、排查、文档 |
-| `codex-flash` | codex-cli | `gpt-6-luna` | high | 是 | 最快最便宜，可读图片：明确、简单、重复的工作 |
-| `cursor-high` | cursor-cli | `grok-4.7-high` | — | 随模型 | 高智能档，走 Cursor 额度：设计、取舍分析、根因不明的疑难 |
-| `cursor-main` | cursor-cli | `auto` | — | 随模型 | 主力档，Cursor auto 路由：常规实现、排查、文档 |
-| `glm-high` | claude-code | `glm-5.3` | high | 否 | 高智能档，额度宽松：高频使用不挤占 claude/codex 配额 |
-| `glm-flash` | claude-code | `glm-5.3-flash` | medium | 是 | 最便宜，可读图片：大批量简单重复工作的首选 |
-| `codex-review` | codex-cli | `gpt-6.1-sol` | high | 是 | 只读检查档：独立审查与 `purpose=verify`，在 CLI 的 read-only sandbox 中运行 |
-| `scout` | 内置 | 默认 | low | 随模型 | 只读调查档：进程内运行，用 Pipiclaw 自己的模型与守卫，不占外部额度；轻量调查同步返回 |
+## 选择能力条目
 
-`cursor-*` 不写 `thinkingLevel`：当前 Cursor CLI 把推理档做进 model id（如 `…-high`），而 runtime 在声明了 `thinkingLevel` 时会再给 model 加上 `[effort=…]`，该形式会被 CLI 拒绝。需要换档时改 `model`（以本机 `agent models` 为准），不要补 `thinkingLevel`。
+| 条目 | harness | model | thinkingLevel | 选择条件 |
+|---|---|---|---|---|
+| `claude-high` | claude-code | `opus` | high | Claude 高推理候选：需求冲突、架构取舍、疑难排查 |
+| `claude-main` | claude-code | `sonnet` | medium | Claude 主力候选：范围和验收较明确的实施、排查、文档 |
+| `codex-high` | codex-cli | `gpt-6.1-sol` | high | Codex 高推理候选：关键取舍、根因未明或难验证的工作 |
+| `codex-main` | codex-cli | `gpt-6.1-terra` | high | Codex 主力候选：常规实施、排查、文档 |
+| `codex-flash` | codex-cli | `gpt-6-luna` | high | Codex 低成本候选：做法明确、易检查且易恢复的批量工作 |
+| `cursor-high` | cursor-cli | `grok-4.7-high` | — | Cursor 固定高推理候选：关键取舍与疑难排查 |
+| `cursor-main` | cursor-cli | `auto` | — | Cursor 自动路由：常规实施、排查、文档 |
+| `glm-high` | claude-code | `glm-5.3` | high | GLM 高推理候选，使用独立于 Claude/Codex 的额度 |
+| `glm-flash` | claude-code | `glm-5.3-flash` | medium | GLM 低成本候选：做法明确、易检查且易恢复的批量工作 |
+| `codex-review` | codex-cli | `gpt-6.1-sol` | high | CLI 强制只读；独立审查与 `purpose=verify` |
 
-三档的分工是这套配置的主要内容：**flash** 用于「做什么和怎么做都已清楚，只差有人去做」，可以大量派发；**main** 是主力，绝大多数实现、排查、文档都在这里，也包括 token 消耗很大的长任务；**high** 只留给这一轮真正需要新判断或取舍的工作。对已经定好的活派 high，只是更贵，不会更对。
+先满足输入能力、权限与可用状态，再按不确定性和错误代价选档。**flash** 用于做法明确、结果易检查、失败易恢复的工作；**main** 用于常规实施；**high** 用于关键取舍、疑难诊断或难以验证的工作。缺输入、缺权限或环境故障不能靠升级模型解决。
 
-`scout` 和 `codex-review` 都不属于这三档。`scout` 是唯一的内置条目：它在 Pipiclaw 进程内运行，用 `settings.subagentModel`（未设时用主会话当前模型），不经过外部 CLI、不占它们的订阅额度，bash 与文件访问走 runtime 的命令与路径守卫。聊天里的内置委派共享 10 秒快速返回窗口，未完成就转后台；任务步骤内确认启动后立即异步返回。它只做只读调查——定位实现、查配置、读日志——工具白名单里没有 `write`/`edit`，不占写锁，可以和其他工作并行；需要写入或跨文件实现时换外部条目。
+这些是候选用途，不是跨供应商能力排名。成本取决于输入、推理与重试，额度取决于实际账号；`codex-review` 与 `codex-high` 的模型和推理档相同，只读不意味着更便宜。部署者可根据本地评测在 description 中声明默认偏好，注明适用任务，不将体验写成永久排名。
 
-`codex-review` 只做检查：read-only sandbox 是 codex 自己强制的边界，所以它改不了被检查的产物，也不占写锁，可以和其他工作并行。检查者尽量和实现者不是同一家模型——它检查 claude/glm 的产物最有价值；检查 codex 自己的产物时，可以另配一个 `claude --permission-mode plan` 的只读条目。它跑不了会写文件的测试或构建，这类检查要么先由实现者或主代理跑好、把输出交给它，要么换可写条目。
+图片不会自动继承自聊天。需要读图时在 task 中给出执行器可读的本地路径，并确认当前 CLI、模型与端点支持；模型原生支持图片不等于整个调用链支持。`opus`、`sonnet`、`auto` 等别名会变化，升级后应重验实际任务。
 
-额度是真实约束：claude 和 codex 的订阅有周/月上限，GLM 只有 5 小时滚动限额、没有周月上限。所以简单重复的批量工作优先走 `glm-flash`，把受限额度留给难题。
+`cursor-*` 不写 `thinkingLevel`：当前适配器会将它编码为 model 的 `[effort=…]` 后缀，而示例用的 Cursor CLI 不接受此形式。需要换档时改 model（以本机 `agent models` 为准）。
 
-### GLM 条目需要一个包装脚本
+### GLM 包装脚本
 
-`glm-high` / `glm-flash` 走 claude-code harness，但要用独立的配置目录指向 Z.ai 的 Anthropic 兼容端点，因此 `command` 是一个包装脚本而不是 `claude` 本身。把它放到 PATH 上：
+`glm-*` 使用 claude-code harness，通过独立配置目录指向 Z.ai 的兼容端点。将包装脚本放到 PATH 上：
 
 ```bash
 #!/bin/bash
@@ -64,47 +52,24 @@ export CLAUDE_CONFIG_DIR="$HOME/.claude-zai"
 exec claude --dangerously-skip-permissions "$@"
 ```
 
-首次使用前在 `CLAUDE_CONFIG_DIR` 里完成一次登录/配置。用其他供应商同理：换配置目录和脚本名，`harness` 仍是 `claude-code`。
+首次使用前在该配置目录完成登录和端点配置。其他兼容供应商同理，需核对其模型和推理参数。
 
-## 正文：一段与任务无关的交付约定
+## 交付约定与执行边界
 
-每个条目的正文是同一段 9 条约束，逐字相同。它**不描述这个条目做什么工作**——那是每次 `task` 的事——只约束怎么取证和怎么交付：不做未授权的动作、不动任务外的既有改动、结论不超过证据、不编造检查结果、不靠削弱断言制造通过、先结论后证据位置、用中文并保留原文。
+十个条目共用九条正文约定：授权与改动范围、输入来源、缺口处理、真实证据、失败保留、验收范围、检查复用和交付表达。它们不规定本轮岗位，也不要求固定的规划—实施—审查流水线。
 
-留着它是因为这几条跨每一个任务都成立，漏掉的代价又很高（尤其是伪造绿色检查结果和把未验证写成已验证），而让主代理每次委派重打一遍既费 token 又会漂移。
+- **九个写条目放开 CLI 权限。** 除 `codex-review` 外都声明 `mutates: write`，使用 bypass/force 参数；实际权限边界由 CLI、宿主账号与环境提供，task 文字不能替代隔离。
+- **并行写必须隔离。** 同一及父子目录只能有一个写委派，独立写分片各用 worktree；主代理也不要同时修改活跃委派的工作树。
+- **`codex-review` 的只读由 CLI sandbox 提供。** 它不能运行需写文件的测试或构建；可核查已有且对应当前产物的检查证据，或将缺失检查交给具备适当权限的执行器。
+- **独立性来自验收依据与取证。** 给检查者原始要求、待检版本和入口，不把实现者总结当预期行为；先保证独立检查，再考虑不同模型。
+- **`VERDICT` 是信息，不是门禁。** PASS 要有本次范围内的证据；FAIL 应区分已证实缺陷和验证受阻，由负责人决定修复还是补检查。
 
-要改就 11 个文件一起改。也可以整段删掉：runtime 允许外部条目的正文为空，此时不会生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex-cli / cursor-cli 的 stdin 就是 task 本身。内置条目的正文不能为空——没有正文的角色文件会被 discovery 丢弃。
-
-## 这套配置的代价，别忽略
-
-- **除 `codex-review` 和内置的 `scout` 外全部是放开权限的写条目。** 这 9 个条目都用 yolo 参数（`claude --dangerously-skip-permissions` / `codex exec --dangerously-bypass-approvals-and-sandbox` / `agent --force`）并声明 `mutates: write`，没有 sandbox 兜底。实际边界只剩宿主账号和 `task` 里写明的范围，**必须在可信 checkout 和最小权限账号下使用**。
-- **同一工作目录同时只容得下一个写委派。** `mutates: write` 会取目标工作区的排他 lease（含父子目录冲突），并行写必须各自 `git worktree`；`codex-review` 不取 lease。
-- **`VERDICT` 是供参考的结论，不是门禁。** runtime 只把检查者的 PASS/FAIL 记到 run 和任务看板上。只有 `codex-review` 在结构上改不了产物；用可写条目做检查时，它可能动过产物。无论哪种，都要自己对照真实产物、diff 和检查输出再采信。
-- **独立性不再由角色提示词提供。** 要评审或验收时，必须在 `task` 里写明"你是检查者，不修实现，不把实现者的总结当作预期行为的来源"，并给出同一份验收口径和待检版本。换一个条目不会自动带来独立性。
-
-## `roles/` 里的岗位角色
-
-[`roles/`](./roles/) 保留了早期的 8 个角色：`explorer`、`git-committer`（内置）和 `planner`、`builder`、`builder-hard`、`reviewer`、`verifier`、`worker`（外部）。它们仍然可用，在两种情况下仍有价值：
-
-- 需要**真正的只读执行边界**：`planner` 的 `--permission-mode plan`、`reviewer` 的 `--sandbox read-only` 是目标 CLI 提供的真实限制，不只是提示词声明；`reviewer` 承担 `purpose=verify` 时也不占工作区写锁。
-- 需要**固定的、反复出现的作业纪律**：`git-committer` 的暂存区隔离规则就是一例——它约束的是一类操作的正确做法，不是一个岗位。
-
-反过来，`explorer`、`builder` / `builder-hard` / `worker` 和 `agents/` 里的对应条目（`scout` 和各实现档位）重叠严重，正文里的岗位设定是净损失，不建议再装。
-
-## 从早期模板迁移
-
-已经复制到工作区的旧角色文件不会被自动删除，可以按需选择新条目；保留旧条目可继续使用其执行边界和续接能力：
-
-```bash
-cd ~/.pipiclaw/workspace/sub-agents
-cp /path/to/pipiclaw/examples/sub-agents/agents/codex-main.md .
-```
-
-迁移期间历史 task 的委派记录里仍会出现旧角色名；`subagent_run op=follow_up` 只能续接条目仍然存在且 `command`/`model`/`shell` 未变的 run，删掉旧文件后这些 run 需要重新委派。
+正文对 Claude 经 `--append-system-prompt-file` 追加，对 Codex/Cursor 与 task 拼入 stdin；相同文字的指令层级并不相同。调优时检查实际 run 的 `system-prompt.txt`、`prompt.txt`、argv 和结果。外部条目正文可以为空，但会失去这些交付约定；内置执行能力仍由运行时支持，不依赖本目录提供模板。
 
 ## 自己写条目
 
-- **`description` 是唯一的路由依据。** 它进入主代理的系统提示词（子代理目录，预算 2400 字符），正文不在那里——改正文修不了选错条目。每条写清：能力特征、相对成本、适用场景，以及会改变选择的边界（能不能读图片、额度是否受限）。`runtime` / `workload` / `mutates` 已由目录分组展示，不要在文字里重复。
-- **描述必须属实且可核查。** 写错一句"支持图片输入"，代价是一次几十分钟后才失败的委派，比不写更糟。
-- **不要扩到十几个条目。** agent × 档位 × 权限很容易组合爆炸。每加一个都先问：主代理会因为它做出不同的路由决定吗？答不上来就不该存在。
-- **调 prompt 时看实际发出的内容。** 正文对 claude-code 经 `--append-system-prompt-file` 追加，对 codex-cli / cursor-cli 与 task 一起写进 stdin；核对 run 目录里真实的 `system-prompt.txt` / `prompt.txt` 和 argv，不要只审模板 Markdown。
-- 委派的写法、并行隔离、等待与续接见 [../../docs/sub-agents.md](../../docs/sub-agents.md) 与运行时的 `agent-delegation.md` playbook。
+- **description 管路由，正文管执行。** 主代理目录只展示 description 及分组元数据，不展示正文；必须让执行者遵守的约束写进正文或 task。目录预算为 2400 字符，描述优先放会改变选择的条件。
+- **声明可核查的能力与边界。** 输入能力以实际链路为准；本地模型偏好写明适用范围，额度与成本不作永久承诺。
+- **每个条目都应改变一次选择。** 只有岗位名称不同不值得新增；本轮方法、检查与交付要求交给 task 或适用 skill。
+
+委派、等待、续接和授权规则见[委派文档](../../docs/sub-agents.md)与运行时 `agent-delegation.md`。

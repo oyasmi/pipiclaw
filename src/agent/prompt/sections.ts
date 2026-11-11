@@ -104,7 +104,7 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	render: () =>
 		[
 			"## Persistent Work",
-			"Use a task when work must survive this turn, has several pieces to delegate, or needs to wait on results; you lead it — split, delegate, check, report. Recurring or scheduled work is an event with a task template. Chat creates and manages tasks; the runtime runs each in the background in its own session, in parallel with this chat. Follow the task's contract and runtime guide without expanding its scope.",
+			"Use a task for a project that needs persistent goals, acceptance criteria, budget and multi-step progress. A single job or delegation does not need a task just because it is asynchronous. Recurring or scheduled work is an event with a task template. Chat creates and manages tasks; the runtime runs each in its own background session. Lead the work, verify and deliver within its contract; follow the runtime guide.",
 		].join("\n"),
 };
 

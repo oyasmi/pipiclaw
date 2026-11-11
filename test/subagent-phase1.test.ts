@@ -127,14 +127,13 @@ function makeDiscovery(workspaceDir: string, agents: SubAgentConfig[]) {
 describe("sub-agent discovery", () => {
 	// Keep this as a loadability and routing check for the shipped examples. Their prompt text,
 	// thinking level, and numeric budgets are deployment knobs and must not become test contracts.
-	// `examples/sub-agents/` holds two alternative sets in subdirectories; discovery itself is flat,
-	// so each set is loaded on its own, the way a deployer is told to install it.
-	function loadExampleSet(subdir: string) {
+	// Discovery is flat: copy the capability entries as a deployer would install them.
+	function loadExamples() {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
 
-		const examplesDir = join(process.cwd(), "examples", "sub-agents", subdir);
+		const examplesDir = join(process.cwd(), "examples", "sub-agents", "agents");
 		const files = readdirSync(examplesDir).filter(
 			(name) => name.endsWith(".md") && name.toLowerCase() !== "readme.md",
 		);
@@ -156,32 +155,19 @@ describe("sub-agent discovery", () => {
 	}
 
 	it("loads every shipped capability entry with routing and permission metadata", () => {
-		const discovery = loadExampleSet("agents");
+		const discovery = loadExamples();
 
-		// A capability entry is an executor binding, not a persona: every one of them must declare
-		// the harness, the pass-through model and the reasoning level the deployer picked, because
-		// after the persona is gone that declaration is the only thing the file carries. The one
-		// internal entry carries the internal runtime's equivalent binding instead: a tool
-		// whitelist and budgets, never a CLI.
+		// Bind each entry to a CLI/model; no prompt wording or numeric tuning contracts.
 		for (const agent of discovery.agents) {
 			// Cursor chooses reasoning through its model id; its harness rejects a separate level.
-			if (agent.runtime === "external" && agent.harness === "cursor-cli")
-				expect(agent.thinkingLevel).toBeUndefined();
+			if (agent.harness === "cursor-cli") expect(agent.thinkingLevel).toBeUndefined();
 			else expect(agent.thinkingLevel).toBeTruthy();
-			if (agent.runtime === "internal") {
-				expect(agent).toMatchObject({ workload: "light", mutates: "read" });
-				expect(agent.tools).not.toContain("write");
-				expect(agent.tools).not.toContain("edit");
-				continue;
-			}
+			if (agent.runtime !== "external") throw new Error("Capability examples must bind an external CLI");
 			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
 			expect(["claude-code", "codex-cli", "cursor-cli"]).toContain(agent.harness);
 			expect(agent.externalModelRef).toBeTruthy();
 		}
-		// A write entry runs with approvals/sandbox off, so its `mutates: write` lease is the only
-		// guard there is. A read entry must be backed by a real boundary, not just the declaration:
-		// the external checker by the CLI's own read-only sandbox, the internal one by the
-		// write/edit-free tool whitelist asserted above. At least one checker exists.
+		// A read declaration needs a real CLI sandbox; writers must participate in leases.
 		for (const agent of discovery.agents) {
 			if (agent.mutates === "read") {
 				if (agent.runtime === "external") {
@@ -197,38 +183,6 @@ describe("sub-agent discovery", () => {
 		expect(discovery.agents.some((agent) => agent.mutates === "read")).toBe(true);
 	});
 
-	it("loads every shipped role template with routing and permission metadata", () => {
-		const discovery = loadExampleSet("roles");
-
-		// Internal routing and write-lease declarations are behavioral/safety metadata. The
-		// role-specific wording and resource tuning are intentionally not asserted here.
-		const explorer = discovery.agents.find((agent) => agent.name === "explorer");
-		expect(explorer).toMatchObject({ runtime: "internal", mutates: "read" });
-		expect(discovery.agents.find((agent) => agent.name === "git-committer")).toMatchObject({
-			runtime: "internal",
-			mutates: "write",
-		});
-
-		// External routing/sandbox spot checks (D5): claude-code planner stays read-only via its permission
-		// mode; codex roles carry the sandbox flag matching their mutates declaration. These real
-		// read-only execution boundaries are the reason this set is kept at all.
-		const planner = discovery.agents.find((agent) => agent.name === "planner");
-		expect(planner).toMatchObject({ runtime: "external", harness: "claude-code", mutates: "read" });
-		expect(planner?.command).toContain("--permission-mode plan");
-		const reviewer = discovery.agents.find((candidate) => candidate.name === "reviewer");
-		expect(reviewer).toMatchObject({ harness: "codex-cli", mutates: "read" });
-		expect(reviewer?.command).toContain("--sandbox read-only");
-		expect(reviewer?.command).not.toContain("--ask-for-approval");
-		for (const name of ["builder", "builder-hard"]) {
-			const agent = discovery.agents.find((candidate) => candidate.name === name);
-			expect(agent).toMatchObject({ harness: "claude-code", mutates: "write" });
-		}
-		for (const name of ["worker", "verifier"]) {
-			const agent = discovery.agents.find((candidate) => candidate.name === name);
-			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "write" });
-			expect(agent?.command).toContain("--sandbox workspace-write");
-		}
-	});
 	it("ignores predefined prompts that exceed the length limit", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);

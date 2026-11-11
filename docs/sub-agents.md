@@ -55,16 +55,13 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.
 
 工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
 
-仓库及 npm 包提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，按两种方式组织，建议选一套使用：
-
-- `agents/` — **推荐**。按能力与成本组织的 Claude、Codex、Cursor 和 GLM 条目，加一个只读检查条目 `codex-review`（codex `--sandbox read-only`）和一个内置只读调查条目 `scout`（进程内，用 Pipiclaw 自己的模型与守卫），把 agent、模型和推理档直接交给主智能体按需选择。文件正文只有一段与任务无关的交付约定，不含岗位设定。
-- `roles/` — 按调查、规划、实现、审查等岗位组织，适合需要固定职责的工作流。逐项核对其工具和 CLI 权限；岗位名称不提供只读保证。
+仓库及 npm 包提供可复制的[能力条目](../examples/sub-agents/agents/)：按 Claude、Codex、Cursor、GLM 的执行器和能力档位组织，并提供 CLI 强制只读的 `codex-review`。文件正文只有跨任务交付约定；调查、实施或检查等本轮职责由 task 指定。
 
 ```bash
 cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
-`agents/` 的三档分工是：**flash** 做已经清楚怎么做的简单重复工作、**main** 承担绝大多数实现与排查、**high** 只留给真正需要新判断或取舍的一轮。逐条目取舍、GLM 包装脚本和这套配置的代价见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值——除只读的 `codex-review` 和内置的 `scout` 外，`agents/` 条目使用放开权限的参数且声明 `mutates: write`，使用前必须按本机账号和风险边界审阅。
+`agents/` 的三档分工是：**flash** 用于做法明确、易检查且易恢复的工作，**main** 承担常规实施，**high** 用于关键取舍、疑难诊断或难验证的工作。逐条目取舍与 GLM 包装脚本见[示例说明](../examples/sub-agents/README.md)。除只读的 `codex-review` 外，条目均放开 CLI 权限并声明 `mutates: write`，部署前按本机账号与权限边界审阅。删除包内模板不会改变已安装的工作区配置。
 
 不复制模板也完全可以使用 inline `systemPrompt` 委派——但 inline 委派永远是 `runtime: internal`，外部角色必须以配置文件的形式存在（需要 `harness`/`command`，无法通过调用参数临时拼出）。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
 
@@ -74,7 +71,7 @@ cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 - 信息收集
 - 风险检查
 - 某类固定格式的总结
-- 把工作区改动整理成提交（读 diff、写提交消息是上下文密集的，适合隔离给 git-committer）
+- 把工作区改动整理成提交（须明确提交授权，并配置适当的写权限）
 
 适合外部角色的场景：
 
