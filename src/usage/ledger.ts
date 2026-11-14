@@ -46,7 +46,7 @@ export interface UsageLedgerEntry {
 	cost: UsageCost;
 	/** False when the harness cannot report tokens at all (external `cursor-cli`/`exec`). Display as "unknown", not 0. */
 	usageKnown?: boolean;
-	/** False when the harness omits a cost field (external `cursor-cli`/`codex-cli`/`exec`). Display as "unknown", not 0. */
+	/** False when the harness omits a cost field (external `cursor-cli`/`codex-cli`/`antigravity-cli`/`exec`). Display as "unknown", not 0. */
 	costKnown?: boolean;
 }
 

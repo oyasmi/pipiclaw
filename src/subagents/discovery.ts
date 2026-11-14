@@ -30,7 +30,7 @@ const ALLOWED_MEMORY_MODES = ["none", "index"] as const;
 // "max" is a real SDK ThinkingLevel; pipiclaw's own whitelist previously omitted it (spec 040, D4).
 const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const ALLOWED_RUNTIMES = ["internal", "external"] as const;
-const ALLOWED_HARNESSES = ["claude-code", "codex-cli", "cursor-cli", "exec"] as const;
+const ALLOWED_HARNESSES = ["claude-code", "codex-cli", "cursor-cli", "antigravity-cli", "exec"] as const;
 const ALLOWED_WORKLOADS = ["light", "heavy"] as const;
 const ALLOWED_MUTATES = ["read", "write"] as const;
 

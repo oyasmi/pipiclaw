@@ -248,6 +248,7 @@ describe("subagent_manage tool", () => {
 	it.each([
 		{ harness: "codex-cli" as const, command: "codex exec", sessionId: "thread-abc" },
 		{ harness: "cursor-cli" as const, command: "agent --mode ask", sessionId: "chat-abc" },
+		{ harness: "antigravity-cli" as const, command: "agy --dangerously-skip-permissions", sessionId: "conv-abc" },
 	])(
 		"follow_up on a completed $harness run with a session id launches a resumed run",
 		async ({ harness, command, sessionId }) => {

@@ -4,7 +4,7 @@ import type { SubAgentThinkingLevel } from "../discovery.js";
 /**
  * The harness adapter seam (spec 040, D4). Every external run is reduced to the same process
  * model (D3: one prompt, one short-lived process); what differs between `claude-code`,
- * `codex-cli`, `cursor-cli`, and `exec` is only argv assembly and stdout parsing, and that is exactly what this
+ * `codex-cli`, `cursor-cli`, `antigravity-cli`, and `exec` is only argv assembly and stdout parsing, and that is exactly what this
  * interface covers. It carries no state machine of its own — `runs.ts` owns that.
  */
 
@@ -29,7 +29,7 @@ export interface ExternalInvocationInput {
 export interface BuildInvocationResult {
 	executable: string;
 	args: string[];
-	/** Whether this harness can be continued later via `resumeSessionId` (claude-code/codex-cli/cursor-cli). */
+	/** Whether this harness can be continued later via `resumeSessionId` (claude-code/codex-cli/cursor-cli/antigravity-cli). */
 	resumable: boolean;
 	/**
 	 * claude-code only (D4): a session id it picked and passed via `--session-id` *before* running,
@@ -57,7 +57,7 @@ export interface ExternalOutcome {
 	usage?: Partial<UsageTotals>;
 	/** `cursor-cli`/`exec` are always false: neither reports tokens. */
 	usageKnown: boolean;
-	/** `cursor-cli`/`codex-cli`/`exec` are always false: none of them reports a cost field. */
+	/** `cursor-cli`/`codex-cli`/`antigravity-cli`/`exec` are always false: none of them reports a cost field. */
 	costKnown: boolean;
 	stderrTail?: string;
 	errorMessage?: string;
@@ -69,10 +69,12 @@ export interface ParseOutcomeInput {
 	/** `undefined` when the process was killed by a signal rather than exiting normally. */
 	exitCode?: number;
 	stderrTail?: string;
+	/** Spec 068 D8: expected resumed conversation id for `antigravity-cli` follow-ups. */
+	expectedResumeSessionId?: string;
 }
 
 export interface ExternalHarness {
-	readonly id: "claude-code" | "codex-cli" | "cursor-cli" | "exec";
+	readonly id: "claude-code" | "codex-cli" | "cursor-cli" | "antigravity-cli" | "exec";
 	/**
 	 * Spec 042 D12: bumped by hand whenever this adapter's `parseOutcome` schema assumptions
 	 * change. Persisted on the run and shown by `/subagents show`, so a failure caused by upstream

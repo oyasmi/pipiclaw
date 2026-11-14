@@ -1,7 +1,7 @@
 import { splitShellWords } from "../../shared/shell-words.js";
 
 /**
- * Non-fatal external-role warnings (spec 042 D4/D10, spec 066 D6). The role still loads.
+ * Non-fatal external-role warnings (spec 042 D4/D10, spec 066 D6, spec 068 D7). The role still loads.
  * This file stays free of discovery and harness imports so `discovery.ts` can call it without a cycle.
  */
 
@@ -51,6 +51,103 @@ function cursorCommandWarnings(input: ExternalRoleWarningInput): string[] {
 	return warnings;
 }
 
+function hasAntigravityPrintToken(token: string): boolean {
+	return (
+		token === "-p" ||
+		token === "--print" ||
+		token === "--prompt" ||
+		token.startsWith("--print=") ||
+		token.startsWith("--prompt=")
+	);
+}
+
+function hasAntigravityInteractiveToken(token: string): boolean {
+	return token === "-i" || token === "--prompt-interactive" || token.startsWith("--prompt-interactive=");
+}
+
+function hasAntigravityConversationToken(token: string): boolean {
+	return (
+		token === "-c" ||
+		token === "--continue" ||
+		token === "--conversation" ||
+		token.startsWith("--continue=") ||
+		token.startsWith("--conversation=")
+	);
+}
+
+function resolveEffectiveAntigravityMode(tokens: readonly string[]): string | undefined {
+	let mode: string | undefined;
+	for (let i = 0; i < tokens.length; i += 1) {
+		const token = tokens[i]!;
+		if (token === "--mode") {
+			const next = tokens[i + 1];
+			if (next !== undefined) {
+				mode = next;
+				i += 1;
+			}
+		} else if (token.startsWith("--mode=")) {
+			mode = token.slice("--mode=".length);
+		}
+	}
+	return mode;
+}
+
+function antigravityCommandWarnings(input: ExternalRoleWarningInput): string[] {
+	if (input.harness !== "antigravity-cli") return [];
+	const tokens = splitShellWords(input.command);
+	const warnings: string[] = [];
+	if (tokens.some(hasAntigravityPrintToken)) {
+		warnings.push(
+			`${input.entryName}: -p, --print, and --prompt consume a string argument and block piped stdin in agy; omit them so headless delegation reads from stdin`,
+		);
+	}
+	if (tokens.some(hasAntigravityInteractiveToken)) {
+		warnings.push(
+			`${input.entryName}: -i and --prompt-interactive require a TTY and will fail or hang in a detached background delegation`,
+		);
+	}
+	if (tokens.some(hasAntigravityConversationToken)) {
+		warnings.push(
+			`${input.entryName}: -c, --continue, and --conversation pin or share session context across runs and conflict with follow_up --conversation <id>; session resumption is managed by Pipiclaw`,
+		);
+	}
+
+	const effectiveMode = resolveEffectiveAntigravityMode(tokens);
+	const hasSkipPermissions = tokens.some(
+		(token) => token === "--dangerously-skip-permissions" || token.startsWith("--dangerously-skip-permissions="),
+	);
+	const hasWriteMode = effectiveMode === "accept-edits" || effectiveMode === "auto";
+	const hasAgentOrSettings = tokens.some(
+		(token) =>
+			token === "--agent" ||
+			token.startsWith("--agent=") ||
+			token === "--settings" ||
+			token.startsWith("--settings="),
+	);
+	const hasSandbox = tokens.some((token) => token === "--sandbox" || token.startsWith("--sandbox="));
+
+	if (input.mutates === "write" && effectiveMode === "plan") {
+		warnings.push(
+			`${input.entryName}: --mode plan adds planning instructions and may divert implementation work; it does not enforce read-only execution and headless plan review may auto-approve`,
+		);
+	}
+	if (input.mutates === "write" && !hasSkipPermissions && !hasWriteMode && !hasAgentOrSettings) {
+		warnings.push(
+			`${input.entryName}: command declares no explicit permission source (--dangerously-skip-permissions, --mode accept-edits/auto, --agent, or --settings); actions requiring review under default request-review mode are denied in headless runs unless allowed by host permission rules`,
+		);
+	}
+	if (input.mutates === "read" && (hasSkipPermissions || hasWriteMode)) {
+		warnings.push(
+			`${input.entryName}: command includes --dangerously-skip-permissions or --mode accept-edits/auto, so the CLI can modify files and the workspace write lock will not stop it`,
+		);
+	} else if (input.mutates === "read" && (effectiveMode === "plan" || hasSandbox)) {
+		warnings.push(
+			`${input.entryName}: --mode plan and --sandbox alone do not guarantee read-only execution in agy; verify CLI permission rules and host boundaries or declare mutates: write`,
+		);
+	}
+	return warnings;
+}
+
 /** Join every applicable warning. An unlucky combination must not hide one of them. */
 export function externalRoleWarning(input: ExternalRoleWarningInput): string | undefined {
 	const warnings: string[] = [];
@@ -68,5 +165,6 @@ export function externalRoleWarning(input: ExternalRoleWarningInput): string | u
 		);
 	}
 	warnings.push(...cursorCommandWarnings(input));
+	warnings.push(...antigravityCommandWarnings(input));
 	return warnings.length > 0 ? warnings.join("; ") : undefined;
 }

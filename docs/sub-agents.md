@@ -1,6 +1,6 @@
 # 智能体委派（Sub-Agents）
 
-> **读者**：想把 reviewer / researcher 这类轻量角色，或 Claude Code / Codex CLI / Cursor CLI 这类外部智能体，接入同一套工作流的使用者与管理员。
+> **读者**：想把 reviewer / researcher 这类轻量角色，或 Claude Code / Codex CLI / Cursor CLI / Antigravity CLI 这类外部智能体，接入同一套工作流的使用者与管理员。
 > **前置**：已完成 [README](../README.md) 的安装与配置。
 > **读完你能**：启用一个现成角色，理解内置与外部委派的差异，查看和控制异步 run，并按真实权限边界编写自己的角色。
 
@@ -11,7 +11,7 @@
 子代理有两种执行方式（`runtime`）：
 
 - **`internal`**（默认）：在 Pipiclaw 进程内运行的隔离上下文子智能体。它使用 Pipiclaw 的模型、工具和安全守卫，启动快，适合检索、筛查和窄范围分析。
-- **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI、Cursor CLI 或脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
+- **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI 或脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
 
 两者共用一个角色目录（`workspace/sub-agents/`）、一套 run 生命周期和控制面（`subagent_list` / `subagent_run` 工具 / `/subagents` 命令）。调用面按形状分两个工具：`subagent` 选一个已配置角色（内置或外部都走它），`subagent_inline` 是没有合适角色时的一次性内置执行者。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
 
@@ -19,7 +19,7 @@
 
 ## 五分钟启用一个外部角色
 
-外部角色的前提是：目标 CLI 已经安装在**运行 Pipiclaw 的同一账号**下，能从该进程的 `PATH` 找到，并已完成登录。先在 shell 中验证所选的 `claude`、`codex` 或 Cursor 的 `agent` 命令能运行。
+外部角色的前提是：目标 CLI 已经安装在**运行 Pipiclaw 的同一账号**下，能从该进程的 `PATH` 找到，并已完成登录。先在 shell 中验证所选的 `claude`、`codex`、Cursor 的 `agent` 或 Antigravity 的 `agy` 命令能运行。
 
 全局 npm 安装会把推荐配置一起安装。以下示例复制两个 Claude Code 条目：
 
@@ -55,7 +55,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.
 
 工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
 
-仓库及 npm 包提供可复制的[能力条目](../examples/sub-agents/agents/)：按 Claude、Codex、Cursor、GLM 的执行器和能力档位组织，并提供 CLI 强制只读的 `codex-review`。文件正文只有跨任务交付约定；调查、实施或检查等本轮职责由 task 指定。
+仓库及 npm 包提供可复制的[能力条目](../examples/sub-agents/agents/)：按 Claude、Codex、Cursor、Antigravity、GLM 的执行器和能力档位组织，并提供 CLI 强制只读的 `codex-review`。文件正文只有跨任务交付约定；调查、实施或检查等本轮职责由 task 指定。
 
 ```bash
 cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
@@ -167,7 +167,7 @@ bashTimeoutSec: 180
 | 字段 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `name` / `description` | 是 | - | 同上 |
-| `harness` | 是 | - | `claude-code`、`codex-cli`、`cursor-cli` 或 `exec` |
+| `harness` | 是 | - | `claude-code`、`codex-cli`、`cursor-cli`、`antigravity-cli` 或 `exec` |
 | `command` | 是 | - | 目标 CLI 的命令行，按 shell 词法分词后直接 argv 调用，**不经过 shell** |
 | `mutates` | 是 | - | `read` 或 `write`，无默认值——这是一次显式声明，决定是否取 workspace 写锁；`purpose=verify` 允许 `write`，但这类检查者无法保证没动过被检查的产物 |
 | `model` | 否 | - | 目标 harness 自己的模型字符串（如 `sonnet`），**原样透传，不经过 `models.json` 校验** |
@@ -270,7 +270,7 @@ bashTimeoutSec: 180
 | `subagent_list` | 本工位的 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况（零参数） |
 | `subagent_run op=show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
 | `subagent_run op=cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
-| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`/`cursor-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
+| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`/`cursor-cli`/`antigravity-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
 
 `follow_up` 只发新增的内容：被续接的会话里已经有首次派发的完整信封（运行时上下文、`paths`/记忆上下文块、角色说明），重发一遍只会重复计费并淹没新指令。续接信封只包含工作目录、这次续接新分配的产物目录、新指令，以及 `purpose=verify` 时的验收协议（结算要读它最后的 VERDICT 行）。verify 的准入检查（`exec` 不能验收）也在 `follow_up` 上重新核对一遍；当前角色若声明 `mutates: write`，续接会像首次派发一样先取得目标工作区独占 lease。
 
@@ -366,7 +366,7 @@ my-gateway/gpt-4.1
 - 多来源综合、代码审查、改动分组和独立验收：通常使用 `medium`。
 - 只有任务确实需要更深推理且预算允许时才使用 `high` 或 `xhigh`。
 
-外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`，cursor-cli 把档位折进模型 id 的 `effort=`（如 `gpt-5[effort=high]`）——但仅当 `thinkingLevel` 实际有值时才追加；未声明的外部 work 角色不会看到这个参数。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位；cursor-cli 不把 `xhigh` / `max` 再往下夹，CLI 不接受时进程失败并在 stderr 留下原因。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果——未声明 `thinkingLevel` 的外部 work 角色，argv 里不应出现 `--effort` / `model_reasoning_effort` / `effort=`。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
+外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 与 antigravity-cli 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`，cursor-cli 把档位折进模型 id 的 `effort=`（如 `gpt-5[effort=high]`）——但仅当 `thinkingLevel` 实际有值时才追加；未声明的外部 work 角色不会看到这个参数。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位；cursor-cli 与 antigravity-cli 将 `off` / `minimal` 夹取为 `low`，不把 `xhigh` / `max` 再往下夹，CLI 不接受时进程失败并在 stderr 留下原因。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果——未声明 `thinkingLevel` 的外部 work 角色，argv 里不应出现 `--effort` / `model_reasoning_effort` / `effort=`。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
 
 结构化 harness 对角色字段和协议参数的组装如下；这些都由 runtime 负责，不需要写进 `command`：
 
@@ -375,9 +375,33 @@ my-gateway/gpt-4.1
 | `claude-code` | `--model <model>` | `--effort <level>` | system prompt 使用 `--append-system-prompt-file`，task 走 stdin | `--session-id` / `--resume`，`-p --output-format stream-json --verbose` |
 | `codex-cli` | `-m <model>` | `-c model_reasoning_effort=<level>` | system prompt 与 task 合并后走 stdin | `resume <thread-id>`，`--json -` |
 | `cursor-cli` | `--model <model>`，推理档写进模型 id 的 `effort=` | 不单独追加 flag；`off` / `minimal` / `low` 写成 `low` | system prompt 与 task 合并后走 stdin | `--resume <id>`，`-p --output-format stream-json`；runtime 追加 `--trust` |
+| `antigravity-cli` | `--model <model>`（无 `-m` 短参数） | `--effort <level>`（可独立于 `--model` 传递；`off` / `minimal` 写成 `low`） | system prompt 与 task 合并后走 stdin（或 `command` 用 `--agent <name>` 且正文留空） | `--conversation <id>`，仅追加 `--output-format stream-json`（**严禁传 `-p`**） |
 | `exec` | 不自动追加 | 不自动追加 | system prompt 与 task 合并后走 stdin | 不支持续接，无结构化终态协议 |
 
 cursor-cli 的可执行文件名是 `agent`，由 `command` 指定。runtime 追加 `-p --output-format stream-json`，有模型且 command 尚未自带 `--model` / `-m` 时追加 `--model`，并在 command 没有 `--trust` 时追加 `--trust`（无人值守进程回答不了工作区信任提示）。`--force` 属于 `command`，`-f` 和 `--yolo` 与它等价；runtime 不追加 `--force`、`--mode`、sandbox、workspace 或 worktree。print 模式如果这三个权限参数一个都没有，CLI 只提议修改，不会把改动写进文件。只读推荐 `agent --mode ask`（或 `--mode plan`），写入推荐 `agent --force`。工作目录里的 `.cursor/rules` 和项目说明会被 CLI 自己读入；角色正文只是用户消息的前缀，不是 claude-code 那种 system prompt 隔离。认证沿用 CLI 自己的登录或环境变量 `CURSOR_API_KEY`，不要把密钥写进角色文件。command 使用 `--worktree` / `-w` 时，实际写入在 `~/.cursor/worktrees/`，不在这次委派的工作目录，workspace 写锁覆盖不到。
+
+antigravity-cli 的可执行文件名是 `agy`，由 `command` 指定。runtime 仅追加 `--output-format stream-json`，按需追加 `--model <id>`、`--effort <level>`，续接时追加 `--conversation <id>`：
+
+- **不要在 `command` 中写 `-p`、`--print`、`--prompt` 或 `-i` / `--prompt-interactive`，也不要写 `-c` / `--continue` / `--conversation`。** 与 `claude`、`agent` 不同，`agy` 的 `-p` / `--print` 是接收任务文本的字符串参数而非布尔开关，会吞掉后续参数或屏蔽管道 `stdin`。当管道 `stdin` 非空且带 `--output-format stream-json` 时，`agy` 自动进入无头 print 模式。
+- **默认不自动追加 `--disable-slash-commands`。** 需要禁用时由角色在 `command` 中显式指定；注意真实委派会在原始任务前拼接角色正文或 `Runtime context:` / follow-up 信封，原始任务开头的 `/...` 不会位于 `stdin` 首行。
+- **续接身份校验与失败处理。** `agy` 在 `--conversation <id>` 找不到目标会话时可能在 `stderr` 打印 warning 并静默新建 UUID 继续执行；因此 `antigravity-cli` 的 `follow_up` 会将请求会话 ID 持久化到 run 记录中，正常退出与重启恢复都会核对流内父会话 `conversation_id`（忽略 `subagent_info` 内部子会话 ID）。一旦返回不同 ID 或未确认预期 ID，该次运行直接判为 `failed` 并清空返回 `sessionId`，请查看 `events.jsonl` / `stderr.log` 后发起带完整上下文的新委派，不要继续对失效会话做 `follow_up`。
+- **权限、拒绝摘要与验证角色写法。** `agy` 的实际写权限由执行模式（`--mode`）、权限规则、`--agent` / `--settings` 与宿主边界共同决定。无头模式下若部分动作被权限规则拦截但模型仍完成本轮（`result.status: "SUCCESS"` 且 `denied_actions` 非空），run 保持 `completed`，并在 `output.md` 正文前插入权限拒绝提示（最多列 5 项，完整列表见 `events.jsonl`），保留末行 `VERDICT`。`--mode plan` 只添加规划指令且无头计划审批可能自动通过，`--sandbox` 只限制终端命令，二者组合不保证只读。不能证明进程只读时，验证角色应声明 `mutates: write` 并通过 lease 串行化，例如：
+
+```yaml
+---
+name: agy-verify
+description: 用 Antigravity CLI 做独立验证，运行期间独占工作目录写锁
+runtime: external
+harness: antigravity-cli
+command: agy --mode accept-edits --sandbox
+model: gemini-4-carbon
+thinkingLevel: high
+mutates: write
+---
+```
+
+  `accept-edits` 自动批准工作区文件编辑，但仍可能拒绝需要审批的终端命令；`auto` 依赖账号、平台与终端 sandbox，不满足时可能退回 default。只有通过 CLI 权限规则和宿主边界实际验证了直接文件工具、终端命令及 MCP/子智能体的写入限制后，才声明 `mutates: read`。
+- **自动加载与认证环境变量。** 工作目录与用户目录下的 `GEMINI.md`、`AGENTS.md`、`.agents/rules/`、`.agents/skills/`、MCP 与插件会被 `agy` 自动加载。使用 Google OAuth（`~/.gemini/antigravity-cli/`）或 ADC（`AGY_ADC_AUTH`）时，在运行 Pipiclaw 的同一系统账号下完成一次 `agy` 登录即可。Pipiclaw 默认从外部进程继承环境中剥离 `GEMINI_API_KEY` 与 `GOOGLE_API_KEY`；若显式采用 API Key 模式，须在角色文件 `env:` 中映射，切勿把明文密钥写进仓库文档。
 
 ### `mutates`（写权限声明）
 

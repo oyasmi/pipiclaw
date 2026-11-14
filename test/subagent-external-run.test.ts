@@ -866,5 +866,97 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(manager.get("run-ext-5")?.costKnown).toBe(true);
 		expect(dispatched).toHaveLength(1);
 		expect(dispatched[0]?.text).toContain("Looks good.");
+
+		// Spec 068 D4/D8: antigravity-cli follow-up persists expectedResumeSessionId at launch,
+		// rejects a mismatched conversation_id on exit 0 without leaving a bogus sessionId,
+		// preserves a matched init sessionId across an empty-id ERROR result, and saves the
+		// denied_actions notice into output.md on completed runs.
+		const agyMismatchDir = join(deskDir, "subagent-artifacts", "run-agy-mismatch");
+		mkdirSync(agyMismatchDir, { recursive: true });
+		const { spawnFnForInput: spawnMismatch, child: childMismatch } = makeFakeSpawn({ pid: 7181 });
+		await launchExternalRun({
+			...testManagers("dingtalk:dm:ext5"),
+			runId: "run-agy-mismatch",
+			channelId: "dingtalk:dm:ext5",
+			label: "agy follow-up mismatch",
+			agent: "agy-main",
+			source: "predefined",
+			harness: "antigravity-cli",
+			command: "agy --dangerously-skip-permissions",
+			maxWallTimeSec: 60,
+			systemPrompt: "You are a builder.",
+			task: "Continue.",
+			workingDirectory: workspaceDir,
+			artifactDir: agyMismatchDir,
+			purpose: "work",
+			resumeSessionId: "conv-expected-1",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+			spawnFn: spawnMismatch,
+		});
+		await waitFor(() => manager.get("run-agy-mismatch")?.pid !== undefined);
+		expect(manager.get("run-agy-mismatch")?.expectedResumeSessionId).toBe("conv-expected-1");
+		expect(manager.get("run-agy-mismatch")?.sessionId).toBeUndefined();
+
+		appendFileSync(
+			join(agyMismatchDir, "events.jsonl"),
+			`${JSON.stringify({ event: "init", conversation_id: "conv-other-2", init: {} })}\n` +
+				`${JSON.stringify({
+					event: "result",
+					conversation_id: "conv-other-2",
+					result: { conversation_id: "conv-other-2", status: "SUCCESS", response: "Wrong session reply." },
+				})}\n`,
+		);
+		childMismatch.emit("close", 0);
+		await waitFor(() => manager.get("run-agy-mismatch")?.status === "failed");
+		expect(manager.get("run-agy-mismatch")?.sessionId).toBeUndefined();
+		expect(manager.get("run-agy-mismatch")?.failureReason).toContain("conv-expected-1");
+
+		const agyDeniedDir = join(deskDir, "subagent-artifacts", "run-agy-denied");
+		mkdirSync(agyDeniedDir, { recursive: true });
+		const { spawnFnForInput: spawnDenied, child: childDenied } = makeFakeSpawn({ pid: 7182 });
+		await launchExternalRun({
+			...testManagers("dingtalk:dm:ext5"),
+			runId: "run-agy-denied",
+			channelId: "dingtalk:dm:ext5",
+			label: "agy follow-up denied notice",
+			agent: "agy-main",
+			source: "predefined",
+			harness: "antigravity-cli",
+			command: "agy --mode accept-edits",
+			maxWallTimeSec: 60,
+			systemPrompt: "",
+			task: "Verify.",
+			workingDirectory: workspaceDir,
+			artifactDir: agyDeniedDir,
+			purpose: "verify",
+			resumeSessionId: "conv-expected-1",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+			spawnFn: spawnDenied,
+		});
+		await waitFor(() => manager.get("run-agy-denied")?.pid !== undefined);
+		appendFileSync(
+			join(agyDeniedDir, "events.jsonl"),
+			`${JSON.stringify({ event: "init", conversation_id: "conv-expected-1", init: {} })}\n` +
+				`${JSON.stringify({
+					event: "result",
+					conversation_id: "conv-expected-1",
+					result: {
+						conversation_id: "conv-expected-1",
+						status: "SUCCESS",
+						response: "Checked via read_file.\nVERDICT: PASS",
+						denied_actions: ["run_command: npm test"],
+					},
+				})}\n`,
+		);
+		childDenied.emit("close", 0);
+		await waitFor(() => manager.get("run-agy-denied")?.status === "completed");
+		expect(manager.get("run-agy-denied")?.sessionId).toBe("conv-expected-1");
+		expect(manager.get("run-agy-denied")?.verificationVerdict).toBe("pass");
+		const savedDeniedOutput = readFileSync(join(agyDeniedDir, "output.md"), "utf-8");
+		expect(savedDeniedOutput).toContain("[antigravity-cli permission notice]");
+		expect(savedDeniedOutput).toContain("run_command: npm test");
+		expect(savedDeniedOutput.endsWith("VERDICT: PASS")).toBe(true);
 	});
 });

@@ -120,6 +120,7 @@ export async function reconcileExternalRun(record: RunRecord, settle: Settle, ac
 			maxWallTimeSec,
 			mutates: record.mutates,
 			workspaceBaseline: record.workspaceBaseline,
+			expectedResumeSessionId: record.expectedResumeSessionId,
 		},
 		(settleInput, options) => (active() ? settle(record.runId, settleInput, options) : Promise.resolve()),
 		{ announce: record.terminationReason !== "cancelled" },

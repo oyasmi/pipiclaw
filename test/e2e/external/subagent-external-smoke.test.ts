@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../../../src/security/config.js";
@@ -23,7 +23,10 @@ import { useTempDirs } from "../../helpers/fixtures.js";
 const REQUESTED_HARNESSES = (process.env.PIPICLAW_E2E_HARNESS ?? "")
 	.split(",")
 	.map((value) => value.trim())
-	.filter((value): value is RunHarness => value === "claude-code" || value === "codex-cli" || value === "cursor-cli");
+	.filter(
+		(value): value is RunHarness =>
+			value === "claude-code" || value === "codex-cli" || value === "cursor-cli" || value === "antigravity-cli",
+	);
 
 const createTempWorkspace = useTempDirs("pipiclaw-subagent-e2e-smoke-");
 
@@ -43,6 +46,7 @@ const HARNESS_COMMAND: Record<RunHarness, string> = {
 	"claude-code": "claude -p --dangerously-skip-permissions",
 	"codex-cli": "codex exec --sandbox read-only --skip-git-repo-check",
 	"cursor-cli": "agent --mode ask",
+	"antigravity-cli": "agy --mode accept-edits --sandbox",
 	exec: "true", // never requested via PIPICLAW_E2E_HARNESS; exec has no protocol to drift.
 };
 
@@ -57,6 +61,89 @@ describeSmoke("external harness smoke (spec 042, D12, opt-in via PIPICLAW_E2E_HA
 			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", `run-smoke-${harness}`);
 			mkdirSync(artifactDir, { recursive: true });
 			configureSubAgentRuntime({});
+
+			if (harness === "antigravity-cli") {
+				// Spec 068 §6.6: isolated writable temp workspace exercising "read input -> write output -> follow-up".
+				const inputPath = join(workspaceDir, "smoke-input.txt");
+				const outputPath = join(workspaceDir, "smoke-output.txt");
+				writeFileSync(inputPath, "SMOKE_TOKEN_068\n", "utf-8");
+
+				const run1Id = `run-smoke-${harness}`;
+				const result1 = await launchExternalRun({
+					...testManagers(channelId),
+					runId: run1Id,
+					channelId,
+					label: "e2e smoke turn 1",
+					agent: "smoke",
+					source: "inline",
+					harness,
+					command: HARNESS_COMMAND[harness],
+					maxWallTimeSec: 90,
+					systemPrompt: "You are a smoke-test agent.",
+					task: `Read "${inputPath}" using read_file and write its exact contents to "${outputPath}" using write_file, then confirm completion.`,
+					workingDirectory: workspaceDir,
+					artifactDir,
+					purpose: "work",
+					mutates: "write",
+					workspaceDir,
+					securityConfig: DEFAULT_SECURITY_CONFIG,
+				});
+				expect(result1.ok).toBe(true);
+
+				const manager = getSubAgentRunManager(channelId);
+				await waitFor(() => manager.get(run1Id)?.status !== "running", 85_000);
+
+				const record1 = manager.get(run1Id);
+				expect(record1?.status, record1?.failureReason ?? "no failure reason recorded").toBe("completed");
+				expect(existsSync(outputPath)).toBe(true);
+				expect(readFileSync(outputPath, "utf-8").trim()).toBe("SMOKE_TOKEN_068");
+				expect(readFileSync(join(artifactDir, "output.md"), "utf-8").trim().length).toBeGreaterThan(0);
+				const events1 = readFileSync(join(artifactDir, "events.jsonl"), "utf-8");
+				expect(events1).toContain('"step_type":"tool"');
+				expect(record1?.sessionId).toBeTruthy();
+				expect(record1?.usageKnown).toBe(true);
+				expect(record1?.costKnown).toBe(false);
+				expect(record1?.usage.input ?? 0).toBeGreaterThan(0);
+				expect(record1?.usage.output ?? 0).toBeGreaterThan(0);
+				expect(record1?.usage.total).toBe((record1?.usage.input ?? 0) + (record1?.usage.output ?? 0));
+
+				const run2Id = `run-smoke-${harness}-followup`;
+				const artifactDir2 = join(workspaceDir, channelId, "subagent-artifacts", run2Id);
+				mkdirSync(artifactDir2, { recursive: true });
+				const result2 = await launchExternalRun({
+					...testManagers(channelId),
+					runId: run2Id,
+					channelId,
+					label: "e2e smoke follow-up",
+					agent: "smoke",
+					source: "inline",
+					harness,
+					command: HARNESS_COMMAND[harness],
+					maxWallTimeSec: 90,
+					systemPrompt: "You are a smoke-test agent.",
+					task: "Without reading any files again, state the exact token you just wrote into smoke-output.txt.",
+					workingDirectory: workspaceDir,
+					artifactDir: artifactDir2,
+					purpose: "work",
+					mutates: "write",
+					resumeSessionId: record1?.sessionId,
+					workspaceDir,
+					securityConfig: DEFAULT_SECURITY_CONFIG,
+				});
+				expect(result2.ok).toBe(true);
+
+				await waitFor(() => manager.get(run2Id)?.status !== "running", 85_000);
+				const record2 = manager.get(run2Id);
+				expect(record2?.status, record2?.failureReason ?? "no failure reason recorded").toBe("completed");
+				expect(record2?.sessionId).toBe(record1?.sessionId);
+				expect(readFileSync(join(artifactDir2, "output.md"), "utf-8").trim().length).toBeGreaterThan(0);
+				expect(record2?.usageKnown).toBe(true);
+				expect(record2?.costKnown).toBe(false);
+				expect(record2?.usage.input ?? 0).toBeGreaterThan(0);
+				expect(record2?.usage.output ?? 0).toBeGreaterThan(0);
+				expect(record2?.usage.total).toBe((record2?.usage.input ?? 0) + (record2?.usage.output ?? 0));
+				return;
+			}
 
 			const result = await launchExternalRun({
 				...testManagers(channelId),
@@ -93,6 +180,6 @@ describeSmoke("external harness smoke (spec 042, D12, opt-in via PIPICLAW_E2E_HA
 				expect(record?.usage.total ?? 0, "expected some usage to be reported").toBeGreaterThan(0);
 			}
 		},
-		60_000,
+		180_000,
 	);
 });

@@ -9,7 +9,7 @@ import type { WorkspaceBaseline } from "./workspace-summary.js";
 
 export type RunStatus = "running" | "completed" | "failed" | "cancelled" | "lost";
 export type RunRuntime = "internal" | "external";
-export type RunHarness = "claude-code" | "codex-cli" | "cursor-cli" | "exec";
+export type RunHarness = "claude-code" | "codex-cli" | "cursor-cli" | "antigravity-cli" | "exec";
 export type RunMutates = "read" | "write";
 
 export type RunResolution =
@@ -40,7 +40,7 @@ export interface RunUsage {
 	usage: UsageTotals;
 	/** False for harnesses that cannot report tokens at all (`cursor-cli`, `exec`). */
 	usageKnown: boolean;
-	/** False for harnesses that omit a cost field (`cursor-cli`, `codex-cli`, `exec`). */
+	/** False for harnesses that omit a cost field (`cursor-cli`, `codex-cli`, `antigravity-cli`, `exec`). */
 	costKnown: boolean;
 }
 
@@ -104,6 +104,9 @@ export interface RunRecord extends RunUsage {
 	terminationReason?: "timeout" | "cancelled";
 	argv?: string[];
 	sessionId?: string;
+	/** Spec 068 D8: expected conversation id on an `antigravity-cli` follow-up, persisted at launch
+	 *  so both normal settlement and post-restart reconciliation verify the resumed session identity. */
+	expectedResumeSessionId?: string;
 	leaseKey?: string;
 	mutates?: RunMutates;
 	/** Spec 042 D1: the role's wall-time budget, persisted so restart reconciliation can report an
@@ -131,6 +134,32 @@ export interface RunRecord extends RunUsage {
 	parserVersion?: number;
 	/** Spec 042 D12: best-effort `<executable> --version` output captured at launch (1s timeout,
 	 *  `undefined` if the probe failed or timed out) — the other half of the same diagnosis. */
+	cliVersion?: string;
+}
+
+export interface ExternalLaunchInfo {
+	pid: number;
+	pidStartedAt?: string;
+	argv: string[];
+	deadlineAt: number;
+	sessionId?: string;
+	/** Spec 068 D8: expected resumed session id for `antigravity-cli` follow-up verification. */
+	expectedResumeSessionId?: string;
+	/** Spec 042 D1: everything a restart reconciliation might need if this daemon disappears
+	 *  before the process exits — restore/deadline recovery must have the same inputs a live watcher
+	 *  would, not a thinner subset. */
+	maxWallTimeSec?: number;
+	processStartedAt?: number;
+	deskDir?: string;
+	/** Spec 042 D10: non-fatal invocation warnings from argv assembly (e.g. a dropped
+	 *  placeholder token), so they survive on the run rather than only ever hitting a log line. */
+	invocationWarnings?: string[];
+	/** Spec 042 D7: the role's `command`/`externalModelRef`/`shell` fingerprint at launch. */
+	roleFingerprint?: string;
+	/** Spec 042 D12: the harness adapter's schema version and a best-effort `--version` probe
+	 *  of the target CLI, so a later failure can be diagnosed as "adapter is stale" vs. "the
+	 *  agent itself failed" instead of looking identical. */
+	parserVersion?: number;
 	cliVersion?: string;
 }
 

@@ -246,7 +246,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		runId: input.runId,
 		channelId: input.channelId,
 		runtime: "external",
-		harness: harness.id as "claude-code" | "codex-cli" | "cursor-cli" | "exec",
+		harness: harness.id as "claude-code" | "codex-cli" | "cursor-cli" | "antigravity-cli" | "exec",
 		agent: input.agent,
 		label: input.label,
 		source: input.source,
@@ -380,6 +380,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			argv: spawnedArgv,
 			deadlineAt,
 			sessionId: invocation.presetSessionId,
+			expectedResumeSessionId: harness.id === "antigravity-cli" ? input.resumeSessionId : undefined,
 			// Spec 042 D1: persisted so a restart reconciliation has the same inputs the live watcher
 			// below would — without these, a run that finishes after the daemon disappears would settle
 			// with an inaccurate timeout message and an unestimatable duration.
@@ -472,7 +473,8 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			fields: { runId: input.runId, taskId: input.taskId, observer: "live", deskDir: input.deskDir },
 		});
 		const durationMs = Date.now() - processStartedAt;
-		const terminationReason = runManager.get(input.runId)?.terminationReason;
+		const launchedRecord = runManager.get(input.runId);
+		const terminationReason = launchedRecord?.terminationReason;
 		// Spec 042 D1: parse whatever the process actually wrote *before* applying a cancel/timeout
 		// override, instead of returning early on those two reasons. A run killed for wall-time budget
 		// or cancelled by request may still have produced useful output, usage, and a resumable session
@@ -490,6 +492,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 				maxWallTimeSec: input.maxWallTimeSec,
 				mutates: input.mutates,
 				workspaceBaseline: input.workspaceBaseline,
+				expectedResumeSessionId: launchedRecord?.expectedResumeSessionId,
 			},
 			(settleInput, options) => runManager.settle(input.runId, settleInput, options),
 			{ announce: terminationReason !== "cancelled" },

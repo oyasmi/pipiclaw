@@ -29,6 +29,7 @@ CLI 不在 PATH 上时条目仍会列出，但标为 `unavailable`，调用时�
 | `codex-flash` | codex-cli | `gpt-6-luna` | high | Codex 低成本候选：做法明确、易检查且易恢复的批量工作 |
 | `cursor-high` | cursor-cli | `grok-4.7-high` | — | Cursor 固定高推理候选：关键取舍与疑难排查 |
 | `cursor-main` | cursor-cli | `auto` | — | Cursor 自动路由：常规实施、排查、文档 |
+| `agy-main` | antigravity-cli | `gemini-4-carbon` | medium | Antigravity 主力候选：范围和验收较明确的实施、排查、文档，支持长上下文与内置子代理协作；使用 Antigravity 额度 |
 | `glm-high` | claude-code | `glm-5.3` | high | GLM 高推理候选，使用独立于 Claude/Codex 的额度 |
 | `glm-flash` | claude-code | `glm-5.3-flash` | medium | GLM 低成本候选：做法明确、易检查且易恢复的批量工作 |
 | `codex-review` | codex-cli | `gpt-6.1-sol` | high | CLI 强制只读；独立审查与 `purpose=verify` |
@@ -56,15 +57,15 @@ exec claude --dangerously-skip-permissions "$@"
 
 ## 交付约定与执行边界
 
-十个条目共用九条正文约定：授权与改动范围、输入来源、缺口处理、真实证据、失败保留、验收范围、检查复用和交付表达。它们不规定本轮岗位，也不要求固定的规划—实施—审查流水线。
+十一个条目共用九条正文约定：授权与改动范围、输入来源、缺口处理、真实证据、失败保留、验收范围、检查复用和交付表达。它们不规定本轮岗位，也不要求固定的规划—实施—审查流水线。
 
-- **九个写条目放开 CLI 权限。** 除 `codex-review` 外都声明 `mutates: write`，使用 bypass/force 参数；实际权限边界由 CLI、宿主账号与环境提供，task 文字不能替代隔离。
+- **十个写条目放开 CLI 权限。** 除 `codex-review` 外都声明 `mutates: write`，使用 bypass/force 参数；实际权限边界由 CLI、宿主账号与环境提供，task 文字不能替代隔离。
 - **并行写必须隔离。** 同一及父子目录只能有一个写委派，独立写分片各用 worktree；主代理也不要同时修改活跃委派的工作树。
 - **`codex-review` 的只读由 CLI sandbox 提供。** 它不能运行需写文件的测试或构建；可核查已有且对应当前产物的检查证据，或将缺失检查交给具备适当权限的执行器。
 - **独立性来自验收依据与取证。** 给检查者原始要求、待检版本和入口，不把实现者总结当预期行为；先保证独立检查，再考虑不同模型。
 - **`VERDICT` 是信息，不是门禁。** PASS 要有本次范围内的证据；FAIL 应区分已证实缺陷和验证受阻，由负责人决定修复还是补检查。
 
-正文对 Claude 经 `--append-system-prompt-file` 追加，对 Codex/Cursor 与 task 拼入 stdin；相同文字的指令层级并不相同。调优时检查实际 run 的 `system-prompt.txt`、`prompt.txt`、argv 和结果。外部条目正文可以为空，但会失去这些交付约定；内置执行能力仍由运行时支持，不依赖本目录提供模板。
+正文对 Claude 经 `--append-system-prompt-file` 追加，对 Codex/Cursor/Antigravity 与 task 拼入 stdin；相同文字的指令层级并不相同。调优时检查实际 run 的 `system-prompt.txt`、`prompt.txt`、argv 和结果。外部条目正文可以为空，但会失去这些交付约定；内置执行能力仍由运行时支持，不依赖本目录提供模板。
 
 ## 自己写条目
 

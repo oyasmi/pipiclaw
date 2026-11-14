@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { antigravityCliHarness } from "../src/subagents/external/antigravity-cli.js";
 import { claudeCodeHarness } from "../src/subagents/external/claude-code.js";
 import { codexCliHarness } from "../src/subagents/external/codex-cli.js";
 import { cursorCliHarness } from "../src/subagents/external/cursor-cli.js";
@@ -13,6 +14,7 @@ const STRUCTURED_HARNESSES: Array<{ harness: ExternalHarness; garbage: string }>
 	{ harness: claudeCodeHarness, garbage: 'not json\n{"broken"' },
 	{ harness: codexCliHarness, garbage: "not json at all\n{{{broken" },
 	{ harness: cursorCliHarness, garbage: "not json\n[1, 2, 3]" },
+	{ harness: antigravityCliHarness, garbage: "not json\n[1, 2, 3]" },
 ];
 
 describe.each(STRUCTURED_HARNESSES)(

@@ -164,7 +164,7 @@ describe("sub-agent discovery", () => {
 			else expect(agent.thinkingLevel).toBeTruthy();
 			if (agent.runtime !== "external") throw new Error("Capability examples must bind an external CLI");
 			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
-			expect(["claude-code", "codex-cli", "cursor-cli"]).toContain(agent.harness);
+			expect(["claude-code", "codex-cli", "cursor-cli", "antigravity-cli"]).toContain(agent.harness);
 			expect(agent.externalModelRef).toBeTruthy();
 		}
 		// A read declaration needs a real CLI sandbox; writers must participate in leases.
@@ -318,6 +318,86 @@ Body.
 			else expect(own.join("\n")).not.toContain("worktrees");
 		},
 	);
+
+	// Spec 068 D7: antigravity-cli command warnings cover print/interactive/pinned-session flags,
+	// effective --mode precedence, write+plan, write without explicit permission source, read+write permission,
+	// and read+plan/sandbox boundary reminders without blocking role loading.
+	it("antigravity-cli warns on D7 command misconfigurations and still loads", () => {
+		const workspaceDir = createTempWorkspace();
+		const subAgentsDir = getSubAgentsDir(workspaceDir);
+		mkdirSync(subAgentsDir, { recursive: true });
+
+		const cases = [
+			{
+				file: "agy-flags.md",
+				command: "agy --print=task -i --conversation=conv-1 --dangerously-skip-permissions",
+				mutates: "write",
+				mustInclude: [
+					"-p, --print, and --prompt",
+					"-i and --prompt-interactive",
+					"-c, --continue, and --conversation",
+				],
+				mustExclude: ["no explicit permission source"],
+			},
+			{
+				file: "agy-write-plan.md",
+				command: "agy --mode accept-edits --mode=plan",
+				mutates: "write",
+				mustInclude: ["--mode plan adds planning instructions", "no explicit permission source"],
+				mustExclude: [],
+			},
+			{
+				file: "agy-write-explicit.md",
+				command: "agy --mode plan --mode accept-edits",
+				mutates: "write",
+				mustInclude: [],
+				mustExclude: ["--mode plan adds planning instructions", "no explicit permission source"],
+			},
+			{
+				file: "agy-write-agent.md",
+				command: "agy --agent=coder /tmp/not--print",
+				mutates: "write",
+				mustInclude: [],
+				mustExclude: ["no explicit permission source", "-p, --print, and --prompt"],
+			},
+			{
+				file: "agy-read-writable.md",
+				command: "agy --mode=accept-edits --sandbox",
+				mutates: "read",
+				mustInclude: ["can modify files and the workspace write lock will not stop it"],
+				mustExclude: ["do not guarantee read-only execution"],
+			},
+			{
+				file: "agy-read-boundary.md",
+				command: "agy --mode plan --sandbox",
+				mutates: "read",
+				mustInclude: ["do not guarantee read-only execution"],
+				mustExclude: ["can modify files and the workspace write lock will not stop it"],
+			},
+		] as const;
+
+		for (const item of cases) {
+			const name = item.file.replace(/\.md$/, "");
+			writeFileSync(
+				join(subAgentsDir, item.file),
+				`---\nname: ${name}\ndescription: agy role\nruntime: external\nharness: antigravity-cli\ncommand: ${item.command}\nmutates: ${item.mutates}\n---\n\nBody.\n`,
+				"utf-8",
+			);
+		}
+
+		const discovery = discoverSubAgents(workspaceDir, []);
+		for (const item of cases) {
+			const name = item.file.replace(/\.md$/, "");
+			expect(discovery.agents.find((agent) => agent.name === name)).toMatchObject({
+				harness: "antigravity-cli",
+				mutates: item.mutates,
+				command: item.command,
+			});
+			const own = discovery.warnings.filter((warning) => warning.includes(item.file)).join("\n");
+			for (const needle of item.mustInclude) expect(own).toContain(needle);
+			for (const needle of item.mustExclude) expect(own).not.toContain(needle);
+		}
+	});
 });
 
 describe("sub-agent runtime context", () => {

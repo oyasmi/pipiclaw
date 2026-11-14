@@ -125,11 +125,18 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 	return lines.join("\n");
 }
 
-/** Resumable harnesses only: `claude-code`/`codex-cli`/`cursor-cli`. `exec` has no session concept,
+/** Resumable harnesses only: `claude-code`/`codex-cli`/`cursor-cli`/`antigravity-cli`. `exec` has no session concept,
  *  and internal runs have no persisted transcript by design (spec 040, non-goals). */
-function resumableHarnessOf(record: RunRecord): "codex-cli" | "claude-code" | "cursor-cli" | undefined {
+function resumableHarnessOf(
+	record: RunRecord,
+): "codex-cli" | "claude-code" | "cursor-cli" | "antigravity-cli" | undefined {
 	if (record.runtime !== "external") return undefined;
-	if (record.harness === "codex-cli" || record.harness === "claude-code" || record.harness === "cursor-cli") {
+	if (
+		record.harness === "codex-cli" ||
+		record.harness === "claude-code" ||
+		record.harness === "cursor-cli" ||
+		record.harness === "antigravity-cli"
+	) {
 		return record.harness;
 	}
 	return undefined;

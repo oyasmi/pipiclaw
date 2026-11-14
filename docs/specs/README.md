@@ -1,6 +1,6 @@
 # 设计记录
 
-这里保存 spec 050–067 的设计取舍和实施证据，供修改源码、追溯决策时参考。当前用法见[专题手册](../README.md)，编号 050 之前的设计见[历史归档](../archive/README.md)。设计中的旧字段、路径和未采用方案不代表当前功能。
+这里保存 spec 050–068 的设计取舍和实施证据，供修改源码、追溯决策时参考。当前用法见[专题手册](../README.md)，编号 050 之前的设计见[历史归档](../archive/README.md)。设计中的旧字段、路径和未采用方案不代表当前功能。
 
 ## 保留的设计
 
@@ -24,6 +24,7 @@
 | `065` | [个人交付聚焦与结果保留](./065-personal-delivery-focus/design.md)：产品范围、作业 7 天与委派 30 天保留期；已实施 |
 | `066` | [Cursor CLI harness](./066-cursor-cli-harness/design.md)：外部委派、协议解析与续接；已实施（[计划](./066-cursor-cli-harness/plan.md)、[验收](./066-cursor-cli-harness/acceptance.md)），真实 CLI smoke 与流协议核对待执行 |
 | `067` | [工具执行与委派结果回收提速](./067-execution-latency/design.md)：完成观察、结果回流与共享快速窗口；范围内实现、离线门禁与定向真实模型验收已完成（[计划](./067-execution-latency/plan.md)、[验收](./067-execution-latency/acceptance.md)），使用官方 SDK，分段调度未采用 |
+| `068` | [Antigravity CLI harness](./068-antigravity-cli-harness/design.md)：`antigravity-cli`（`agy`）外部委派、管道无头调用、`stream-json` 解析、token 归集、续接与 `agy-main` 示例；已实施，真实协议已核实（[计划](./068-antigravity-cli-harness/plan.md)、[验收](./068-antigravity-cli-harness/acceptance.md)） |
 
 050、051 已完成的实施清单也保存在归档中（[050](../archive/specs/050-memory-v2/plan.md)、[051](../archive/specs/051-long-horizon-task-loop/plan.md)）。
 

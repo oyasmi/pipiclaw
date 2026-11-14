@@ -1,3 +1,4 @@
+import { antigravityCliHarness } from "./antigravity-cli.js";
 import { claudeCodeHarness } from "./claude-code.js";
 import { codexCliHarness } from "./codex-cli.js";
 import { cursorCliHarness } from "./cursor-cli.js";
@@ -8,6 +9,7 @@ const harnesses: Partial<Record<ExternalHarness["id"], ExternalHarness>> = {
 	"codex-cli": codexCliHarness,
 	"claude-code": claudeCodeHarness,
 	"cursor-cli": cursorCliHarness,
+	"antigravity-cli": antigravityCliHarness,
 	exec: execHarness,
 };
 

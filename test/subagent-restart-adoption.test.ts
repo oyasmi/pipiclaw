@@ -442,6 +442,87 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// process lifetime — it must be flagged as such rather than presented as precise.
 		expect(record?.durationEstimated).toBe(true);
 		expect(dispatched).toHaveLength(1);
+
+		// Spec 068 D8: post-restart reconciliation also enforces persisted expectedResumeSessionId
+		// for antigravity-cli follow-ups (rejecting a mismatched session and preserving a matched
+		// init session across an empty-id error result).
+		const agyBadDir = join(workspaceDir, channelId, "subagent-artifacts", "run-agy-restart-bad");
+		const agyEmptyErrDir = join(workspaceDir, channelId, "subagent-artifacts", "run-agy-restart-err");
+		mkdirSync(agyBadDir, { recursive: true });
+		mkdirSync(agyEmptyErrDir, { recursive: true });
+		const [pidBad, pidErr] = await Promise.all([spawnAndWaitExit(), spawnAndWaitExit()]);
+		writeFileSync(
+			join(agyBadDir, "events.jsonl"),
+			`${[
+				JSON.stringify({ event: "init", conversation_id: "conv-wrong" }),
+				JSON.stringify({
+					event: "result",
+					conversation_id: "conv-wrong",
+					result: { conversation_id: "conv-wrong", status: "SUCCESS", response: "ok" },
+				}),
+			].join("\n")}\n`,
+		);
+		writeFileSync(
+			join(agyEmptyErrDir, "events.jsonl"),
+			`${[
+				JSON.stringify({ event: "init", conversation_id: "conv-right" }),
+				JSON.stringify({
+					event: "result",
+					conversation_id: "",
+					result: { conversation_id: "", status: "ERROR", response: "", error: "network reset" },
+				}),
+			].join("\n")}\n`,
+		);
+		await secondDaemon.register({
+			runId: "run-agy-restart-bad",
+			channelId,
+			runtime: "external",
+			harness: "antigravity-cli",
+			agent: "agy-main",
+			label: "agy mismatch across restart",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir: agyBadDir,
+		});
+		await secondDaemon.setLaunched("run-agy-restart-bad", {
+			pid: pidBad,
+			argv: [process.execPath],
+			deadlineAt: Date.now() + 60_000,
+			expectedResumeSessionId: "conv-right",
+			processStartedAt: Date.now(),
+		});
+		await secondDaemon.register({
+			runId: "run-agy-restart-err",
+			channelId,
+			runtime: "external",
+			harness: "antigravity-cli",
+			agent: "agy-main",
+			label: "agy matched init then empty error across restart",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir: agyEmptyErrDir,
+		});
+		await secondDaemon.setLaunched("run-agy-restart-err", {
+			pid: pidErr,
+			argv: [process.execPath],
+			deadlineAt: Date.now() + 60_000,
+			expectedResumeSessionId: "conv-right",
+			processStartedAt: Date.now(),
+		});
+		secondDaemon.stop();
+
+		const thirdDaemon = createManager(channelId, { stateDir });
+		await thirdDaemon.restore();
+		expect(thirdDaemon.get("run-agy-restart-bad")?.status).toBe("failed");
+		expect(thirdDaemon.get("run-agy-restart-bad")?.sessionId).toBeUndefined();
+		expect(thirdDaemon.get("run-agy-restart-bad")?.failureReason).toContain("conv-right");
+		expect(thirdDaemon.get("run-agy-restart-err")?.status).toBe("failed");
+		expect(thirdDaemon.get("run-agy-restart-err")?.sessionId).toBe("conv-right");
+		expect(thirdDaemon.get("run-agy-restart-err")?.failureReason).toBe("network reset");
 	});
 
 	// Spec 042, D1: the same defect as above, for `purpose=verify` — a verify run that completed

@@ -80,6 +80,8 @@ export interface FinalizeExternalRunInput {
 	mutates?: RunMutates;
 	/** The run's dispatch-time snapshot, so the summary leaves out paths that were already dirty. */
 	workspaceBaseline?: WorkspaceBaseline;
+	/** Spec 068 D8: expected resumed session id for `antigravity-cli` follow-ups. */
+	expectedResumeSessionId?: string;
 }
 
 /**
@@ -99,7 +101,12 @@ export async function finalizeExternalRun(
 	const eventsText = await readFile(eventsPath, "utf-8").catch(() => "");
 	const stderrTail = (await readFile(stderrPath, "utf-8").catch(() => "")).slice(-STDERR_TAIL_CHARS);
 	const outcome: ExternalOutcome = harness
-		? harness.parseOutcome({ eventsText, exitCode: input.exitCode, stderrTail })
+		? harness.parseOutcome({
+				eventsText,
+				exitCode: input.exitCode,
+				stderrTail,
+				expectedResumeSessionId: input.expectedResumeSessionId,
+			})
 		: {
 				finalText: "",
 				terminalSeen: false,

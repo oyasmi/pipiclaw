@@ -20,6 +20,7 @@ import { runArchiveEntry, runLedgerEntry } from "./run-archive.js";
 import {
 	applyPendingSettlement,
 	createPendingSettlement,
+	type ExternalLaunchInfo,
 	isTerminal,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_DESK,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
@@ -428,32 +429,7 @@ export class SubAgentRunManager {
 	 * with pid unknown; a crash between that persist and this one leaves an intent-only record
 	 * that restore treats as `lost` rather than guessing (D1/D10.3).
 	 */
-	async setLaunched(
-		runId: string,
-		info: {
-			pid: number;
-			pidStartedAt?: string;
-			argv: string[];
-			deadlineAt: number;
-			sessionId?: string;
-			/** Spec 042 D1: everything a restart reconciliation might need if this daemon disappears
-			 *  before the process exits — restore/deadline recovery must have the same inputs a live watcher
-			 *  would, not a thinner subset. */
-			maxWallTimeSec?: number;
-			processStartedAt?: number;
-			deskDir?: string;
-			/** Spec 042 D10: non-fatal invocation warnings from argv assembly (e.g. a dropped
-			 *  placeholder token), so they survive on the run rather than only ever hitting a log line. */
-			invocationWarnings?: string[];
-			/** Spec 042 D7: the role's `command`/`externalModelRef`/`shell` fingerprint at launch. */
-			roleFingerprint?: string;
-			/** Spec 042 D12: the harness adapter's schema version and a best-effort `--version` probe
-			 *  of the target CLI, so a later failure can be diagnosed as "adapter is stale" vs. "the
-			 *  agent itself failed" instead of looking identical. */
-			parserVersion?: number;
-			cliVersion?: string;
-		},
-	): Promise<void> {
+	async setLaunched(runId: string, info: ExternalLaunchInfo): Promise<void> {
 		await this.queue.run(runId, async () => {
 			const record = this.runs.get(runId);
 			if (!record || record.status !== "running") return;
@@ -464,6 +440,7 @@ export class SubAgentRunManager {
 			// claude-code pre-assigns its session id before running (D4); persisting it here, not just
 			// at settle(), means a run that crashes before any output is still resumable.
 			if (info.sessionId) record.sessionId = info.sessionId;
+			if (info.expectedResumeSessionId) record.expectedResumeSessionId = info.expectedResumeSessionId;
 			record.maxWallTimeSec = info.maxWallTimeSec;
 			record.processStartedAt = info.processStartedAt;
 			record.deskDir = info.deskDir;

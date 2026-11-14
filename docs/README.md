@@ -16,7 +16,7 @@
 
 | 目标 | 从这里开始 |
 |---|---|
-| 把工作委派给内置子智能体、Claude Code、Codex CLI 或 Cursor CLI | [智能体委派](./sub-agents.md) |
+| 把工作委派给内置子智能体、Claude Code、Codex CLI、Cursor CLI 或 Antigravity CLI | [智能体委派](./sub-agents.md) |
 | 了解它能读写什么、能调用哪些能力 | [工具总览](./tools.md) |
 | 让它记住约定、找回历史或忘掉旧信息 | [记忆](./memory.md) |
 | 建立提醒、周期检查或跨会话长期任务 | [事件与任务](./events-and-tasks.md) |
@@ -43,7 +43,7 @@
 | [主动性机制与设计取舍](./refer/personal-agent-proactivity-design-notes.md) | Grok Bot、DeepSeek Super-agent、OpenClaw 的证据；主动介入的分寸、心跳与 watchdog、现有任务约束及分阶段验证建议（2026-11-06，未实施） |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
 | [行为评测使用指南](./evals.md) | 无人参与的 `cycle`、评分器校验、短报告、证据重放与兼容参照 |
-| [设计记录](./specs/README.md) | 保留的 spec 050–067、实施状态及当前行为的判断顺序 |
+| [设计记录](./specs/README.md) | 保留的 spec 050–068、实施状态及当前行为的判断顺序 |
 | [历史文档归档](./archive/README.md) | 编号 050 之前的完整 spec，以及已完成的实施清单、review 和快照 |
 | [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
 

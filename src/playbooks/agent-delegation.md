@@ -62,4 +62,4 @@ order: 60
 
 daemon 重启后内置 run 判 lost，外部通常继续；启动信息尚未落盘的外部 run 也可能 lost。lost 是结局未知，先查产物再重派；带 `≈` 的重连耗时是估算。
 
-`subagent_run op=follow_up` 只支持已结束且有 session id 的 claude-code/codex-cli/cursor-cli run，产生新 runId，归发起续接的频道。目标不变、反馈局部、旧上下文可靠时只发新增指令；换方向、反复陷入错误假设或需要独立判断时重开。内置/exec 不支持续接，角色 command/model/shell 改动后也须重开；带上仍有效的已有产出。
+`subagent_run op=follow_up` 只支持已结束且有 session id 的 claude-code/codex-cli/cursor-cli/antigravity-cli run，产生新 runId，归发起续接的频道。目标不变、反馈局部、旧上下文可靠时只发新增指令；换方向、反复陷入错误假设或需要独立判断时重开。内置/exec 不支持续接，角色 command/model/shell 改动后也须重开；带上仍有效的已有产出。
