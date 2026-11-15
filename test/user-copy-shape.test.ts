@@ -30,6 +30,7 @@ import {
 	cancelledByUserReceipt,
 	completedReceipt,
 	pausedReceipt,
+	reportReceipt,
 } from "../src/tasks/receipts.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";
 import type { UsageLedger } from "../src/usage/ledger.js";
@@ -512,6 +513,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		}
 		for (const [label, text] of [
 			["ask", askReceipt("weekly", "要合并到 master 吗？推荐：合并。")],
+			["report", reportReceipt("weekly", "已完成第一阶段核对。")],
 			[
 				"completed",
 				completedReceipt(
@@ -551,9 +553,28 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		for (const status of ["completed", "failed", "cancelled", "lost"] as const) {
 			expectUserCopyShape(
 				`run notice ${status}`,
-				renderRunNotice({ kind: "settled", runId: "run_a1", agent: "builder", status, durationMs: 192_000 }) ?? "",
+				renderRunNotice({
+					kind: "settled",
+					runId: "run_a1",
+					agent: "builder",
+					taskId: "weekly",
+					status,
+					durationMs: 192_000,
+				}) ?? "",
 			);
 		}
+		expect(
+			renderRunNotice({
+				kind: "progress",
+				runId: "run_a1",
+				agent: "builder",
+				taskId: "weekly",
+				durationMs: 60_000,
+				step: "运行测试",
+			}),
+		).toContain("任务 `weekly`");
+		expect(reportReceipt("weekly", "已完成核对")).toBe("**任务 `weekly` 汇报**\n已完成核对");
+		expect(reportReceipt("weekly", "任务 weekly 已完成核对")).toBe("任务 weekly 已完成核对");
 		expectUserCopyShape(
 			"run notice stalled",
 			renderRunNotice({

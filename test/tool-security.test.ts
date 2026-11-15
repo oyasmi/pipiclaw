@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createBashTool } from "../src/tools/bash.js";
 import { createReadTool } from "../src/tools/read.js";
 import { writeContent } from "../src/tools/write-content.js";
@@ -23,6 +24,7 @@ describe("tool security (guard runs before the executor)", () => {
 		});
 
 		await expect(tool.execute("call", { command: "rm -rf /" })).rejects.toThrow("Command blocked");
+		await expect(tool.execute("call", { command: "echo ok > $TARGET" })).rejects.toBeInstanceOf(RecoverableToolError);
 		expect(executor.calls).toEqual([]);
 	});
 

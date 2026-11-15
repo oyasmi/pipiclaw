@@ -231,10 +231,18 @@ describe("session search", () => {
 		);
 		writeJsonl(join(deskDir, "tasks", "archive", "oauth-migration.jsonl"), [
 			{
+				id: "r0",
+				kind: "ask",
+				ts: "2026-04-18T11:00:00.000Z",
+				seq: 1,
+				question: "Use S256 challenge?",
+				delivered: true,
+			},
+			{
 				id: "r1",
 				kind: "close",
 				ts: "2026-04-18T12:00:00.000Z",
-				outcome: "complete",
+				outcome: "completed",
 				by: "leader",
 				note: "PKCE live",
 			},
@@ -242,6 +250,8 @@ describe("session search", () => {
 
 		const docs = await buildSessionCorpus({ deskDir, maxFiles: 6 });
 		expect(docs.filter((doc) => doc.text === "duplicate oauth note")).toHaveLength(1);
+		expect(docs.find((doc) => doc.source === "task")?.text).toContain("PKCE live");
+		expect(docs.find((doc) => doc.source === "task")?.text).toContain("Use S256 challenge?");
 
 		// Empty-query browse still bounds the returned tail by maxChunks.
 		const browse = await searchDeskSessions({

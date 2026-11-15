@@ -13,6 +13,9 @@ class FakeFrontend implements Frontend {
 	appendProgress(text: string): void {
 		this.calls.push(["progress", text]);
 	}
+	streamText(delta: string): void {
+		this.calls.push(["stream", delta]);
+	}
 	showFinal(text: string): void {
 		this.calls.push(["final", text]);
 	}
@@ -127,6 +130,7 @@ describe("TuiSession", () => {
 		session.submit("/followup 不会发送");
 		const staleClose = state.onClose;
 		session.submit("/stop");
+		expect(sent.at(-1)).toMatchObject({ type: "response.cancel", response_id: "resp_4" });
 		expect(state.closed).toBe(1);
 		expect(session.busy).toBe(false);
 		expect(frontend.calls).toContainEqual(["notice", "已停止。"]);
@@ -238,6 +242,8 @@ describe("EventRenderer", () => {
 				type: "response.output_item.done",
 				item: { type: "mcp_call", status: "failed", error: { content: "boom\nmore" }, pipiclaw_failure: "boom" },
 			});
+			renderer.handle({ type: "response.output_text.delta", delta: "答" });
+			renderer.handle({ type: "response.output_text.delta", delta: "案" });
 			renderer.handle({
 				type: "response.output_item.done",
 				item: { type: "message", phase: "final_answer", content: [{ text: "答案" }] },
@@ -247,9 +253,14 @@ describe("EventRenderer", () => {
 		};
 		const plain = run("full_progress_then_plain_final");
 		expect(plain.filter(([kind]) => kind === "progress").length).toBe(2);
+		expect(plain.filter(([kind]) => kind === "stream")).toEqual([
+			["stream", "答"],
+			["stream", "案"],
+		]);
 		expect(plain.filter(([kind]) => kind === "final")).toEqual([["final", "答案"]]);
 		const card = run("final_card_only");
 		expect(card.filter(([kind]) => kind === "progress")).toEqual([]);
+		expect(card.filter(([kind]) => kind === "stream")).toEqual([]);
 		expect(card.filter(([kind]) => kind === "final")).toEqual([["final", "答案"]]);
 	});
 });

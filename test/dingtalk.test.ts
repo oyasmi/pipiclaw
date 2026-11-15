@@ -228,6 +228,25 @@ describe("dingtalk", () => {
 			conversationType: "2",
 			senderId: "staff_2",
 		});
+
+		// Any non-text/unknown msgtype with no parsed content or attachment replies with an unsupported hint.
+		axiosMock.post.mockResolvedValue({ data: { accessToken: "token-1", expireIn: 7200 } });
+		await privateApi.inbound.onStreamMessage({
+			msgtype: "interactiveCard",
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_dm",
+			conversationType: "1",
+		});
+		await flushMicrotasks();
+		expect(ingress.receive).toHaveBeenCalledTimes(2);
+		expect(axiosMock.post).toHaveBeenLastCalledWith(
+			expect.stringContaining("/oToMessages/batchSend"),
+			expect.objectContaining({
+				msgParam: expect.stringContaining("interactiveCard"),
+			}),
+			expect.any(Object),
+		);
 	});
 
 	it("ignores senders outside the allow-list entirely", async () => {

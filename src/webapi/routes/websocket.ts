@@ -129,10 +129,13 @@ class Connection {
 				case "response.steer":
 					await this.steer(event);
 					return;
+				case "response.cancel":
+					await this.cancel(event);
+					return;
 				default:
 					throw badRequest(
 						"invalid_value",
-						"Only `response.create` and `response.steer` events are accepted.",
+						"Only `response.create`, `response.steer`, and `response.cancel` events are accepted.",
 						"type",
 					);
 			}
@@ -382,6 +385,26 @@ class Connection {
 		}
 		// The response it follows has already been forwarded to its end: start a new forwarding.
 		void this.follow(successor, this.laneOf.get(target.id));
+	}
+
+	// ---- response.cancel -------------------------------------------------------------------
+
+	private async cancel(event: Record<string, unknown>): Promise<void> {
+		const targetId = event.response_id;
+		if (targetId !== undefined) {
+			if (typeof targetId !== "string" || !targetId) {
+				throw badRequest("invalid_value", "`response_id` must be a non-empty string.", "response_id");
+			}
+			const target = this.responses.get(targetId);
+			if (!target) {
+				throw badRequest("response_not_found", "That response is not on this connection.", "response_id");
+			}
+			if (!target.terminal) await this.service.cancel(target);
+			return;
+		}
+		for (const live of this.responses.values()) {
+			if (!live.terminal) await this.service.cancel(live);
+		}
 	}
 }
 

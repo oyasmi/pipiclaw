@@ -449,7 +449,9 @@ export async function handleSubagentsCommand(options: HandleSubagentsCommandOpti
  * that never resolved to a label).
  */
 export function renderRunNotice(notice: RunNotice): string | undefined {
-	const subject = `委派 \`${notice.runId}\`（${notice.agent}）`;
+	const subject = notice.taskId
+		? `委派 \`${notice.runId}\`（${notice.agent} · 任务 \`${notice.taskId}\`）`
+		: `委派 \`${notice.runId}\`（${notice.agent}）`;
 	if (notice.kind === "progress") {
 		return notice.step ? `⏳ ${subject} · ${notice.step}` : undefined;
 	}

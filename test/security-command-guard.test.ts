@@ -27,6 +27,9 @@ describe("security command guard", () => {
 			"find . -name -delete",
 			"parallel printf '%s' 'rm -rf /' ::: value",
 			"timeout 1 ls *.ts",
+			"stat *.json",
+			"jq . *.json",
+			"diff *.old",
 			"find . -exec printf '%s' -delete sh {} \\;",
 		]) {
 			expect(guardCommand(command, DEFAULT_SECURITY_CONFIG.commandGuard), command).toEqual({ allowed: true });

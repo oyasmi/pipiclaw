@@ -136,6 +136,8 @@ describe("webapi WebSocket mode", () => {
 		const serverClosed = once([...app!.websocketServer.clients][0], "close");
 		ws.send(JSON.stringify({ type: "response.create", input: "HOLD" }));
 		await until(() => messages.some((m) => m.type === "response.created"));
+		ws.send(JSON.stringify({ type: "response.cancel", response_id: "resp_unknown" }));
+		await until(() => messages.some((m) => m.error?.code === "response_not_found"));
 		await vi.advanceTimersByTimeAsync(1499);
 		expect(cancel).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1);

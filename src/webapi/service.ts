@@ -589,8 +589,14 @@ class ResponseTurn implements ChannelContext {
 			case "tool.end":
 				if (!this.quiet) live.endToolCall(event.callId, event.ok, event.output, event.failure);
 				return;
+			case "reasoning.delta":
+				if (!this.quiet) live.appendReasoning(event.delta);
+				return;
 			case "reasoning":
 				if (!this.quiet) live.addReasoning(event.text);
+				return;
+			case "text.delta":
+				if (!this.quiet) live.appendText(event.delta);
 				return;
 			case "commentary":
 				if (!this.quiet) live.addMessage("commentary", event.text, event.level);

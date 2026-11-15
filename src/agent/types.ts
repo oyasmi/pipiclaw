@@ -200,6 +200,9 @@ export interface RunState {
 	toolsUsed: string[];
 	/** The text of the latest assistant message that had any, tool-calling messages included. */
 	lastAssistantText: string;
+	/** Buffered leading text of the current assistant message until we know it does not start with `[SILENT]`. */
+	streamingTextBuffer: string;
+	streamingTextFlushed: boolean;
 }
 
 export function createEmptyRunState(): RunState {
@@ -222,6 +225,8 @@ export function createEmptyRunState(): RunState {
 		userMessagesStarted: 0,
 		toolsUsed: [],
 		lastAssistantText: "",
+		streamingTextBuffer: "",
+		streamingTextFlushed: false,
 		answerEmitted: false,
 	};
 }
@@ -264,6 +269,7 @@ export type SessionEvent =
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
 	| { type: "message_start"; message: unknown }
+	| { type: "message_update"; message: unknown; assistantMessageEvent: { type: string; delta?: string } }
 	| { type: "message_end"; message: unknown }
 	| { type: "turn_end"; message: unknown; toolResults: unknown[] }
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
@@ -281,6 +287,7 @@ export type ToolExecutionStartEvent = Extract<SessionEvent, { type: "tool_execut
 export type ToolExecutionUpdateEvent = Extract<SessionEvent, { type: "tool_execution_update" }>;
 export type ToolExecutionEndEvent = Extract<SessionEvent, { type: "tool_execution_end" }>;
 export type MessageStartEvent = Extract<SessionEvent, { type: "message_start" }>;
+export type MessageUpdateEvent = Extract<SessionEvent, { type: "message_update" }>;
 export type MessageEndEvent = Extract<SessionEvent, { type: "message_end" }>;
 export type TurnEndEvent = Extract<SessionEvent, { type: "turn_end" }>;
 export type AutoCompactionStartEvent = Extract<SessionEvent, { type: "compaction_start" }>;

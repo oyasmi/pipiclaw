@@ -15,8 +15,6 @@ import type { DingTalkConfig } from "./config.js";
 import type { ConversationMetaStore } from "./conversation-meta.js";
 import { type InboundQuotedMessage, type ParsedInboundMessage, parseInboundMessage } from "./inbound-media.js";
 
-const UNSUPPORTED_HINT_MSGTYPES = new Set(["video", "chatRecord", "interactiveCard"]);
-
 interface DingTalkIncomingMessage {
 	msgId?: string;
 	senderStaffId?: string;
@@ -136,8 +134,8 @@ export class InboundMessages {
 		const conversationType = data.conversationType || "1";
 
 		const hasMedia = parsed.downloadCodes.length > 0 || (parsed.files?.length ?? 0) > 0;
-		const msgtype = typeof data.msgtype === "string" ? data.msgtype : "unknown";
-		const isUnsupportedMedia = !parsed.text && !hasMedia && UNSUPPORTED_HINT_MSGTYPES.has(msgtype);
+		const msgtype = typeof data.msgtype === "string" ? data.msgtype.trim() || "unknown" : "unknown";
+		const isUnsupportedMedia = !parsed.text && !hasMedia && msgtype !== "text" && msgtype !== "unknown";
 
 		if (!parsed.text && !hasMedia && !isUnsupportedMedia) {
 			log.logWarn("dingtalk.message.empty", "Empty message ignored", { fields: { msgtype } });

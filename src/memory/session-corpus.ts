@@ -368,7 +368,11 @@ async function readArchivedTaskDocuments(
 			if (!isRecord(parsed)) continue;
 			if (parsed.kind === "report" && typeof parsed.text === "string" && parsed.text.trim()) {
 				logNotes.push(`[汇报] ${parsed.text.trim()}`);
-			} else if (parsed.kind === "closed") {
+			} else if (parsed.kind === "ask" && typeof parsed.question === "string" && parsed.question.trim()) {
+				logNotes.push(`[提问] ${parsed.question.trim()}`);
+			} else if (parsed.kind === "message" && typeof parsed.text === "string" && parsed.text.trim()) {
+				logNotes.push(`[用户消息] ${parsed.text.trim()}`);
+			} else if (parsed.kind === "close" || parsed.kind === "closed") {
 				closedAt = getStringField(parsed, "ts") ?? closedAt;
 				const outcome = getStringField(parsed, "outcome") ?? "closed";
 				const note = getStringField(parsed, "note");

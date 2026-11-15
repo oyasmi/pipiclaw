@@ -275,13 +275,13 @@ flowchart LR
 
 ### 阶段 H1：`v1.0` 零摩擦单人高杠杆工作流（核心体验跃升）
 
-#### 方向 1.1：钉钉移动生产力“全接住”闭环
+#### 方向 1.1：钉钉移动生产力“全接住”闭环（✅ 已完成）
 - **原生接入语音、文件与引用回复**：
   - `msgtype === "audio"`：优先提取 `content.recognition` 作为用户输入文本（标注 `[语音转写]`），同时可选保存原音频至 `inbox/`；
   - `msgtype === "file"`：复用已有的 `downloadMessageFile` + `persistInboundFile` 落盘至工位 `inbox/`，在消息中注入文件路径与大小供模型直接 `read` / `bash` 处理；
   - `repliedMsg`：当用户引用历史消息（尤其是引用某条任务报告或提问回执）时，将引用摘要拼入 `<replied_message>` 上下文；若引用的消息携带明确 `[task:<id>]` 标记，可直接确定性路由至 `task_message`！
-  - 对暂不支持的富媒体类型返回一行清晰的中文引导，彻底消灭“发消息无回音”。
-- **后台任务委派通知精细化（尊重 Spec 065 可见性裁决）**：保留实时通知，但在任务触发的委派通知上附带 `[任务 <id>]` 来源标签；当 `wake-coalescing` 合并 $K$ 个聊天子代理完成唤醒时，将 $K$ 条散碎完成提示合并为单条汇总提示。
+  - 对暂不支持的富媒体类型返回一行清晰的中文引导，彻底消灭“发消息无回音”（已在 [inbound.ts](../../src/dingtalk/inbound.ts) 中覆盖所有无法提取正文或附件的非文本消息类型）。
+- **后台任务委派通知精细化（尊重 Spec 065 可见性裁决）**：保留实时通知，但在任务触发的委派通知与进度回执上附带任务来源标签（已在 [receipts.ts](../../src/tasks/receipts.ts)、[runs.ts](../../src/subagents/runs.ts) 与 [commands.ts](../../src/subagents/commands.ts) 接入 `reportReceipt` 与 `taskId`）；当 `wake-coalescing` 合并 $K$ 个聊天子代理完成唤醒时，将 $K$ 条散碎完成提示合并为单条汇总提示。
 
 #### 方向 1.2：`Desk` 多仓人体工学与双层记忆共享
 - **极简仓库绑定体验**：支持 `pipiclaw tui --here`（或 `--cwd <path>`）与 `/desk new <name> [cwd]`、`/desk cwd <path>`，并在 `/desk list` 展示当前 `cwd`；修复 `DeskRuntime` 修改 `desk.json` 后的热刷新与 TUI `@file` 补全根目录。
@@ -293,15 +293,15 @@ flowchart LR
   - 在 `workspace-lease.ts` 中引入读写锁语义：`purpose: "verify"` 持共享读租约（防止核验中途被写操作污染），主会话/任务会话的 `write`/`edit` 检查目标路径是否存在活跃的子代理独占写租约（冲突时抛 `RecoverableToolError` 引导模型等待或改用 worktree）；
   - 为 `subagent` 增加可选 `worktree: true`（仅当目标目录为 Git 仓库且 `mutates: "write"` 时生效）：由运行时在 `.git/pipiclaw-worktrees/<runId>` 自动创建独立分支/分离头工作树，执行完毕后在结算结果中结构化返回 `branch`、`headSha`、`changedFiles` 摘要，并在父任务关闭或超时后自动 `git worktree remove` 回收干净工作树（有未合并改动时保留并提示）。
 
-#### 方向 1.4：打通“已完成任务归档（Task Archive）”检索与 Shell 守卫降噪
-- **统一历史工作召回**：为 `task_list` 增加 `includeArchived` / 关键词过滤，或提供轻量 `work_search`（同时覆盖 `tasks/archive/*.md` 的目标/最终交付摘要与全量 `conversations/*/log.jsonl`），让模型在接新需求时能秒查“上次这个模块是怎么改的”。
-- **Shell 守卫减摩**：在 [bash.ts](../../src/tools/bash.ts#L255) 中将 `unsupported-shell`（语法受限但非恶意命令）改为抛 `RecoverableToolError`（不弹用户侧高危告警，直接指导模型改用 `python3 -c` / `node -e` 或文件工具），并评估在安全参数位置放开无副作用的只读 glob / heredoc。
+#### 方向 1.4：打通“已完成任务归档（Task Archive）”检索与 Shell 守卫降噪（✅ 已完成）
+- **统一历史工作召回**：为 `task_list` 增加 `includeArchived` / 关键词过滤，或提供轻量 `work_search`（同时覆盖 `tasks/archive/*.md` 的目标/最终交付摘要与全量 `conversations/*/log.jsonl`），让模型在接新需求时能秒查“上次这个模块是怎么改的”（已在 [session-corpus.ts](../../src/memory/session-corpus.ts) 打通 `tasks/archive/<id>.md` 与 `<id>.jsonl` 的 `report`/`ask`/`message`/`close` 归档索引）。
+- **Shell 守卫减摩**：在 [bash.ts](../../src/tools/bash.ts) 中将 `unsupported-shell`（语法受限但非恶意命令）改为抛 `RecoverableToolError`（不弹用户侧高危告警，直接指导模型改用简单命令或文件工具），并在 [command-guard.ts](../../src/security/command-guard.ts) 安全参数位置放开无副作用的只读检查命令 glob。
 - **✅ 已完成 — 外部 Harness 注册表与 `follow_up` 编排收敛**：已在 [run-record.ts](../../src/subagents/run-record.ts) 与 [harness.ts](../../src/subagents/external/harness.ts) 收敛单一能力声明与 `Record<RunHarness, ExternalHarness>` 穷尽注册表，并将 `subagent-manage.ts` 中的 `follow_up` 执行逻辑下沉至 [dispatch.ts](../../src/subagents/external/dispatch.ts)。
 
-#### 方向 1.5：WebAPI / TUI 增量流式与单机守护进程收敛
-- 在 `TurnOutputPort` 增加可选增量事件 `answer_delta` / `thinking_delta`，让 TUI 与 WebAPI 客户端获得丝滑的实时逐字流式反馈（钉钉端可继续按字节水位节流刷新）；
-- 为 WebSocket 补齐 `response.cancel` 控制帧，在有活跃回合时顺延 `MAX_WS_CONNECTION_MS`；独立隔离 `request-execution.ts` 的无状态 Runner 字典；
-- 优化 `pipiclaw tui` 启动策略：当检测到已有另一个嵌入式 TUI 持有锁时给出明确提示（或支持一键自动拉起后台常驻 `pipiclaw daemon`），并为嵌入式模式补齐 `SIGHUP`/`SIGTERM` 优雅停机钩子。
+#### 方向 1.5：WebAPI / TUI 增量流式与单机守护进程收敛（✅ 已完成）
+- 在 `TurnOutputPort`（[channel-context.ts](../../src/channel/channel-context.ts)、[session-events.ts](../../src/agent/session/session-events.ts)、[response-state.ts](../../src/webapi/response-state.ts)、[pitui-frontend.ts](../../src/tui/pitui-frontend.ts)）增加增量事件 `text.delta` / `reasoning.delta`，让 TUI 与 WebAPI 客户端获得丝滑的实时逐字流式反馈（钉钉端继续按水位刷新）；
+- 为 WebSocket（[websocket.ts](../../src/webapi/routes/websocket.ts)）补齐 `response.cancel` 控制帧，并在 [session.ts](../../src/tui/session.ts) 静默处理空闲态 60 分钟连接轮转；独立隔离 [request-execution.ts](../../src/runtime/request-execution.ts) 的无状态 Runner 字典；
+- 优化 `pipiclaw tui` 启动策略：在 [client.ts](../../src/tui/client.ts) 检测到已有进程持有锁且无 WebAPI socket 时展示 `daemon.lock` 持有者 PID 与启动时间，并在 [cli.ts](../../src/tui/cli.ts) 为嵌入式模式补齐 `SIGHUP`/`SIGTERM` 优雅停机钩子。
 
 ---
 

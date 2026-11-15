@@ -72,6 +72,8 @@ export class PiTuiFrontend implements Frontend {
 	private readonly loader: Loader;
 	private readonly editorContainer = new Container();
 	private turnProgress: Component[] = [];
+	private streamPreview: Markdown | undefined;
+	private streamBuffer = "";
 	private removeInputListener: (() => void) | undefined;
 	private spinnerShown = false;
 
@@ -134,13 +136,27 @@ export class PiTuiFrontend implements Frontend {
 	}
 
 	appendProgress(text: string): void {
+		this.clearStreamPreview();
 		const line = new Text(dim(text), 1, 0);
 		this.transcript.addChild(line);
 		this.turnProgress.push(line);
 		this.ui.requestRender();
 	}
 
+	streamText(delta: string): void {
+		if (!delta) return;
+		this.streamBuffer += delta;
+		if (!this.streamPreview) {
+			this.streamPreview = new Markdown(this.streamBuffer, 1, 1, MARKDOWN_THEME, undefined, { renderLatex: false });
+			this.transcript.addChild(this.streamPreview);
+		} else {
+			this.streamPreview.setText(this.streamBuffer);
+		}
+		this.ui.requestRender();
+	}
+
 	showFinal(markdown: string): void {
+		this.clearStreamPreview();
 		this.transcript.addChild(new Markdown(markdown, 1, 1, MARKDOWN_THEME, undefined, { renderLatex: false }));
 		// The turn's progress becomes permanent scrollback; stop tracking it so a
 		// later clearProgress cannot retract it.
@@ -149,16 +165,26 @@ export class PiTuiFrontend implements Frontend {
 	}
 
 	showNotice(text: string): void {
+		this.clearStreamPreview();
 		this.transcript.addChild(new Text(gray(text), 1, 0));
 		this.ui.requestRender();
 	}
 
 	clearProgress(): void {
+		this.clearStreamPreview();
 		for (const component of this.turnProgress) {
 			this.transcript.removeChild(component);
 		}
 		this.turnProgress = [];
 		this.ui.requestRender();
+	}
+
+	private clearStreamPreview(): void {
+		if (this.streamPreview) {
+			this.transcript.removeChild(this.streamPreview);
+			this.streamPreview = undefined;
+		}
+		this.streamBuffer = "";
 	}
 
 	setWorking(on: boolean): void {
@@ -171,6 +197,7 @@ export class PiTuiFrontend implements Frontend {
 	}
 
 	setBusy(busy: boolean): void {
+		if (!busy) this.clearStreamPreview();
 		this.showSpinner(busy);
 	}
 

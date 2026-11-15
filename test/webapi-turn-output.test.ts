@@ -38,6 +38,11 @@ function live() {
 describe("LiveResponse event log", () => {
 	it("orders what happened before announce after response.created, numbers every event, and replays from any point", () => {
 		const { response, events } = live();
+		response.appendReasoning("先思考");
+		response.appendReasoning("一下");
+		response.addReasoning("先思考一下");
+		response.appendText("先看");
+		response.appendText("一下");
 		response.addMessage("commentary", "先看一下");
 		response.announce("in_progress");
 		response.complete(usage);
@@ -47,6 +52,9 @@ describe("LiveResponse event log", () => {
 		expect(events.map((e) => e.sequence_number)).toEqual(events.map((_, index) => index));
 		const types = events.map((e) => e.type);
 		expect(types.indexOf("response.output_item.added")).toBeGreaterThan(types.indexOf("response.in_progress"));
+		expect(events.filter((e) => e.type === "response.reasoning_summary_text.delta")).toHaveLength(2);
+		expect(events.filter((e) => e.type === "response.output_text.delta")).toHaveLength(2);
+		expect(events.filter((e) => e.type === "response.output_item.done")).toHaveLength(2);
 
 		const replayed: LoggedEvent[] = [];
 		response.subscribe(5, { onEvent: (event) => replayed.push(event), onEnd: () => undefined });

@@ -25,7 +25,9 @@ export type TurnEvent =
 	 * itself (a rejected argument) is `ok: false` with no `failure`.
 	 */
 	| { type: "tool.end"; callId: string; ok: boolean; output: string; failure?: string }
+	| { type: "reasoning.delta"; delta: string }
 	| { type: "reasoning"; text: string }
+	| { type: "text.delta"; delta: string }
 	/**
 	 * A line of the turn's narrative that is not the answer. Without a `level` it is the model's
 	 * own text between tool calls. `level` marks runtime-authored text:

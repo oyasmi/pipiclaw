@@ -17,6 +17,7 @@ import type { TaskSessionContext, TaskStepIntent } from "../tasks/control.js";
 import { drainTaskDeliveries, queueTaskReport } from "../tasks/delivery.js";
 import { acknowledgeTaskInputs, taskInputTag } from "../tasks/input-receipts.js";
 import { readTaskLog, type TaskStepResult } from "../tasks/loop-log.js";
+import { reportReceipt } from "../tasks/receipts.js";
 import type { StepDerivation } from "../tasks/state.js";
 import { beginStep, type EndedStep, endStep, pauseTask, readStoredTask } from "../tasks/store.js";
 import type { LaneContext, LiveTask, StepAbort, TaskStepEvent } from "./task-lane-types.js";
@@ -46,7 +47,13 @@ function sessionContextOf(ctx: LaneContext, live: LiveTask): TaskSessionContext 
 		},
 		report: async (text) => {
 			assertActive();
-			const message = await queueTaskReport(live.deskDir, live.taskId, live.seq, live.channelId, text);
+			const message = await queueTaskReport(
+				live.deskDir,
+				live.taskId,
+				live.seq,
+				live.channelId,
+				reportReceipt(live.taskId, text),
+			);
 			await drainTaskDeliveries(
 				live.deskDir,
 				(channel, text) => ctx.options.deliver(live.desk, channel, text),

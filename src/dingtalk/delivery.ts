@@ -169,6 +169,8 @@ class ChannelDeliveryController {
 			case "compaction":
 				if (event.phase === "start") await this.remember("正在压缩上下文…", "");
 				return;
+			case "reasoning.delta":
+			case "text.delta":
 			case "steer.applied":
 				return;
 		}

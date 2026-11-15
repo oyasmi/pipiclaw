@@ -14,6 +14,8 @@
 export interface TranscriptRenderer {
 	/** A streamed progress line (tool call, thinking, assistant increment, error). */
 	appendProgress(text: string): void;
+	/** Incremental assistant text delta for live preview before the message completes. */
+	streamText?(delta: string): void;
 	/** The final answer for a turn, rendered prominently (Markdown where supported). */
 	showFinal(markdown: string): void;
 	/** A side notice (skill change, model fallback), rendered subtly. */

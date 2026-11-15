@@ -198,6 +198,7 @@ export class SubAgentRunManager {
 	private emitNotice(record: RunRecord, notice: RunNotice): void {
 		const notify = this.options.notify;
 		if (!notify) return;
+		if (record.taskId && !notice.taskId) notice = { ...notice, taskId: record.taskId };
 		void Promise.resolve()
 			.then(() => notify(this.target.desk, record.channelId, notice))
 			.catch((error) =>
@@ -211,8 +212,7 @@ export class SubAgentRunManager {
 	/** Start tailing a just-launched external run's artifact file for a human-readable step label
 	 *  (P1a). Best-effort only — see `progress-tail.ts` for the polling/pacing contract. */
 	private startExternalProgressTail(record: RunRecord): void {
-		if (this.stopped) return;
-		if (!record.harness) return;
+		if (this.stopped || !record.harness) return;
 		this.stopExternalProgressTail(record.runId);
 		const tail = startExternalProgressTail({
 			artifactDir: record.artifactDir,

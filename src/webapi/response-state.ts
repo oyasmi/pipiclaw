@@ -51,6 +51,12 @@ export class LiveResponse {
 	private announced = false;
 	private readonly subscribers = new Set<ResponseSubscriber>();
 	private readonly toolItems = new Map<string, number>();
+	private streamingReasoning?: { index: number; item: ResponseReasoningItem; text: string };
+	private streamingMessage?: {
+		index: number;
+		item: ResponseOutputMessage & { pipiclaw_level?: CommentaryLevel };
+		text: string;
+	};
 	private readonly ended: Promise<void>;
 	private resolveEnded!: () => void;
 	private persisting: Promise<void> = Promise.resolve();
@@ -213,9 +219,66 @@ export class LiveResponse {
 		this.emit({ type: "response.output_item.done", output_index: index, item: structuredClone(item) });
 	}
 
+	/** Stream an incremental reasoning delta before the reasoning block finishes. */
+	appendReasoning(delta: string): void {
+		if (this.terminal || !delta) return;
+		if (!this.streamingReasoning) {
+			if (!delta.trim()) return;
+			const item: ResponseReasoningItem = { id: newId("rs"), type: "reasoning", summary: [], status: "in_progress" };
+			const index = this.record.output.push(item) - 1;
+			this.streamingReasoning = { index, item, text: "" };
+			this.emit({ type: "response.output_item.added", output_index: index, item: structuredClone(item) });
+			this.emit({
+				type: "response.reasoning_summary_part.added",
+				output_index: index,
+				item_id: item.id,
+				summary_index: 0,
+				part: { type: "summary_text", text: "" },
+			});
+		}
+		const active = this.streamingReasoning;
+		active.text += delta;
+		this.emit({
+			type: "response.reasoning_summary_text.delta",
+			output_index: active.index,
+			item_id: active.item.id,
+			summary_index: 0,
+			delta,
+		});
+	}
+
 	/** The model's reasoning, as a reasoning item with a one-part summary. */
 	addReasoning(text: string): void {
-		if (this.terminal || !text.trim()) return;
+		if (this.terminal) return;
+		if (this.streamingReasoning) {
+			const active = this.streamingReasoning;
+			this.streamingReasoning = undefined;
+			const finalText = text.trim() ? text : active.text;
+			this.emit({
+				type: "response.reasoning_summary_text.done",
+				output_index: active.index,
+				item_id: active.item.id,
+				summary_index: 0,
+				text: finalText,
+			});
+			const part = { type: "summary_text" as const, text: finalText };
+			this.emit({
+				type: "response.reasoning_summary_part.done",
+				output_index: active.index,
+				item_id: active.item.id,
+				summary_index: 0,
+				part,
+			});
+			active.item.summary = [part];
+			active.item.status = "completed";
+			this.emit({
+				type: "response.output_item.done",
+				output_index: active.index,
+				item: structuredClone(active.item),
+			});
+			return;
+		}
+		if (!text.trim()) return;
 		const item: ResponseReasoningItem = { id: newId("rs"), type: "reasoning", summary: [], status: "in_progress" };
 		const index = this.record.output.push(item) - 1;
 		this.emit({ type: "response.output_item.added", output_index: index, item: structuredClone(item) });
@@ -253,9 +316,77 @@ export class LiveResponse {
 		this.emit({ type: "response.output_item.done", output_index: index, item: structuredClone(item) });
 	}
 
+	/** Stream an incremental assistant text delta before the message finishes. */
+	appendText(delta: string): void {
+		if (this.terminal || !delta) return;
+		if (!this.streamingMessage) {
+			if (!delta.trim()) return;
+			const id = newId("msg");
+			const item: ResponseOutputMessage & { pipiclaw_level?: CommentaryLevel } = {
+				id,
+				type: "message",
+				role: "assistant",
+				status: "in_progress",
+				phase: "final_answer",
+				content: [],
+			};
+			const index = this.record.output.push(item) - 1;
+			this.streamingMessage = { index, item, text: "" };
+			this.emit({ type: "response.output_item.added", output_index: index, item: structuredClone(item) });
+			this.emit({
+				type: "response.content_part.added",
+				output_index: index,
+				item_id: id,
+				content_index: 0,
+				part: { type: "output_text", text: "", annotations: [] },
+			});
+		}
+		const active = this.streamingMessage;
+		active.text += delta;
+		this.emit({
+			type: "response.output_text.delta",
+			output_index: active.index,
+			item_id: active.item.id,
+			content_index: 0,
+			delta,
+			logprobs: [],
+		});
+	}
+
 	/** A finished assistant message: commentary between tool calls, or the final answer. */
 	addMessage(phase: "commentary" | "final_answer", text: string, level?: CommentaryLevel): void {
-		if (this.terminal || !text.trim()) return;
+		if (this.terminal) return;
+		if (level === undefined && this.streamingMessage) {
+			const active = this.streamingMessage;
+			this.streamingMessage = undefined;
+			const finalText = text.trim() ? text : active.text;
+			active.item.phase = phase;
+			this.emit({
+				type: "response.output_text.done",
+				output_index: active.index,
+				item_id: active.item.id,
+				content_index: 0,
+				text: finalText,
+				logprobs: [],
+			});
+			const part = { type: "output_text" as const, text: finalText, annotations: [] };
+			this.emit({
+				type: "response.content_part.done",
+				output_index: active.index,
+				item_id: active.item.id,
+				content_index: 0,
+				part,
+			});
+			active.item.content = [part];
+			active.item.status = "completed";
+			this.emit({
+				type: "response.output_item.done",
+				output_index: active.index,
+				item: structuredClone(active.item),
+			});
+			return;
+		}
+		if (!text.trim()) return;
 		const id = newId("msg");
 		const empty: ResponseOutputMessage & { pipiclaw_level?: CommentaryLevel } = {
 			id,
@@ -378,8 +509,30 @@ export class LiveResponse {
 		this.persisting = Promise.all([this.persisting, written]).then(() => undefined);
 	}
 
-	/** Tool calls still running when the response ends are closed as `incomplete`, with their `done` events. */
+	/** Tool calls or streaming items still running when the response ends are closed as `incomplete`. */
 	private closeDanglingCalls(): void {
+		if (this.streamingReasoning) {
+			const active = this.streamingReasoning;
+			this.streamingReasoning = undefined;
+			active.item.summary = [{ type: "summary_text", text: active.text }];
+			active.item.status = "incomplete";
+			this.emit({
+				type: "response.output_item.done",
+				output_index: active.index,
+				item: structuredClone(active.item),
+			});
+		}
+		if (this.streamingMessage) {
+			const active = this.streamingMessage;
+			this.streamingMessage = undefined;
+			active.item.content = [{ type: "output_text", text: active.text, annotations: [] }];
+			active.item.status = "incomplete";
+			this.emit({
+				type: "response.output_item.done",
+				output_index: active.index,
+				item: structuredClone(active.item),
+			});
+		}
 		for (const [callId, index] of [...this.toolItems]) {
 			this.toolItems.delete(callId);
 			const item = this.record.output[index] as McpCallItem;
@@ -389,6 +542,18 @@ export class LiveResponse {
 	}
 
 	private markDanglingCallsIncomplete(): void {
+		if (this.streamingReasoning) {
+			this.streamingReasoning.item.summary = [{ type: "summary_text", text: this.streamingReasoning.text }];
+			this.streamingReasoning.item.status = "incomplete";
+			this.streamingReasoning = undefined;
+		}
+		if (this.streamingMessage) {
+			this.streamingMessage.item.content = [
+				{ type: "output_text", text: this.streamingMessage.text, annotations: [] },
+			];
+			this.streamingMessage.item.status = "incomplete";
+			this.streamingMessage = undefined;
+		}
 		for (const [callId, index] of [...this.toolItems]) {
 			this.toolItems.delete(callId);
 			(this.record.output[index] as McpCallItem).status = "incomplete";

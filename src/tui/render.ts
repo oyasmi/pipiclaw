@@ -24,6 +24,7 @@ export function traitsOf(mode: TuiResponseMode): DeliveryTraits {
 /** The parts of a Response event the terminal reads (the SDK's union is much wider). */
 export interface StreamEvent {
 	type: string;
+	delta?: string;
 	item?: {
 		id?: string;
 		type?: string;
@@ -94,6 +95,11 @@ export class EventRenderer {
 			case "response.output_item.added":
 				if (event.item?.type === "mcp_call") {
 					this.progress("tool", describeToolCall(event.item.name ?? "", parseArguments(event.item.arguments)));
+				}
+				return;
+			case "response.output_text.delta":
+				if (this.traits.finalDelivery === "plain" && !this.answered && event.delta) {
+					this.out.streamText?.(event.delta);
 				}
 				return;
 			case "response.output_item.done":

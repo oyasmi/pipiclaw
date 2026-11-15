@@ -13,6 +13,12 @@ import type { GuardBreach } from "./state.js";
  * next step is something the user can type.
  */
 
+/** A `task_report` message, tagged with its task id when the leader did not already name it. */
+export function reportReceipt(id: string, text: string): string {
+	if (text.includes(id)) return text;
+	return `**任务 \`${id}\` 汇报**\n${text}`;
+}
+
 /** A `task_ask` question, delivered once the step ends. */
 export function askReceipt(id: string, question: string): string {
 	return `⚠️ 任务 \`${id}\` 需要你的决定：${question}\n直接回复我，或用 \`/tasks msg ${id} <内容>\` 回答。`;

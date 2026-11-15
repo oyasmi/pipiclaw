@@ -13,6 +13,7 @@ import type {
 	AutoRetryStartEvent,
 	MessageEndEvent,
 	MessageStartEvent,
+	MessageUpdateEvent,
 	SessionEvent,
 	ToolExecutionEndEvent,
 	ToolExecutionStartEvent,
@@ -109,6 +110,15 @@ export function isToolExecutionEndEvent(value: unknown): value is ToolExecutionE
 
 export function isMessageStartEvent(value: unknown): value is MessageStartEvent {
 	return hasEventType(value, "message_start") && "message" in value;
+}
+
+export function isMessageUpdateEvent(value: unknown): value is MessageUpdateEvent {
+	return (
+		hasEventType(value, "message_update") &&
+		"message" in value &&
+		isRecord(value.assistantMessageEvent) &&
+		typeof value.assistantMessageEvent.type === "string"
+	);
 }
 
 export function isMessageEndEvent(value: unknown): value is MessageEndEvent {

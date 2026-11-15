@@ -242,6 +242,12 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
 				const guardResult = guardCommand(command, securityConfig.commandGuard);
 				if (!guardResult.allowed) {
+					if (guardResult.category === "unsupported-shell") {
+						throw new RecoverableToolError(
+							`Command rejected by static shell parser (${guardResult.reason ?? "unsupported syntax"}). ` +
+								"Rewrite using simple commands without shell expansions, globs, or heredocs, or use the dedicated read, write, edit, find, or grep tools instead.",
+						);
+					}
 					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
 						type: "command",
 						tool: "bash",

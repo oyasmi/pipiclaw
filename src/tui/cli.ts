@@ -172,6 +172,22 @@ export async function runTui(
 	// the console log sink would corrupt the output, so logging goes to its file sink only.
 	log.setConsoleLoggingEnabled(false);
 	const embedded = await hooks.startEmbeddedRuntime(paths, io);
+	let stoppingEmbedded = false;
+	const stopEmbedded = async (): Promise<void> => {
+		if (!embedded || stoppingEmbedded) return;
+		stoppingEmbedded = true;
+		process.stderr.write("正在关闭运行时…\n");
+		await embedded.stop();
+	};
+	const onSignal = (): void => {
+		void stopEmbedded().finally(() => {
+			process.exitCode = 0;
+		});
+	};
+	if (embedded) {
+		process.once("SIGTERM", onSignal);
+		process.once("SIGHUP", onSignal);
+	}
 	try {
 		if (!embedded) requireSocket(paths, io);
 		try {
@@ -184,8 +200,9 @@ export async function runTui(
 		}
 	} finally {
 		if (embedded) {
-			process.stderr.write("正在关闭运行时…\n");
-			await embedded.stop();
+			process.off("SIGTERM", onSignal);
+			process.off("SIGHUP", onSignal);
+			await stopEmbedded();
 		}
 	}
 }

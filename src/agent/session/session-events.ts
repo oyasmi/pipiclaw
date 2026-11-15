@@ -33,6 +33,7 @@ import {
 	isAutoRetryStartEvent,
 	isMessageEndEvent,
 	isMessageStartEvent,
+	isMessageUpdateEvent,
 	isSubAgentToolDetails,
 	isTextPart,
 	isThinkingPart,
@@ -224,12 +225,35 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 	if (isMessageStartEvent(event)) {
 		if (isAssistantEventMessage(event.message)) {
+			runState.streamingTextBuffer = "";
+			runState.streamingTextFlushed = false;
 			log.logResponseStart(logCtx);
 		} else if (isUserEventMessage(event.message)) {
 			// The turn's own prompt is the first user message; any later one is a steering or
 			// follow-up message the SDK injected into the running loop.
 			runState.userMessagesStarted++;
 			if (runState.userMessagesStarted > 1) ctx.emit({ type: "steer.applied" });
+		}
+		return;
+	}
+
+	if (isMessageUpdateEvent(event)) {
+		const sub = event.assistantMessageEvent;
+		if (sub.type === "thinking_delta" && typeof sub.delta === "string" && sub.delta.length > 0) {
+			ctx.emit({ type: "reasoning.delta", delta: sub.delta });
+		} else if (sub.type === "text_delta" && typeof sub.delta === "string" && sub.delta.length > 0) {
+			if (runState.streamingTextFlushed) {
+				ctx.emit({ type: "text.delta", delta: sub.delta });
+			} else {
+				runState.streamingTextBuffer += sub.delta;
+				const trimmed = runState.streamingTextBuffer.trimStart();
+				if (trimmed.length > 0 && !"[SILENT]".startsWith(trimmed) && !trimmed.startsWith("[SILENT]")) {
+					runState.streamingTextFlushed = true;
+					const flushed = runState.streamingTextBuffer;
+					runState.streamingTextBuffer = "";
+					ctx.emit({ type: "text.delta", delta: flushed });
+				}
+			}
 		}
 		return;
 	}

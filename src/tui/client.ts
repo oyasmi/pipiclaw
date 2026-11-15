@@ -69,10 +69,20 @@ export function createSocketClient(paths: BootstrapPaths): OpenAI {
 export function requireSocket(paths: BootstrapPaths, io: BootstrapIO): void {
 	const socketPath = webapiSocketPath(paths.appHomeDir);
 	if (existsSync(socketPath)) return;
+	let lockDetail = "";
+	try {
+		const raw: unknown = JSON.parse(readFileSync(join(paths.appHomeDir, "state", "daemon.lock"), "utf-8"));
+		if (isPlainObject(raw) && typeof raw.pid === "number") {
+			const started = typeof raw.startedAt === "string" ? `, started at ${raw.startedAt}` : "";
+			lockDetail = ` (lock held by PID ${raw.pid}${started})`;
+		}
+	} catch {
+		// Lock file unreadable or absent; omit holder details.
+	}
 	io.error(
 		[
 			`Cannot reach the Web API socket (${socketPath}).`,
-			"A Pipiclaw daemon is running, but it has no Web API socket. Either:",
+			`A Pipiclaw daemon is running${lockDetail}, but it has no Web API socket. Either:`,
 			'  - set `"webapi": { "enabled": true, "socket": true }` in channel.json and restart the daemon, or',
 			"  - stop the daemon, and `pipiclaw tui` will run the runtime itself.",
 		].join("\n"),

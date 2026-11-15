@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BootstrapExitError } from "../src/app/home.js";
 import { runTui } from "../src/tui/cli.js";
@@ -9,15 +11,22 @@ describe("pipiclaw tui startup", () => {
 
 	it("connects to a daemon that holds the app home, and says what to change when it has no socket", async () => {
 		const errors: string[] = [];
+		const paths = bootstrapPathsIn(tempDir());
+		mkdirSync(join(paths.appHomeDir, "state"), { recursive: true });
+		writeFileSync(
+			join(paths.appHomeDir, "state", "daemon.lock"),
+			JSON.stringify({ pid: 4242, startedAt: "2026-11-15T10:00:00Z" }),
+		);
 		await expect(
 			runTui(
 				["node", "pipiclaw", "tui", "--print", "x"],
 				{ startEmbeddedRuntime: async () => undefined },
 				{ log: () => undefined, error: (...args: unknown[]) => void errors.push(args.join(" ")) },
-				bootstrapPathsIn(tempDir()),
+				paths,
 			),
 		).rejects.toBeInstanceOf(BootstrapExitError);
 		expect(errors.join("\n")).toMatch(/webapi/);
+		expect(errors.join("\n")).toContain("PID 4242");
 	});
 
 	it("stops the runtime it started even when the client fails", async () => {

@@ -225,6 +225,8 @@ export interface RunNotice {
 	kind: "settled" | "progress" | "stalled";
 	runId: string;
 	agent: string;
+	/** Set when the delegation run is bound to a background task. */
+	taskId?: string;
 	/** Only set for `kind: "settled"`. */
 	status?: RunStatus;
 	durationMs: number;

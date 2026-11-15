@@ -203,10 +203,12 @@ export class TuiSession {
 
 	private stop(): void {
 		const connection = this.connection;
+		const target = this.lastSteerTarget;
 		this.connection = undefined;
 		this.connectionId++;
 		this.resetCounters();
 		this.followups.length = 0;
+		connection?.send({ type: "response.cancel", ...(target ? { response_id: target } : {}) });
 		connection?.close();
 		this.options.frontend.showNotice("已停止。");
 		this.afterStateChange();
@@ -222,6 +224,10 @@ export class TuiSession {
 	// ---- events ----------------------------------------------------------------------------
 
 	private onEvent(event: StreamEvent & Record<string, unknown>): void {
+		const errorCode = (event.error as { code?: string } | undefined)?.code;
+		if (event.type === "error" && errorCode === "websocket_connection_limit_reached" && !this.busy) {
+			return;
+		}
 		this.renderer.handle(event);
 		if (event.type === "response.output_item.done" && event.item?.id) this.shown.add(event.item.id);
 		// A command typed mid-turn runs on its own stream: it is neither a steering successor nor a

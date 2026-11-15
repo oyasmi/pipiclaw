@@ -499,9 +499,29 @@ function inspectParsed(
 		throw new ShellSyntaxError("Dynamic command operands are unsupported");
 	if (
 		!WRAPPER_COMMANDS.has(parsed.command) &&
-		!["echo", "printf", "ls", "cat", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "grep", "rg", "sed"].includes(
-			parsed.command,
-		) &&
+		![
+			"echo",
+			"printf",
+			"ls",
+			"cat",
+			"head",
+			"tail",
+			"wc",
+			"sort",
+			"uniq",
+			"cut",
+			"tr",
+			"grep",
+			"rg",
+			"sed",
+			"stat",
+			"file",
+			"du",
+			"diff",
+			"jq",
+			"sha256sum",
+			"md5sum",
+		].includes(parsed.command) &&
 		parsed.args.some((arg) => arg.includes(SHELL_DYNAMIC.glob))
 	)
 		throw new ShellSyntaxError("Dynamic pathname operands are unsupported for this command");
