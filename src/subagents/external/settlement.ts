@@ -32,7 +32,8 @@ export interface BuildExternalSettleInputInput {
  * session id — those come from whatever the process actually produced, parsed or not.
  */
 export function buildExternalSettleInput(input: BuildExternalSettleInputInput): SettleInput {
-	const classification = classifyExternalOutcome(input.harnessId, input.outcome);
+	const harness = getExternalHarness(input.harnessId);
+	const classification = classifyExternalOutcome(harness ?? input.harnessId, input.outcome);
 	const cancelled = input.terminationReason === "cancelled";
 	const timedOut = input.terminationReason === "timeout";
 	const status: SettleInput["status"] = cancelled ? "cancelled" : timedOut ? "failed" : classification.status;

@@ -216,7 +216,7 @@ flowchart TB
 
 ### 3.3 P2 级代码复杂度、架构基线清零路径与评测集（`evals/`）诊断
 
-1. **外部执行器（Harness）扩展摩擦过大**：对照刚合入的 [Spec 068](../../docs/specs/068-antigravity-cli-harness/design.md)，每新增一个外部 CLI 需要在跨层 **7 个文件**同步修改硬编码字符串联合类型（`discovery.ts`、`run-record.ts`、`external/harness.ts`、`external/run.ts`、`channel/store.ts`、`agent/prompt/types.ts`、`tools/subagent-manage.ts`），且 4 个 CLI 适配器各自复制了一套参数扫描与 NDJSON 解析（其中 `detectExistingFlags` 还把短参数 `-c` 全局当成 Codex 配置项处理）。同时 [subagent-manage.ts](../../src/tools/subagent-manage.ts#L293-L389) 的 `follow_up` 在 `tools/` 适配层内联了约 90 行租约与外部派发逻辑，违背了 [AGENTS.md](../../AGENTS.md#L111) 的薄适配器原则。
+1. **✅ 已修复 — 外部执行器（Harness）扩展摩擦过大**：已在叶子词汇表 [run-record.ts](../../src/subagents/run-record.ts) 收敛单一真相源 `EXTERNAL_HARNESS_IDS` / `RunHarness` 与 `ALLOWED_THINKING_LEVELS`，并在 [harness.ts](../../src/subagents/external/harness.ts) 的 `ExternalHarness` 契约上显式声明静态能力属性（`resumable`、`requiresProtocolTerminal`、`supportsImplicitVerifyThinking`、`acceptsSystemPromptFlag`、`verifiesResumeSession`、`roleWarnings`），由 [registry.ts](../../src/subagents/external/registry.ts) 的 `Record<RunHarness, ExternalHarness>` 穷尽校验驱动 [discovery.ts](../../src/subagents/discovery.ts)、[task-envelope.ts](../../src/subagents/task-envelope.ts)、[run.ts](../../src/subagents/external/run.ts)、[settlement.ts](../../src/subagents/external/settlement.ts) 与 [role-warnings.ts](../../src/subagents/external/role-warnings.ts)；同时修复了 `detectExistingFlags` 将 `-c` 误作非 Codex 适配器参数冲突的隐性缺陷，复用 `outputFormatConflicts` 与 `parseJsonObjectLines` 薄辅助函数，并将 [subagent-manage.ts](../../src/tools/subagent-manage.ts) 中的 `follow_up` 租约与派发编排下沉至 [dispatch.ts](../../src/subagents/external/dispatch.ts) 的 `dispatchExternalFollowUp`。
 2. **一举清零 [architecture-baseline.json](../../scripts/architecture-baseline.json) 中仅存的 3 个 >800 行历史例外**：
    - [jobs/manager.ts](../../src/jobs/manager.ts)（975 行）：将纯 `Executor` 杀进程脚本引擎（`killCommand` + `runKill`，约 85 行）与产物读取/GC 辅助函数（`collectGarbage` + `readOutput`，约 110 行）拆至同目录独立文件，即可自然降至 ~770 行；
    - [subagents/discovery.ts](../../src/subagents/discovery.ts)（1031 行）：将 Frontmatter YAML 子集解析器与角色校验/列表渲染分离；
@@ -295,7 +295,7 @@ flowchart LR
 #### 方向 1.4：打通“已完成任务归档（Task Archive）”检索与 Shell 守卫降噪
 - **统一历史工作召回**：为 `task_list` 增加 `includeArchived` / 关键词过滤，或提供轻量 `work_search`（同时覆盖 `tasks/archive/*.md` 的目标/最终交付摘要与全量 `conversations/*/log.jsonl`），让模型在接新需求时能秒查“上次这个模块是怎么改的”。
 - **Shell 守卫减摩**：在 [bash.ts](../../src/tools/bash.ts#L255) 中将 `unsupported-shell`（语法受限但非恶意命令）改为抛 `RecoverableToolError`（不弹用户侧高危告警，直接指导模型改用 `python3 -c` / `node -e` 或文件工具），并评估在安全参数位置放开无副作用的只读 glob / heredoc。
-- **外部 Harness 注册表收敛**：用单一声明式 `HARNESS_SPECS` 表收拢 7 处重复联合类型，并将 `subagent-manage.ts` 中的 `follow_up` 执行逻辑下沉回 `src/subagents/`。
+- **✅ 已完成 — 外部 Harness 注册表与 `follow_up` 编排收敛**：已在 [run-record.ts](../../src/subagents/run-record.ts) 与 [harness.ts](../../src/subagents/external/harness.ts) 收敛单一能力声明与 `Record<RunHarness, ExternalHarness>` 穷尽注册表，并将 `subagent-manage.ts` 中的 `follow_up` 执行逻辑下沉至 [dispatch.ts](../../src/subagents/external/dispatch.ts)。
 
 #### 方向 1.5：WebAPI / TUI 增量流式与单机守护进程收敛
 - 在 `TurnOutputPort` 增加可选增量事件 `answer_delta` / `thinking_delta`，让 TUI 与 WebAPI 客户端获得丝滑的实时逐字流式反馈（钉钉端可继续按字节水位节流刷新）；

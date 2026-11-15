@@ -1,3 +1,4 @@
+import { splitShellWords } from "../../shared/shell-words.js";
 import { isPlainObject } from "../../shared/type-guards.js";
 import {
 	type BuildInvocationResult,
@@ -5,9 +6,12 @@ import {
 	type ExternalHarness,
 	type ExternalInvocationInput,
 	type ExternalOutcome,
+	type ExternalRoleWarningInput,
 	expandPlaceholders,
 	formatDroppedPlaceholderWarnings,
+	outputFormatConflicts,
 	type ParseOutcomeInput,
+	parseJsonObjectLines,
 } from "./harness.js";
 
 /**
@@ -64,21 +68,14 @@ function decorateCursorModel(model: string, effort: string): { model: string; wa
 	return { model: `${match[1]}[${nextInner}]` };
 }
 
-function hasTrustFlag(argv: string[]): boolean {
-	return argv.some((token) => token === "--trust" || token.startsWith("--trust="));
+const FORCE_TOKENS = new Set(["-f", "--force", "--yolo"]);
+
+function hasWorktreeToken(token: string): boolean {
+	return token === "--worktree" || token === "-w" || token.startsWith("--worktree=");
 }
 
-/** True when the command already chose an output format other than the one settlement parses. */
-function outputFormatConflicts(argv: string[]): boolean {
-	for (let i = 0; i < argv.length; i++) {
-		const token = argv[i];
-		if (token === "--output-format") {
-			if (argv[i + 1] !== "stream-json") return true;
-		} else if (token?.startsWith("--output-format=") && token.slice("--output-format=".length) !== "stream-json") {
-			return true;
-		}
-	}
-	return false;
+function hasTrustFlag(argv: string[]): boolean {
+	return argv.some((token) => token === "--trust" || token.startsWith("--trust="));
 }
 
 function collapseWhitespace(text: string): string {
@@ -147,6 +144,31 @@ function assistantText(record: Record<string, unknown>): string | undefined {
 export const cursorCliHarness: ExternalHarness = {
 	id: "cursor-cli",
 	parserVersion: 1,
+	resumable: true,
+	requiresProtocolTerminal: true,
+	supportsImplicitVerifyThinking: false,
+
+	roleWarnings(input: ExternalRoleWarningInput): string[] {
+		const tokens = splitShellWords(input.command);
+		const hasForce = tokens.some((token) => FORCE_TOKENS.has(token));
+		const warnings: string[] = [];
+		if (input.mutates === "write" && !hasForce) {
+			warnings.push(
+				`${input.entryName}: print mode does not write changes to files unless command includes -f, --force, or --yolo`,
+			);
+		}
+		if (input.mutates === "read" && hasForce) {
+			warnings.push(
+				`${input.entryName}: command includes -f, --force, or --yolo, so the CLI can modify files and the workspace write lock will not stop it`,
+			);
+		}
+		if (tokens.some(hasWorktreeToken)) {
+			warnings.push(
+				`${input.entryName}: --worktree writes under ~/.cursor/worktrees/, outside the delegation working directory, so the workspace write lock does not cover those files`,
+			);
+		}
+		return warnings;
+	},
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
@@ -211,22 +233,12 @@ export const cursorCliHarness: ExternalHarness = {
 		let terminalSeen = false;
 		let protocolStatus: ExternalOutcome["protocolStatus"] = "absent";
 		let errorMessage: string | undefined;
-		let parsedAnyObject = false;
 		let assistantCandidate: string | undefined;
 		let resultText: string | undefined;
 
-		for (const line of input.eventsText.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed) continue;
-			let event: unknown;
-			try {
-				event = JSON.parse(trimmed);
-			} catch {
-				continue;
-			}
-			if (!isPlainObject(event)) continue;
-			parsedAnyObject = true;
-
+		const events = parseJsonObjectLines(input.eventsText);
+		const parsedAnyObject = events.length > 0;
+		for (const event of events) {
 			if (typeof event.session_id === "string") sessionId = event.session_id;
 
 			if (event.type === "assistant") {

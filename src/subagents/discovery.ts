@@ -1,18 +1,22 @@
 import { createHash } from "node:crypto";
-import { existsSync as existsSyncFs } from "node:fs";
-import { join as joinPath, delimiter as pathDelimiter } from "node:path";
+import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, delimiter as pathDelimiter } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { Dirent } from "fs";
-import { existsSync, readdirSync, readFileSync } from "fs";
-import { join } from "path";
 import { findExactModelReferenceMatch, formatModelReference } from "../models/reference.js";
 import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 import type { SecurityConfig } from "../security/types.js";
 import { splitShellWords } from "../shared/shell-words.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { SUBAGENT_TOOL_NAMES, type SubAgentToolName } from "../tools/contract/names.js";
+import { getExternalHarness } from "./external/registry.js";
 import { externalRoleWarning } from "./external/role-warnings.js";
+import {
+	EXTERNAL_HARNESS_IDS as ALLOWED_HARNESSES,
+	ALLOWED_THINKING_LEVELS,
+	type RunHarness as SubAgentHarness,
+	type SubAgentThinkingLevel,
+} from "./run-record.js";
 
 /** Re-exported from the leaf source of truth so validation and the tool set never drift. */
 const ALLOWED_SUB_AGENT_TOOLS = SUBAGENT_TOOL_NAMES;
@@ -27,19 +31,14 @@ const MAX_SUB_AGENT_TASK_CHARS = 12000;
 const MAX_SUB_AGENT_SYSTEM_PROMPT_CHARS = 16000;
 const ALLOWED_CONTEXT_MODES = ["isolated", "contextual"] as const;
 const ALLOWED_MEMORY_MODES = ["none", "index"] as const;
-// "max" is a real SDK ThinkingLevel; pipiclaw's own whitelist previously omitted it (spec 040, D4).
-const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const ALLOWED_RUNTIMES = ["internal", "external"] as const;
-const ALLOWED_HARNESSES = ["claude-code", "codex-cli", "cursor-cli", "antigravity-cli", "exec"] as const;
 const ALLOWED_WORKLOADS = ["light", "heavy"] as const;
 const ALLOWED_MUTATES = ["read", "write"] as const;
 
-export type { SubAgentToolName };
+export type { SubAgentHarness, SubAgentThinkingLevel, SubAgentToolName };
 export type SubAgentContextMode = (typeof ALLOWED_CONTEXT_MODES)[number];
 export type SubAgentMemoryMode = (typeof ALLOWED_MEMORY_MODES)[number];
-export type SubAgentThinkingLevel = (typeof ALLOWED_THINKING_LEVELS)[number];
 export type SubAgentRuntime = (typeof ALLOWED_RUNTIMES)[number];
-export type SubAgentHarness = (typeof ALLOWED_HARNESSES)[number];
 export type SubAgentWorkload = (typeof ALLOWED_WORKLOADS)[number];
 export type SubAgentMutates = (typeof ALLOWED_MUTATES)[number];
 
@@ -487,11 +486,9 @@ function firstCommandToken(command: string): string | undefined {
 
 /** Existence check only (no exec-bit probe): cheap, spawn-free, good enough for "is it installed". */
 function isExecutableAvailable(token: string): boolean {
-	if (token.includes("/")) {
-		return existsSyncFs(token);
-	}
+	if (token.includes("/")) return existsSync(token);
 	const pathEnv = process.env.PATH ?? "";
-	return pathEnv.split(pathDelimiter).some((dir) => dir && existsSyncFs(joinPath(dir, token)));
+	return pathEnv.split(pathDelimiter).some((dir) => dir && existsSync(join(dir, token)));
 }
 
 type FieldSupport = "supported" | "rejected";
@@ -853,10 +850,9 @@ export function resolveConfiguredRole(
 	}
 
 	if (baseConfig.runtime === "external") {
-		// `cursor-cli` folds effort into `model[effort=...]` which `auto` and non-parameterized model IDs reject;
-		// `exec` has no effort flag at all. Only apply the implicit verify default when the harness accepts one.
-		const verifyDefault =
-			baseConfig.harness === "cursor-cli" || baseConfig.harness === "exec" ? undefined : DEFAULT_THINKING_LEVEL;
+		const verifyDefault = getExternalHarness(baseConfig.harness)?.supportsImplicitVerifyThinking
+			? DEFAULT_THINKING_LEVEL
+			: undefined;
 		return {
 			config: {
 				...baseConfig,

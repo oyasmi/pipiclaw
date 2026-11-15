@@ -1,13 +1,18 @@
+import { splitShellWords } from "../../shared/shell-words.js";
 import { isPlainObject } from "../../shared/type-guards.js";
 import type { UsageTotals } from "../../usage/totals.js";
 import {
 	type BuildInvocationResult,
+	detectExistingFlags,
 	type ExternalHarness,
 	type ExternalInvocationInput,
 	type ExternalOutcome,
+	type ExternalRoleWarningInput,
 	expandPlaceholders,
 	formatDroppedPlaceholderWarnings,
+	outputFormatConflicts,
 	type ParseOutcomeInput,
+	parseJsonObjectLines,
 } from "./harness.js";
 
 /**
@@ -72,49 +77,45 @@ function toAntigravityEffort(level: string): string {
 	return THINKING_LEVEL_TO_ANTIGRAVITY_EFFORT[level] ?? level;
 }
 
-function hasModelFlag(argv: readonly string[]): boolean {
-	return argv.some((token) => token === "--model" || token.startsWith("--model="));
-}
-
-function hasEffortFlag(argv: readonly string[]): boolean {
-	return argv.some((token) => token === "--effort" || token.startsWith("--effort="));
-}
-
-function hasPrintOrInteractiveFlag(argv: readonly string[]): boolean {
-	return argv.some(
-		(token) =>
-			token === "-p" ||
-			token === "--print" ||
-			token === "--prompt" ||
-			token.startsWith("--print=") ||
-			token.startsWith("--prompt=") ||
-			token === "-i" ||
-			token === "--prompt-interactive" ||
-			token.startsWith("--prompt-interactive="),
+function hasPrintToken(token: string): boolean {
+	return (
+		token === "-p" ||
+		token === "--print" ||
+		token === "--prompt" ||
+		token.startsWith("--print=") ||
+		token.startsWith("--prompt=")
 	);
 }
 
-function hasConversationFlag(argv: readonly string[]): boolean {
-	return argv.some(
-		(token) =>
-			token === "-c" ||
-			token === "--continue" ||
-			token === "--conversation" ||
-			token.startsWith("--continue=") ||
-			token.startsWith("--conversation="),
+function hasInteractiveToken(token: string): boolean {
+	return token === "-i" || token === "--prompt-interactive" || token.startsWith("--prompt-interactive=");
+}
+
+function hasConversationToken(token: string): boolean {
+	return (
+		token === "-c" ||
+		token === "--continue" ||
+		token === "--conversation" ||
+		token.startsWith("--continue=") ||
+		token.startsWith("--conversation=")
 	);
 }
 
-function outputFormatConflicts(argv: readonly string[]): boolean {
-	for (let i = 0; i < argv.length; i += 1) {
-		const token = argv[i];
-		if (token === "--output-format") {
-			if (argv[i + 1] !== "stream-json") return true;
-		} else if (token?.startsWith("--output-format=") && token.slice("--output-format=".length) !== "stream-json") {
-			return true;
+function resolveEffectiveMode(tokens: readonly string[]): string | undefined {
+	let mode: string | undefined;
+	for (let i = 0; i < tokens.length; i += 1) {
+		const token = tokens[i]!;
+		if (token === "--mode") {
+			const next = tokens[i + 1];
+			if (next !== undefined) {
+				mode = next;
+				i += 1;
+			}
+		} else if (token.startsWith("--mode=")) {
+			mode = token.slice("--mode=".length);
 		}
 	}
-	return false;
+	return mode;
 }
 
 function collapseWhitespace(text: string): string {
@@ -241,14 +242,72 @@ function formatProgressLabel(verb: string, subject: string | undefined): string 
 export const antigravityCliHarness: ExternalHarness = {
 	id: "antigravity-cli",
 	parserVersion: 1,
+	resumable: true,
+	requiresProtocolTerminal: true,
+	supportsImplicitVerifyThinking: true,
+	verifiesResumeSession: true,
+
+	roleWarnings(input: ExternalRoleWarningInput): string[] {
+		const tokens = splitShellWords(input.command);
+		const warnings: string[] = [];
+		if (tokens.some(hasPrintToken)) {
+			warnings.push(
+				`${input.entryName}: -p, --print, and --prompt consume a string argument and block piped stdin in agy; omit them so headless delegation reads from stdin`,
+			);
+		}
+		if (tokens.some(hasInteractiveToken)) {
+			warnings.push(
+				`${input.entryName}: -i and --prompt-interactive require a TTY and will fail or hang in a detached background delegation`,
+			);
+		}
+		if (tokens.some(hasConversationToken)) {
+			warnings.push(
+				`${input.entryName}: -c, --continue, and --conversation pin or share session context across runs and conflict with follow_up --conversation <id>; session resumption is managed by Pipiclaw`,
+			);
+		}
+
+		const effectiveMode = resolveEffectiveMode(tokens);
+		const hasSkipPermissions = tokens.some(
+			(token) => token === "--dangerously-skip-permissions" || token.startsWith("--dangerously-skip-permissions="),
+		);
+		const hasWriteMode = effectiveMode === "accept-edits" || effectiveMode === "auto";
+		const hasAgentOrSettings = tokens.some(
+			(token) =>
+				token === "--agent" ||
+				token.startsWith("--agent=") ||
+				token === "--settings" ||
+				token.startsWith("--settings="),
+		);
+		const hasSandbox = tokens.some((token) => token === "--sandbox" || token.startsWith("--sandbox="));
+
+		if (input.mutates === "write" && effectiveMode === "plan") {
+			warnings.push(
+				`${input.entryName}: --mode plan adds planning instructions and may divert implementation work; it does not enforce read-only execution and headless plan review may auto-approve`,
+			);
+		}
+		if (input.mutates === "write" && !hasSkipPermissions && !hasWriteMode && !hasAgentOrSettings) {
+			warnings.push(
+				`${input.entryName}: command declares no explicit permission source (--dangerously-skip-permissions, --mode accept-edits/auto, --agent, or --settings); actions requiring review under default request-review mode are denied in headless runs unless allowed by host permission rules`,
+			);
+		}
+		if (input.mutates === "read" && (hasSkipPermissions || hasWriteMode)) {
+			warnings.push(
+				`${input.entryName}: command includes --dangerously-skip-permissions or --mode accept-edits/auto, so the CLI can modify files and the workspace write lock will not stop it`,
+			);
+		} else if (input.mutates === "read" && (effectiveMode === "plan" || hasSandbox)) {
+			warnings.push(
+				`${input.entryName}: --mode plan and --sandbox alone do not guarantee read-only execution in agy; verify CLI permission rules and host boundaries or declare mutates: write`,
+			);
+		}
+		return warnings;
+	},
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
 			throw new Error("antigravity-cli: command produced no argv tokens");
 		}
 		const [executable, ...rest] = input.argv;
-		const existingModel = hasModelFlag(rest);
-		const existingEffort = hasEffortFlag(rest);
+		const existing = detectExistingFlags(rest, { shortModelFlag: false, thinkingAlias: false });
 		const effort = input.thinkingLevel ? toAntigravityEffort(input.thinkingLevel) : undefined;
 		const {
 			argv: expandedRest,
@@ -267,22 +326,22 @@ export const antigravityCliHarness: ExternalHarness = {
 				"Appended --output-format stream-json; the command already set a different output format, and settlement parses stream-json.",
 			);
 		}
-		if (hasPrintOrInteractiveFlag(expandedRest)) {
+		if (expandedRest.some((token) => hasPrintToken(token) || hasInteractiveToken(token))) {
 			warnings.push(
 				"Command includes -p/--print/--prompt or -i/--prompt-interactive; in agy these flags consume a following argument, block piped stdin, or require an interactive terminal.",
 			);
 		}
-		if (hasConversationFlag(expandedRest)) {
+		if (expandedRest.some(hasConversationToken)) {
 			warnings.push(
 				"Command includes -c/--continue/--conversation; pinning or resuming a session in the role command can share state across runs and conflict with runtime follow_up resumption.",
 			);
 		}
 
 		const args = [...expandedRest, "--output-format", "stream-json"];
-		if (input.model && !existingModel && !used.has("$MODEL")) {
+		if (input.model && !existing.model && !used.has("$MODEL")) {
 			args.push("--model", input.model);
 		}
-		if (effort && !existingEffort && !used.has("$EFFORT")) {
+		if (effort && !existing.effort && !used.has("$EFFORT")) {
 			args.push("--effort", effort);
 		}
 		if (input.resumeSessionId) {
@@ -302,7 +361,6 @@ export const antigravityCliHarness: ExternalHarness = {
 		let terminalSeen = false;
 		let protocolStatus: ExternalOutcome["protocolStatus"] = "absent";
 		let errorMessage: string | undefined;
-		let parsedAnyObject = false;
 
 		const expectedResumeId = input.expectedResumeSessionId?.trim() || undefined;
 		let matchedExpectedSession = false;
@@ -331,18 +389,9 @@ export const antigravityCliHarness: ExternalHarness = {
 			}
 		};
 
-		for (const line of input.eventsText.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed) continue;
-			let event: unknown;
-			try {
-				event = JSON.parse(trimmed);
-			} catch {
-				continue;
-			}
-			if (!isPlainObject(event)) continue;
-			parsedAnyObject = true;
-
+		const events = parseJsonObjectLines(input.eventsText);
+		const parsedAnyObject = events.length > 0;
+		for (const event of events) {
 			recordParentConversationId(event.conversation_id);
 
 			if (event.event === "step_update" && isPlainObject(event.step_update)) {

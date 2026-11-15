@@ -4,6 +4,8 @@ import { claudeCodeHarness } from "../src/subagents/external/claude-code.js";
 import { codexCliHarness } from "../src/subagents/external/codex-cli.js";
 import { cursorCliHarness } from "../src/subagents/external/cursor-cli.js";
 import { classifyExternalOutcome, type ExternalHarness } from "../src/subagents/external/harness.js";
+import { getExternalHarness } from "../src/subagents/external/registry.js";
+import { EXTERNAL_HARNESS_IDS } from "../src/subagents/run-record.js";
 
 /**
  * Contract rules every *structured* harness (stream protocol with a terminal event) must honor.
@@ -30,10 +32,13 @@ describe.each(STRUCTURED_HARNESSES)(
 		// terminal event the run is "absent", and the shared classifier must fail it rather than let
 		// a killed-but-exited process count as done.
 		it("treats exit 0 without a terminal event as 'absent', which the classifier still fails", () => {
+			expect(EXTERNAL_HARNESS_IDS.filter((id) => getExternalHarness(id)?.requiresProtocolTerminal).sort()).toEqual(
+				STRUCTURED_HARNESSES.map((entry) => entry.harness.id).sort(),
+			);
 			const outcome = harness.parseOutcome({ eventsText: "", exitCode: 0 });
 			expect(outcome.protocolStatus).toBe("absent");
 			expect(outcome.terminalSeen).toBe(false);
-			expect(classifyExternalOutcome(harness.id, outcome).status).toBe("failed");
+			expect(classifyExternalOutcome(harness, outcome).status).toBe("failed");
 		});
 
 		// P1a: every structured harness implements progress labeling, and it degrades the same way

@@ -1,11 +1,12 @@
+import { isPlainObject } from "../../shared/type-guards.js";
 import type { UsageTotals } from "../../usage/totals.js";
-import type { SubAgentThinkingLevel } from "../discovery.js";
+import type { RunHarness, SubAgentThinkingLevel } from "../run-record.js";
 
 /**
  * The harness adapter seam (spec 040, D4). Every external run is reduced to the same process
- * model (D3: one prompt, one short-lived process); what differs between `claude-code`,
- * `codex-cli`, `cursor-cli`, `antigravity-cli`, and `exec` is only argv assembly and stdout parsing, and that is exactly what this
- * interface covers. It carries no state machine of its own — `runs.ts` owns that.
+ * model (D3: one prompt, one short-lived process); what differs between harnesses is argv
+ * assembly, static role checks, capability flags, and stdout parsing — all owned here rather than
+ * scattered as harness-name branches across discovery, tools, and orchestration.
  */
 
 export interface ExternalInvocationInput {
@@ -29,7 +30,7 @@ export interface ExternalInvocationInput {
 export interface BuildInvocationResult {
 	executable: string;
 	args: string[];
-	/** Whether this harness can be continued later via `resumeSessionId` (claude-code/codex-cli/cursor-cli/antigravity-cli). */
+	/** Whether this harness can be continued later via `resumeSessionId`. */
 	resumable: boolean;
 	/**
 	 * claude-code only (D4): a session id it picked and passed via `--session-id` *before* running,
@@ -69,46 +70,66 @@ export interface ParseOutcomeInput {
 	/** `undefined` when the process was killed by a signal rather than exiting normally. */
 	exitCode?: number;
 	stderrTail?: string;
-	/** Spec 068 D8: expected resumed conversation id for `antigravity-cli` follow-ups. */
+	/** Spec 068 D8: expected resumed conversation id for harnesses that verify resumed sessions. */
 	expectedResumeSessionId?: string;
 }
 
+export interface ExternalRoleWarningInput {
+	/** Role filename, so a warning can be traced back to the file that produced it. */
+	entryName: string;
+	harness: string;
+	command: string;
+	mutates: "read" | "write";
+	/** Resolved memory mode. Anything other than `none` discloses desk memory to the external process. */
+	memory: string;
+	/** True when frontmatter `model` is set. External models are never taken from the invocation. */
+	modelConfigured: boolean;
+}
+
 export interface ExternalHarness {
-	readonly id: "claude-code" | "codex-cli" | "cursor-cli" | "antigravity-cli" | "exec";
+	readonly id: RunHarness;
 	/**
 	 * Spec 042 D12: bumped by hand whenever this adapter's `parseOutcome` schema assumptions
 	 * change. Persisted on the run and shown by `/subagents show`, so a failure caused by upstream
-	 * CLI schema drift is distinguishable from a failure the target CLI itself reported — "the
-	 * adapter is stale" and "the agent failed" look identical from a run's status alone otherwise.
+	 * CLI schema drift is distinguishable from a failure the target CLI itself reported.
 	 */
 	readonly parserVersion: number;
+	/** Whether `subagent_run op=follow_up` can resume a finished run on this harness. */
+	readonly resumable: boolean;
+	/** Whether completion requires a protocol terminal event (false only for raw `exec`, D4/D9). */
+	readonly requiresProtocolTerminal: boolean;
+	/** Whether `purpose=verify` supplies the default thinking level when the role omits one. */
+	readonly supportsImplicitVerifyThinking: boolean;
+	/** True when `systemPrompt` is passed via a CLI flag rather than prepended on stdin (`claude-code`). */
+	readonly acceptsSystemPromptFlag?: boolean;
+	/** True when resumed runs persist and verify `expectedResumeSessionId` in `parseOutcome` (spec 068 D8). */
+	readonly verifiesResumeSession?: boolean;
 	/** Assemble argv. The command line is never joined into a single shell string (D4). */
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult;
 	/** Parse stdout into a unified outcome. Must never throw — a parse failure degrades to
 	 *  `protocolStatus: "unparsable"`, not an exception (D4). */
 	parseOutcome(input: ParseOutcomeInput): ExternalOutcome;
 	/**
-	 * P1a: map one raw output line, still mid-run, to a short human-readable step label — e.g. the
-	 * command a coding CLI just started, or a todo-list progress count. Same contract as
-	 * `parseOutcome`: must never throw, and returns `undefined` for a line that carries no
-	 * progress-worthy information (most lines). Optional — `exec` has no structured protocol to
-	 * read mid-run, so it omits this entirely rather than implement a no-op.
+	 * P1a: map one raw output line, still mid-run, to a short human-readable step label. Must never
+	 * throw, and returns `undefined` for a line that carries no progress-worthy information.
 	 */
 	toProgressLabel?(line: string): string | undefined;
+	/** Optional discovery-time static role warnings owned by this harness. */
+	roleWarnings?(input: ExternalRoleWarningInput): string[];
 }
 
 /**
  * The D4 status table, shared by the live post-exit path and restart reconciliation (D10.3) so
- * both judge a run identically. `exec` is the table's explicit exception (D4/D9): it has no
- * protocol terminal at all, so its own `parseOutcome` already folds the exit code into
- * `protocolStatus` directly — `terminalSeen` stays `false` even on success, so it must not be
- * checked here for that one harness.
+ * both judge a run identically. Harnesses with `requiresProtocolTerminal: false` (`exec`) fold
+ * exit code directly into `protocolStatus` because they emit no protocol terminal event.
  */
 export function classifyExternalOutcome(
-	harnessId: ExternalHarness["id"],
+	harnessOrId: Pick<ExternalHarness, "requiresProtocolTerminal"> | RunHarness,
 	outcome: ExternalOutcome,
 ): { status: "completed" | "failed"; failureReason?: string } {
-	if (harnessId === "exec") {
+	const requiresTerminal =
+		typeof harnessOrId === "string" ? harnessOrId !== "exec" : harnessOrId.requiresProtocolTerminal;
+	if (!requiresTerminal) {
 		return outcome.protocolStatus === "completed"
 			? { status: "completed" }
 			: { status: "failed", failureReason: outcome.errorMessage ?? `exec exited with code ${outcome.exitCode}` };
@@ -140,34 +161,78 @@ export interface ExistingFlags {
 	effort: boolean;
 }
 
-const MODEL_FLAG_PATTERN = /^(--model|-m)$/;
-const EFFORT_FLAG_PATTERN = /^(--effort|--thinking)$/;
+export interface DetectExistingFlagsOptions {
+	/** Recognize `-m` / `-m=...` as a short model flag (default true; `agy` supports `--model` only). */
+	shortModelFlag?: boolean;
+	/** Recognize `--thinking` / `--thinking=...` as an effort alias (default true; `agy` supports `--effort` only). */
+	thinkingAlias?: boolean;
+	/** Recognize Codex CLI's `-c` / `--config` `model=...` and `model_reasoning_effort=...` overrides (default false). */
+	codexConfigFlag?: boolean;
+}
+
 const CODEX_CONFIG_FLAG_PATTERN = /^(-c|--config)$/;
 const CODEX_MODEL_VALUE_PREFIX = "model=";
 const CODEX_EFFORT_VALUE_PREFIX = "model_reasoning_effort=";
 
-/** Which flags the user's own `command` already spells out, so a harness never injects a duplicate (D4). */
-export function detectExistingFlags(argv: string[]): ExistingFlags {
+/** Which flags the user's own `command` already spells out, scoped to the target CLI's flag grammar (D4). */
+export function detectExistingFlags(argv: readonly string[], options: DetectExistingFlagsOptions = {}): ExistingFlags {
+	const shortModel = options.shortModelFlag ?? true;
+	const thinkingAlias = options.thinkingAlias ?? true;
+	const codexConfig = options.codexConfigFlag ?? false;
 	let model = false;
 	let effort = false;
 	for (let i = 0; i < argv.length; i++) {
-		const token = argv[i];
-		if (MODEL_FLAG_PATTERN.test(token)) model = true;
-		if (EFFORT_FLAG_PATTERN.test(token)) effort = true;
-		if (CODEX_CONFIG_FLAG_PATTERN.test(token)) {
-			const value = argv[i + 1];
-			if (value?.startsWith(CODEX_MODEL_VALUE_PREFIX)) model = true;
-			if (value?.startsWith(CODEX_EFFORT_VALUE_PREFIX)) effort = true;
-		}
-		if (token.startsWith("--model=") || token.startsWith("-m=")) model = true;
-		if (token.startsWith("--effort=") || token.startsWith("--thinking=")) effort = true;
-		if (token.startsWith("-c=") || token.startsWith("--config=")) {
-			const value = token.slice(token.indexOf("=") + 1);
-			if (value.startsWith(CODEX_MODEL_VALUE_PREFIX)) model = true;
-			if (value.startsWith(CODEX_EFFORT_VALUE_PREFIX)) effort = true;
+		const token = argv[i]!;
+		if (token === "--model" || token.startsWith("--model=")) model = true;
+		if (shortModel && (token === "-m" || token.startsWith("-m="))) model = true;
+		if (token === "--effort" || token.startsWith("--effort=")) effort = true;
+		if (thinkingAlias && (token === "--thinking" || token.startsWith("--thinking="))) effort = true;
+		if (codexConfig) {
+			if (CODEX_CONFIG_FLAG_PATTERN.test(token)) {
+				const value = argv[i + 1];
+				if (value?.startsWith(CODEX_MODEL_VALUE_PREFIX)) model = true;
+				if (value?.startsWith(CODEX_EFFORT_VALUE_PREFIX)) effort = true;
+			} else if (token.startsWith("-c=") || token.startsWith("--config=")) {
+				const value = token.slice(token.indexOf("=") + 1);
+				if (value.startsWith(CODEX_MODEL_VALUE_PREFIX)) model = true;
+				if (value.startsWith(CODEX_EFFORT_VALUE_PREFIX)) effort = true;
+			}
 		}
 	}
 	return { model, effort };
+}
+
+/** True when `argv` already specifies `--output-format` with a value other than `expected`. */
+export function outputFormatConflicts(argv: readonly string[], expected = "stream-json"): boolean {
+	for (let i = 0; i < argv.length; i++) {
+		const token = argv[i];
+		if (token === "--output-format") {
+			if (argv[i + 1] !== expected) return true;
+		} else if (token?.startsWith("--output-format=") && token.slice("--output-format=".length) !== expected) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Parse NDJSON lines into plain JSON objects, tolerating blank, torn, or non-object lines.
+ * Returning an array keeps each adapter's loop imperative so TypeScript tracks state narrowing.
+ */
+export function parseJsonObjectLines(eventsText: string): Record<string, unknown>[] {
+	const records: Record<string, unknown>[] = [];
+	for (const line of eventsText.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let event: unknown;
+		try {
+			event = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
+		if (isPlainObject(event)) records.push(event);
+	}
+	return records;
 }
 
 const PLACEHOLDERS = ["$MODEL", "$EFFORT", "$PROMPT_FILE", "$SYSTEM_PROMPT_FILE"] as const;
@@ -175,16 +240,7 @@ export type Placeholder = (typeof PLACEHOLDERS)[number];
 
 /**
  * Expand `$MODEL`/`$EFFORT`/`$PROMPT_FILE`/`$SYSTEM_PROMPT_FILE` wherever they appear in argv
- * (D4). Returns which placeholders were actually found, so a harness knows whether it still needs
- * to *append* the corresponding flag (a placeholder present ⇒ never append; absent ⇒ append per
- * the harness's own rule).
- *
- * Spec 042 D10: a token that still references a placeholder after substitution (its value was
- * `undefined`, e.g. `--model $MODEL` on a role with no `model:` configured) is dropped from argv
- * entirely rather than reaching the process as a literal `"$MODEL"` string — that literal-string
- * failure is exactly what D4's "argv, not a shell string" design exists to prevent, just arriving
- * through a different door (a missing value instead of a shell-quoting bug). `dropped` carries the
- * original tokens so the caller can turn them into a run-visible warning.
+ * (D4). Unresolved placeholder tokens are dropped and returned in `dropped` (spec 042 D10).
  */
 export function expandPlaceholders(
 	argv: string[],
@@ -211,8 +267,7 @@ export function expandPlaceholders(
 	return { argv: expanded, used, dropped };
 }
 
-/** Turn `expandPlaceholders`'s `dropped` tokens into run-visible warning strings (spec 042 D10),
- *  shared so every structured harness reports the same wording. */
+/** Turn `expandPlaceholders`'s `dropped` tokens into run-visible warning strings (spec 042 D10). */
 export function formatDroppedPlaceholderWarnings(dropped: string[]): string[] {
 	return dropped.map(
 		(token) =>

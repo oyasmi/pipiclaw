@@ -1,19 +1,48 @@
 /**
- * The `runtime: external` half of delegation dispatch: launches the harness process through
- * `external/run.ts`. Always returns the "[Dispatched]" placeholder.
+ * The `runtime: external` half of delegation dispatch and `follow_up` continuation: launches the
+ * harness process through `external/run.ts` and converts pre-spawn launch failures into tool errors.
  */
+import { dirname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_SECURITY_CONFIG } from "../../security/config.js";
+import type { SecurityConfig } from "../../security/types.js";
 import { RecoverableToolError } from "../../shared/recoverable-error.js";
 import { createEmptyUsageTotals } from "../../usage/totals.js";
-import { type ExternalSubAgentConfig, externalRoleFingerprint } from "../discovery.js";
+import { type ExternalSubAgentConfig, externalRoleFingerprint, type SubAgentDiscoveryResult } from "../discovery.js";
 import { buildDispatchedText, createDetails } from "../result.js";
+import type { RunRecord } from "../run-record.js";
 import type { SubAgentRunManager } from "../runs.js";
-import { buildSubAgentTask, resolveContextualBlocks } from "../task-envelope.js";
+import {
+	assertVerifyAdmissible,
+	buildFollowUpTask,
+	buildSubAgentTask,
+	resolveContextualBlocks,
+} from "../task-envelope.js";
 import type { DelegationParams, DelegationResult, SubAgentRunContext, SubAgentToolOptions } from "../types.js";
-import { releaseWorkspaceLease } from "../workspace-lease.js";
-import type { WorkspaceBaseline } from "../workspace-summary.js";
+import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "../workspace-lease.js";
+import { snapshotWorkspace, type WorkspaceBaseline } from "../workspace-summary.js";
+import { getExternalHarness } from "./registry.js";
 import { type ExternalLaunchResult, launchExternalRun } from "./run.js";
+
+/**
+ * Spec 042 D2: a pre-spawn failure is reported in the dispatching turn instead of returning a
+ * "[Dispatched]" placeholder the model would wait on forever. `settle()` already released any lease.
+ */
+function throwOnExternalLaunchFailure(
+	launchResult: ExternalLaunchResult,
+	subjectLabel: string,
+	targetNoun: "run" | "follow-up",
+): void {
+	if (launchResult.ok) return;
+	if (launchResult.kind === "missing-binary") {
+		throw new Error(
+			`${subjectLabel} failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the ${targetNoun} was not dispatched.`,
+		);
+	}
+	throw new RecoverableToolError(
+		`${subjectLabel} failed to launch: ${launchResult.reason} The ${targetNoun} was not dispatched.`,
+	);
+}
 
 /**
  * The `runtime: external` half of `dispatchSubAgentRun` (spec 046, D2.5): launches the harness
@@ -81,19 +110,7 @@ export async function dispatchExternalRun(input: {
 		releaseWorkspaceLease(leaseKey, runContext.runId);
 		throw error;
 	}
-	// Spec 042 D2: a pre-spawn failure is reported in this same turn instead of a
-	// "[Dispatched]" placeholder the model would wait on forever — two of the three
-	// failure kinds never used to announce at all. `settle()` already released the lease.
-	if (!launchResult.ok) {
-		if (launchResult.kind === "missing-binary") {
-			throw new Error(
-				`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the run was not dispatched.`,
-			);
-		}
-		throw new RecoverableToolError(
-			`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} The run was not dispatched.`,
-		);
-	}
+	throwOnExternalLaunchFailure(launchResult, `Sub-agent "${config.name}"`, "run");
 	// D2: external's sync grace window is always 0 — always the dispatched placeholder,
 	// never an inline wait. The run keeps going in the background and wakes the channel.
 	return {
@@ -120,4 +137,158 @@ export async function dispatchExternalRun(input: {
 			toolsOverride: [],
 		}),
 	};
+}
+
+/**
+ * Resumes a finished external run on a resumable harness under a fresh `runId`, re-validating role
+ * availability, harness identity, verify admissibility, role fingerprint, and workspace leases.
+ */
+export async function dispatchExternalFollowUp(input: {
+	runManager: SubAgentRunManager;
+	record: RunRecord;
+	task: string;
+	channelId: string;
+	workspaceDir: string;
+	desk: string;
+	deskDir: string;
+	discovery?: SubAgentDiscoveryResult;
+	securityConfig?: SecurityConfig;
+}): Promise<{ newRunId: string }> {
+	const { runManager, record, task } = input;
+	const resolvedRunId = record.runId;
+	const harness =
+		record.runtime === "external" && record.harness && getExternalHarness(record.harness)?.resumable
+			? record.harness
+			: undefined;
+	if (!harness) {
+		// Internal runs have no persisted transcript to resume — the isolated-context design
+		// is the point, not a gap. Non-resumable harnesses (`exec`) have no session concept.
+		throw new RecoverableToolError(
+			`Run "${resolvedRunId}" (${record.runtime}${record.harness ? `/${record.harness}` : ""}) does not support ` +
+				"follow_up yet. Delegate a new run instead, carrying forward whatever context or prior output it needs.",
+		);
+	}
+	if (record.status === "running") {
+		throw new RecoverableToolError(
+			`Run "${resolvedRunId}" is still running; wait for it to finish before following up.`,
+		);
+	}
+	if (!record.sessionId) {
+		throw new RecoverableToolError(
+			`Run "${resolvedRunId}" never reported a session id (it likely failed before producing one); it cannot be resumed. Delegate a new run instead.`,
+		);
+	}
+	const role = input.discovery?.agents.find(
+		(agent): agent is ExternalSubAgentConfig => agent.name === record.agent && agent.runtime === "external",
+	);
+	if (!role) {
+		throw new RecoverableToolError(
+			`Role "${record.agent}" is no longer configured as an external role; cannot follow up run "${resolvedRunId}".`,
+		);
+	}
+	if (role.unavailable) {
+		throw new RecoverableToolError(`Role "${record.agent}" is currently unavailable: ${role.unavailable}`);
+	}
+	// P1-2: a role hot-edited between the original run and this follow-up must not silently
+	// resume under a stale harness (the wrong CLI would parse a command it never wrote), or
+	// masquerade a shell role as resumable (there is no flag to carry `resumeSessionId` into
+	// `/bin/sh -lc`, so the run would silently start a fresh, unrelated session anyway).
+	if (role.harness !== harness) {
+		throw new RecoverableToolError(
+			`Role "${record.agent}" now uses harness "${role.harness}", but run "${resolvedRunId}" was started on "${harness}". Delegate a new run instead of resuming across a harness change.`,
+		);
+	}
+	if (role.shell) {
+		throw new RecoverableToolError(
+			`Role "${record.agent}" runs its command through a shell, which has no way to carry a resume session id. Delegate a new run instead, carrying forward whatever context it needs.`,
+		);
+	}
+
+	assertVerifyAdmissible(role, record.purpose, record.workingDirectory);
+
+	// Spec 042 D7: a role hot-edited since the original dispatch (different command, model,
+	// or shell mode) would resume the old session under a harness invocation it never wrote.
+	const currentFingerprint = externalRoleFingerprint(role);
+	if (record.roleFingerprint !== undefined && record.roleFingerprint !== currentFingerprint) {
+		throw new RecoverableToolError(
+			`Role "${record.agent}" has changed (command, model, or shell mode) since run "${resolvedRunId}" was dispatched; resuming under the new config could reinterpret the old session incorrectly. Delegate a new run instead.`,
+		);
+	}
+
+	const newRunId = runManager.mintRunId();
+
+	let leaseKey: string | undefined;
+	if (role.mutates === "write" || record.purpose === "verify") {
+		const lease = acquireWorkspaceLease({
+			runId: newRunId,
+			channelId: input.channelId,
+			workingDirectory: record.workingDirectory,
+			mode: role.mutates === "write" ? "write" : "read",
+		});
+		if (!lease.ok) {
+			throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
+		}
+		leaseKey = lease.leaseKey;
+	}
+
+	// Spec 042 D7: `<subagent-artifacts>/<runId>` computed with path join rather than regex substitution.
+	const artifactDir = join(dirname(record.artifactDir), newRunId);
+	const runContext: SubAgentRunContext = {
+		runId: newRunId,
+		purpose: record.purpose,
+		taskId: record.taskId,
+		item: record.item,
+		workingDirectory: record.workingDirectory,
+		artifactDir,
+	};
+
+	let launchResult: ExternalLaunchResult;
+	try {
+		const envelopedTask = buildFollowUpTask(
+			task,
+			{
+				workspaceDir: input.workspaceDir,
+				desk: input.desk,
+				deskDir: input.deskDir,
+				channelId: input.channelId,
+			},
+			runContext,
+		);
+		const workspaceBaseline = role.mutates === "write" ? await snapshotWorkspace(record.workingDirectory) : undefined;
+		launchResult = await launchExternalRun({
+			runManager,
+			runId: newRunId,
+			channelId: input.channelId,
+			deskDir: input.deskDir,
+			label: `follow-up: ${task.slice(0, 80)}`,
+			agent: role.name,
+			source: role.source,
+			harness,
+			command: role.command,
+			shell: role.shell,
+			env: role.env,
+			externalModelRef: role.externalModelRef,
+			thinkingLevel: role.thinkingLevel,
+			maxWallTimeSec: role.maxWallTimeSec,
+			systemPrompt: role.systemPrompt,
+			task: envelopedTask,
+			workingDirectory: record.workingDirectory,
+			artifactDir,
+			purpose: record.purpose,
+			taskId: record.taskId,
+			item: record.item,
+			leaseKey,
+			resumeSessionId: record.sessionId,
+			mutates: role.mutates,
+			workspaceBaseline,
+			roleFingerprint: currentFingerprint,
+			workspaceDir: input.workspaceDir,
+			securityConfig: input.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+		});
+	} catch (error) {
+		releaseWorkspaceLease(leaseKey, newRunId);
+		throw error;
+	}
+	throwOnExternalLaunchFailure(launchResult, `Follow-up on run "${resolvedRunId}"`, "follow-up");
+	return { newRunId };
 }

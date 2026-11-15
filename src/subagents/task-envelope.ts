@@ -21,6 +21,7 @@ import { localDayKey } from "../shared/local-time.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { ResolvedSubAgentConfig, SubAgentConfig } from "./discovery.js";
+import { getExternalHarness } from "./external/registry.js";
 import type { SubAgentRunContext, SubAgentToolOptions } from "./types.js";
 import { findWorkspaceLeaseHolder, formatWorkspaceLeaseConflict } from "./workspace-lease.js";
 
@@ -78,9 +79,13 @@ export function assertVerifyAdmissible(
 	workingDirectory: string,
 ): void {
 	if (purpose !== "verify") return;
-	if (config.runtime === "external" && config.harness === "exec") {
+	if (
+		config.runtime === "external" &&
+		config.harness &&
+		!getExternalHarness(config.harness)?.requiresProtocolTerminal
+	) {
 		throw new RecoverableToolError(
-			`Sub-agent "${config.name}" uses the exec harness, which has no protocol terminal and cannot be used for purpose=verify.`,
+			`Sub-agent "${config.name}" uses the ${config.harness} harness, which has no protocol terminal and cannot be used for purpose=verify.`,
 		);
 	}
 	const holder = findWorkspaceLeaseHolder(workingDirectory);

@@ -14,10 +14,10 @@ import {
 import { splitShellWords } from "../../shared/shell-words.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { createEmptyUsageTotals } from "../../usage/totals.js";
-import type { SubAgentThinkingLevel } from "../discovery.js";
-import type { RunMutates, SettleInput } from "../run-record.js";
+import type { RunMutates, SettleInput, SubAgentThinkingLevel } from "../run-record.js";
 import type { SubAgentRunManager } from "../runs.js";
 import type { WorkspaceBaseline } from "../workspace-summary.js";
+import type { ExternalHarness } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
 import { finalizeExternalRun } from "./settlement.js";
 
@@ -183,11 +183,10 @@ function classifySpawnError(error: Error): "missing-binary" | "launch-failed" {
 	return code === "ENOENT" || code === "EACCES" ? "missing-binary" : "launch-failed";
 }
 
-function buildStdinContent(harnessId: string, systemPrompt: string, task: string): string {
-	// claude-code has a real system-prompt flag (--append-system-prompt-file, D4); every other
-	// harness has no such channel, so the role's system prompt has nowhere to go but the prompt
-	// itself, folded ahead of the task.
-	if (harnessId === "claude-code") return task;
+function buildStdinContent(harness: ExternalHarness, systemPrompt: string, task: string): string {
+	// Harnesses with a dedicated system-prompt flag (`claude-code`'s `--append-system-prompt-file`, D4)
+	// receive `task` alone on stdin; others fold `systemPrompt` ahead of `task`.
+	if (harness.acceptsSystemPromptFlag) return task;
 	const trimmedPrompt = systemPrompt.trim();
 	// A capability entry declares no system prompt at all: the task must then start the prompt,
 	// with no leading blank section and no `---` fence separating it from nothing.
@@ -203,22 +202,20 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	if (!harness) {
 		throw new Error(`Unknown external harness "${input.harness}".`);
 	}
-	if (input.shell && harness.id !== "exec") {
+	if (input.shell && harness.requiresProtocolTerminal) {
 		throw new Error(
 			`External harness "${harness.id}" cannot use shell mode because it would bypass protocol argv assembly. Use a wrapper script as command, or use harness: exec.`,
 		);
 	}
 
-	// `dispatch.ts` already creates the artifact dir for a fresh run; `follow_up` (subagent-manage.ts)
-	// mints a new runId/artifactDir on the spot, so this is the one place that must be reliable
-	// either way.
+	// `dispatch.ts` creates the artifact dir for both fresh and `follow_up` runs; ensure it here too.
 	await mkdir(input.artifactDir, { recursive: true });
 	const promptFile = join(input.artifactDir, "prompt.txt");
 	const trimmedSystemPrompt = input.systemPrompt.trim();
 	// Only written when the role actually declares one, so `system-prompt.txt`'s presence in a run's
 	// artifacts stays a truthful record of what was sent (D1 layout) instead of an empty decoy.
 	const systemPromptFile = trimmedSystemPrompt ? join(input.artifactDir, "system-prompt.txt") : undefined;
-	const stdinContent = buildStdinContent(harness.id, input.systemPrompt, input.task);
+	const stdinContent = buildStdinContent(harness, input.systemPrompt, input.task);
 	await writeFile(promptFile, `${input.task.trim()}\n`, "utf-8");
 	if (systemPromptFile) await writeFile(systemPromptFile, `${trimmedSystemPrompt}\n`, "utf-8");
 
@@ -246,7 +243,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		runId: input.runId,
 		channelId: input.channelId,
 		runtime: "external",
-		harness: harness.id as "claude-code" | "codex-cli" | "cursor-cli" | "antigravity-cli" | "exec",
+		harness: harness.id,
 		agent: input.agent,
 		label: input.label,
 		source: input.source,
@@ -380,7 +377,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			argv: spawnedArgv,
 			deadlineAt,
 			sessionId: invocation.presetSessionId,
-			expectedResumeSessionId: harness.id === "antigravity-cli" ? input.resumeSessionId : undefined,
+			expectedResumeSessionId: harness.verifiesResumeSession ? input.resumeSessionId : undefined,
 			// Spec 042 D1: persisted so a restart reconciliation has the same inputs the live watcher
 			// below would — without these, a run that finishes after the daemon disappears would settle
 			// with an inaccurate timeout message and an unestimatable duration.

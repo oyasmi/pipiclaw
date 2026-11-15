@@ -8,6 +8,7 @@ import {
 	expandPlaceholders,
 	formatDroppedPlaceholderWarnings,
 	type ParseOutcomeInput,
+	parseJsonObjectLines,
 } from "./harness.js";
 
 /**
@@ -42,13 +43,16 @@ function toCodexEffort(level: string | undefined): string | undefined {
 export const codexCliHarness: ExternalHarness = {
 	id: "codex-cli",
 	parserVersion: 1,
+	resumable: true,
+	requiresProtocolTerminal: true,
+	supportsImplicitVerifyThinking: true,
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
 			throw new Error("codex-cli: command produced no argv tokens");
 		}
 		const [executable, ...rest] = input.argv;
-		const existing = detectExistingFlags(rest);
+		const existing = detectExistingFlags(rest, { codexConfigFlag: true });
 		const effort = toCodexEffort(input.thinkingLevel);
 
 		const {
@@ -92,21 +96,10 @@ export const codexCliHarness: ExternalHarness = {
 		let errorMessage: string | undefined;
 		let usage: ExternalOutcome["usage"];
 		let usageKnown = false;
-		let parsedAnyLine = false;
 
-		for (const line of input.eventsText.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed) continue;
-			let event: unknown;
-			try {
-				event = JSON.parse(trimmed);
-			} catch {
-				continue; // Tolerate a torn or non-JSON line; judged by what *did* parse.
-			}
-			if (typeof event !== "object" || event === null) continue;
-			parsedAnyLine = true;
-			const record = event as Record<string, unknown>;
-
+		const records = parseJsonObjectLines(input.eventsText);
+		const parsedAnyLine = records.length > 0;
+		for (const record of records) {
 			const threadId = record.thread_id ?? (record.thread as Record<string, unknown> | undefined)?.id;
 			if (typeof threadId === "string") sessionId = threadId;
 

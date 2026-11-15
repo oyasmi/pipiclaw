@@ -9,6 +9,7 @@ import {
 	expandPlaceholders,
 	formatDroppedPlaceholderWarnings,
 	type ParseOutcomeInput,
+	parseJsonObjectLines,
 } from "./harness.js";
 
 /**
@@ -48,6 +49,10 @@ export const claudeCodeHarness: ExternalHarness = {
 	// `result` event never arrives (timeout/cancel kill the process before claude-code emits one) —
 	// `op=show` can use this to distinguish "adapter is stale" from "the agent itself crashed".
 	parserVersion: 2,
+	resumable: true,
+	requiresProtocolTerminal: true,
+	supportsImplicitVerifyThinking: true,
+	acceptsSystemPromptFlag: true,
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
@@ -108,7 +113,6 @@ export const claudeCodeHarness: ExternalHarness = {
 		let usageKnown = false;
 		let costKnown = false;
 		let costTotal: number | undefined;
-		let parsedAnyLine = false;
 		// Fallback only: a run killed by timeout/cancel never gets a `result` event, so without this
 		// a fully productive 90-minute run reports empty text and zero usage (D-review §1.2). Neither
 		// of these ever sets `terminalSeen`/`protocolStatus` — only a real `result` event may do that;
@@ -116,19 +120,9 @@ export const claudeCodeHarness: ExternalHarness = {
 		let lastAssistantText = "";
 		let streamedUsage: { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined;
 
-		for (const line of input.eventsText.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed) continue;
-			let event: unknown;
-			try {
-				event = JSON.parse(trimmed);
-			} catch {
-				continue; // Tolerate a torn or non-JSON line.
-			}
-			if (typeof event !== "object" || event === null) continue;
-			parsedAnyLine = true;
-			const record = event as Record<string, unknown>;
-
+		const records = parseJsonObjectLines(input.eventsText);
+		const parsedAnyLine = records.length > 0;
+		for (const record of records) {
 			const sid = record.session_id;
 			if (typeof sid === "string") sessionId = sid;
 

@@ -9,7 +9,10 @@ import type { WorkspaceBaseline } from "./workspace-summary.js";
 
 export type RunStatus = "running" | "completed" | "failed" | "cancelled" | "lost";
 export type RunRuntime = "internal" | "external";
-export type RunHarness = "claude-code" | "codex-cli" | "cursor-cli" | "antigravity-cli" | "exec";
+export const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type SubAgentThinkingLevel = (typeof ALLOWED_THINKING_LEVELS)[number];
+export const EXTERNAL_HARNESS_IDS = ["claude-code", "codex-cli", "cursor-cli", "antigravity-cli", "exec"] as const;
+export type RunHarness = (typeof EXTERNAL_HARNESS_IDS)[number];
 export type RunMutates = "read" | "write";
 
 export type RunResolution =

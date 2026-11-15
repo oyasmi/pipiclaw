@@ -1,24 +1,15 @@
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
+import { type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
+import { dispatchExternalFollowUp } from "../subagents/external/dispatch.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
-import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
 import type { RunRecord } from "../subagents/run-record.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
-import { assertVerifyAdmissible, buildFollowUpTask } from "../subagents/task-envelope.js";
-import type { SubAgentRunContext } from "../subagents/types.js";
-import {
-	acquireWorkspaceLease,
-	formatWorkspaceLeaseConflict,
-	releaseWorkspaceLease,
-} from "../subagents/workspace-lease.js";
-import { snapshotWorkspace } from "../subagents/workspace-summary.js";
 
 // Spec 047, P3: `subagent_list` is zero-argument and shape-independent (like `task_list`); the
 // other three ops all take `runId`, so they stay together in `subagent_run` rather than being
@@ -125,23 +116,6 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 	return lines.join("\n");
 }
 
-/** Resumable harnesses only: `claude-code`/`codex-cli`/`cursor-cli`/`antigravity-cli`. `exec` has no session concept,
- *  and internal runs have no persisted transcript by design (spec 040, non-goals). */
-function resumableHarnessOf(
-	record: RunRecord,
-): "codex-cli" | "claude-code" | "cursor-cli" | "antigravity-cli" | undefined {
-	if (record.runtime !== "external") return undefined;
-	if (
-		record.harness === "codex-cli" ||
-		record.harness === "claude-code" ||
-		record.harness === "cursor-cli" ||
-		record.harness === "antigravity-cli"
-	) {
-		return record.harness;
-	}
-	return undefined;
-}
-
 export function createSubAgentListTool(options: SubAgentManageToolOptions): AgentTool<typeof subagentListSchema> {
 	const manager = options.runManager;
 	return {
@@ -219,7 +193,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				};
 			}
 
-			// follow_up
+			// follow_up: validate parameters in the adapter, then delegate domain orchestration.
 			if (!task || !task.trim()) {
 				throw new RecoverableToolError("follow_up requires task.");
 			}
@@ -227,166 +201,17 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			if (taskLengthError) {
 				throw new RecoverableToolError(taskLengthError);
 			}
-			const record = resolution.record;
-			const harness = resumableHarnessOf(record);
-			if (!harness) {
-				// Internal runs have no persisted transcript to resume — the isolated-context design
-				// is the point, not a gap. `exec` has no session concept at all. Directing the model
-				// at a fresh delegation, not a fallback to "just use internal", keeps this honest (P2).
-				throw new RecoverableToolError(
-					`Run "${resolvedRunId}" (${record.runtime}${record.harness ? `/${record.harness}` : ""}) does not support ` +
-						"follow_up yet. Delegate a new run instead, carrying forward whatever context or prior output it needs.",
-				);
-			}
-			if (record.status === "running") {
-				throw new RecoverableToolError(
-					`Run "${resolvedRunId}" is still running; wait for it to finish before following up.`,
-				);
-			}
-			if (!record.sessionId) {
-				throw new RecoverableToolError(
-					`Run "${resolvedRunId}" never reported a session id (it likely failed before producing one); it cannot be resumed. Delegate a new run instead.`,
-				);
-			}
-			const discovery = options.getSubAgentDiscovery?.();
-			const role = discovery?.agents.find((agent) => agent.name === record.agent && agent.runtime === "external");
-			if (!role) {
-				throw new RecoverableToolError(
-					`Role "${record.agent}" is no longer configured as an external role; cannot follow up run "${resolvedRunId}".`,
-				);
-			}
-			if (role.unavailable) {
-				throw new RecoverableToolError(`Role "${record.agent}" is currently unavailable: ${role.unavailable}`);
-			}
-			// P1-2: a role hot-edited between the original run and this follow-up must not silently
-			// resume under a stale harness (the wrong CLI would parse a command it never wrote), or
-			// masquerade a shell role as resumable (there is no flag to carry `resumeSessionId` into
-			// `/bin/sh -lc`, so the run would silently start a fresh, unrelated session anyway).
-			if (role.harness !== harness) {
-				throw new RecoverableToolError(
-					`Role "${record.agent}" now uses harness "${role.harness}", but run "${resolvedRunId}" was started on "${harness}". Delegate a new run instead of resuming across a harness change.`,
-				);
-			}
-			if (role.shell) {
-				throw new RecoverableToolError(
-					`Role "${record.agent}" runs its command through a shell, which has no way to carry a resume session id. Delegate a new run instead, carrying forward whatever context it needs.`,
-				);
-			}
-
-			// Verify admission is re-checked against the *current* role config, shared with the initial
-			// dispatch. A write-capable verify follow-up takes the same exclusive lease as any writer;
-			// `exec` remains barred because it has no verification protocol terminal.
-			assertVerifyAdmissible(role, record.purpose, record.workingDirectory);
-
-			// Spec 042 D7: a role hot-edited since the original dispatch (different command, model,
-			// or shell mode) would resume the old session under a harness invocation it never wrote.
-			// Only enforced when the original run actually recorded a fingerprint — an older record
-			// predating this field cannot be checked, so it is let through rather than made
-			// permanently unresumable.
-			const currentFingerprint = externalRoleFingerprint(role);
-			if (record.roleFingerprint !== undefined && record.roleFingerprint !== currentFingerprint) {
-				throw new RecoverableToolError(
-					`Role "${record.agent}" has changed (command, model, or shell mode) since run "${resolvedRunId}" was dispatched; resuming under the new config could reinterpret the old session incorrectly. Delegate a new run instead.`,
-				);
-			}
-
-			// A short, human-typeable id (spec 041) — the follow-up gets a fresh identity, not the
-			// dispatching tool call's own id.
-			const newRunId = manager.mintRunId();
-
-			let leaseKey: string | undefined;
-			if (role.mutates === "write" || record.purpose === "verify") {
-				const lease = acquireWorkspaceLease({
-					runId: newRunId,
-					channelId: options.channelId,
-					workingDirectory: record.workingDirectory,
-					mode: role.mutates === "write" ? "write" : "read",
-				});
-				if (!lease.ok) {
-					throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
-				}
-				leaseKey = lease.leaseKey;
-			}
-
-			// Spec 042 D7: the same `<subagent-artifacts>/<runId>` layout the initial dispatch uses,
-			// computed with a real path join rather than a regex substitution that assumed the old
-			// runId was the last path segment with no separators of its own.
-			const artifactDir = join(dirname(record.artifactDir), newRunId);
-			const runContext: SubAgentRunContext = {
-				runId: newRunId,
-				purpose: record.purpose,
-				taskId: record.taskId,
-				item: record.item,
-				workingDirectory: record.workingDirectory,
-				artifactDir,
-			};
-
-			// The resumed session already holds the first dispatch's full envelope; the follow-up
-			// envelope carries only what is new (its own artifact directory, the instruction, and the
-			// checker protocol again for a verify run) — see `buildFollowUpTask`.
-			let launchResult: ExternalLaunchResult;
-			try {
-				const envelopedTask = buildFollowUpTask(
-					task,
-					{
-						workspaceDir: options.workspaceDir,
-						desk: options.desk,
-						deskDir: options.deskDir,
-						channelId: options.channelId,
-					},
-					runContext,
-				);
-				const workspaceBaseline =
-					role.mutates === "write" ? await snapshotWorkspace(record.workingDirectory) : undefined;
-				launchResult = await launchExternalRun({
-					runManager: manager,
-					runId: newRunId,
-					channelId: options.channelId,
-					deskDir: options.deskDir,
-					label: `follow-up: ${task.slice(0, 80)}`,
-					agent: role.name,
-					source: role.source,
-					harness,
-					command: role.command ?? "",
-					shell: role.shell,
-					env: role.env,
-					externalModelRef: role.externalModelRef,
-					thinkingLevel: role.thinkingLevel,
-					maxWallTimeSec: role.maxWallTimeSec,
-					systemPrompt: role.systemPrompt,
-					task: envelopedTask,
-					workingDirectory: record.workingDirectory,
-					artifactDir,
-					purpose: record.purpose,
-					taskId: record.taskId,
-					item: record.item,
-					leaseKey,
-					resumeSessionId: record.sessionId,
-					mutates: role.mutates,
-					workspaceBaseline,
-					roleFingerprint: currentFingerprint,
-					workspaceDir: options.workspaceDir,
-					securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
-				});
-			} catch (error) {
-				// Until launchExternalRun has durably registered the run, no settlement authority owns
-				// this lease. Releasing here mirrors the initial subagent dispatch path and covers prompt,
-				// artifact, audit, invocation, and pre-spawn failures in follow_up.
-				releaseWorkspaceLease(leaseKey, newRunId);
-				throw error;
-			}
-			// Spec 042 D2: a pre-spawn failure is reported in this same turn — settle() already
-			// released the lease, so there is nothing left to clean up here.
-			if (!launchResult.ok) {
-				if (launchResult.kind === "missing-binary") {
-					throw new Error(
-						`Follow-up on run "${resolvedRunId}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the follow-up was not dispatched.`,
-					);
-				}
-				throw new RecoverableToolError(
-					`Follow-up on run "${resolvedRunId}" failed to launch: ${launchResult.reason} The follow-up was not dispatched.`,
-				);
-			}
+			const { newRunId } = await dispatchExternalFollowUp({
+				runManager: manager,
+				record: resolution.record,
+				task,
+				channelId: options.channelId,
+				workspaceDir: options.workspaceDir,
+				desk: options.desk,
+				deskDir: options.deskDir,
+				discovery: options.getSubAgentDiscovery?.(),
+				securityConfig: options.securityConfig,
+			});
 
 			return {
 				content: [

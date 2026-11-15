@@ -1,3 +1,4 @@
+import type { RunHarness } from "../run-record.js";
 import { antigravityCliHarness } from "./antigravity-cli.js";
 import { claudeCodeHarness } from "./claude-code.js";
 import { codexCliHarness } from "./codex-cli.js";
@@ -5,7 +6,8 @@ import { cursorCliHarness } from "./cursor-cli.js";
 import { execHarness } from "./exec.js";
 import type { ExternalHarness } from "./harness.js";
 
-const harnesses: Partial<Record<ExternalHarness["id"], ExternalHarness>> = {
+/** Exhaustive `Record<RunHarness, ExternalHarness>`: adding an id to `EXTERNAL_HARNESS_IDS` fails typecheck until registered here. */
+const harnesses: Record<RunHarness, ExternalHarness> = {
 	"codex-cli": codexCliHarness,
 	"claude-code": claudeCodeHarness,
 	"cursor-cli": cursorCliHarness,
@@ -14,5 +16,5 @@ const harnesses: Partial<Record<ExternalHarness["id"], ExternalHarness>> = {
 };
 
 export function getExternalHarness(id: string): ExternalHarness | undefined {
-	return harnesses[id as ExternalHarness["id"]];
+	return Object.hasOwn(harnesses, id) ? harnesses[id as RunHarness] : undefined;
 }
