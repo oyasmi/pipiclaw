@@ -195,7 +195,10 @@ export class LaneControl implements TaskControl {
 		});
 		if (!updated) return { kind: "not_found" };
 		const live = ctx.live.get(taskKey(desk, id));
-		if (live) live.channelId = channel;
+		if (live) {
+			live.channelId = channel;
+			if (!live.driving) await ctx.release(live);
+		}
 		await redirectTaskDeliveries(deskDir, id, channel).catch(() => undefined);
 		await drainTaskDeliveries(
 			deskDir,

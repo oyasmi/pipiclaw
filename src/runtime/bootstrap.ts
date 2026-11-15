@@ -367,12 +367,18 @@ async function buildRuntimeContext(
 		if (resolution.kind !== "bound") return undefined;
 		const { conversation } = resolution;
 		const existing = channelRunners.get(channelId);
-		if (existing && existing.conversation.desk === conversation.desk) {
-			// Re-insert to move this channel to the end (most-recently-used) of the Map's
-			// iteration order, which evictIdleRunnersOverCap relies on.
-			channelRunners.delete(channelId);
-			channelRunners.set(channelId, existing);
-			return existing;
+		if (existing) {
+			if (existing.conversation.desk === conversation.desk && existing.conversation.cwd === conversation.cwd) {
+				// Re-insert to move this channel to the end (most-recently-used) of the Map's
+				// iteration order, which evictIdleRunnersOverCap relies on.
+				channelRunners.delete(channelId);
+				channelRunners.set(channelId, existing);
+				return existing;
+			}
+			// Keep the in-flight runner reachable for `/stop` and steer until its turn settles; the
+			// next call after it finishes replaces it with one built for the updated desk/cwd.
+			if (existing.isBusy()) return existing;
+			void releaseCachedRunner(channelRunners, channelId);
 		}
 
 		const runner = createRunner(conversation, { ...runnerPaths(conversation, channelId), getTaskControl });
@@ -515,6 +521,12 @@ async function buildRuntimeContext(
 	const taskLane = new TaskLane({
 		getActiveDesks: () => deskRuntime.activeDesks(),
 		getDeskDir: (desk) => getDeskDir(workspaceDir, desk),
+		getDeskCwd: (desk, channelId) => {
+			const resolution = deskRuntime.resolve(channelId);
+			return resolution.kind === "bound" && resolution.conversation.desk === desk
+				? resolution.conversation.cwd
+				: undefined;
+		},
 		isBoundTo,
 		isReachable: (channelId) => transports.isReachable(channelId),
 		// One runner per executing task, built from the task's own report channel (spec 064, D13).
@@ -564,7 +576,11 @@ async function buildRuntimeContext(
 				// gets a lightweight disk-backed context instead of resurrecting a full runner.
 				getRuntimeContext: async (conversation) => {
 					const runner = channelRunners.get(conversation.channelId);
-					if (runner && runner.conversation.desk === conversation.desk) {
+					if (
+						runner &&
+						runner.conversation.desk === conversation.desk &&
+						runner.conversation.cwd === conversation.cwd
+					) {
 						return runner.getMemoryMaintenanceContext();
 					}
 					return loadDetachedMaintenanceContext({

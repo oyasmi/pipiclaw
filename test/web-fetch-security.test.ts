@@ -32,7 +32,7 @@ describe("web fetch security", () => {
 		lookupMock.mockReset();
 	});
 
-	it("blocks private resolved addresses", async () => {
+	it("blocks private resolved addresses (including when preferJina or enableJinaFallback is enabled)", async () => {
 		lookupMock.mockResolvedValue([{ address: "169.254.169.254", family: 4 }]);
 
 		await expect(
@@ -43,13 +43,24 @@ describe("web fetch security", () => {
 				maxImageBytes: context.webConfig.fetch.maxImageBytes,
 				maxResponseBytes: context.webConfig.fetch.maxResponseBytes,
 				preferJina: false,
-				enableJinaFallback: false,
+				enableJinaFallback: true,
+			}),
+		).rejects.toThrow(/private network address/i);
+		await expect(
+			runWebFetch(context, {
+				url: "https://metadata.example/internal",
+				extractMode: "text",
+				maxChars: 5000,
+				maxImageBytes: context.webConfig.fetch.maxImageBytes,
+				maxResponseBytes: context.webConfig.fetch.maxResponseBytes,
+				preferJina: true,
+				enableJinaFallback: true,
 			}),
 		).rejects.toThrow(/private network address/i);
 		expect(requestMock).not.toHaveBeenCalled();
 	});
 
-	it("blocks localhost before making a request", async () => {
+	it("blocks localhost before making a request (even with Jina preferred or fallback enabled)", async () => {
 		await expect(
 			runWebFetch(context, {
 				url: "http://localhost/admin",
@@ -57,14 +68,14 @@ describe("web fetch security", () => {
 				maxChars: 5000,
 				maxImageBytes: context.webConfig.fetch.maxImageBytes,
 				maxResponseBytes: context.webConfig.fetch.maxResponseBytes,
-				preferJina: false,
-				enableJinaFallback: false,
+				preferJina: true,
+				enableJinaFallback: true,
 			}),
 		).rejects.toThrow(/blocked host/i);
 		expect(requestMock).not.toHaveBeenCalled();
 	});
 
-	it("blocks redirects to private targets", async () => {
+	it("blocks redirects to private targets without falling back to Jina", async () => {
 		lookupMock
 			.mockResolvedValueOnce([{ address: "93.184.216.34", family: 4 }])
 			.mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }]);
@@ -82,9 +93,10 @@ describe("web fetch security", () => {
 				maxImageBytes: context.webConfig.fetch.maxImageBytes,
 				maxResponseBytes: context.webConfig.fetch.maxResponseBytes,
 				preferJina: false,
-				enableJinaFallback: false,
+				enableJinaFallback: true,
 			}),
 		).rejects.toThrow(/private network address|blocked host/i);
+		expect(requestMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("refuses a binary download (PDF) with a download-then-read next step (batch 2.7)", async () => {

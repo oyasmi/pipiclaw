@@ -62,9 +62,21 @@ function sessionContextOf(ctx: LaneContext, live: LiveTask): TaskSessionContext 
 	};
 }
 
-/** The task's runner, built on first use and kept until the task leaves execution (D13). */
-export function ensureRunner(ctx: LaneContext, live: LiveTask): AgentRunner {
-	if (live.runner) return live.runner;
+/** The task's runner, built on first use and kept until the task leaves execution (D13) or the desk's cwd changes. */
+export async function ensureRunner(ctx: LaneContext, live: LiveTask): Promise<AgentRunner> {
+	if (live.runner) {
+		const currentCwd = ctx.options.getDeskCwd?.(live.desk, live.channelId);
+		if (!currentCwd || live.runner.conversation.cwd === currentCwd) return live.runner;
+		const stale = live.runner;
+		live.runner = undefined;
+		await stale.dispose().catch((disposeErr: unknown) =>
+			log.logWarn("tasks.runner.dispose_failed", "Stale task runner dispose failed", {
+				channelId: live.channelId,
+				reason: errorMessage(disposeErr),
+				fields: { taskId: live.taskId, desk: live.desk },
+			}),
+		);
+	}
 	live.runner = ctx.options.createTaskRunner({
 		desk: live.desk,
 		deskDir: live.deskDir,
@@ -89,7 +101,7 @@ export function abortStep(ctx: LaneContext, live: LiveTask, reason: StepAbort): 
 			live.quarantined = true;
 			if (live.runner === runner) live.runner = undefined;
 			runner.retireForRecovery();
-			void pauseTask(live.deskDir, live.taskId, {
+			step.quarantining = pauseTask(live.deskDir, live.taskId, {
 				by: "runtime",
 				reason: "当前步骤未能及时停止，已暂停后续执行；待该步退出后可用 /tasks resume 恢复，持续卡死时请重启服务",
 			})
@@ -151,7 +163,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	if (!document || document.fields.outcome) return { kind: "skipped" };
 
 	await acknowledgeTaskInputs(live.deskDir, live.taskId);
-	const runner = ensureRunner(ctx, live);
+	const runner = await ensureRunner(ctx, live);
 	// Whether the session still holds the current contract is read from the session itself, so a
 	// compaction that dropped it, or an edit that changed it, brings the full brief back (D15).
 	const full = !(await runner.contextIncludes(contractOpenTag(live.taskId, contractSha(document.body))));
@@ -249,6 +261,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	}
 	step.ending = true;
 	await step.submitting;
+	await step.quarantining;
 	// Only this task step can own the SDK queue here; the next step has not started.
 	runner.clearTaskStepQueue?.(step.seq);
 	await acknowledgeTaskInputs(live.deskDir, live.taskId, {

@@ -51,6 +51,7 @@ interface Harness {
 	cancelledRuns: string[];
 	enabled: { value: boolean };
 	deliveryOk: { value: boolean };
+	deskCwd: { value?: string };
 	/** Fast-forward the lane's clock. */
 	skew: { ms: number };
 	task(id: string, fields?: Partial<TaskFrontmatter>, desk?: string): Promise<void>;
@@ -72,6 +73,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 	const bound = { value: (_channelId: string, _desk: string) => true };
 	const enabled = { value: true };
 	const deliveryOk = { value: true };
+	const deskCwd: { value?: string } = {};
 	const pending: Harness["pending"] = [];
 	const cancelledRuns: string[] = [];
 	const deliveries: Harness["deliveries"] = [];
@@ -82,9 +84,11 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 		return { text: "default", tools: ["task_wait"] };
 	};
 
+	const resolveCwd = (desk: string) => (desk === "main" ? (deskCwd.value ?? deskDirs.get(desk)) : deskDirs.get(desk));
 	const lane = new TaskLane({
 		getActiveDesks: () => [...deskDirs].map(([desk, deskDir]) => ({ desk, deskDir })),
 		getDeskDir: (desk) => deskDirs.get(desk),
+		getDeskCwd: resolveCwd,
 		isBoundTo: (channelId, desk) => bound.value(channelId, desk),
 		isReachable: () => true,
 		createTaskRunner: (target) => {
@@ -97,7 +101,16 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 				);
 			};
 			let step: StepContext | undefined;
+			const cwd = resolveCwd(target.desk) ?? target.deskDir;
 			const runner = createFakeRunner({
+				conversation: {
+					desk: target.desk,
+					deskDir: target.deskDir,
+					cwd,
+					channelId: target.channelId,
+					conversation: "dm-1",
+					conversationDir: target.deskDir,
+				},
 				queueSteer: vi.fn(async (text: string) => {
 					queued.push(text);
 				}),
@@ -181,6 +194,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 		cancelledRuns,
 		enabled,
 		deliveryOk,
+		deskCwd,
 		skew,
 		task: async (id, fields = {}, desk = "main") => {
 			const deskDir = deskDirs.get(desk) as string;
@@ -425,12 +439,16 @@ describe("results and messages wake the task (D9, INV-6)", () => {
 		harness.script(
 			"waiter",
 			() => ({ text: "dispatched", tools: ["subagent"] }),
-			() => ({ text: "checked", tools: ["read"] }),
+			() => {
+				harness.deskCwd.value = "/custom/cwd";
+				return { text: "checked", tools: ["read"] };
+			},
 			close("complete"),
 		);
 		await harness.settle();
+		const firstRunner = harness.runners.waiter;
 		expect((await state("waiter"))?.waiting?.kind).toBe("work");
-		expect(harness.runners.waiter).toBeDefined();
+		expect(firstRunner).toBeDefined();
 		expect(harness.disposed).not.toContain("waiter");
 
 		harness.pending.length = 0;
@@ -444,6 +462,8 @@ describe("results and messages wake the task (D9, INV-6)", () => {
 
 		expect(harness.briefs.waiter?.[1]).toContain("RESULT_TAIL");
 		expect(harness.briefs.waiter?.[1]).not.toContain("<task_contract");
+		expect(harness.runners.waiter).not.toBe(firstRunner);
+		expect(harness.runners.waiter?.conversation.cwd).toBe("/custom/cwd");
 	});
 
 	it("leaves a task that asked the user waiting through a result, and wakes it for the user's message", async () => {
@@ -586,7 +606,13 @@ describe("runtime guards (D16)", () => {
 		release.resolve();
 		await harness.lane.drained();
 		expect((await state("stubborn"))?.state).toBe("paused");
+		const stubbornKinds = (await readTaskLog(harness.deskDir, "stubborn")).map((record) => record.kind);
+		expect(stubbornKinds.indexOf("pause")).toBeGreaterThanOrEqual(0);
+		expect(stubbornKinds.indexOf("pause")).toBeLessThan(stubbornKinds.indexOf("step_end"));
 		expect(harness.briefs.stubborn).toHaveLength(1);
+		expect(await harness.lane.resume("main", "stubborn", {})).toEqual({ kind: "ok" });
+		await harness.settle();
+		expect(harness.briefs.stubborn).toHaveLength(2);
 	});
 });
 

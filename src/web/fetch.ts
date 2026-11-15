@@ -1,5 +1,6 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { PipiclawWebToolsConfig } from "../config/tools.js";
+import { NetworkGuardError } from "../security/network.js";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createWebHttpClient } from "./client.js";
@@ -85,6 +86,7 @@ async function tryFetchViaJina(
 		workspaceDir: context.workspaceDir,
 		channelId: context.channelId,
 	});
+	await client.validateTarget(url);
 	const headers: Record<string, string> = { Accept: "application/json" };
 	if (context.webConfig.search.apiKey && context.webConfig.search.provider === "jina") {
 		headers.Authorization = `Bearer ${context.webConfig.search.apiKey}`;
@@ -246,9 +248,10 @@ export async function runWebFetch(
 			signal,
 		);
 	} catch (error) {
-		// A binary payload is a definitive answer, not a transient direct-fetch failure — jina would
-		// just return the same non-text content.
-		if (error instanceof WebFetchBinaryError || !request.enableJinaFallback) {
+		// A binary payload or a network-guard refusal is a definitive answer, not a transient
+		// direct-fetch failure — falling back to Jina on a blocked target would leak internal URLs
+		// and bypass the SSRF guard.
+		if (error instanceof WebFetchBinaryError || error instanceof NetworkGuardError || !request.enableJinaFallback) {
 			throw error;
 		}
 		const jinaResult = await tryFetchViaJina(

@@ -158,6 +158,17 @@ export class WebHttpClient {
 		this.context = context;
 	}
 
+	async validateTarget(url: string): Promise<void> {
+		try {
+			await validateNetworkTarget(url, { config: this.context.securityConfig });
+		} catch (error) {
+			if (error instanceof NetworkGuardError) {
+				await logBlockedRequest(this.context, error);
+			}
+			throw error;
+		}
+	}
+
 	async request(options: WebHttpRequestOptions): Promise<WebHttpResponse> {
 		const maxRedirects = options.maxRedirects ?? this.context.securityConfig.networkGuard.maxRedirects;
 		let currentUrl = buildUrlWithParams(options.url, options.params);

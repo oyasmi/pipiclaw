@@ -162,12 +162,12 @@ flowchart TB
   2. `write`/`edit` 可直接把 `~/.pipiclaw/security.json` 覆写为 `{"enabled": false}`——而 `SessionHost` 在每轮重建工具时会热加载 `security.json`，下一轮所有守卫即刻全部失效！
 - **修复状态（已合入 `7e7519f`）**：已在默认路径守卫中保护 `~/.pipiclaw` 及自定义 `appHomeDir` 下的控制面配置（`auth.json`、`channel.json`、`security.json`、`models.json`、`tools.json`、`settings.json`）与 `state/`（不影响 `workspace/`），并将 `~/.claude/.credentials.json` 与 `~/.codex/auth.json` 纳入敏感凭据黑名单。
 
-#### [P0-3] ⏸️ 按设计保留 Opt-in：初始化模板默认关闭 `networkGuard`，且 `web_fetch` 的 Jina 回退直接绕过 SSRF 拦截
-- **定位**：[home.ts](../../src/app/home.ts#L140-L150)、[config.ts](../../src/security/config.ts#L29)、[fetch.ts](../../src/web/fetch.ts#L75-L120)、[fetch.ts](../../src/web/fetch.ts#L248-L264)
+#### [P0-3] ✅ 已修复：`web_fetch` 的 Jina 直通/回退绕过 `NetworkGuardError` SSRF 拦截（`home.ts` 初始化模板按设计保留 `networkGuard` 显式 opt-in）
+- **定位**：[home.ts](../../src/app/home.ts#L140-L150)、[config.ts](../../src/security/config.ts#L29)、[client.ts](../../src/web/client.ts#L60-L81)、[fetch.ts](../../src/web/fetch.ts#L75-L120)、[fetch.ts](../../src/web/fetch.ts#L248-L264)
 - **根因与影响**：
-  1. `DEFAULT_SECURITY_CONFIG` 设计上默认 `networkGuard.enabled: true`，但 `home.ts` 的 `SECURITY_CONFIG_TEMPLATE` 在初始化 `~/.pipiclaw/security.json` 时硬编码写入了 `"networkGuard": { "enabled": false }`，导致所有标准安装的实例默认裸奔。
-  2. 在 `web/fetch.ts` 中，当 `preferJina: true` 时直接跳过 `validateNetworkTarget`；当直连因 `NetworkGuardError`（如目标被判定为受限域名或私网地址）抛错时，`catch` 块在 `enableJinaFallback: true` 下竟然把被拦截的原始 URL 拼接到 `https://r.jina.ai/<url>` 继续外发请求！
-- **处置状态（`7e7519f` 裁决）**：按个人本地开发场景保持 `networkGuard` 显式 opt-in，暂不默认收紧。
+  1. `DEFAULT_SECURITY_CONFIG` 设计上默认 `networkGuard.enabled: true`，而 `home.ts` 的 `SECURITY_CONFIG_TEMPLATE` 在初始化 `~/.pipiclaw/security.json` 时写入 `"networkGuard": { "enabled": false }`（见 [docs/security.md](../security.md#L153-L154)，避免首次安装误伤本地代理与局域网 SearXNG）。
+  2. 在 `web/fetch.ts` 中，当 `preferJina: true` 时直接跳过 `validateNetworkTarget`；当直连因 `NetworkGuardError`（如目标被判定为受限域名或私网地址）抛错时，`catch` 块在 `enableJinaFallback: true` 下把被拦截的原始 URL 拼接到 `https://r.jina.ai/<url>` 继续外发请求。
+- **修复状态**：`home.ts` 按本地开发场景与文档契约保持 `networkGuard.enabled: false` 显式 opt-in；同时在 [client.ts](../../src/web/client.ts) 与 [fetch.ts](../../src/web/fetch.ts) 中修复了 Jina 绕过漏洞（`tryFetchViaJina` 前置校验原始目标 URL，`runWebFetch` 捕获 `NetworkGuardError` 时直接重抛不再回退 Jina）。
 
 #### [P0-4] ✅ 已修复：`cursor-cli` 执行器在 `purpose: "verify"` 时必现参数崩溃
 - **定位**：[discovery.ts](../../src/subagents/discovery.ts#L862-L863) 与 [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts#L176-L180)
@@ -255,21 +255,21 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    H0["H0: v0.9.6 安全与正确性封板 (3–5天)"] --> H1["H1: v1.0 零摩擦单人研发闭环 (2–3周)"]
+    H0["✅ H0: v0.9.6 安全与正确性封板 (已完成)"] --> H1["H1: v1.0 零摩擦单人研发闭环 (2–3周)"]
     H1 --> H2["H2: v1.1 有界守望与经验反哺 (3–4周)"]
     H2 --> H3["H3: v1.2+ 进程外多模态客户端 (按需演进)"]
 ```
 
-### 阶段 H0：`v0.9.6` 安全与正确性封板（Pre-1.0 Hardening，高确定性低风险）
+### 阶段 H0：`v0.9.6` 安全与正确性封板（Pre-1.0 Hardening，高确定性低风险）— ✅ 已完成
 
-1. **统一 Shell 执行目录语义（修 [P0-1]）**：修复 `runner-factory.ts` / `bash.ts`、`DeskJobManager`、`EventsWatcher.preAction` 的 `cwd` 漏传，补一条跨 `write → bash → job` 的确定性 E2E 用例（遵循 [AGENTS.md](../../AGENTS.md) 先破后立做 mutation check）。
-2. **补齐控制面自保护与 SSRF 闭环（修 [P0-2]、[P0-3]）**：在 `path-guard.ts` 锁死 `appHomeDir` 下的配置/密钥/状态目录写权限与敏感凭据读权限；将 `home.ts` 模板 `networkGuard.enabled` 设为 `true`，并在 `web/fetch.ts` 堵住 Jina 对 `NetworkGuardError` 的绕过。
-3. **修复外部执行器与事件调度必现缺陷（修 [P0-4]、[P0-5]）**：修复 `cursor-cli` 在 `purpose: "verify"` 下的 `[effort=...]` 崩溃；串行化 `EventsWatcher.handleFile` 并停止被替换的旧 `Cron`/Timer；对齐 `event_manage` 的 `timeout` / `timeoutMs`。
-4. **顺手消除低垂缺陷与清零架构基线**：
-   - 修复 `session_search` 打分前截断 500 块的 bug（改为流式遍历打分、仅保留 Top-K 小顶堆）；
-   - 修复钉钉 `replaceWithFinal` 漏归档、`deliverAnswer` 漏传 `title`、`send_media` 误抛普通 `Error`、`presentation.ts` 的 `memory_forget` 字段名、`catalog.ts` 重复 `archive`；
-   - 将 `TaskLane` 的 `stopGraceMs` 放宽至 15–30s（支持延迟结算自动解除隔离），限定 `.delivery/` 坏文件故障仅影响对应任务，归档任务时一并归档/清理 `tasks/.sessions/<id>.jsonl` 与 `appenders` 缓存；
-   - ✅ 已按 §3.3 按内聚度治理历史超长文件（拆分 `discovery.ts` 为 `types.ts` + `discovery.ts` + `resolve.ts` 并移出基线，抽离 `jobs/kill.ts` 并收紧 `jobs/manager.ts` 与 `subagents/runs.ts` 水位线）。
+1. **✅ 统一 Shell 执行目录语义（修 [P0-1]）**：已修复 `runner-factory.ts` / `bash.ts`、`DeskJobManager`、`EventsWatcher.preAction` 的 `cwd` 漏传，并在 [bootstrap.ts](../../src/runtime/bootstrap.ts) 与 [task-step.ts](../../src/runtime/task-step.ts) 补齐 `/desk cwd` 变更后的 Runner 缓存校验；在 [job-chain.test.ts](../../test/e2e/deterministic/job-chain.test.ts) 扩展了跨 `/desk cwd` + `write → bash → job` 的确定性 E2E 用例（已完成 mutation check）。
+2. **✅ 补齐控制面自保护与 SSRF 闭环（修 [P0-2]、[P0-3]）**：已在 `path-guard.ts` 锁死 `appHomeDir` 下的配置/密钥/状态目录写权限与敏感凭据读权限；`home.ts` 模板按 [docs/security.md](../security.md#L153-L154) 保持 `networkGuard.enabled: false` 显式 opt-in，并在 [fetch.ts](../../src/web/fetch.ts) 堵住 `preferJina` 与 `enableJinaFallback` 对 `NetworkGuardError` 的绕过。
+3. **✅ 修复外部执行器与事件调度必现缺陷（修 [P0-4]、[P0-5]）**：已修复 `cursor-cli` 在 `purpose: "verify"` 下的 `[effort=...]` 崩溃；串行化 `EventsWatcher.handleFile` 并停止被替换的旧 `Cron`/Timer；对齐 `event_manage` 的 `timeout` / `timeoutMs`。
+4. **✅ 顺手消除低垂缺陷与清零架构基线**：
+   - 已移除 `session_search` 打分前截断 500 块的 bug（先做轻量小写子串预筛再分词打分）；
+   - 已修复钉钉 `replaceWithFinal` 漏归档、`deliverAnswer` 漏传 `title`、`send_media` 误抛普通 `Error`、`presentation.ts` 的 `memory_forget` 字段名、`catalog.ts` 重复 `archive`；
+   - 已将 `TaskLane` 的 `stopGraceMs` 放宽至 15s、消除隔离态异步写 `pause` 与延迟结算 `endStep` 的竞态（[task-step.ts](../../src/runtime/task-step.ts)）、限定 `.delivery/` 坏文件故障仅影响对应任务、归档任务时一并归档/清理 `tasks/.sessions/<id>.jsonl` 与 `appenders` 缓存；
+   - 已按 §3.3 按内聚度治理历史超长文件（拆分 `discovery.ts` 为 `types.ts` + `discovery.ts` + `resolve.ts` 并移出基线，抽离 `jobs/kill.ts` 并收紧 `jobs/manager.ts` 与 `subagents/runs.ts` 水位线）。
 
 ---
 
@@ -347,7 +347,7 @@ flowchart LR
 | 优先级 | 状态 | 事项 | 核心涉及文件 | 预估改动量 | 预期收益 |
 |---|---|---|---|---|---|
 | **P0** | ✅ 已修复 | 修复 `bash` / `job` / `preAction` 漏传工位 `cwd` | [bash.ts](../../src/tools/bash.ts), [manager.ts](../../src/jobs/manager.ts), [watcher.ts](../../src/events/watcher.ts) | ~40 行 | 彻底对齐文件工具与 Shell 工具的目录语义，激活多仓工位 |
-| **P0** | ✅ 已修复* | 保护 `~/.pipiclaw` 控制面文件与外部 CLI 凭据（*`networkGuard` 按设计保留 opt-in） | [path-guard.ts](../../src/security/path-guard.ts), [index.ts](../../src/tools/index.ts), [session-host.ts](../../src/agent/session/session-host.ts) | ~60 行 | 防止间接注入窃取密钥或热关闭 `security.json` |
+| **P0** | ✅ 已修复 | 保护 `~/.pipiclaw` 控制面文件与外部 CLI 凭据 + 堵住 `web_fetch` Jina SSRF 绕过（`networkGuard` 模板保留 opt-in） | [path-guard.ts](../../src/security/path-guard.ts), [fetch.ts](../../src/web/fetch.ts), [client.ts](../../src/web/client.ts) | ~80 行 | 防止间接注入窃取密钥/热关闭守卫或通过 Jina 绕过受限域名拦截 |
 | **P0** | ✅ 已修复 | 修复 `cursor-cli` 核验崩溃、`EventsWatcher` 竞态泄漏与 `timeoutMs` 丢失 | [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts), [watcher.ts](../../src/events/watcher.ts), [event-manage.ts](../../src/tools/event-manage.ts) | ~70 行 | 消除必现参数报错与重复定时任务幽灵 |
 | **P1** | ✅ 已修复 | 修复 `session_search` 500 块预截断 + 打通 `tasks/archive` 历史检索 | [session-search.ts](../../src/memory/session-search.ts), [session-corpus.ts](../../src/memory/session-corpus.ts), [lifecycle.ts](../../src/tools/task-manage/lifecycle.ts) | ~120 行 | 恢复数天前冷历史召回，消除已完成任务失忆 |
 | **P1** | ✅ 已修复 | 钉钉入站接入 `audio`（ASR）、`file`、`repliedMsg` + 修复归档与 `send_media` | [inbound-media.ts](../../src/dingtalk/inbound-media.ts), [delivery.ts](../../src/dingtalk/delivery.ts), [send-media.ts](../../src/tools/send-media.ts) | ~180 行 | 手机端发语音、传日志、引用回复任务无缝闭环 |

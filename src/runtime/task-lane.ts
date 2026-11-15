@@ -767,6 +767,7 @@ export class TaskLane implements TaskControl {
 	/** Dispose a task's runner and forget its in-memory state (D13). */
 	private async dispose(live: LiveTask): Promise<void> {
 		if (this.ctx.live.get(live.key) === live) this.ctx.live.delete(live.key);
+		live.quarantined = undefined;
 		const runner = live.runner;
 		live.runner = undefined;
 		if (!runner) return;

@@ -41,6 +41,8 @@ export interface TaskLaneOptions {
 	getActiveDesks: () => ReadonlyArray<{ desk: string; deskDir: string }>;
 	/** The directory of a desk the runtime knows, or `undefined`. */
 	getDeskDir: (desk: string) => string | undefined;
+	/** The current working directory of `desk` for `channelId`, so a retained runner notices `/desk cwd` updates. */
+	getDeskCwd?: (desk: string, channelId: string) => string | undefined;
 	/**
 	 * Whether a report channel is bound to a desk right now. A task whose `channel` is missing or not
 	 * bound to its own desk is frozen: the lane does not touch it (INV-7).
@@ -91,6 +93,7 @@ export interface LiveTask {
 		startedAt: number;
 		submittedInputIds: Set<string>;
 		submitting?: Promise<void>;
+		quarantining?: Promise<void>;
 		injecting?: boolean;
 		inputDirty?: boolean;
 		ending?: boolean;
