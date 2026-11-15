@@ -4,13 +4,26 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.6-beta.1] - 2026-11-15
+
 ### Breaking
 
 - **Pi SDK 1.5.0 model catalog and routing.** Some old, free and batch model entries are removed. OpenRouter's `~anthropic/claude-*-latest` aliases now use Anthropic Messages; check custom gateway routes and configured primary, fallback and internal sub-agent models. See the [upgrade notes](docs/configuration-reference.md#pi-150-升级注意事项).
 
+### Added
+
+- **`antigravity-cli` external harness (spec 068).** External roles can set `harness: antigravity-cli` to delegate to Google Antigravity CLI (`agy`) over `--output-format stream-json`, supporting `--model`, `--effort`, and `--conversation <id>` resume, structured step/subagent progress labels, and token usage accounting, with `examples/sub-agents/agents/agy-main.md` as the example template.
+
 ### Changed
 
 - Upgrade all four direct Pi SDK dependencies from 1.4.0 to 1.5.0 for incremental parsing of large tool calls, session-write rollback, provider compatibility and terminal rendering fixes. Keep existing TypeBox tool definitions and partial-write isolation. OpenRouter cost totals can now use provider-reported billing while component costs remain estimates.
+- Simplify sub-agent examples to capability entries under `examples/sub-agents/agents/` (removing `examples/sub-agents/roles/` and `scout.md`), and refine runtime playbooks around delegation selection, cross-turn task creation criteria, incremental step records, verification reuse, and memory scope checks.
+- Upgrade Fastify, follow-redirects, and Vitest dependencies to resolve `npm audit` vulnerabilities.
+
+### Fixed
+
+- **External delegation resume verifies the returned session ID.** Resumed external runs persist `expectedSessionId` across restarts and fail settlement if the CLI silently opens a new conversation instead of resuming the requested session.
+- **Harden shell command guards, memory reflection, durable recovery, and shutdown.** The command guard lexically parses execution positions across comments, quotes, pipes, background operators, subshells, substitutions, assignments, and redirects while failing closed on unknown or dynamic syntax. Memory reflection protects actual surviving replacement identities before deleting superseded entries. Task delivery and durable wake recovery isolate corrupt records without letting later task reports jump ahead, stop watchdogs track turn generations so late cleanup cannot clear a newer turn, and shutdown bounds abort waits while retaining the daemon lock if writes have not quiesced.
 
 ## [0.9.5] - 2026-11-08
 

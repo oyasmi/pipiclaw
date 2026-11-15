@@ -4,13 +4,26 @@
 
 ## [Unreleased]
 
+## [0.9.6-beta.1] - 2026-11-15
+
 ### 不兼容变更
 
 - **Pi SDK 1.5.0 模型目录与请求路由。** 移除部分旧模型、免费模型和 batch 模型条目；OpenRouter 的 `~anthropic/claude-*-latest` 别名改用 Anthropic Messages。升级前核对自建网关路由，以及默认、备用和内部子代理模型配置，见[升级说明](docs/configuration-reference.md#pi-150-升级注意事项)。
 
+### 新增
+
+- **外部执行器 `antigravity-cli`（spec 068）。** 外部角色可声明 `harness: antigravity-cli`，通过 `--output-format stream-json` 委派 Google Antigravity CLI（`agy`），支持 `--model`、`--effort` 与 `--conversation <id>` 续接、结构化步骤与子智能体进度标注及 token 用量记账，并提供 `examples/sub-agents/agents/agy-main.md` 示例条目。
+
 ### 变更
 
 - 四个直接 Pi SDK 依赖从 1.4.0 同步升级到 1.5.0，获得大工具调用增量解析、会话写入失败回滚、提供方兼容性和终端渲染修复。保留现有 TypeBox 工具定义与部分写入隔离；OpenRouter 成本合计可采用提供方报告的计费金额，分项仍为估算。
+- 子代理示例收敛为 `examples/sub-agents/agents/` 下的能力条目（移除 `examples/sub-agents/roles/` 岗位模板与 `scout.md`），并细化运行指南中的委派选型边界、跨回合立项条件、增量步骤记录、检查证据复用与记忆适用范围核对。
+- 升级 Fastify、follow-redirects 与 Vitest 相关依赖，清理 `npm audit` 漏洞。
+
+### 修复
+
+- **外部委派续接校验实际返回的会话 ID。** 续接运行持久化 `expectedSessionId`（含重启接管恢复），若 CLI 在原会话失效时静默新建会话而非续接请求会话，结算将明确判为失败。
+- **加固命令守卫、记忆反思、持久化恢复与关机收尾。** 命令守卫通过词法解析识别跨行注释、引号、管道、后台执行、子 shell、命令替换、赋值与重定向中的实际执行位置，对未知或动态语法保守拒绝；记忆反思在删除阶段保护实际存活的替换目标；任务汇报投递与持久化唤醒按单条记录隔离损坏文件并保持同任务汇报顺序；停止看门狗按回合代次（generation）隔离迟到清理；关机限制中止等待时间并在写入未静止时保留 daemon 锁直到进程退出。
 
 ## [0.9.5] - 2026-11-08
 
