@@ -7,10 +7,12 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { formatSize, MAX_INLINE_BINARY_BYTES } from "./truncate.js";
+import { formatSize } from "./truncate.js";
 
 /** Extensions delivered as inline images; everything else goes as a file attachment. */
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
+/** Matches DingTalk's 20MB robot file cap while bounding the Buffer read into memory. */
+const MAX_SEND_MEDIA_BYTES = 20 * 1024 * 1024;
 
 const sendMediaSchema = Type.Object({
 	path: Type.String({ description: "Local file path (relative to the current working directory, or absolute)" }),
@@ -68,10 +70,10 @@ export function createSendMediaTool(
 					`Cannot send ${path}: not a regular file. Locate the generated file and retry with its path.`,
 				);
 			}
-			if (stat.size > MAX_INLINE_BINARY_BYTES) {
+			if (stat.size > MAX_SEND_MEDIA_BYTES) {
 				throw new RecoverableToolError(
-					`Cannot send ${path}: it is ${formatSize(stat.size)}, over the ${formatSize(MAX_INLINE_BINARY_BYTES)} send limit. ` +
-						"Compress it first, or provide the path so the user can be told where to find it.",
+					`Cannot send ${path}: it is ${formatSize(stat.size)}, over the ${formatSize(MAX_SEND_MEDIA_BYTES)} send limit. ` +
+						"Compress or split it first, or provide the path so the user can fetch it directly.",
 				);
 			}
 			if (stat.size === 0) {
@@ -89,7 +91,11 @@ export function createSendMediaTool(
 
 			const result = await options.sendMedia(options.channelId, { data, fileName: name, kind });
 			if (!result.ok) {
-				throw new Error(result.error ?? "Failed to send the file to the channel.");
+				throw new RecoverableToolError(
+					`${result.error ?? "Failed to send the file to the channel."} ` +
+						"To recover: pack unsupported extensions (.md/.json/.log/code) into a .zip or export as .txt/.pdf/.csv, " +
+						"compress images over 1MB, or include the key content / local path directly in your reply.",
+				);
 			}
 
 			return {

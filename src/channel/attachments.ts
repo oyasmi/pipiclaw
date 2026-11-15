@@ -17,6 +17,12 @@ export const MAX_INBOUND_IMAGE_BYTES = 10 * 1024 * 1024;
 /** Defensive hard cap on how many images one inbound message can carry. */
 export const MAX_INBOUND_IMAGES_PER_MESSAGE = 10;
 
+/** Inbound file attachment cap (matches DingTalk's 20MB robot file limit). */
+export const MAX_INBOUND_FILE_BYTES = 20 * 1024 * 1024;
+
+/** Defensive hard cap on how many non-image file attachments one inbound message can carry. */
+export const MAX_INBOUND_FILES_PER_MESSAGE = 4;
+
 /**
  * Identify a downloaded file's real format from its magic bytes rather than trusting the
  * `Content-Type` DingTalk's CDN happens to answer with (spec 049 D8) — the four formats `read`

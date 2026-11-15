@@ -124,6 +124,23 @@ export async function readTaskDeliveries(deskDir: string): Promise<TaskDelivery[
 	return messages;
 }
 
+/** Retarget pending delivery records of `taskId` when `/tasks adopt` moves the task to a new channel. */
+export async function redirectTaskDeliveries(deskDir: string, taskId: string, channel: string): Promise<void> {
+	const { messages } = await scanDeliveries(deskDir);
+	for (const item of messages) {
+		if (item.taskId !== taskId || item.channel === channel) continue;
+		await withFileLock(
+			join(deskDir, ".locks", `delivery-${item.id}.lock`),
+			async () => {
+				const current = await readDelivery(deskDir, item.id);
+				if (!current || current.sentAt) return;
+				await save(deskDir, { ...current, channel, nextAttemptAt: 0 });
+			},
+			{ timeoutMs: 10_000 },
+		);
+	}
+}
+
 class InvalidDeliveryError extends Error {
 	constructor(path: string, cause?: unknown) {
 		super(`Invalid task delivery: ${path}; have the deployer inspect it before retrying.`, { cause });

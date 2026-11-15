@@ -100,8 +100,18 @@ function getDocumentTokens(document: SessionSearchDocument): Set<string> {
 	return tokens;
 }
 
-function scoreDocument(document: SessionSearchDocument, lowerQuery: string, queryTokens: string[]): ScoredDocument {
+function scoreDocument(
+	document: SessionSearchDocument,
+	lowerQuery: string,
+	queryTokens: string[],
+): ScoredDocument | null {
 	const lowerText = document.text.toLowerCase();
+	const exactHit = Boolean(lowerQuery) && lowerText.includes(lowerQuery);
+	// Every token emitted by `tokenizeRecallText` is a contiguous substring of `lowerText`, so a
+	// document that contains neither `lowerQuery` nor any query token cannot match after tokenizing.
+	if (!exactHit && !queryTokens.some((token) => lowerText.includes(token))) {
+		return null;
+	}
 	const documentTokens = getDocumentTokens(document);
 	const matches: string[] = [];
 	let matchedTokens = 0;
@@ -117,7 +127,6 @@ function scoreDocument(document: SessionSearchDocument, lowerQuery: string, quer
 	// dominant `matchedTokens * 1.4` term. Normalizing by query length alone would make detailed
 	// queries score worse the more context they give, so it must stay a tiebreaker.
 	const coverage = queryTokens.length > 0 ? matchedTokens / queryTokens.length : 0;
-	const exactHit = Boolean(lowerQuery) && lowerText.includes(lowerQuery);
 	const score = matchedTokens * 1.4 + coverage * 2 + (exactHit ? 1 : 0) + computeRecencyBoost(document.timestamp);
 
 	return {
@@ -263,10 +272,12 @@ export async function searchDeskSessions(request: SearchDeskSessionsRequest): Pr
 	const maxChunks = clampInteger(request.maxChunks, 1, 500);
 	const query = request.query.trim();
 	const roleFilter = normalizeRoleFilter(request.roleFilter);
-	const documents = (await getCachedCorpus(request.deskDir, request.maxFiles, request.maxCharsPerChunk))
-		.filter((document) => roleFilter.size === 0 || roleFilter.has(document.role))
-		.sort(sortRecentDocuments)
-		.slice(0, maxChunks);
+	const corpus = (await getCachedCorpus(request.deskDir, request.maxFiles, request.maxCharsPerChunk)).filter(
+		(document) => roleFilter.size === 0 || roleFilter.has(document.role),
+	);
+	// Score the full desk corpus when searching by query: slicing to `maxChunks` by recency before
+	// scoring made every message older than the newest ~80 turns permanently unreachable.
+	const documents = query ? corpus : [...corpus].sort(sortRecentDocuments).slice(0, maxChunks);
 
 	// Both derived once, not per document: `tokenizeRecallText` is milliseconds on real input and
 	// this loop runs over the whole corpus.
@@ -278,18 +289,15 @@ export async function searchDeskSessions(request: SearchDeskSessionsRequest): Pr
 				// Require actual match evidence: recency alone used to lift a completely unrelated
 				// recent message above 0 and return it with an empty `matches` array — wasted tokens
 				// and a misleading "hit". Recency now only ranks among documents that did match.
-				.filter((entry) => entry.matches.length > 0 || entry.exactHit)
-				.sort((a, b) => b.score - a.score)
+				.filter((entry): entry is ScoredDocument => entry !== null && (entry.matches.length > 0 || entry.exactHit))
+				.sort((a, b) => b.score - a.score || sortRecentDocuments(a.document, b.document))
 				.slice(0, limit)
-		: documents
-				.sort(sortRecentDocuments)
-				.slice(0, limit)
-				.map((document) => ({
-					document,
-					score: computeRecencyBoost(document.timestamp),
-					matches: [],
-					exactHit: false,
-				}));
+		: documents.slice(0, limit).map((document) => ({
+				document,
+				score: computeRecencyBoost(document.timestamp),
+				matches: [],
+				exactHit: false,
+			}));
 
 	const results: SessionSearchResult[] = [];
 	for (const hit of selected) {

@@ -13,13 +13,20 @@ import { join } from "node:path";
 import { loadBindings, writeBindings } from "../desk/bindings.js";
 import type { BindOutcome } from "../desk/commands.js";
 import { getDeskDir, isDeskName, normalizeDeskName } from "../desk/paths.js";
-import { allocateConversation, createDeskRecord, findConversation, readDeskRecord } from "../desk/registry.js";
+import {
+	allocateConversation,
+	createDeskRecord,
+	findConversation,
+	readDeskRecord,
+	setDeskCwd,
+} from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
 import type {
 	BindingsFile,
 	ConversationKind,
 	CreateDeskOutcome,
 	DeskConversation,
+	DeskCwdOutcome,
 	DeskSummary,
 } from "../desk/types.js";
 import { parseScheduledEventContent } from "../events/parse.js";
@@ -256,8 +263,36 @@ export class DeskRuntime {
 	}
 
 	/** `/desk new`: an empty desk, bound to nothing and therefore dormant (D5). */
-	create(name: string): Promise<CreateDeskOutcome> {
-		return Promise.resolve(createDeskRecord(this.options.workspaceDir, normalizeDeskName(name), new Date()));
+	create(name: string, cwd?: string): Promise<CreateDeskOutcome> {
+		return Promise.resolve(createDeskRecord(this.options.workspaceDir, normalizeDeskName(name), new Date(), cwd));
+	}
+
+	/** `/desk cwd`: view or update the working directory of `channelId`'s bound desk. */
+	async cwd(channelId: string, input: { cwd?: string; reset?: boolean }): Promise<DeskCwdOutcome> {
+		const resolution = this.resolve(channelId);
+		if (resolution.kind !== "bound") {
+			return { kind: "unavailable", desk: resolvedDesk(resolution) ?? "" };
+		}
+		const { desk, deskDir } = resolution.conversation;
+		if (!input.cwd && !input.reset) {
+			const summary = await this.refreshRecord(desk);
+			if (!summary.record) return { kind: "unavailable", desk };
+			const effective = summary.record.cwd ?? deskDir;
+			return { kind: "ok", desk, cwd: effective, isDefault: summary.record.cwd === undefined };
+		}
+		const outcome = await setDeskCwd(this.options.workspaceDir, desk, input.reset ? null : (input.cwd ?? ""));
+		if (outcome.kind !== "ok") return outcome;
+		await this.refreshRecord(desk);
+		if (this.active.has(desk) && this.servicesStarted) {
+			await this.stopWatcher(desk);
+			this.startWatcher(desk);
+		}
+		for (const boundChannel of this.boundChannelsOf(desk)) {
+			if (!this.options.isChannelBusy(boundChannel)) {
+				await this.options.releaseRunner(boundChannel).catch(() => undefined);
+			}
+		}
+		return outcome;
 	}
 
 	/** `/desk bind` from `channelId`, in D5's order. Throws only when the bindings write itself fails. */

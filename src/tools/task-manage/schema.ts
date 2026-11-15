@@ -14,7 +14,14 @@ const budgetField = Type.Optional(
 	),
 );
 
-export const taskListSchema = Type.Object({});
+export const taskListSchema = Type.Object({
+	includeArchived: Type.Optional(
+		Type.Boolean({ description: "Also include closed/archived tasks from tasks/archive/." }),
+	),
+	query: Type.Optional(
+		Type.String({ description: "Filter tasks by keyword across id, title, and contract/archive summary." }),
+	),
+});
 
 export const taskCreateSchema = Type.Object({
 	id: idField,

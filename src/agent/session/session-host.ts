@@ -215,6 +215,7 @@ export class SessionHost {
 			ledger: this.ledger,
 			getRunState: () => this.runState,
 			isEnabled: () => this.settingsManager.getCompactionEnabled(),
+			isTaskSession: deps.profile?.kind === "task",
 			onPersistenceFault: (session, error) => this.markContextFault(session, error, "background-compaction"),
 			onAdopt: () => {
 				this.firstTurnMemoryBootstrapPending = true;

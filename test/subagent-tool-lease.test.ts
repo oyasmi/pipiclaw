@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -368,6 +369,71 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		});
 		expect(nextLease.ok).toBe(true);
 		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next-verify");
+
+		// Managed worktree (P1-5): a write delegation with worktree=true runs inside <artifactDir>/worktree
+		// concurrently with an active lease on workspaceDir, auto-cleans clean worktrees, and preserves dirty ones.
+		execFileSync("git", ["init"], { cwd: workspaceDir });
+		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: workspaceDir });
+		execFileSync("git", ["config", "user.name", "Test"], { cwd: workspaceDir });
+		writeFileSync(join(workspaceDir, "README.md"), "base\n", "utf-8");
+		execFileSync("git", ["add", "README.md"], { cwd: workspaceDir });
+		execFileSync("git", ["commit", "-m", "init"], { cwd: workspaceDir });
+
+		const mainLock = acquireWorkspaceLease({ runId: "main-writer", channelId, workingDirectory: workspaceDir });
+		expect(mainLock.ok).toBe(true);
+		try {
+			let worktreeDirty = false;
+			const wtTool = createSubAgentInlineTool({
+				...testManagers(channelId),
+				executor: fakeExecutor,
+				fileStore: createFileStore(),
+				getCurrentModel: () => model,
+				getAvailableModels: () => [model],
+				resolveApiKey: async () => "test-key",
+				workspaceDir,
+				workingDirectory: workspaceDir,
+				deskDir,
+				runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
+				getRunManager: () => manager,
+				createWorker: () =>
+					new FakeWorker((input, worker) => {
+						const match = input.match(/- Working directory: (.+)/);
+						if (worktreeDirty && match?.[1]) {
+							writeFileSync(join(match[1].trim(), "feature.txt"), "edited\n", "utf-8");
+						}
+						const message = createAssistantMessage("Worktree run complete.");
+						worker.state.messages = [message];
+						worker.emit({ type: "message_end", message });
+					}),
+			});
+
+			const cleanRes = await wtTool.execute("wt-clean", {
+				systemPrompt: "Edit in worktree.",
+				tools: ["read", "edit"],
+				mutates: "write",
+				worktree: true,
+				task: "Inspect without modifying.",
+			});
+			await vi.waitFor(() => expect(manager.get(cleanRes.details.runId)?.settledAt).toBeDefined());
+			expect(existsSync(join(cleanRes.details.artifactDir, "worktree"))).toBe(false);
+
+			worktreeDirty = true;
+			const dirtyRes = await wtTool.execute("wt-dirty", {
+				systemPrompt: "Edit in worktree.",
+				tools: ["read", "edit"],
+				mutates: "write",
+				worktree: true,
+				task: "Write feature.txt.",
+			});
+			await vi.waitFor(() => expect(manager.get(dirtyRes.details.runId)?.settledAt).toBeDefined());
+			expect(existsSync(join(dirtyRes.details.artifactDir, "worktree", "feature.txt"))).toBe(true);
+			expect(dirtyRes.content[0]).toMatchObject({
+				type: "text",
+				text: expect.stringContaining("Managed git worktree:"),
+			});
+		} finally {
+			if (mainLock.ok) releaseWorkspaceLease(mainLock.leaseKey, "main-writer");
+		}
 	});
 });
 

@@ -84,12 +84,16 @@ export interface FinalizedSubAgentOutput {
  */
 export function finalizeSubAgentOutput(runContext: SubAgentRunContext, finalText: string): FinalizedSubAgentOutput {
 	const outputPath = join(runContext.artifactDir, "output.md");
+	const worktreeHeader = runContext.managedWorktree
+		? `[Managed git worktree: ${runContext.workingDirectory}]\n\n`
+		: "";
+	const decorated = `${worktreeHeader}${finalText}`;
 
-	if (countPromptUnits(finalText) <= MAX_SUBAGENT_RESULT_UNITS && finalText.length <= MAX_SUBAGENT_RESULT_CHARS) {
-		return { replyText: finalText, truncated: false };
+	if (countPromptUnits(decorated) <= MAX_SUBAGENT_RESULT_UNITS && decorated.length <= MAX_SUBAGENT_RESULT_CHARS) {
+		return { replyText: decorated, truncated: false };
 	}
 
-	const clipped = clipTextByPromptUnits(finalText, MAX_SUBAGENT_RESULT_UNITS, {
+	const clipped = clipTextByPromptUnits(decorated, MAX_SUBAGENT_RESULT_UNITS, {
 		headRatio: RESULT_TRUNCATION_HEAD_RATIO,
 		maxChars: MAX_SUBAGENT_RESULT_CHARS,
 		marker: `\n\n[... truncated; full output saved at ${outputPath} ...]\n\n`,

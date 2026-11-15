@@ -149,6 +149,10 @@ describe("DeskJobManager", () => {
 			cwd: "/desk/custom",
 		});
 		expect(firstExecutor.execOptions.slice(-2).map((o) => o?.cwd)).toEqual([deskDir, "/desk/custom"]);
+		const beforeList = firstExecutor.commands.length;
+		await deskScoped.list();
+		// Mutation check (P1-4): per-job serial probing spawned N shells instead of 1 batched probe.
+		expect(firstExecutor.commands.length - beforeList).toBe(1);
 	});
 
 	it("sweeps and reaps a finished job even when nobody polls it", async () => {
@@ -294,7 +298,7 @@ describe("DeskJobManager", () => {
 		// The output tail travels with the settlement: a task step's brief replaces the wake that carried it.
 		expect(records[1]).toMatchObject({ ref: job.id, status: "completed", exitCode: 0, tail: "compiling\nBUILD_OK" });
 		// The lane is told after the result is in the log, so the step it starts already finds it (INV-6).
-		expect(told).toEqual([true]);
+		await vi.waitFor(() => expect(told).toEqual([true]));
 		expect(wakes).toEqual([]);
 		await resetTaskLogAppenders();
 		manager.stop();

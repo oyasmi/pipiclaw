@@ -76,18 +76,65 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined, "run-1");
 	});
 
-	it("findWorkspaceLeaseHolder is read-only: it never itself takes a lease", () => {
+	it("findWorkspaceLeaseHolder is read-only, and shared read (verify) leases coexist while blocking writers", () => {
 		const dir = createTempDir();
 		expect(findWorkspaceLeaseHolder(dir)).toBeUndefined();
 
 		const held = acquireWorkspaceLease({ runId: "run-1", channelId: "dingtalk:dm:1", workingDirectory: dir });
 		expect(held.ok).toBe(true);
 		expect(findWorkspaceLeaseHolder(dir)?.runId).toBe("run-1");
-		// A read run can still be admitted freely — this check does not itself register anything.
-		expect(findWorkspaceLeaseHolder(dir)?.runId).toBe("run-1");
+		const verifyWhileWriting = acquireWorkspaceLease({
+			runId: "verify-blocked",
+			channelId: "dingtalk:dm:1",
+			workingDirectory: dir,
+			mode: "read",
+		});
+		expect(verifyWhileWriting.ok).toBe(false);
 
 		releaseWorkspaceLease(held.ok ? held.leaseKey : undefined, "run-1");
 		expect(findWorkspaceLeaseHolder(dir)).toBeUndefined();
+
+		// Two verify read leases coexist on the same checkout, while any writer is blocked until both release.
+		const verify1 = acquireWorkspaceLease({
+			runId: "verify-1",
+			channelId: "dingtalk:dm:1",
+			workingDirectory: dir,
+			mode: "read",
+		});
+		const verify2 = acquireWorkspaceLease({
+			runId: "verify-2",
+			channelId: "dingtalk:dm:2",
+			workingDirectory: dir,
+			mode: "read",
+		});
+		expect(verify1.ok).toBe(true);
+		expect(verify2.ok).toBe(true);
+		// Pre-flight check ignores read holders so parallel verifiers are admitted.
+		expect(findWorkspaceLeaseHolder(dir)).toBeUndefined();
+
+		const writerWhileVerifying = acquireWorkspaceLease({
+			runId: "writer-blocked",
+			channelId: "dingtalk:dm:1",
+			workingDirectory: dir,
+		});
+		expect(writerWhileVerifying.ok).toBe(false);
+		if (!writerWhileVerifying.ok) {
+			expect(formatWorkspaceLeaseConflict(writerWhileVerifying.heldBy)).toContain("read lease");
+		}
+
+		releaseWorkspaceLease(verify1.ok ? verify1.leaseKey : undefined, "verify-1");
+		expect(
+			acquireWorkspaceLease({ runId: "still-blocked", channelId: "dingtalk:dm:1", workingDirectory: dir }).ok,
+		).toBe(false);
+		releaseWorkspaceLease(verify2.ok ? verify2.leaseKey : undefined, "verify-2");
+
+		const writerAfterVerify = acquireWorkspaceLease({
+			runId: "writer-ok",
+			channelId: "dingtalk:dm:1",
+			workingDirectory: dir,
+		});
+		expect(writerAfterVerify.ok).toBe(true);
+		releaseWorkspaceLease(writerAfterVerify.ok ? writerAfterVerify.leaseKey : undefined, "writer-ok");
 	});
 
 	// Spec 042, D5: a blind `leases.delete(key)` let a caller release someone else's lease — e.g. a

@@ -87,16 +87,17 @@ export function abortStep(ctx: LaneContext, live: LiveTask, reason: StepAbort): 
 		step.stopTimer = setTimeout(() => {
 			if (live.step !== step) return;
 			live.quarantined = true;
+			if (live.runner === runner) live.runner = undefined;
 			runner.retireForRecovery();
 			void pauseTask(live.deskDir, live.taskId, {
 				by: "runtime",
-				reason: "当前步骤未能停止，请联系部署者重启服务后再恢复任务",
+				reason: "当前步骤未能及时停止，已暂停后续执行；待该步退出后可用 /tasks resume 恢复，持续卡死时请重启服务",
 			})
 				.then(async () => {
 					await ctx.options.deliver(
 						live.desk,
 						live.channelId,
-						`⚠️ 任务 \`${live.taskId}\` 的当前步骤未能停止，已暂停后续执行。请联系部署者重启服务，再用 \`/tasks resume ${live.taskId}\` 恢复。`,
+						`⚠️ 任务 \`${live.taskId}\` 的当前步骤未能及时停止，已暂停后续执行。待当前步骤退出后可用 \`/tasks resume ${live.taskId}\` 恢复；若持续未退出请联系部署者重启服务。`,
 					);
 				})
 				.catch((error: unknown) =>
@@ -256,6 +257,15 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 		generation: runner.generation,
 	});
 	live.step = undefined;
+	if (live.runner !== runner) {
+		await runner.dispose().catch((disposeErr: unknown) =>
+			log.logWarn("tasks.runner.dispose_failed", "Retired task runner dispose failed", {
+				channelId: live.channelId,
+				reason: errorMessage(disposeErr),
+				fields: { taskId: live.taskId, desk: live.desk },
+			}),
+		);
+	}
 
 	// A stop from the lane decides the result whatever the turn reported on its way out.
 	switch (step.abort) {

@@ -24,6 +24,7 @@ import type {
 } from "./types.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict } from "./workspace-lease.js";
 import { snapshotWorkspace } from "./workspace-summary.js";
+import { cleanupManagedWorktreeIfUnchanged, prepareManagedWorktree } from "./worktree.js";
 
 function safeRunSegment(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 48) || "run";
@@ -144,22 +145,35 @@ export async function dispatchSubAgentRun(
 	// on some providers is a long `call_<id>|fc_<id>` composite unreadable in a chat UI.
 	const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
 
+	if (params.worktree) {
+		if (runContext.purpose === "verify" || config.mutates !== "write") {
+			throw new RecoverableToolError(
+				'worktree=true is only valid for write delegations (mutates="write" and purpose="work"); omit worktree for read-only or verification runs.',
+			);
+		}
+		runContext.workingDirectory = await prepareManagedWorktree(runContext.workingDirectory, runContext.artifactDir);
+		runContext.managedWorktree = true;
+	}
+
 	// D9: an independent verifier checks against a target that isn't moving under it — shared
 	// with `subagent_run op=follow_up` (spec 042 D7) so a verify run's admission rules
 	// cannot drift between the two dispatch paths.
 	assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
 
-	// Admission: every write-mutating run, including a write-capable verifier, takes an exclusive
-	// workspace lease before it is even registered (spec 040, D10.1). A rejected delegation should
-	// never count as "started"; the lease is handed to SubAgentRunManager as the settlement owner.
+	// Admission: write delegations take an exclusive write lease; read-only verification runs take a
+	// shared read lease so parallel verifiers coexist while excluding writers until verification settles.
 	let leaseKey: string | undefined;
-	if (config.mutates === "write") {
+	if (config.mutates === "write" || runContext.purpose === "verify") {
 		const lease = acquireWorkspaceLease({
 			runId: runContext.runId,
 			channelId: options.runtimeContext.channelId,
 			workingDirectory: runContext.workingDirectory,
+			mode: config.mutates === "write" ? "write" : "read",
 		});
 		if (!lease.ok) {
+			if (runContext.managedWorktree) {
+				await cleanupManagedWorktreeIfUnchanged(runContext.artifactDir).catch(() => undefined);
+			}
 			throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
 		}
 		leaseKey = lease.leaseKey;
@@ -168,32 +182,39 @@ export async function dispatchSubAgentRun(
 	const workspaceBaseline =
 		config.mutates === "write" ? await snapshotWorkspace(runContext.workingDirectory) : undefined;
 
-	if (config.runtime === "external") {
-		return dispatchExternalRun({
+	try {
+		if (config.runtime === "external") {
+			return await dispatchExternalRun({
+				options,
+				currentModel,
+				config,
+				runLabel,
+				runContext,
+				leaseKey,
+				params,
+				runManager,
+				workspaceBaseline,
+			});
+		}
+
+		return await dispatchInternalRun({
 			options,
 			currentModel,
 			config,
 			runLabel,
+			mutatesNote,
 			runContext,
 			leaseKey,
 			params,
+			signal,
+			onUpdate,
 			runManager,
 			workspaceBaseline,
 		});
+	} catch (error) {
+		if (runContext.managedWorktree) {
+			await cleanupManagedWorktreeIfUnchanged(runContext.artifactDir).catch(() => undefined);
+		}
+		throw error;
 	}
-
-	return dispatchInternalRun({
-		options,
-		currentModel,
-		config,
-		runLabel,
-		mutatesNote,
-		runContext,
-		leaseKey,
-		params,
-		signal,
-		onUpdate,
-		runManager,
-		workspaceBaseline,
-	});
 }

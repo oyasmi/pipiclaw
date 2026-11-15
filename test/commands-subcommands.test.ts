@@ -31,6 +31,7 @@ const EXPECTED_EXAMPLES: Record<string, unknown> = {
 	"/desk": { action: "list" },
 	"/desk new research": { action: "new", name: "research" },
 	"/desk bind research": { action: "bind", name: "research" },
+	"/desk cwd /srv/repo": { action: "cwd", cwd: "/srv/repo" },
 	"/events list": { action: "list" },
 	"/events show weekly-review": { action: "show", name: "weekly-review" },
 	"/events delete weekly-review": { action: "delete", name: "weekly-review" },
@@ -41,6 +42,7 @@ const EXPECTED_EXAMPLES: Record<string, unknown> = {
 	"/tasks archive": { action: "archive" },
 	"/tasks pause weekly-report": { action: "pause", id: "weekly-report" },
 	"/tasks resume weekly-report +steps 20": { action: "resume", id: "weekly-report", grants: { steps: 20 } },
+	"/tasks adopt weekly-report": { action: "adopt", id: "weekly-report" },
 	"/tasks msg weekly-report 先跑一遍 npm run check": {
 		action: "msg",
 		id: "weekly-report",

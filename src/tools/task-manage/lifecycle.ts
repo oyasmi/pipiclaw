@@ -1,4 +1,5 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { finalTaskReport } from "../../tasks/completion.js";
 import { extractTaskTitle, normalizeTaskId, readActiveTasks } from "../../tasks/contract.js";
 import type { TaskLiveSnapshot } from "../../tasks/control.js";
@@ -8,7 +9,7 @@ import { completedReceipt } from "../../tasks/receipts.js";
 import { closeTask as closeStoredTask, readStoredTask } from "../../tasks/store.js";
 import { RecoverableToolError } from "../contract/details.js";
 import { assertCompletable, requiredField, tasksDir } from "./shared.js";
-import type { TaskCloseRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
+import type { TaskCloseRequest, TaskListRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 export async function requireTask(options: TaskManageToolOptions, id: string) {
 	const document = await readStoredTask(options.deskDir, id);
@@ -47,11 +48,22 @@ function describeInFlight(live: TaskLiveSnapshot | undefined, now: number): stri
 	});
 }
 
-/** `task_list`: every active task of the desk, with what each is doing right now and what it waits for. */
-export async function listTasks(options: TaskManageToolOptions): Promise<TaskManageResult> {
+/** `task_list`: active tasks of the desk (plus archived tasks when requested), optionally filtered by keyword. */
+export async function listTasks(
+	options: TaskManageToolOptions,
+	request: TaskListRequest = {},
+): Promise<TaskManageResult> {
 	const dir = tasksDir(options);
 	await mkdir(dir, { recursive: true });
-	const entries = (await readActiveTasks(dir)).filter((entry) => !entry.fields.outcome);
+	const needle = request.query?.trim().toLowerCase();
+	const matchesQuery = async (entry: { id: string; title: string }, mdPath: string): Promise<boolean> => {
+		if (!needle) return true;
+		if (entry.id.toLowerCase().includes(needle) || entry.title.toLowerCase().includes(needle)) return true;
+		const content = await readFile(mdPath, "utf-8").catch(() => "");
+		return content.toLowerCase().includes(needle);
+	};
+
+	const activeEntries = (await readActiveTasks(dir)).filter((entry) => !entry.fields.outcome);
 	const snapshots = new Map(
 		((await options.control?.snapshot(options.desk).catch(() => [])) ?? []).map((snapshot) => [
 			snapshot.id,
@@ -59,9 +71,11 @@ export async function listTasks(options: TaskManageToolOptions): Promise<TaskMan
 		]),
 	);
 	const now = Date.now();
-	const tasks = entries.map((entry) => {
+	const tasks: NonNullable<TaskManageResult["tasks"]> = [];
+	for (const entry of activeEntries) {
+		if (!(await matchesQuery(entry, join(dir, `${entry.id}.md`)))) continue;
 		const live = snapshots.get(entry.id);
-		return {
+		tasks.push({
 			id: entry.id,
 			title: entry.title,
 			state: entry.readable ? (live?.closing ? "closing" : entry.fields.state) : "unreadable",
@@ -75,12 +89,41 @@ export async function listTasks(options: TaskManageToolOptions): Promise<TaskMan
 			items: entry.items ? `${entry.items.done}/${entry.items.total}` : undefined,
 			activity: describeActivity(live, now),
 			inFlight: describeInFlight(live, now),
-		};
-	});
+		});
+	}
+	if (request.includeArchived) {
+		const archiveDir = join(dir, "archive");
+		const archivedEntries = (await readActiveTasks(archiveDir)).sort((a, b) =>
+			(b.fields.closedAt ?? "").localeCompare(a.fields.closedAt ?? ""),
+		);
+		for (const entry of archivedEntries.slice(0, 50)) {
+			if (!(await matchesQuery(entry, join(archiveDir, `${entry.id}.md`)))) continue;
+			tasks.push({
+				id: entry.id,
+				title: entry.title,
+				state: entry.fields.outcome ?? "archived",
+				archived: true,
+				closedAt: entry.fields.closedAt,
+				channel: entry.fields.channel,
+				deliversHere: entry.fields.channel === options.channelId,
+				steps: entry.fields.usage?.steps,
+				usd: entry.fields.usage ? Number(entry.fields.usage.usd.toFixed(2)) : undefined,
+				unknownCostCount: entry.fields.usage?.unknownCostCount ?? 0,
+				items: entry.items ? `${entry.items.done}/${entry.items.total}` : undefined,
+			});
+		}
+	}
 	return {
 		action: "list",
 		tasks,
-		notice: tasks.length === 0 ? "暂无进行中的任务。" : `共 ${tasks.length} 个进行中的任务。`,
+		notice:
+			tasks.length === 0
+				? request.includeArchived || needle
+					? "未找到匹配的任务。"
+					: "暂无进行中的任务。"
+				: request.includeArchived
+					? `共 ${tasks.length} 个匹配任务（含已归档任务）。`
+					: `共 ${tasks.length} 个进行中的任务。`,
 	};
 }
 

@@ -149,68 +149,68 @@ flowchart TB
 > [!WARNING]
 > 以下 5 项均已通过源码逐行核实，涉及**跨模块契约违背、控制面凭据自保缺失、SSRF 绕过以及必现崩溃/定时器泄漏**，修复成本均很低（每项约 15–60 行代码），但收益极大。
 
-#### [P0-1] `bash`、后台作业 `job` 与事件 `preAction` 全面漏传工位 `cwd`
+#### [P0-1] ✅ 已修复：`bash`、后台作业 `job` 与事件 `preAction` 全面漏传工位 `cwd`
 - **定位**：[runner-factory.ts](../../src/agent/runner-factory.ts#L14-L19)、[bash.ts](../../src/tools/bash.ts#L402-L406)、[manager.ts](../../src/jobs/manager.ts#L290)、[watcher.ts](../../src/events/watcher.ts#L706)
 - **根因与影响**：Spec 060、[runtime-orientation.md](../../src/playbooks/runtime-orientation.md#L46) 以及注入给模型的 `<runtime_turn_context>` 均明确承诺：相对路径与默认执行目录为当前工位 `cwd`（默认 `workspace/desk-<desk>/` 或 `desk.json` 自定义目录）。`read`/`write`/`edit`/`glob`/`grep` 与内外部子代理均正确绑定了该 `cwd`；唯独 `createRunner` 传入了裸 `createExecutor()`，`bash.ts` 调用 `executor.exec(...)` 未传 `cwd: securityContext.cwd`，`DeskJobManager.start`（含 [launch.ts](../../src/jobs/launch.ts#L49-L89)）和 `EventsWatcher.runPreAction` 也均未传 `cwd`。
 - **后果**：所有同步 `bash`、`bash async:true` 后台作业（无论在聊天还是任务步中！）以及事件 `preAction` 传感器，实际全部运行在**启动守护进程时的宿主 `process.cwd()`** 下！模型先 `write("foo.txt")` 再 `bash("cat foo.txt")` 会直接找不到文件，多工位自定义仓库目录在 shell 层完全失效。
-- **修复建议**：在 `createRunner` 中用 `new DirectoryExecutor(createExecutor(), conversation.cwd)` 包装（或在 `bash.ts` 显式传 `cwd: securityContext.cwd`），并将工位实时解析的 `cwd` 注入 `DeskJobManager` 与 `EventsWatcher.runPreAction`。
+- **修复状态（已合入 `7e7519f`）**：已将工位 `cwd` 贯通至 `bash`（同步与 `async: true`）、`DeskJobManager.start` 及 `EventsWatcher.runPreAction`，与文件工具目录语义完全对齐。
 
-#### [P0-2] `pathGuard` 未保护 `~/.pipiclaw`（`APP_HOME_DIR`），允许模型读取全部密钥并热关闭安全守卫
+#### [P0-2] ✅ 已修复：`pathGuard` 未保护 `~/.pipiclaw`（`APP_HOME_DIR`），允许模型读取全部密钥并热关闭安全守卫
 - **定位**：[path-guard.ts](../../src/security/path-guard.ts#L16-L36)、[path-guard.ts](../../src/security/path-guard.ts#L280-L283)、[index.ts](../../src/tools/index.ts#L56-L58)、[session-host.ts](../../src/agent/session/session-host.ts#L104)
 - **根因与影响**：`pathAllowedByDefaults` 默认放行整个 `$HOME`，而内置敏感路径黑名单 `HOME_SENSITIVE_*` 仅列了 `.ssh`/`.aws`/`.gnupg` 等，**漏掉了 `~/.pipiclaw` 自身**（以及外部 CLI 凭据如 `~/.claude/.credentials.json`、`~/.codex/auth.json`）。虽然 `withSubAgentsDirWriteDeny` 拦住了写 `workspace/sub-agents/`，但一旦遭遇网页/文档间接提示词注入：
   1. `read`/`grep` 可直接读取 `~/.pipiclaw/auth.json`（LLM API Keys / OAuth 令牌）、`channel.json`（钉钉 `clientSecret`）、`state/webapi/` 密钥哈希；
   2. `write`/`edit` 可直接把 `~/.pipiclaw/security.json` 覆写为 `{"enabled": false}`——而 `SessionHost` 在每轮重建工具时会热加载 `security.json`，下一轮所有守卫即刻全部失效！
-- **修复建议**：在默认路径守卫中对 `appHomeDir` 下除 `workspace/` 以外的控制面文件（`auth.json`、`channel.json`、`security.json`、`models.json`、`tools.json`、`state/`）默认禁止读写（只允许宿主用户手工或通过 CLI 子命令维护），同时将 `~/.claude/.credentials.json` 与 `~/.codex/auth.json` 纳入 `HOME_SENSITIVE_FILES`。
+- **修复状态（已合入 `7e7519f`）**：已在默认路径守卫中保护 `~/.pipiclaw` 及自定义 `appHomeDir` 下的控制面配置（`auth.json`、`channel.json`、`security.json`、`models.json`、`tools.json`、`settings.json`）与 `state/`（不影响 `workspace/`），并将 `~/.claude/.credentials.json` 与 `~/.codex/auth.json` 纳入敏感凭据黑名单。
 
-#### [P0-3] 初始化模板默认关闭 `networkGuard`，且 `web_fetch` 的 Jina 回退直接绕过 SSRF 拦截
+#### [P0-3] ⏸️ 按设计保留 Opt-in：初始化模板默认关闭 `networkGuard`，且 `web_fetch` 的 Jina 回退直接绕过 SSRF 拦截
 - **定位**：[home.ts](../../src/app/home.ts#L140-L150)、[config.ts](../../src/security/config.ts#L29)、[fetch.ts](../../src/web/fetch.ts#L75-L120)、[fetch.ts](../../src/web/fetch.ts#L248-L264)
 - **根因与影响**：
   1. `DEFAULT_SECURITY_CONFIG` 设计上默认 `networkGuard.enabled: true`，但 `home.ts` 的 `SECURITY_CONFIG_TEMPLATE` 在初始化 `~/.pipiclaw/security.json` 时硬编码写入了 `"networkGuard": { "enabled": false }`，导致所有标准安装的实例默认裸奔。
   2. 在 `web/fetch.ts` 中，当 `preferJina: true` 时直接跳过 `validateNetworkTarget`；当直连因 `NetworkGuardError`（如目标被判定为受限域名或私网地址）抛错时，`catch` 块在 `enableJinaFallback: true` 下竟然把被拦截的原始 URL 拼接到 `https://r.jina.ai/<url>` 继续外发请求！
-- **修复建议**：将 `SECURITY_CONFIG_TEMPLATE` 中 `networkGuard.enabled` 改为 `true`；在 `fetchWebContent` 入口无条件先跑 `validateNetworkTarget`（无论是否走 Jina），且捕获 `NetworkGuardError` 时立即重抛，绝不走 Jina fallback。
+- **处置状态（`7e7519f` 裁决）**：按个人本地开发场景保持 `networkGuard` 显式 opt-in，暂不默认收紧。
 
-#### [P0-4] `cursor-cli` 执行器在 `purpose: "verify"` 时必现参数崩溃
+#### [P0-4] ✅ 已修复：`cursor-cli` 执行器在 `purpose: "verify"` 时必现参数崩溃
 - **定位**：[discovery.ts](../../src/subagents/discovery.ts#L862-L863) 与 [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts#L176-L180)
 - **根因与影响**：Cursor CLI 不支持 `--model <name>[effort=...]` 后缀（因此 [examples/sub-agents/README.md](../../examples/sub-agents/README.md#L43) 中 `cursor-main` 刻意不配 `thinkingLevel`）。然而 `resolveConfiguredRole` 在 `purpose === "verify"` 且角色未配 `thinkingLevel` 时强行注入 `DEFAULT_THINKING_LEVEL`（`"medium"`），导致 `cursor-cli.ts` 拼出 `--model auto[effort=medium]` 直接启动失败。
-- **修复建议**：在 `cursor-cli.ts` 中忽略不支持的 `[effort=...]` 模型后缀（或仅对支持 effort 后缀的 harness 注入默认核验思考档位）。
+- **修复状态（已合入 `7e7519f`）**：对 `cursor-cli` / `exec` 外部角色在未显式声明 `thinkingLevel` 时不再隐式注入 `"medium"`，且 `cursor-cli` 对 `model: auto` 保持裸传不加后缀。
 
-#### [P0-5] `EventsWatcher` 异步重载竞态泄漏永生 `Cron`，且 `event_manage` `show → update` 静默丢失 `preAction` 超时
+#### [P0-5] ✅ 已修复：`EventsWatcher` 异步重载竞态泄漏永生 `Cron`，且 `event_manage` `show → update` 静默丢失 `preAction` 超时
 - **定位**：[watcher.ts](../../src/events/watcher.ts#L105-L110)、[watcher.ts](../../src/events/watcher.ts#L241-L246)、[watcher.ts](../../src/events/watcher.ts#L458-L481) 与 [event-manage.ts](../../src/tools/event-manage.ts#L64)、[event-manage.ts](../../src/tools/event-manage.ts#L220)、[event-manage.ts](../../src/tools/event-manage.ts#L299)
 - **根因与影响**：
   1. `start()` 中 `scanExisting()` 与 `fs.watch` 并发运行，`handleFileChange` 触发的异步 `handleFile(filename)` 未按文件名串行化；当两次 `handleFile` 重叠进入 `handlePeriodic` / `handleOneShot` 时，`this.crons.set(filename, cron)` 直接覆盖 Map 而不 `.stop()` 旧 `Cron` 实例，导致旧 `Cron` 变成内存孤儿，在守护进程存活期间无限重复触发且无法删除！
   2. `event_manage` 入参叫 `preAction.timeoutMs`，落盘字段叫 `preAction.timeout`；但 `action: "show"` 直接返回磁盘原始 JSON（含 `timeout`）。当模型遵循 [event-scheduling.md](../../src/playbooks/event-scheduling.md#L27) 先 `show` 再原样 `update` 时，`timeoutMs` 为 `undefined`，自定义超时被静默重置回 10 秒（且 Playbook 第 46 行示例写的也是磁盘不认的 `timeoutMs`）。
-- **修复建议**：用 `createSerialQueue<string>()` 串行化单文件加载，并在 `crons.set` / `timers.set` 前防御性停止旧实例；统一 `show` 输出与 `update` 输入字段（兼容 `timeout` 与 `timeoutMs`），同时让 `/events list`（[commands.ts](../../src/events/commands.ts#L150-L158)）补齐 `commandGuardConfig` 校验与 `.error.txt` 故障展示。
+- **修复状态（已合入 `7e7519f`）**：已按文件名串行化 `EventsWatcher` 加载并在替换前 `.stop()` 旧 `Cron`/Timer；`event_manage` 的 `show` 投影 `timeoutMs` 并兼容 `timeout` / `timeoutMs`；`/events list` 补齐 `commandGuardConfig` 校验与 `.error.txt` 故障展示。
 
 ---
 
 ### 3.2 P1 级核心体验断点、长周期退化与并发隐患
 
-#### 1. 钉钉移动端交互与投递链路断点
-- **入站语音、文件与引用回复被静默吞没**：[inbound-media.ts](../../src/dingtalk/inbound-media.ts#L45-L73) 仅解析 `text`/`picture`/`richText`。用户在手机端发**语音消息**（钉钉 Stream 自带免费高准度 `content.recognition` 语音转文字！）、发 **日志文件/PDF/压缩包**（`msgtype === "file"`，而 [media.ts](../../src/dingtalk/media.ts#L153-L191) 的 `downloadMessageFile` 与 [inbound-images.ts](../../src/runtime/inbound-images.ts#L70-L89) 的 `persistInboundFile` 其实早已写好！），或**引用某条异步任务报告进行回复**（`data.text.repliedMsg`）时，前者在 [inbound.ts](../../src/dingtalk/inbound.ts#L129-L133) 被静默丢弃（用户端石沉大海，连不支持提示都没有），后者直接丢失被引用上下文。
-- **出站 `send_media` 限额错配与错误类型误抛**：[send-media.ts](../../src/tools/send-media.ts#L71-L93) 用 5MB 的 `MAX_INLINE_BINARY_BYTES` 拦截文件（而钉钉实际支持 20MB，且此处走 `readBytes` 并未进 stdout 缓冲）；同时当发送 `.md`/`.json`/`.html`/`.patch`/`.log` 被 [media.ts](../../src/dingtalk/media.ts#L24) 白名单拒绝时，第 92 行抛出了普通 `new Error(...)` 而非 `RecoverableToolError`，直接在用户钉钉弹出报错气泡，剥夺了模型自动打包 `.zip` 或转 `.txt` 重试的机会。
-- **交付归档遗漏与通知细节**：[delivery.ts](../../src/dingtalk/delivery.ts#L324-L335) 的 `replaceWithFinal`（用于 `final_card_only` 模式及卡片回退重试）漏调了 `this.archiveBotResponse(text)`，导致机器人回复不进 `log.jsonl`；第 167 行 `deliverAnswer(event.text)` 丢弃了 `event.title`，导致手机锁屏通知标题永远是 `"Bot"`；此外当 `task_ask` 提示用户“直接回复我”时，若通道恰有活跃回合，默认的 `whenBusy: "steer"`（[ingress-busy.ts](../../src/runtime/ingress-busy.ts#L92-L116)）会把用户的回答误注入无关的聊天回合中。
+#### 1. 钉钉移动端交互与投递链路断点（✅ 核心项已修复）
+- **✅ 已修复 — 入站语音、文件与引用回复支持**：[inbound-media.ts](../../src/dingtalk/inbound-media.ts) 已原生支持 `audio`（优先提取 `content.recognition` 为 `[语音转写]`，无转写时回退下载语音原件）、`file`（20MB 上限落盘至 `inbox/` 并注入路径）与 `repliedMsg`（注入 `[引用消息：…]` 前缀）；对暂不支持的 `video`/`chatRecord`/`interactiveCard` 在 [inbound.ts](../../src/dingtalk/inbound.ts) 返回明确中文引导。
+- **✅ 已修复 — 出站 `send_media` 限额对齐与可恢复报错**：[send-media.ts](../../src/tools/send-media.ts) 预读上限提升至 20MB，发送失败改为抛出带打包/转文本指引的 `RecoverableToolError`。
+- **✅ 已修复 — 交付归档补齐与标题透传**：[delivery.ts](../../src/dingtalk/delivery.ts) 的 `replaceWithFinal` 已补调 `archiveBotResponse(text)`，`deliverAnswer` 已向 `sendFinal` 透传 `event.title`（`whenBusy: "steer"` 交互策略保持现状待后续评估）。
 
-#### 2. 记忆与冷历史检索的长周期退化
-- **`session_search` 严重的时间视野截断 bug**：[session-search.ts](../../src/memory/session-search.ts#L268-L269) 在对查询词打分**之前**，先按时间截取了最新的 `MAX_CORPUS_CHUNKS = 500` 个分块（约 20 万字符，重度研发几天就会填满），导致**几天前的全部历史对话虽然躺在磁盘 `log.jsonl` 里，却永远不可能被搜出来**！
-- **`reflect.ts` 规模化与事务性隐患**：
+#### 2. 记忆与冷历史检索的长周期退化（✅ 检索与归档召回已修复；`reflect.ts` 锁优化留待后续）
+- **✅ 已修复 — `session_search` 预截断修复与归档任务检索**：[session-search.ts](../../src/memory/session-search.ts) 已移除带查询词时的 `maxChunks` 前置截断并加入无损子串预筛；[session-corpus.ts](../../src/memory/session-corpus.ts) 已将 `tasks/archive/*.md` 及结项/汇报摘要纳入语料，`task_list`（[lifecycle.ts](../../src/tools/task-manage/lifecycle.ts)）已支持 `includeArchived` 与 `query` 过滤。
+- **待后续迭代 — `reflect.ts` 规模化与事务性隐患**：
   1. [reflect.ts](../../src/memory/reflect.ts#L252) 在长达 45 秒的后台 LLM 请求期间全程持有 `.locks/memory.lock`，阻塞用户侧同步执行的 `memory_save` / `memory_forget`（超时仅 10 秒）；
   2. 第 415–428 行将“单条低价值 `add` 被跳过”算作 `skipped > 0`，进而阻断同批次所有合法的过时记忆 `delete`；
   3. 第 280–286 行 `touch` 操作无需任何跨日复现门槛即可直接将 `probationary` 记忆转正为永久记忆，而 `expires` 过期字段在所有读取与索引生成路径上从未被过滤；
   4. 当用户手工沉淀的 `source: "user"` 记忆超过 1,400 units（预算的 70%）时，`condense` 因无权修改用户记忆将陷入每次后台运行都白跑一轮 LLM 的死循环（[index-budget.ts](../../src/memory/index-budget.ts#L18)）；且 [sidecar-worker.ts](../../src/memory/sidecar-worker.ts#L222) 已支持的 JSON 格式 `repair` 回调在 `reflect.ts` 调用处未接线。
 
-#### 3. Task Lane 长周期运行脆弱点与 I/O 放大
-- **3 秒 `stopGraceMs` 过短导致任务极易“永久隔离（Quarantined）”**：[task-lane.ts](../../src/runtime/task-lane.ts#L99) 与 [task-step.ts](../../src/runtime/task-step.ts#L86-L110) 在 `/tasks pause` 或步骤超时取消后只给 3 秒宽限期。一旦流式请求收尾或磁盘 flush 耗时 3.1 秒，任务即被标记为 `live.quarantined = true`，覆写暂停原因为“请联系部署者重启服务后再恢复任务”，且后续即使底层 Promise 正常结束，[task-control.ts](../../src/runtime/task-control.ts#L178-L204) 仍会拒绝 `/tasks resume` 直至整个守护进程重启。
-- **任务会话文件孤儿化、双倍全量解析与压缩死胡同**：
-  1. [archive.ts](../../src/tasks/archive.ts#L67-L131) 归档任务时只搬运 `.md` 与 `.jsonl`，**永久遗留 `tasks/.sessions/<id>.jsonl`**（周期性事件派生的任务会无限堆积会话文件），同时 [loop-log.ts](../../src/tasks/loop-log.ts#L231-L274) 的模块级 `appenders` Map 从不清理已归档任务；
-  2. [input-receipts.ts](../../src/tasks/input-receipts.ts#L23-L41) 在每步前后各把整个 `tasks/.sessions/<id>.jsonl` 从头读入内存全量 `JSON.parse` 一遍；
-  3. 若长任务（60+ 步）触发上下文压缩失败，[compaction.ts](../../src/agent/session/compaction.ts#L20) 抛出面向聊天的 `"请用 /compact 重试，或用 /new 开新会话"`——任务会话没有这两个命令，重试 3 次后任务彻底卡死。
-- **单个匿名坏投递文件冻结全工位任务报告**：[delivery.ts](../../src/tasks/delivery.ts#L351) 中只要 `tasks/.delivery/` 下出现任何一个无法归属 `taskId` 的损坏文件，整个工位**所有健康任务**的报告与完成回执都会永久停摆。
-- **扫描回路子进程风暴**：[task-lane.ts](../../src/runtime/task-lane.ts#L251-L273) 每次 `scan()` 重复读取两次活跃任务与在途工作，每次最多解析 3 遍高达 12MB 的任务日志；而 `listPendingWork()` 调 `jobs.list()`（[manager.ts](../../src/jobs/manager.ts#L805-L810)）不像 `sweep()` 那样批量调一次 `probeAll`，而是为每个运行中作业串行 `spawn` 一个 `bash + ps` 子进程。
+#### 3. Task Lane 长周期运行脆弱点与 I/O 放大（✅ 核心项已修复）
+- **✅ 已修复 — `stopGraceMs` 放宽与隔离 Runner 自动解绑恢复**：[task-lane.ts](../../src/runtime/task-lane.ts) 默认 `stopGraceMs` 提升至 15 秒；[task-step.ts](../../src/runtime/task-step.ts) 在步骤被隔离时摘除旧 `runner` 并在其退出后安全 `dispose()`，后续执行 `/tasks resume` 即可重建干净会话恢复推进。
+- **✅ 已修复 — 任务会话文件清理与压缩提示分流**：
+  1. [archive.ts](../../src/tasks/archive.ts) 归档提交时已自动清理 `tasks/.sessions/<id>.jsonl` 并释放 [loop-log.ts](../../src/tasks/loop-log.ts) 的 `appenders` 句柄；
+  2. [input-receipts.ts](../../src/tasks/input-receipts.ts#L23-L41) 的增量扫描留待后续按需优化；
+  3. [compaction.ts](../../src/agent/session/compaction.ts) 与 [session-host.ts](../../src/agent/session/session-host.ts) 已区分任务会话与聊天会话，不再向任务步输出无效的 `/compact`、`/new` 提示。
+- **按规格保留 — 匿名坏投递文件全局栅栏**：有明确归属 `taskId` 的损坏记录已按单任务隔离；完全匿名的损坏记录保留全局栅栏以严格守住 Spec 064 投递 FIFO 顺序不变量。
+- **✅ 已修复 — 消除扫描回路子进程风暴**：[task-lane.ts](../../src/runtime/task-lane.ts) 在无对账变更时跳过二次全量扫描；[manager.ts](../../src/jobs/manager.ts) 的 `list()` 抽取 `refreshBatch` 改为单次批量调用 `probeAll`。
 
-#### 4. WebAPI / TUI 运行时竞态与连接陷阱
-- **WebSocket 60 分钟硬断连直接腰斩在途回合**：[websocket.ts](../../src/webapi/routes/websocket.ts#L57-L108) 设置了无视活跃度的 60 分钟硬定时器，到期触发 `onClose()` 会立即对当前连接上未结束的响应调用 `service.cancel(live)`，导致用户在 TUI 里挂着跑满 1 小时的复杂回合被直接中断；同时 WS 协议缺少 `response.cancel` 帧，TUI 按 `Ctrl-C` 只能暴力断连重连。
-- **`request-execution.ts` 双重 `dispose` 竞态与缓存驱逐**：[request-execution.ts](../../src/runtime/request-execution.ts#L53-L80) 将无状态请求塞进与聊天共享的 `channelRunners`（上限 50），不仅突发 API 请求会驱逐热聊天会话，且 `finally` 中先 `endTurn()` 再 `await runner.dispose()` 最后才 `delete`，在异步 `dispose` 窗口内会被 LRU 淘汰器二次并发 `dispose()`。
-- **TUI 交互细节失步**：[cli.ts](../../src/tui/cli.ts#L198) 将 `@file` 自动补全根目录硬编码为 `paths.workspaceDir` 而非当前工位 `cwd`；TUI 内执行 `/desk bind` 会导致服务端重绑而客户端顶栏与 `state/tui/conversations.json` 错乱；恢复已有会话时屏幕全空，缺少最近几轮上下文回显。
+#### 4. WebAPI / TUI 运行时竞态与连接陷阱（✅ 核心项已修复）
+- **按规格保留 — WebSocket `maxMs` 寿命上限**：[websocket.ts](../../src/webapi/routes/websocket.ts#L57-L108) 的连接时长上限属于 Spec 061 D19 契约，`response.cancel` 控制帧留待 H1.5 流式协议演进一并设计。
+- **✅ 已修复 — `request-execution.ts` 双重 `dispose` 竞态与缓存驱逐**：[request-execution.ts](../../src/runtime/request-execution.ts) 在回合结束时先将一次性 runner 从 `running` 与 `runners` 池摘除再执行 `endTurn()` + `dispose()`，彻底消除 LRU 误驱逐与二次并发 `dispose()`。
+- **✅ 已修复 — TUI 多仓 `--cwd`、补全根路径与 `/desk cwd`**：[cli.ts](../../src/tui/cli.ts) 与 [client.ts](../../src/tui/client.ts) 已支持 `--cwd <dir>` 并将 `@file` 补全 `basePath` 对齐到当前工位 `cwd`；新增 `/desk new <name> [cwd]`、`/desk cwd [path|--reset]` 与失联任务接管命令 `/tasks adopt <id>`（[commands.ts](../../src/desk/commands.ts)、[commands.ts](../../src/tasks/commands.ts)，同时删除 [catalog.ts](../../src/commands/catalog.ts) 中重复的 `archive` 条目）。
 
 ---
 
@@ -343,14 +343,14 @@ flowchart LR
 
 ## 七、优先行动清单速查表（Actionable Checklist）
 
-| 优先级 | 事项 | 核心涉及文件 | 预估改动量 | 预期收益 |
-|---|---|---|---|---|
-| **P0** | 修复 `bash` / `job` / `preAction` 漏传工位 `cwd` | [runner-factory.ts](../../src/agent/runner-factory.ts), [manager.ts](../../src/jobs/manager.ts), [watcher.ts](../../src/events/watcher.ts) | ~40 行 | 彻底对齐文件工具与 Shell 工具的目录语义，激活多仓工位 |
-| **P0** | 保护 `~/.pipiclaw` 控制面文件 + 启用默认 SSRF 守卫并堵住 Jina 绕过 | [path-guard.ts](../../src/security/path-guard.ts), [home.ts](../../src/app/home.ts), [fetch.ts](../../src/web/fetch.ts) | ~60 行 | 防止间接注入窃取密钥或热关闭 `security.json` |
-| **P0** | 修复 `cursor-cli` 核验崩溃、`EventsWatcher` 竞态泄漏与 `timeoutMs` 丢失 | [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts), [watcher.ts](../../src/events/watcher.ts), [event-manage.ts](../../src/tools/event-manage.ts) | ~70 行 | 消除必现参数报错与重复定时任务幽灵 |
-| **P1** | 修复 `session_search` 500 块预截断 + 打通 `tasks/archive` 历史检索 | [session-search.ts](../../src/memory/session-search.ts), [factory.ts](../../src/tools/task-manage/factory.ts) | ~120 行 | 恢复数天前冷历史召回，消除已完成任务失忆 |
-| **P1** | 钉钉入站接入 `audio`（ASR）、`file`、`repliedMsg` + 修复归档与 `send_media` | [inbound-media.ts](../../src/dingtalk/inbound-media.ts), [delivery.ts](../../src/dingtalk/delivery.ts), [send-media.ts](../../src/tools/send-media.ts) | ~180 行 | 手机端发语音、传日志、引用回复任务无缝闭环 |
-| **P1** | `Desk` 多仓 `--cwd` 人体工学 + 解耦单 DM 切工位与后台活跃任务推进 | [cli.ts](../../src/tui/cli.ts), [commands.ts](../../src/desk/commands.ts), [desk-runtime.ts](../../src/runtime/desk-runtime.ts) | ~200 行 | 顺畅支撑一人同时推进多个本地代码仓库 |
-| **P1** | Task Lane 健壮性（`stopGraceMs`、`.sessions` 清理、`.delivery` 故障隔离、批量 `probeAll`） | [task-lane.ts](../../src/runtime/task-lane.ts), [archive.ts](../../src/tasks/archive.ts), [delivery.ts](../../src/tasks/delivery.ts) | ~150 行 | 长周期无人值守任务抗抖动、零内存/文件泄漏 |
-| **P1** | 轻量运行时托管 Git Worktree 隔离 + `verify` 读租约 | [workspace-lease.ts](../../src/subagents/workspace-lease.ts), [dispatch.ts](../../src/subagents/dispatch.ts) | ~250 行 | 多任务/主从并发编码不再互相踩脏工作树 |
-| **P2** | 拆分 3 个超长文件清零 `architecture-baseline.json` + 收敛 Harness 注册表 | [manager.ts](../../src/jobs/manager.ts), [discovery.ts](../../src/subagents/discovery.ts), [runs.ts](../../src/subagents/runs.ts) | 纯结构重构 | 全仓零架构特例，降低后续新增执行器维护成本 |
+| 优先级 | 状态 | 事项 | 核心涉及文件 | 预估改动量 | 预期收益 |
+|---|---|---|---|---|---|
+| **P0** | ✅ 已修复 | 修复 `bash` / `job` / `preAction` 漏传工位 `cwd` | [bash.ts](../../src/tools/bash.ts), [manager.ts](../../src/jobs/manager.ts), [watcher.ts](../../src/events/watcher.ts) | ~40 行 | 彻底对齐文件工具与 Shell 工具的目录语义，激活多仓工位 |
+| **P0** | ✅ 已修复* | 保护 `~/.pipiclaw` 控制面文件与外部 CLI 凭据（*`networkGuard` 按设计保留 opt-in） | [path-guard.ts](../../src/security/path-guard.ts), [index.ts](../../src/tools/index.ts), [session-host.ts](../../src/agent/session/session-host.ts) | ~60 行 | 防止间接注入窃取密钥或热关闭 `security.json` |
+| **P0** | ✅ 已修复 | 修复 `cursor-cli` 核验崩溃、`EventsWatcher` 竞态泄漏与 `timeoutMs` 丢失 | [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts), [watcher.ts](../../src/events/watcher.ts), [event-manage.ts](../../src/tools/event-manage.ts) | ~70 行 | 消除必现参数报错与重复定时任务幽灵 |
+| **P1** | ✅ 已修复 | 修复 `session_search` 500 块预截断 + 打通 `tasks/archive` 历史检索 | [session-search.ts](../../src/memory/session-search.ts), [session-corpus.ts](../../src/memory/session-corpus.ts), [lifecycle.ts](../../src/tools/task-manage/lifecycle.ts) | ~120 行 | 恢复数天前冷历史召回，消除已完成任务失忆 |
+| **P1** | ✅ 已修复 | 钉钉入站接入 `audio`（ASR）、`file`、`repliedMsg` + 修复归档与 `send_media` | [inbound-media.ts](../../src/dingtalk/inbound-media.ts), [delivery.ts](../../src/dingtalk/delivery.ts), [send-media.ts](../../src/tools/send-media.ts) | ~180 行 | 手机端发语音、传日志、引用回复任务无缝闭环 |
+| **P1** | ✅ 已修复 | `Desk` 多仓 `--cwd` / `/desk cwd` 人体工学 + `/tasks adopt` 接管失联任务 + 修复 `request-execution` 竞态 | [cli.ts](../../src/tui/cli.ts), [commands.ts](../../src/desk/commands.ts), [desk-runtime.ts](../../src/runtime/desk-runtime.ts), [task-control.ts](../../src/runtime/task-control.ts) | ~200 行 | 顺畅支撑一人同时推进多个本地代码仓库并保留 `DESK-3` 安全隔离 |
+| **P1** | ✅ 已修复 | Task Lane 健壮性（`stopGraceMs`、隔离恢复、`.sessions` 清理、任务压缩分流、批量 `probeAll`） | [task-lane.ts](../../src/runtime/task-lane.ts), [task-step.ts](../../src/runtime/task-step.ts), [archive.ts](../../src/tasks/archive.ts), [manager.ts](../../src/jobs/manager.ts) | ~150 行 | 长周期无人值守任务抗抖动、零内存/文件泄漏 |
+| **P1** | ✅ 已修复 | 轻量运行时托管 Git Worktree 隔离（`worktree: true`）+ `verify` 共享读租约 | [workspace-lease.ts](../../src/subagents/workspace-lease.ts), [worktree.ts](../../src/subagents/worktree.ts), [dispatch.ts](../../src/subagents/dispatch.ts) | ~250 行 | 多任务/并发校验与写委派不再互相踩脏工作树 |
+| **P2** | 待办 | 拆分 3 个超长文件清零 `architecture-baseline.json` + 收敛 Harness 注册表 | [manager.ts](../../src/jobs/manager.ts), [discovery.ts](../../src/subagents/discovery.ts), [runs.ts](../../src/subagents/runs.ts) | 纯结构重构 | 全仓零架构特例，降低后续新增执行器维护成本 |

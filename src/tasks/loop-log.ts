@@ -273,6 +273,15 @@ function appenderFor(path: string, deskDir: string, id: string): JsonlAppender {
 	return appender;
 }
 
+/** Close and evict a single task's cached appender once its log has moved to `tasks/archive/`. */
+export async function closeTaskLogAppender(deskDir: string, id: string): Promise<void> {
+	const path = taskLogPath(deskDir, id);
+	const appender = appenders.get(path);
+	if (!appender) return;
+	appenders.delete(path);
+	await appender.close();
+}
+
 /** Test seam: drop cached appenders so a temp-dir fixture does not leak into the next case. */
 export async function resetTaskLogAppenders(): Promise<void> {
 	const open = [...appenders.values()];

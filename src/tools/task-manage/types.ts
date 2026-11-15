@@ -6,6 +6,7 @@ import type {
 	taskAskSchema,
 	taskCloseSchema,
 	taskCreateSchema,
+	taskListSchema,
 	taskLogSchema,
 	taskMessageSchema,
 	taskPauseSchema,
@@ -37,6 +38,8 @@ export interface TaskManageResult {
 		/** The step in progress and what the model is doing in it. */
 		activity?: string;
 		inFlight?: string[];
+		archived?: boolean;
+		closedAt?: string;
 	}>;
 	/** Rendered log lines, for `task_log`. */
 	entries?: string[];
@@ -49,6 +52,7 @@ export interface TaskManageResult {
  * One request type per schema the model actually sees (spec 046, D3.3): each tool's required
  * fields are non-optional in the type rather than documented as "required for X" in shared prose.
  */
+export type TaskListRequest = Static<typeof taskListSchema>;
 export type TaskCreateRequest = Static<typeof taskCreateSchema>;
 export type TaskCloseRequest = Static<typeof taskCloseSchema>;
 export type TaskLogRequest = Static<typeof taskLogSchema>;

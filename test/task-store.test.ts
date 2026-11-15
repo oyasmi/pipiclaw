@@ -109,7 +109,9 @@ describe("pause and resume", () => {
 });
 
 describe("closing", () => {
-	it("records the close and archives the contract with its log", async () => {
+	it("records the close, archives the contract with its log, and removes the task session transcript", async () => {
+		await mkdir(join(dir, "tasks", ".sessions"), { recursive: true });
+		await writeFile(join(dir, "tasks", ".sessions", "T.jsonl"), '{"type":"session"}\n');
 		await writeFile(
 			join(dir, "tasks", "T.md"),
 			renderTaskDocument({ state: "queued", usage: createUsage() }, "# T\n\n## DoD\n- [x] checked\n"),
@@ -117,6 +119,7 @@ describe("closing", () => {
 		const reportId = await appendTaskLog(dir, "T", { kind: "report", seq: 1, text: "delivered", delivered: true });
 		await closeTask(dir, "T", { outcome: "complete", by: "leader", note: "done", reportId });
 		expect(existsSync(join(dir, "tasks", "T.md"))).toBe(false);
+		expect(existsSync(join(dir, "tasks", ".sessions", "T.jsonl"))).toBe(false);
 		expect(existsSync(archivedTaskPath(dir, "T"))).toBe(true);
 		expect((await readStoredTask(dir, "T", true))?.fields.outcome).toBe("completed");
 		expect(await readTaskLog(dir, "T")).toMatchObject([

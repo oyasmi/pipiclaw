@@ -11,7 +11,7 @@ import type {
 	TaskLiveSnapshot,
 	TaskMessageOutcome,
 } from "../tasks/control.js";
-import { drainTaskDeliveries } from "../tasks/delivery.js";
+import { drainTaskDeliveries, redirectTaskDeliveries } from "../tasks/delivery.js";
 import type { TaskBudget, TaskFrontmatter } from "../tasks/frontmatter.js";
 import { taskInputTag } from "../tasks/input-receipts.js";
 import { appendTaskLog, readTaskLog } from "../tasks/loop-log.js";
@@ -23,6 +23,7 @@ import {
 	readStoredTask,
 	resumeTask as resumeStoredTask,
 	tasksDir,
+	updateStoredTask,
 } from "../tasks/store.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
 import { submitTaskInput } from "./task-input.js";
@@ -179,6 +180,30 @@ export class LaneControl implements TaskControl {
 		const resumed = await resumeStoredTask(deskDir, id, grants);
 		if (!resumed) return { kind: "unchanged" };
 		this.ctx.notify();
+		return { kind: "ok" };
+	}
+
+	async adopt(desk: string, id: string, channel: string): Promise<TaskControlOutcome> {
+		const { ctx } = this;
+		const deskDir = ctx.options.getDeskDir(desk);
+		if (!deskDir) return { kind: "not_found" };
+		const existing = await readStoredTask(deskDir, id);
+		if (!existing || existing.fields.outcome) return { kind: "not_found" };
+		if (existing.fields.channel === channel) return { kind: "unchanged" };
+		const updated = await updateStoredTask(deskDir, id, (doc) => {
+			doc.fields = { ...doc.fields, channel };
+		});
+		if (!updated) return { kind: "not_found" };
+		const live = ctx.live.get(taskKey(desk, id));
+		if (live) live.channelId = channel;
+		await redirectTaskDeliveries(deskDir, id, channel).catch(() => undefined);
+		await drainTaskDeliveries(
+			deskDir,
+			(targetChannel, text) => ctx.options.deliver(desk, targetChannel, text),
+			(targetChannel) => ctx.options.isBoundTo(targetChannel, desk) && ctx.options.isReachable(targetChannel),
+			ctx.now(),
+		).catch(() => undefined);
+		ctx.notify();
 		return { kind: "ok" };
 	}
 

@@ -295,11 +295,12 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			const newRunId = manager.mintRunId();
 
 			let leaseKey: string | undefined;
-			if (role.mutates === "write") {
+			if (role.mutates === "write" || record.purpose === "verify") {
 				const lease = acquireWorkspaceLease({
 					runId: newRunId,
 					channelId: options.channelId,
 					workingDirectory: record.workingDirectory,
+					mode: role.mutates === "write" ? "write" : "read",
 				});
 				if (!lease.ok) {
 					throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));

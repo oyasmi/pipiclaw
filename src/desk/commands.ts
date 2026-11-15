@@ -7,9 +7,13 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { normalizeDeskName } from "./paths.js";
-import type { BindingsFile, CreateDeskOutcome, DeskAvailability, DeskSummary } from "./types.js";
+import type { BindingsFile, CreateDeskOutcome, DeskAvailability, DeskCwdOutcome, DeskSummary } from "./types.js";
 
-type DeskCommand = { action: "list" } | { action: "new"; name: string } | { action: "bind"; name: string };
+type DeskCommand =
+	| { action: "list" }
+	| { action: "new"; name: string; cwd?: string }
+	| { action: "bind"; name: string }
+	| { action: "cwd"; cwd?: string; reset?: boolean };
 
 /** One channel bound to a desk, as `/desk list` shows it. */
 export interface DeskListChannel {
@@ -24,6 +28,8 @@ export interface DeskListItem {
 	channels: DeskListChannel[];
 	/** The desk the asking channel is bound to (or, in the TUI, the desk it opened). */
 	current: boolean;
+	/** Custom working directory when `desk.json` overrides `deskDir`. */
+	cwd?: string;
 }
 
 export type BindOutcome =
@@ -55,39 +61,61 @@ export function buildDeskList(
 	current: string | undefined,
 	label: (channelId: string) => string,
 ): DeskListItem[] {
-	const onDisk = new Map<string, DeskAvailability>(desks.map((summary) => [summary.name, summary.availability]));
-	const names = [...new Set([...onDisk.keys(), ...Object.values(bindings).map((binding) => binding.desk)])].sort();
-	return names.map((name) => ({
-		name,
-		availability: onDisk.get(name) ?? "missing",
-		current: name === current,
-		channels: Object.entries(bindings)
-			.filter(([, binding]) => binding.desk === name)
-			.map(([channelId]) => ({ channelId, label: label(channelId) })),
-	}));
+	const summaries = new Map<string, DeskSummary>(desks.map((summary) => [summary.name, summary]));
+	const names = [...new Set([...summaries.keys(), ...Object.values(bindings).map((binding) => binding.desk)])].sort();
+	return names.map((name) => {
+		const summary = summaries.get(name);
+		const customCwd = summary?.record?.cwd && summary.record.cwd !== summary.deskDir ? summary.record.cwd : undefined;
+		return {
+			name,
+			availability: summary?.availability ?? "missing",
+			current: name === current,
+			channels: Object.entries(bindings)
+				.filter(([, binding]) => binding.desk === name)
+				.map(([channelId]) => ({ channelId, label: label(channelId) })),
+			...(customCwd ? { cwd: customCwd } : {}),
+		};
+	});
 }
 
 export interface DeskCommandPort {
 	list(): Promise<DeskListItem[]>;
 	/** Absolute path of `CHANNELS.md`, where a truncated `/desk list` sends the reader. */
 	channelIndexPath: string;
-	create(name: string): Promise<CreateDeskOutcome>;
+	create(name: string, cwd?: string): Promise<CreateDeskOutcome>;
 	/** Absent in the TUI, which never writes bindings (D18). */
 	bind?(name: string): Promise<BindOutcome>;
+	/** Inspect or update the current desk's working directory (`desk.json` `cwd`). */
+	cwd?(input: { cwd?: string; reset?: boolean }): Promise<DeskCwdOutcome>;
 }
 
 /** Exported so `test/commands-subcommands.test.ts` can feed every broadcast example back through it. */
 export function parseDeskCommand(args: string): DeskCommand {
-	const parts = args.trim().split(/\s+/).filter(Boolean);
+	const trimmed = args.trim();
+	const parts = trimmed.split(/\s+/).filter(Boolean);
 	if (parts.length === 0) return { action: "list" };
 	const [action, ...rest] = parts;
 	if (action === "list") {
 		if (rest.length > 0) throw new Error("用法：/desk list");
 		return { action: "list" };
 	}
-	if (action === "new" || action === "bind") {
-		if (rest.length !== 1) throw new Error(`用法：/desk ${action} <名字>`);
-		return { action, name: normalizeDeskName(rest[0]) };
+	if (action === "new") {
+		const match = /^new\s+(\S+)(?:\s+([\s\S]+))?$/.exec(trimmed);
+		if (!match) throw new Error("用法：/desk new <名字> [目录绝对路径]");
+		const name = normalizeDeskName(match[1]);
+		const cwd = match[2]?.trim();
+		return cwd ? { action: "new", name, cwd } : { action: "new", name };
+	}
+	if (action === "bind") {
+		if (rest.length !== 1) throw new Error("用法：/desk bind <名字>");
+		return { action: "bind", name: normalizeDeskName(rest[0]) };
+	}
+	if (action === "cwd") {
+		const match = /^cwd(?:\s+([\s\S]+))?$/.exec(trimmed);
+		const target = match?.[1]?.trim();
+		if (!target) return { action: "cwd" };
+		if (target === "--reset" || target === "reset") return { action: "cwd", reset: true };
+		return { action: "cwd", cwd: target };
 	}
 	throw new Error(`未知子命令 \`${action}\`。`);
 }
@@ -116,7 +144,8 @@ function renderList(items: DeskListItem[], channelIndexPath: string, canBind: bo
 	}
 	const lines = ["**工位列表**"];
 	for (const item of items) {
-		const head = `- \`${item.name}\`${item.current ? (canBind ? "（本频道）" : "（当前打开）") : ""}`;
+		const cwdNote = item.cwd ? ` · 目录 \`${item.cwd}\`` : "";
+		const head = `- \`${item.name}\`${item.current ? (canBind ? "（本频道）" : "（当前打开）") : ""}${cwdNote}`;
 		if (item.availability !== "available") {
 			lines.push(`${head}：不可用（目录缺失或 desk.json 有误），需要部署者在服务器上检查`);
 		} else if (item.channels.length === 0) {
@@ -134,15 +163,33 @@ function renderCreate(outcome: CreateDeskOutcome, canBind: boolean): string {
 	switch (outcome.kind) {
 		case "invalid":
 			return `工位名不合法：\`${outcome.name}\`。${NAME_RULE}。`;
+		case "invalid_cwd":
+			return `工作目录无效：${outcome.reason}。`;
 		case "unavailable":
 			return `工位 \`${outcome.name}\` 已有绑定但记录缺失，请联系部署者从备份恢复。`;
 		case "exists":
 			return `工位 \`${outcome.name}\` 已经存在。用 \`/desk\` 查看已有的工位。`;
 		case "created": {
 			const name = outcome.record.name;
+			const cwdNote = outcome.record.cwd ? `（工作目录：\`${outcome.record.cwd}\`）` : "";
 			return canBind
-				? `已创建工位 \`${name}\`。用 \`/desk bind ${name}\` 把本频道绑定到它。`
-				: `已创建工位 \`${name}\`。在钉钉频道里用 \`/desk bind ${name}\` 绑定。`;
+				? `已创建工位 \`${name}\`${cwdNote}。用 \`/desk bind ${name}\` 把本频道绑定到它。`
+				: `已创建工位 \`${name}\`${cwdNote}。在钉钉频道里用 \`/desk bind ${name}\` 绑定。`;
+		}
+	}
+}
+
+function renderCwd(outcome: DeskCwdOutcome, isQuery: boolean): string {
+	switch (outcome.kind) {
+		case "invalid_cwd":
+			return `工作目录无效：${outcome.reason}。`;
+		case "unavailable":
+			return `当前频道没有可用的工位，无法查看或修改工作目录。用 \`/desk\` 查看工位状态。`;
+		case "ok": {
+			const suffix = outcome.isDefault ? "（工位默认目录）" : "（自定义仓库目录，状态仍保存在工位目录）";
+			return isQuery
+				? `工位 \`${outcome.desk}\` 当前工作目录：\`${outcome.cwd}\`${suffix}。用 \`/desk cwd <绝对路径>\` 切换目录，或 \`/desk cwd --reset\` 恢复默认。`
+				: `已将工位 \`${outcome.desk}\` 的工作目录设为 \`${outcome.cwd}\`${suffix}。`;
 		}
 	}
 }
@@ -165,13 +212,18 @@ function renderBind(outcome: BindOutcome): string {
 			const lines = [`本频道已绑定到工位 \`${outcome.desk}\`。`];
 			if (outcome.previousDesk && outcome.previousDeskDormant) {
 				lines.push(
-					`原工位 \`${outcome.previousDesk}\` 已没有绑定的频道，它的定时事件和任务已暂停，重新绑定后自动恢复。`,
+					`原工位 \`${outcome.previousDesk}\` 已没有绑定的频道，它的定时事件和任务已暂停；重新绑定或打开 \`pipiclaw tui --desk ${outcome.previousDesk}\` 后自动恢复。`,
 				);
 			} else if (outcome.previousDesk && ((outcome.suspendedTasks ?? 0) > 0 || (outcome.suspendedEvents ?? 0) > 0)) {
 				const parts: string[] = [];
 				if (outcome.suspendedTasks) parts.push(`${outcome.suspendedTasks} 个任务`);
 				if (outcome.suspendedEvents) parts.push(`${outcome.suspendedEvents} 个定时事件`);
-				lines.push(`原工位 \`${outcome.previousDesk}\` 中以本频道为投递频道的 ${parts.join("、")}已暂停。`);
+				const adoptHint = outcome.suspendedTasks
+					? `可在已绑定 \`${outcome.previousDesk}\` 的其他频道或终端里执行 \`/tasks adopt <id>\` 接管汇报并继续执行。`
+					: "";
+				lines.push(
+					`原工位 \`${outcome.previousDesk}\` 中以本频道为投递频道的 ${parts.join("、")}已暂停。${adoptHint}`,
+				);
 			}
 			return lines.join("\n");
 		}
@@ -190,10 +242,16 @@ export async function handleDeskCommand(args: string, port: DeskCommandPort): Pr
 			case "list":
 				return renderList(await port.list(), port.channelIndexPath, port.bind !== undefined);
 			case "new":
-				return renderCreate(await port.create(command.name), port.bind !== undefined);
+				return renderCreate(await port.create(command.name, command.cwd), port.bind !== undefined);
 			case "bind":
 				if (!port.bind) return "终端不支持绑定，用 `--desk` 选择工位。";
 				return renderBind(await port.bind(command.name));
+			case "cwd":
+				if (!port.cwd) return "当前入口不支持直接设置工作目录，请在对话频道或守护进程连接下执行 `/desk cwd`。";
+				return renderCwd(
+					await port.cwd({ cwd: command.cwd, reset: command.reset }),
+					!command.cwd && !command.reset,
+				);
 		}
 	} catch (error) {
 		return `执行 /desk ${command.action} 失败：${errorMessage(error)}`;

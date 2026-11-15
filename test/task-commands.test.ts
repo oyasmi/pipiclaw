@@ -33,6 +33,7 @@ describe("/tasks (spec 064, D25)", () => {
 		message: vi.fn<TaskControl["message"]>(async () => ({ kind: "injected" })),
 		pause: vi.fn<TaskControl["pause"]>(async () => ({ kind: "ok" })),
 		resume: vi.fn<TaskControl["resume"]>(async () => ({ kind: "ok" })),
+		adopt: vi.fn<NonNullable<TaskControl["adopt"]>>(async () => ({ kind: "ok" })),
 		cancel: vi.fn<TaskControl["cancel"]>(async () => ({ kind: "cancelled", cancelled: ["run_a"] })),
 	} satisfies TaskControl;
 
@@ -74,6 +75,8 @@ describe("/tasks (spec 064, D25)", () => {
 		expect(control.pause).toHaveBeenCalledWith("main", "weekly", { by: "user", reason: expect.any(String) });
 		await run("resume weekly +steps 20 +usd 5");
 		expect(control.resume).toHaveBeenCalledWith("main", "weekly", { steps: 20, usd: 5 });
+		expect(await run("adopt weekly")).toContain("切换到当前频道");
+		expect(control.adopt).toHaveBeenCalledWith("main", "weekly", "dingtalk:dm:1");
 		expect(await run("cancel weekly")).toContain("run_a");
 		expect(control.cancel).toHaveBeenCalledWith("main", "weekly", expect.objectContaining({ by: "user" }));
 		await run("msg weekly 先跑一遍 npm run check，\n再汇报");

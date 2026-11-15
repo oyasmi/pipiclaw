@@ -22,6 +22,12 @@ const workingDirectoryField = Type.Optional(
 			"Optional existing directory to run the sub-agent in (its shell cwd and relative-path root). Use it to work on another checkout — e.g. a `git worktree add`ed one. Defaults to this runtime's own working directory.",
 	}),
 );
+const worktreeField = Type.Optional(
+	Type.Boolean({
+		description:
+			"Optional: set true on a write delegation inside a Git repository to run it in a fresh detached Git worktree under its artifact directory, avoiding workspace lease conflicts with concurrent runs. Clean unchanged worktrees are removed automatically when the run settles.",
+	}),
+);
 const purposeField = Type.Optional(
 	Type.Union([Type.Literal("work"), Type.Literal("verify")], {
 		description:
@@ -44,6 +50,7 @@ const subagentSchema = Type.Object({
 	agent: Type.String({ description: "Name of a configured sub-agent from workspaceDir/sub-agents/" }),
 	task: Type.String({ description: "Complete task description for the sub-agent" }),
 	workingDirectory: workingDirectoryField,
+	worktree: worktreeField,
 	purpose: purposeField,
 	item: itemField,
 });
@@ -95,6 +102,7 @@ const subagentInlineSchema = Type.Object({
 		}),
 	),
 	workingDirectory: workingDirectoryField,
+	worktree: worktreeField,
 	purpose: purposeField,
 	item: itemField,
 });

@@ -164,7 +164,7 @@ class ChannelDeliveryController {
 				await this.deliverCommentary(event.text, event.level);
 				return;
 			case "answer":
-				await this.deliverAnswer(event.text);
+				await this.deliverAnswer(event.text, event.title);
 				return;
 			case "compaction":
 				if (event.phase === "start") await this.remember("正在压缩上下文…", "");
@@ -195,12 +195,12 @@ class ChannelDeliveryController {
 		}
 	}
 
-	private async deliverAnswer(text: string): Promise<void> {
+	private async deliverAnswer(text: string, title?: string): Promise<void> {
 		this.lastAnswer = text;
 		if (this.bot.finalDelivery === "card") {
-			await this.replaceWithFinal(text);
+			await this.replaceWithFinal(text, true);
 		} else {
-			await this.sendFinal(text, true);
+			await this.sendFinal(text, true, title);
 		}
 	}
 
@@ -244,7 +244,7 @@ class ChannelDeliveryController {
 				case "completed":
 					if (this.lastAnswer && !this.finalResponseDelivered) {
 						try {
-							await this.replaceWithFinal(this.lastAnswer);
+							await this.replaceWithFinal(this.lastAnswer, true);
 						} catch (err) {
 							log.logWarn("delivery.final_reply.failed", "Final reply replacement failed", {
 								channelId: this.event.channelId,
@@ -321,7 +321,7 @@ class ChannelDeliveryController {
 		return true;
 	}
 
-	private async replaceWithFinal(text: string): Promise<void> {
+	private async replaceWithFinal(text: string, shouldLog = false): Promise<void> {
 		if (this.closed || this.finalResponseDelivered || !this.isCurrent || !text.trim()) return;
 
 		this.ending = true;
@@ -329,8 +329,12 @@ class ChannelDeliveryController {
 		this.mode = "finalize-with-fallback";
 		this.bumpRevision(true);
 		await this.flush();
-		if (!this.finalResponseDelivered && this.isCurrent) {
-			throw new Error("最终答复发送失败，请稍后重试。");
+		if (!this.finalResponseDelivered) {
+			if (this.isCurrent) throw new Error("最终答复发送失败，请稍后重试。");
+			return;
+		}
+		if (shouldLog) {
+			this.archiveBotResponse(text);
 		}
 	}
 

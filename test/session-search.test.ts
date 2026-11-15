@@ -211,10 +211,10 @@ describe("session search", () => {
 		expect(result.results[0]?.summary).toContain("session_search fallback");
 	});
 
-	it("deduplicates mirrored transcript documents and limits the scored corpus", async () => {
+	it("deduplicates mirrored transcript documents, searches past maxChunks on queries, and recalls archived tasks", async () => {
 		const workspaceDir = createWorkspace();
 		const deskDir = join(workspaceDir, "dingtalk:dm:123");
-		mkdirSync(deskDir, { recursive: true });
+		mkdirSync(join(deskDir, "tasks", "archive"), { recursive: true });
 		const duplicate = {
 			type: "message",
 			timestamp: "2026-04-19T00:00:00.000Z",
@@ -225,13 +225,28 @@ describe("session search", () => {
 		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-04-19T00:01:00.000Z", text: "newest unrelated note", isBot: false },
 		]);
+		writeFileSync(
+			join(deskDir, "tasks", "archive", "oauth-migration.md"),
+			"---\nstate: closed\n---\n# OAuth Migration\n\n## Goal\nMigrate legacy PKCE callback.\n",
+		);
+		writeJsonl(join(deskDir, "tasks", "archive", "oauth-migration.jsonl"), [
+			{
+				id: "r1",
+				kind: "close",
+				ts: "2026-04-18T12:00:00.000Z",
+				outcome: "complete",
+				by: "leader",
+				note: "PKCE live",
+			},
+		]);
 
 		const docs = await buildSessionCorpus({ deskDir, maxFiles: 6 });
 		expect(docs.filter((doc) => doc.text === "duplicate oauth note")).toHaveLength(1);
 
-		const result = await searchDeskSessions({
+		// Empty-query browse still bounds the returned tail by maxChunks.
+		const browse = await searchDeskSessions({
 			deskDir,
-			query: "oauth",
+			query: "",
 			limit: 5,
 			maxFiles: 6,
 			maxChunks: 1,
@@ -241,8 +256,23 @@ describe("session search", () => {
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
 		});
-		expect(result.searchedDocuments).toBe(1);
-		expect(result.results).toEqual([]);
+		expect(browse.searchedDocuments).toBe(1);
+
+		// Mutation check (P1-1): slicing to maxChunks before scoring hid any match older than maxChunks.
+		const result = await searchDeskSessions({
+			deskDir,
+			query: "oauth pkce",
+			limit: 5,
+			maxFiles: 6,
+			maxChunks: 1,
+			maxCharsPerChunk: 800,
+			summarizeWithModel: false,
+			timeoutMs: 1000,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(result.searchedDocuments).toBe(3);
+		expect(result.results.map((entry) => entry.source)).toEqual(["task", "context"]);
 	});
 
 	it("caps documents at maxDocumentsTotal, keeps the newest, and leaves no conversation out", async () => {

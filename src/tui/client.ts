@@ -22,6 +22,8 @@ import type { Connection, ConversationItem, SessionLink } from "./session.js";
 export interface OpenOptions {
 	/** The desk to work in; defaults to `default`. */
 	desk?: string;
+	/** Optional repository / working directory to configure on the desk (`--cwd`). */
+	cwd?: string;
 	/** Create the desk first — an explicit creation, like `/desk new`. */
 	create: boolean;
 	/** Start a new conversation instead of resuming the desk's last one. */
@@ -170,19 +172,29 @@ export async function openConversation(
 		);
 		// A conversation rebound to another desk since is not this desk's any more.
 		const bound = exists ? await boundDesk(paths, id) : undefined;
-		if (exists && (bound === desk || (bound === undefined && desk === DEFAULT_DESK))) return { id, replies: [] };
+		if (exists && (bound === desk || (bound === undefined && desk === DEFAULT_DESK))) {
+			const replies = options.cwd ? [await ask(client, id, `/desk cwd ${options.cwd}`)] : [];
+			return { id, replies };
+		}
 	}
 
 	const id = (await client.conversations.create({})).id;
 	const replies: string[] = [];
 	// A conversation starts on the default desk by itself; any other desk is an explicit request.
 	if (desk !== DEFAULT_DESK || options.create) {
-		if (options.create) replies.push(await ask(client, id, `/desk new ${desk}`));
+		if (options.create) {
+			replies.push(await ask(client, id, options.cwd ? `/desk new ${desk} ${options.cwd}` : `/desk new ${desk}`));
+		}
 		replies.push(await ask(client, id, `/desk bind ${desk}`));
 		if ((await boundDesk(paths, id)) !== desk) {
 			for (const reply of replies) io.error(reply);
 			fail(`Could not open desk "${desk}".`);
 		}
+		if (options.cwd && !options.create) {
+			replies.push(await ask(client, id, `/desk cwd ${options.cwd}`));
+		}
+	} else if (options.cwd) {
+		replies.push(await ask(client, id, `/desk cwd ${options.cwd}`));
 	}
 	await writeState(paths, { ...state, [desk]: id });
 	return { id, replies };

@@ -63,6 +63,7 @@ type TasksCommand =
 	| { action: "log"; id: string }
 	| { action: "archive" }
 	| { action: "doctor" }
+	| { action: "adopt"; id: string }
 	| { action: "pause"; id: string }
 	| { action: "cancel"; id: string }
 	| { action: "resume"; id: string; grants: Partial<TaskBudget> }
@@ -100,7 +101,7 @@ export function parseTasksCommand(args: string): TasksCommand {
 		if (parts.length > 1) throw new Error(`用法：/tasks ${action}`);
 		return { action };
 	}
-	if (action === "show" || action === "pause" || action === "log" || action === "cancel") {
+	if (action === "show" || action === "adopt" || action === "pause" || action === "log" || action === "cancel") {
 		const id = parts[1];
 		if (!id || parts.length > 2) throw new Error(`用法：/tasks ${action} <id>`);
 		return { action, id };
@@ -134,7 +135,8 @@ function usageSummary(entry: TaskLedgerEntry): string | undefined {
 function deliveryNote(channel: string | undefined, options: HandleTasksCommandOptions): string | undefined {
 	if (!channel) return "已冻结：未指定汇报频道";
 	const described = options.describeChannel(channel);
-	if (!described.boundHere) return `已冻结：汇报频道未绑定到本工位（${described.label}）`;
+	if (!described.boundHere)
+		return `已冻结：汇报频道未绑定到本工位（${described.label}；可用 \`/tasks adopt\` 接管到当前频道）`;
 	return channel === options.currentChannelId ? undefined : `汇报到${described.label}`;
 }
 
@@ -344,6 +346,17 @@ async function showTaskLog(deskDir: string, idInput: string): Promise<string> {
 	return capReply(lines.join("\n"), { nextStepHint: `完整记录在 \`${path}\`` }).text;
 }
 
+async function adoptTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+	const id = normalizeTaskId(idInput);
+	if (!options.control.adopt) {
+		return "当前环境不支持接管任务汇报频道。";
+	}
+	const outcome = await options.control.adopt(options.desk, id, options.currentChannelId);
+	if (outcome.kind === "not_found") return notFound(id);
+	if (outcome.kind === "unchanged") return `任务 \`${id}\` 的汇报频道已经是当前频道。`;
+	return `已将任务 \`${id}\` 的汇报频道切换到当前频道，后台调度将继续推进。`;
+}
+
 async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const outcome = await options.control.pause(options.desk, id, {
@@ -540,6 +553,8 @@ async function dispatchTasksCommand(options: HandleTasksCommandOptions, command:
 			return await showTaskLog(options.deskDir, command.id);
 		case "archive":
 			return await listArchive(options.deskDir);
+		case "adopt":
+			return await adoptTask(options, command.id);
 		case "pause":
 			return await pauseTask(options, command.id);
 		case "resume":

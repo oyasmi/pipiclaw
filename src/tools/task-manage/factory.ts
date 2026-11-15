@@ -28,6 +28,7 @@ import type {
 	TaskAskRequest,
 	TaskCloseRequest,
 	TaskCreateRequest,
+	TaskListRequest,
 	TaskLogRequest,
 	TaskManageResult,
 	TaskManageToolOptions,
@@ -57,9 +58,9 @@ export function createTaskListTool(options: TaskManageToolOptions): AgentTool<ty
 		name: "task_list",
 		label: "task_list",
 		description:
-			"List this desk's active tasks, including those created from other channels (each reports to its own `channel`; `deliversHere` marks the ones that report to this chat). Shows each task's state, what a waiting one waits for, the step in progress and the delegations in flight — the live status to answer a progress question from.",
+			"List this desk's active tasks (or include closed/archived ones with `includeArchived: true` and optional `query`), including those created from other channels (each reports to its own `channel`; `deliversHere` marks the ones that report to this chat). Shows each task's state, what a waiting one waits for, the step in progress and the delegations in flight — the live status to answer a progress question from.",
 		parameters: taskListSchema,
-		execute: async () => asResult(await listTasks(options)),
+		execute: async (_toolCallId, args: TaskListRequest) => asResult(await listTasks(options, args)),
 	};
 }
 

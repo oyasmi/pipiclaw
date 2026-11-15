@@ -8,7 +8,9 @@ import { errorMessage } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
 import { normalizeTaskId, renderTaskDocument } from "./contract.js";
 import type { TaskArchiveOutcome, TaskFrontmatter } from "./frontmatter.js";
+import { closeTaskLogAppender } from "./loop-log.js";
 import { withTaskMutation } from "./mutation-lock.js";
+import { taskSessionPath } from "./session-path.js";
 
 const SUFFIXES = ["", ".1", ".2"] as const;
 type LogSuffix = (typeof SUFFIXES)[number];
@@ -93,7 +95,9 @@ async function finishCommit(deskDir: string, commit: ArchiveCommit): Promise<voi
 	} else await writeFileAtomically(target, commit.contract);
 	// Keep the active contract until every archive file is durable. It is the lane's visible handle
 	// throughout cleanup; the commit independently covers a crash after that handle is removed.
+	await closeTaskLogAppender(deskDir, commit.id).catch(() => undefined);
 	for (const { suffix } of commit.logs) await rm(join(tasks, `${commit.id}.jsonl${suffix}`), { force: true });
+	await rm(taskSessionPath(deskDir, commit.id), { force: true });
 	await rm(join(tasks, `${commit.id}.md`), { force: true });
 	await syncDirectory(tasks);
 	await rm(taskArchiveCommitPath(deskDir, commit.id), { force: true });

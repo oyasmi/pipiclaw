@@ -8,7 +8,13 @@ import { initializeBindings, loadBindings, writeBindings } from "../src/desk/bin
 import { buildDeskList } from "../src/desk/commands.js";
 import { initializeDefaultDesk } from "../src/desk/default.js";
 import { getBindingsPath, getDeskDir, getDeskLockPath, isDeskName } from "../src/desk/paths.js";
-import { allocateConversation, createDeskRecord, listDesks } from "../src/desk/registry.js";
+import {
+	allocateConversation,
+	createDeskRecord,
+	listDesks,
+	resolveDeskCwdSync,
+	setDeskCwd,
+} from "../src/desk/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 import { spawnLockHolder } from "./helpers/lock-holder.js";
 
@@ -108,12 +114,18 @@ describe("desk registry", () => {
 		// Working directory: the desk directory unless desk.json sets an absolute `cwd`; state stays put.
 		expect(dm.cwd).toBe(dm.deskDir);
 		expect(dm.deskDir).toBe(join(workspace, "desk-desk-news"));
+		const customRepo = join(workspace, "external-repo");
+		mkdirSync(customRepo, { recursive: true });
+		expect((await setDeskCwd(workspace, "desk-news", customRepo)).kind).toBe("ok");
+		expect(resolveDeskCwdSync(workspace, "desk-news")).toBe(customRepo);
+		const moved = await allocateConversation(workspace, "desk-news", "dingtalk:dm:1", "dm", NOW);
+		expect([moved.cwd, moved.deskDir]).toEqual([customRepo, dm.deskDir]);
+		expect((await setDeskCwd(workspace, "desk-news", null)).kind).toBe("ok");
+		expect(resolveDeskCwdSync(workspace, "desk-news")).toBe(dm.deskDir);
+		expect((await setDeskCwd(workspace, "desk-news", join(workspace, "missing-dir"))).kind).toBe("invalid_cwd");
+		// Failure caught: a relative cwd would resolve against the daemon's own directory.
 		const recordPath = join(dm.deskDir, "desk.json");
 		const record = JSON.parse(readFileSync(recordPath, "utf8"));
-		writeFileSync(recordPath, JSON.stringify({ ...record, cwd: "/srv/work" }));
-		const moved = await allocateConversation(workspace, "desk-news", "dingtalk:dm:1", "dm", NOW);
-		expect([moved.cwd, moved.deskDir]).toEqual(["/srv/work", dm.deskDir]);
-		// Failure caught: a relative cwd would resolve against the daemon's own directory.
 		writeFileSync(recordPath, JSON.stringify({ ...record, cwd: "work" }));
 		await expect(allocateConversation(workspace, "desk-news", "dingtalk:dm:1", "dm", NOW)).rejects.toThrow(
 			/absolute/,

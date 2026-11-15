@@ -21,12 +21,32 @@ describe("parseInboundMessage", () => {
 		});
 	});
 
-	it("synthesizes a [图片1] marker for a text-less picture message", () => {
+	it("synthesizes markers for picture, audio ASR/download, file, and repliedMsg payloads", () => {
 		// Mutation check: revert the synthetic-marker branch and this becomes { text: "",
 		// downloadCodes: [...] } — the transport then drops the whole message as "empty".
 		expect(parseInboundMessage({ msgtype: "picture", content: { downloadCode: "code-1" } })).toEqual({
 			text: "[图片1]",
 			downloadCodes: ["code-1"],
+		});
+		expect(parseInboundMessage({ msgtype: "audio", content: { recognition: "  帮我跑一下测试  " } })).toEqual({
+			text: "[语音转写] 帮我跑一下测试",
+			downloadCodes: [],
+		});
+		expect(parseInboundMessage({ msgtype: "audio", content: { downloadCode: "aud-1" } })).toEqual({
+			text: "[文件1]",
+			downloadCodes: [],
+			files: [{ downloadCode: "aud-1", fileName: "voice.amr" }],
+		});
+		expect(
+			parseInboundMessage({
+				msgtype: "file",
+				content: { downloadCode: "file-1", fileName: "spec.pdf" },
+				repliedMsg: { content: { text: "先看这份需求" } },
+			}),
+		).toEqual({
+			text: "[引用消息：先看这份需求]\n[文件1]",
+			downloadCodes: [],
+			files: [{ downloadCode: "file-1", fileName: "spec.pdf" }],
 		});
 	});
 

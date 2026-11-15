@@ -4,6 +4,7 @@
  * the daemon's socket, or — when no daemon is running — to a runtime it starts inside this
  * process (D26, `startEmbeddedRuntime`, supplied by the entry so `tui/` never imports `runtime/`).
  */
+import { resolve } from "node:path";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -12,6 +13,8 @@ import {
 	readCliVersion,
 } from "../app/home.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
+import { DEFAULT_DESK, normalizeDeskName } from "../desk/paths.js";
+import { resolveDeskCwdSync } from "../desk/registry.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { createLink, createSocketClient, openConversation, printOnce, requireSocket } from "./client.js";
@@ -24,6 +27,7 @@ export type ParsedTui =
 	| {
 			kind: "run";
 			desk?: string;
+			cwd?: string;
 			create: boolean;
 			fresh: boolean;
 			print: boolean;
@@ -38,6 +42,7 @@ export type ParsedTui =
 /** Parse `pipiclaw tui` arguments (everything after the `tui` subcommand). */
 export function parseTuiArgs(args: string[]): ParsedTui {
 	let desk: string | undefined;
+	let cwd: string | undefined;
 	let create = false;
 	let fresh = false;
 	let print = false;
@@ -54,6 +59,12 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 			index += 1;
 		} else if (arg.startsWith("--desk=")) {
 			desk = arg.slice("--desk=".length);
+		} else if (arg === "--cwd") {
+			cwd = args[index + 1];
+			if (!cwd || cwd.startsWith("-")) return { kind: "error", message: "--cwd needs a directory path." };
+			index += 1;
+		} else if (arg.startsWith("--cwd=")) {
+			cwd = arg.slice("--cwd=".length);
 		} else if (arg === "--create") {
 			create = true;
 		} else if (arg === "--new") {
@@ -77,7 +88,17 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 		}
 	}
 
-	return { kind: "run", desk, create, fresh, print, quiet, plain, positional };
+	return {
+		kind: "run",
+		desk,
+		...(cwd !== undefined ? { cwd } : {}),
+		create,
+		fresh,
+		print,
+		quiet,
+		plain,
+		positional,
+	};
 }
 
 function printTuiHelp(io: BootstrapIO): void {
@@ -93,6 +114,7 @@ function printTuiHelp(io: BootstrapIO): void {
 	io.log("");
 	io.log("Options:");
 	io.log("  --desk <name>             Open a desk (default: default)");
+	io.log("  --cwd <dir>               Set the desk's working directory (repo path)");
 	io.log("  --create                  Create the desk first (like `/desk new`)");
 	io.log("  --new                     Start a new conversation instead of resuming");
 	io.log("  --print, -p               One-shot: run [prompt] (or stdin), print the answer, exit");
@@ -175,10 +197,11 @@ async function runClient(
 	io: BootstrapIO,
 ): Promise<void> {
 	const client = createSocketClient(paths);
+	const resolvedCwdArg = parsed.cwd ? resolve(parsed.cwd) : undefined;
 	const { id, replies } = await openConversation(
 		client,
 		paths,
-		{ desk: parsed.desk, create: parsed.create, fresh: parsed.fresh },
+		{ desk: parsed.desk, cwd: resolvedCwdArg, create: parsed.create, fresh: parsed.fresh },
 		io,
 	);
 
@@ -190,12 +213,13 @@ async function runClient(
 		return;
 	}
 
+	const deskName = normalizeDeskName(parsed.desk ?? DEFAULT_DESK);
 	const frontend = createFrontend({
 		plain: parsed.plain,
 		quiet: parsed.quiet,
 		interactive: true,
 		commands: TUI_SLASH_COMMANDS,
-		basePath: paths.workspaceDir,
+		basePath: resolveDeskCwdSync(paths.workspaceDir, deskName),
 	});
 	const traits = traitsOf(new PipiclawSettingsManager(paths.appHomeDir).getTuiSettings().responseMode);
 	const session = new TuiSession({

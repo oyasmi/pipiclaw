@@ -3,7 +3,12 @@
  * per-message attachment collection built on it (spec 049).
  */
 import axios from "axios";
-import { MAX_INBOUND_IMAGE_BYTES, MAX_INBOUND_IMAGES_PER_MESSAGE } from "../channel/attachments.js";
+import {
+	MAX_INBOUND_FILE_BYTES,
+	MAX_INBOUND_FILES_PER_MESSAGE,
+	MAX_INBOUND_IMAGE_BYTES,
+	MAX_INBOUND_IMAGES_PER_MESSAGE,
+} from "../channel/attachments.js";
 import type { InboundAttachment } from "../channel/ingress.js";
 import type { MediaSendResult, OutboundMedia } from "../channel/transport.js";
 import * as log from "../log.js";
@@ -39,7 +44,7 @@ export interface DingTalkMediaDeps {
 	 * The inbound file fetch used while resolving attachments. The bot supplies its own overridable
 	 * `downloadMessageFile`, so the deterministic e2e harness can stub the network out.
 	 */
-	downloadMessageFile: (downloadCode: string) => Promise<{ data: Buffer } | null>;
+	downloadMessageFile: (downloadCode: string, maxBytes?: number) => Promise<{ data: Buffer } | null>;
 }
 
 export class DingTalkMedia {
@@ -150,7 +155,10 @@ export class DingTalkMedia {
 	 * queued turn actually ran, a `downloadCode`/`downloadUrl` fetched only then could easily have
 	 * already expired.
 	 */
-	async downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null> {
+	async downloadMessageFile(
+		downloadCode: string,
+		maxBytes = MAX_INBOUND_IMAGE_BYTES,
+	): Promise<{ data: Buffer } | null> {
 		const token = await this.deps.getAccessToken();
 		if (!token) return null;
 
@@ -173,7 +181,7 @@ export class DingTalkMedia {
 			const fileResp = await http.get(downloadUrl, {
 				responseType: "arraybuffer",
 				// Reject an oversized body before it fully lands in memory rather than after.
-				maxContentLength: MAX_INBOUND_IMAGE_BYTES,
+				maxContentLength: maxBytes,
 				timeout: MEDIA_DOWNLOAD_TIMEOUT_MS,
 			});
 			return { data: Buffer.from(fileResp.data as ArrayBuffer) };
@@ -191,51 +199,86 @@ export class DingTalkMedia {
 	}
 
 	/**
-	 * Download one parsed message's images and say, in the text, what became of the ones that did
-	 * not make it (spec 049 D8): a failed download, an oversized file, or more images than
-	 * `MAX_INBOUND_IMAGES_PER_MESSAGE` allows. A failure on one image never drops the rest of the
-	 * message — only that one `[图片N]` marker changes. The bytes of the others go to the runtime as
-	 * attachments (it persists them under the bound desk and settles the remaining markers).
-	 *
-	 * No-op (no network call at all) when the message carries no image credentials, so a plain
-	 * text message never pays for this method's existence.
+	 * Download one parsed message's images/files and say, in the text, what became of any that did
+	 * not make it (spec 049 D8). No-op when the message carries no attachment credentials.
 	 */
 	async collectInboundAttachments(
 		parsed: ParsedInboundMessage,
 	): Promise<{ text: string; attachments: InboundAttachment[] }> {
-		if (parsed.downloadCodes.length === 0) {
+		const files = parsed.files ?? [];
+		if (parsed.downloadCodes.length === 0 && files.length === 0) {
 			return { text: parsed.text, attachments: [] };
 		}
 
 		let text = parsed.text;
-		const attachments: (InboundAttachment | undefined)[] = [];
-		const replaceMarker = (index: number, replacement: string) => {
+		const imageAttachments: (InboundAttachment | undefined)[] = [];
+		const fileAttachments: (InboundAttachment | undefined)[] = [];
+		const replaceImageMarker = (index: number, replacement: string) => {
 			text = text.replace(`[图片${index + 1}]`, replacement);
 		};
+		const replaceFileMarker = (index: number, replacement: string) => {
+			text = text.replace(`[文件${index + 1}]`, replacement);
+		};
 
-		await Promise.all(
-			parsed.downloadCodes.map(async (downloadCode, index) => {
+		await Promise.all([
+			...parsed.downloadCodes.map(async (downloadCode, index) => {
 				const marker = index + 1;
 				if (index >= MAX_INBOUND_IMAGES_PER_MESSAGE) {
-					replaceMarker(index, `[图片${marker}：超出单条消息图片数量上限，已丢弃]`);
+					replaceImageMarker(index, `[图片${marker}：超出单条消息图片数量上限，已丢弃]`);
 					return;
 				}
 
-				const downloaded = await this.deps.downloadMessageFile(downloadCode);
+				const downloaded = await this.deps.downloadMessageFile(downloadCode, MAX_INBOUND_IMAGE_BYTES);
 				if (!downloaded) {
-					replaceMarker(index, `[图片${marker}：接收失败]`);
+					replaceImageMarker(index, `[图片${marker}：接收失败]`);
 					return;
 				}
 
 				if (downloaded.data.byteLength > MAX_INBOUND_IMAGE_BYTES) {
-					replaceMarker(index, `[图片${marker}：文件过大（${formatSize(downloaded.data.byteLength)}），已丢弃]`);
+					replaceImageMarker(
+						index,
+						`[图片${marker}：文件过大（${formatSize(downloaded.data.byteLength)}），已丢弃]`,
+					);
 					return;
 				}
 
-				attachments[index] = { kind: "image", index: marker, data: downloaded.data };
+				imageAttachments[index] = { kind: "image", index: marker, data: downloaded.data };
 			}),
-		);
+			...files.map(async (file, index) => {
+				const marker = index + 1;
+				if (index >= MAX_INBOUND_FILES_PER_MESSAGE) {
+					replaceFileMarker(index, `[文件${marker}：超出单条消息附件数量上限，已丢弃]`);
+					return;
+				}
 
-		return { text, attachments: attachments.filter((attachment): attachment is InboundAttachment => !!attachment) };
+				const downloaded = await this.deps.downloadMessageFile(file.downloadCode, MAX_INBOUND_FILE_BYTES);
+				if (!downloaded) {
+					replaceFileMarker(index, `[文件${marker}（${file.fileName}）：接收失败]`);
+					return;
+				}
+
+				if (downloaded.data.byteLength > MAX_INBOUND_FILE_BYTES) {
+					replaceFileMarker(
+						index,
+						`[文件${marker}（${file.fileName}）：文件过大（${formatSize(downloaded.data.byteLength)}），已丢弃]`,
+					);
+					return;
+				}
+
+				fileAttachments[index] = {
+					kind: "file",
+					index: marker,
+					data: downloaded.data,
+					fileName: file.fileName,
+				};
+			}),
+		]);
+
+		return {
+			text,
+			attachments: [...imageAttachments, ...fileAttachments].filter(
+				(attachment): attachment is InboundAttachment => !!attachment,
+			),
+		};
 	}
 }

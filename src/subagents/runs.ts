@@ -40,6 +40,7 @@ import {
 } from "./run-record.js";
 import { creditTaskForRun } from "./task-settlement.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
+import { cleanupManagedWorktreeIfUnchanged } from "./worktree.js";
 
 /**
  * The run: one abstraction level for delegation, whether it executes as an in-process sub-agent
@@ -541,6 +542,7 @@ export class SubAgentRunManager {
 			this.recovery.remove(runId);
 			this.stopExternalProgressTail(runId);
 			this.internalProgressPacers.delete(runId);
+			await cleanupManagedWorktreeIfUnchanged(record.artifactDir).catch(() => undefined);
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
@@ -717,6 +719,7 @@ export class SubAgentRunManager {
 				releaseWorkspaceLease(record.leaseKey, record.runId);
 				record.leaseKey = undefined;
 				await this.persist(record);
+				await cleanupManagedWorktreeIfUnchanged(record.artifactDir).catch(() => undefined);
 				return record.status;
 			}
 			return "running"; // A live handle or the adopted-run reconciliation below drives settlement.
@@ -851,6 +854,7 @@ export class SubAgentRunManager {
 						runId: record.runId,
 						channelId: record.channelId,
 						workingDirectory: record.workingDirectory,
+						mode: record.mutates === "read" ? "read" : "write",
 					});
 					if (rebuilt.ok) {
 						// Spec 042 D5: persist what was *actually* acquired, not just trust the old

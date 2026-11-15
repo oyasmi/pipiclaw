@@ -128,18 +128,29 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "desk",
-		argumentHint: "[list|new <名字>|bind <名字>]",
-		description: "进阶：创建工位，或把本频道切换到另一个工位",
-		// list/new answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
+		argumentHint: "[list|new <名字> [目录]|bind <名字>|cwd [目录|--reset]]",
+		description: "进阶：创建工位、配置工位仓库目录，或把本频道切换到另一个工位",
+		// list/new/cwd answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
 		availableWhileBusy: true,
 		subcommands: [
-			{ name: "list", description: "列出所有工位和各自绑定的频道（默认动作，可省略）", example: "/desk" },
-			{ name: "new", args: "<名字>", description: "创建一个空工位，不绑定任何频道", example: "/desk new research" },
+			{ name: "list", description: "列出所有工位、工作目录和各自绑定的频道（默认动作，可省略）", example: "/desk" },
+			{
+				name: "new",
+				args: "<名字> [目录绝对路径]",
+				description: "创建一个空工位（可选指定代码仓库绝对路径），不绑定任何频道",
+				example: "/desk new research",
+			},
 			{
 				name: "bind",
 				args: "<名字>",
 				description: "把本频道绑定到这个工位，同时解除原来的绑定；回合进行中不能执行",
 				example: "/desk bind research",
+			},
+			{
+				name: "cwd",
+				args: "[目录绝对路径|--reset]",
+				description: "查看或设置当前工位的工作目录（状态仍保存在工位目录中）",
+				example: "/desk cwd /srv/repo",
 			},
 		],
 	},
@@ -168,8 +179,8 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "tasks",
 		argumentHint:
-			"[show <id>|log <id>|msg <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|cancel <id>|archive|doctor]",
-		description: "查看、对话、暂停与取消本工位在后台执行的长程任务；任务与聊天互不占用",
+			"[show <id>|log <id>|msg <id> <内容>|adopt <id>|pause <id>|resume <id> [+steps N|+usd X]|cancel <id>|archive|doctor]",
+		description: "查看、对话、接管、暂停与取消本工位在后台执行的长程任务；任务与聊天互不占用",
 		availableWhileBusy: true,
 		subcommands: [
 			{ name: "list", description: "列出本工位进行中的任务（默认动作，可省略）", example: "/tasks" },
@@ -185,12 +196,17 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 				description: "查看该任务的记录（含每次委派的开始与结束）",
 				example: "/tasks log weekly-report",
 			},
-			{ name: "archive", description: "列出已归档（已关闭）的任务", example: "/tasks archive" },
 			{
 				name: "msg",
 				args: "<id> <内容>",
 				description: "对任务说话：步骤执行中直接送进当前步骤，否则排给下一步；也是回答任务提问的方式",
 				example: "/tasks msg weekly-report 先跑一遍 npm run check",
+			},
+			{
+				name: "adopt",
+				args: "<id>",
+				description: "把任务的汇报频道改到当前频道，解冻因原频道切走而暂停的任务",
+				example: "/tasks adopt weekly-report",
 			},
 			{
 				name: "pause",

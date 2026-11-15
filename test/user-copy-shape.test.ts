@@ -71,6 +71,7 @@ const TASK_CHANNELS = {
 		message: async () => ({ kind: "injected" }),
 		pause: async () => ({ kind: "ok" }),
 		resume: async () => ({ kind: "ok" }),
+		adopt: async () => ({ kind: "ok" }),
 		cancel: async () => ({ kind: "cancelled", cancelled: ["run_1"] }),
 	} satisfies TaskControl,
 };

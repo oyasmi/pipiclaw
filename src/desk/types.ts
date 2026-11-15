@@ -69,5 +69,11 @@ export interface DeskSummary {
 export type CreateDeskOutcome =
 	| { kind: "created"; record: DeskRecord }
 	| { kind: "invalid"; name: string }
+	| { kind: "invalid_cwd"; cwd: string; reason: string }
 	| { kind: "exists"; name: string }
 	| { kind: "unavailable"; name: string };
+
+export type DeskCwdOutcome =
+	| { kind: "ok"; desk: string; cwd: string; isDefault: boolean }
+	| { kind: "invalid_cwd"; cwd: string; reason: string }
+	| { kind: "unavailable"; desk: string };

@@ -13,7 +13,9 @@ import { isRecord } from "../shared/type-guards.js";
 import { dingtalkDmChannelId, dingtalkGroupChannelId } from "./channel-ids.js";
 import type { DingTalkConfig } from "./config.js";
 import type { ConversationMetaStore } from "./conversation-meta.js";
-import { type ParsedInboundMessage, parseInboundMessage } from "./inbound-media.js";
+import { type InboundQuotedMessage, type ParsedInboundMessage, parseInboundMessage } from "./inbound-media.js";
+
+const UNSUPPORTED_HINT_MSGTYPES = new Set(["video", "chatRecord", "interactiveCard"]);
 
 interface DingTalkIncomingMessage {
 	msgId?: string;
@@ -27,11 +29,17 @@ interface DingTalkIncomingMessage {
 	msgtype?: string;
 	text?: {
 		content?: string;
+		isReplyMsg?: boolean;
+		repliedMsg?: InboundQuotedMessage;
 	};
+	repliedMsg?: InboundQuotedMessage;
 	content?: {
 		richText?: Array<Record<string, string>>;
-		/** Present on a `picture` message; see `inbound-media.ts`'s `parseInboundMessage`. */
+		/** Present on `picture` / `file` / `audio` messages; see `inbound-media.ts`'s `parseInboundMessage`. */
 		downloadCode?: string;
+		recognition?: string;
+		audioType?: string;
+		fileName?: string;
 	};
 }
 
@@ -46,6 +54,7 @@ export interface InboundMessagesDeps {
 	/** Acknowledge a downstream frame to DingTalk. */
 	ack: (messageId: string) => void;
 	collectAttachments: (parsed: ParsedInboundMessage) => Promise<{ text: string; attachments: InboundAttachment[] }>;
+	sendPlain?: (channelId: string, text: string) => Promise<boolean>;
 }
 
 export class InboundMessages {
@@ -126,8 +135,11 @@ export class InboundMessages {
 		const conversationId = data.conversationId || "";
 		const conversationType = data.conversationType || "1";
 
-		if (!parsed.text && parsed.downloadCodes.length === 0) {
-			const msgtype = typeof data.msgtype === "string" ? data.msgtype : "unknown";
+		const hasMedia = parsed.downloadCodes.length > 0 || (parsed.files?.length ?? 0) > 0;
+		const msgtype = typeof data.msgtype === "string" ? data.msgtype : "unknown";
+		const isUnsupportedMedia = !parsed.text && !hasMedia && UNSUPPORTED_HINT_MSGTYPES.has(msgtype);
+
+		if (!parsed.text && !hasMedia && !isUnsupportedMedia) {
 			log.logWarn("dingtalk.message.empty", "Empty message ignored", { fields: { msgtype } });
 			return;
 		}
@@ -144,6 +156,23 @@ export class InboundMessages {
 		// Determine channel ID
 		const channelId =
 			conversationType === "2" ? dingtalkGroupChannelId(conversationId) : dingtalkDmChannelId(senderId);
+
+		if (isUnsupportedMedia) {
+			log.logWarn("dingtalk.message.unsupported", "Unsupported message type rejected", {
+				channelId,
+				fields: { msgtype },
+			});
+			this.deps.conversations.set(channelId, {
+				conversationId,
+				conversationType,
+				senderId,
+			});
+			await this.deps.sendPlain?.(
+				channelId,
+				`⚠️ 暂不支持直接解析 \`${msgtype}\` 类型消息，请改发文字、语音、图片或文件附件。`,
+			);
+			return;
+		}
 
 		// Parsing above is free; downloading image attachments below is a real network round-trip.
 		// Serialize the whole "download attachments → hand over" unit per channel (spec 049 D3):

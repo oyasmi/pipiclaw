@@ -18,10 +18,12 @@ import { CompactionSummary, type CompactionSummaryOptions } from "./compaction-s
 
 const FAILURE_COOLDOWN_MS = 30_000;
 const CONTEXT_FULL = "会话上下文空间不足，自动压缩暂未完成。请用 /compact 重试，或用 /new 开新会话。";
+const TASK_CONTEXT_FULL = "任务会话上下文空间不足，自动压缩暂未完成；当前步骤将重试，请把大段中间产物写入文件再引用。";
 interface CompactionOptions extends CompactionSummaryOptions {
 	getSession: () => AgentSession;
 	getRunState: () => RunState;
 	isEnabled?: () => boolean;
+	isTaskSession?: boolean;
 	onAdopt?: () => void;
 	onPersistenceFault?: (session: AgentSession, error: unknown) => Error;
 }
@@ -79,10 +81,14 @@ export class SessionCompaction {
 		const candidate = this.candidate;
 		if (candidate) await this.wait(candidate);
 		if (session !== this.options.getSession() || this.retired || candidate?.controller.signal.aborted)
-			throw new Error(CONTEXT_FULL);
+			throw new Error(this.contextFullMessage());
 		this.adopt();
 		budget = compactionBudget(session, incoming);
-		if (budget.projected >= budget.hard) throw new Error(CONTEXT_FULL);
+		if (budget.projected >= budget.hard) throw new Error(this.contextFullMessage());
+	}
+
+	private contextFullMessage(): string {
+		return this.options.isTaskSession ? TASK_CONTEXT_FULL : CONTEXT_FULL;
 	}
 
 	private start(): void {
@@ -215,7 +221,7 @@ export class SessionCompaction {
 			if (this.retired || session !== this.options.getSession() || pending?.controller.signal.aborted) return;
 			this.adopt();
 			budget = compactionBudget(this.options.getSession());
-			if (budget.projected >= budget.hard) throw new Error(CONTEXT_FULL);
+			if (budget.projected >= budget.hard) throw new Error(this.contextFullMessage());
 		} catch (error) {
 			this.failure(error);
 			void session.abort().catch(() => undefined);
@@ -286,20 +292,24 @@ export class SessionCompaction {
 			channelId: this.options.conversation.channelId,
 			reason: errorMessage(error),
 		});
-		state.ctx?.emit({
-			type: "commentary",
-			level: "notice",
-			text: "⚠️ 上下文压缩未完成，原会话已保留。可用 `/compact` 重试，或用 `/new` 开新会话。",
-		});
+		if (!this.options.isTaskSession) {
+			state.ctx?.emit({
+				type: "commentary",
+				level: "notice",
+				text: "⚠️ 上下文压缩未完成，原会话已保留。可用 `/compact` 重试，或用 `/new` 开新会话。",
+			});
+		}
 	}
 	private wait(candidate: Candidate): Promise<void> {
 		this.record("waiting", candidate);
-		const state = this.options.getRunState();
-		state.ctx?.emit({
-			type: "commentary",
-			level: "notice",
-			text: "⏳ 正在整理上下文，可用 `/stop` 停止当前回合，或用 `/new` 开新会话。",
-		});
+		if (!this.options.isTaskSession) {
+			const state = this.options.getRunState();
+			state.ctx?.emit({
+				type: "commentary",
+				level: "notice",
+				text: "⏳ 正在整理上下文，可用 `/stop` 停止当前回合，或用 `/new` 开新会话。",
+			});
+		}
 		return candidate.promise;
 	}
 	private record(state: string, candidate: Candidate, fields: Record<string, unknown> = {}): void {

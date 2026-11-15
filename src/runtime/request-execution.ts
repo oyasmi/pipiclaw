@@ -70,13 +70,15 @@ export function createRequestExecution(deps: {
 							message: "请求执行失败，请稍后重试或让部署者检查服务日志。",
 						});
 					} finally {
-						runner.endTurn();
-						try {
-							await runner.dispose();
-						} finally {
-							running.delete(message.channelId);
+						// Detach from shared maps before `endTurn()` flips `isBusy()` to false and before
+						// `dispose()` awaits, so `evictIdleRunnersOverCap` / `shutdown` can never double-dispose
+						// a request-scoped runner or count an ended request against chat's idle LRU cap.
+						running.delete(message.channelId);
+						if (deps.runners.get(message.channelId) === runner) {
 							deps.runners.delete(message.channelId);
 						}
+						runner.endTurn();
+						await runner.dispose();
 					}
 				};
 				const task = run();

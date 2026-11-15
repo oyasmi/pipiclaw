@@ -484,40 +484,42 @@ export class DeskJobManager {
 			log.logEvent("debug", "job.completion.hinted", "Background job completion check requested", {
 				fields: { desk: this.target.desk, jobIds: running.map((r) => r.id), trigger: "sweep" },
 			});
-			// One shell for the whole sweep, not one per job: the sweeper runs every 10s for as
-			// long as any job lives, so per-job spawns are the steady-state cost of backgrounding.
-			const probes = await this.probeAll(running);
-			for (const record of running) {
-				// The batched probe is a read; the state transition it implies still goes through the
-				// per-job slot so it cannot race a concurrent list/poll/cancel.
-				await this.reconcileQueue
-					.run(record.id, async () => {
-						if (this.stopped || record.status !== "running") return;
-						await this.applyProbe(record, probes.get(record.id) ?? "");
-					})
-					.catch((error) => {
-						log.logWarn("job.sweep.refresh_failed", "Background job refresh failed", {
-							reason: errorMessage(error),
-							fields: { jobId: record.id },
-						});
-					});
-			}
-			for (const id of this.pendingCompletion) {
-				const record = this.jobs.get(id);
-				if (!record || this.stopped) break;
-				await this.refresh(record).catch((error) =>
-					log.logWarn("job.completion.retry_failed", "Background job completion failed", {
-						reason: errorMessage(error),
-						fields: { jobId: id },
-					}),
-				);
-			}
+			await this.refreshBatch(running);
 			await this.collectGarbage();
 		} finally {
 			this.sweeping = false;
 			if (this.runningCount() === 0 && this.pendingCompletion.size === 0) {
 				this.stopSweeper();
 			}
+		}
+	}
+
+	private async refreshBatch(running: JobRecord[], signal?: AbortSignal): Promise<void> {
+		if (running.length > 0) {
+			const probes = await this.probeAll(running, signal);
+			for (const record of running) {
+				await this.reconcileQueue
+					.run(record.id, async () => {
+						if (this.stopped || record.status !== "running") return;
+						await this.applyProbe(record, probes.get(record.id) ?? "", signal);
+					})
+					.catch((error) =>
+						log.logWarn("job.sweep.refresh_failed", "Background job refresh failed", {
+							reason: errorMessage(error),
+							fields: { jobId: record.id },
+						}),
+					);
+			}
+		}
+		for (const id of this.pendingCompletion) {
+			const record = this.jobs.get(id);
+			if (!record || this.stopped) break;
+			await this.refresh(record, signal).catch((error) =>
+				log.logWarn("job.completion.retry_failed", "Background job completion failed", {
+					reason: errorMessage(error),
+					fields: { jobId: id },
+				}),
+			);
 		}
 	}
 
@@ -802,9 +804,8 @@ export class DeskJobManager {
 	}
 
 	async list(signal?: AbortSignal): Promise<JobSnapshot[]> {
-		for (const record of this.jobs.values()) {
-			await this.refresh(record, signal);
-		}
+		const running = Array.from(this.jobs.values()).filter((r) => r.status === "running");
+		await this.refreshBatch(running, signal);
 		return Array.from(this.jobs.values()).map(toSnapshot);
 	}
 

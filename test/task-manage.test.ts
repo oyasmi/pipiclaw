@@ -52,6 +52,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 		message: vi.fn<TaskControl["message"]>(async () => ({ kind: "injected" })),
 		pause: vi.fn<TaskControl["pause"]>(async () => ({ kind: "ok" })),
 		resume: vi.fn<TaskControl["resume"]>(async () => ({ kind: "ok" })),
+		adopt: vi.fn<NonNullable<TaskControl["adopt"]>>(async () => ({ kind: "ok" })),
 		cancel: vi.fn<TaskControl["cancel"]>(async () => ({ kind: "cancelled", cancelled: ["run_live"] })),
 	} satisfies TaskControl;
 

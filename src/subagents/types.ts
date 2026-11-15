@@ -53,12 +53,14 @@ export interface SubAgentRunContext {
 	item?: string;
 	workingDirectory: string;
 	artifactDir: string;
+	managedWorktree?: boolean;
 }
 
 /** The delegation parameters both invocation surfaces share (`task` plus routing). */
 export interface DelegationParams {
 	task: string;
 	workingDirectory?: string;
+	worktree?: boolean;
 	purpose?: "work" | "verify";
 	item?: string;
 }

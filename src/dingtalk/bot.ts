@@ -72,7 +72,7 @@ export class DingTalkBot implements DeliveryPort {
 			getAccessToken,
 			getConversationMeta: (channelId) => this.conversations.get(channelId),
 			sendRobotMessage: sendRobot,
-			downloadMessageFile: (downloadCode) => this.downloadMessageFile(downloadCode),
+			downloadMessageFile: (downloadCode, maxBytes) => this.downloadMessageFile(downloadCode, maxBytes),
 		});
 		this.connection = new StreamConnection({
 			clientId: this.config.clientId,
@@ -87,6 +87,7 @@ export class DingTalkBot implements DeliveryPort {
 			isStopped: () => this.isStopped,
 			ack: (messageId) => this.connection.ack(messageId),
 			collectAttachments: (parsed) => this.media.collectInboundAttachments(parsed),
+			sendPlain: (channelId, text) => this.sendPlain(channelId, text),
 		});
 	}
 
@@ -261,8 +262,8 @@ export class DingTalkBot implements DeliveryPort {
 	 * deterministic e2e harness can override it and run the inbound path with zero network, the
 	 * same pattern `HarnessDingTalkBot` already uses for outbound calls.
 	 */
-	protected downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null> {
-		return this.media.downloadMessageFile(downloadCode);
+	protected downloadMessageFile(downloadCode: string, maxBytes?: number): Promise<{ data: Buffer } | null> {
+		return this.media.downloadMessageFile(downloadCode, maxBytes);
 	}
 
 	private touchChannel(channelId: string): void {

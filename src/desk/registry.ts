@@ -9,9 +9,9 @@
  * Channel ids are only JSON keys here; this module never parses them — callers pass the
  * conversation kind (the format rules live in `channel/channel-id.ts`).
  */
-import { lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { syncDirectoryBestEffort, writeFileAtomically } from "../shared/atomic-file.js";
 import { withFileLock } from "../shared/file-lock.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -28,7 +28,14 @@ import {
 	isDeskName,
 	parseConversationName,
 } from "./paths.js";
-import type { ConversationKind, CreateDeskOutcome, DeskConversation, DeskRecord, DeskSummary } from "./types.js";
+import type {
+	ConversationKind,
+	CreateDeskOutcome,
+	DeskConversation,
+	DeskCwdOutcome,
+	DeskRecord,
+	DeskSummary,
+} from "./types.js";
 
 /** `desk.json` writes are tiny; anything waiting this long is a stuck holder, not contention. */
 const DESK_RECORD_LOCK_TIMEOUT_MS = 10_000;
@@ -109,9 +116,31 @@ export async function listDesks(workspaceDir: string): Promise<DeskSummary[]> {
 	return summaries;
 }
 
+function validateCustomCwd(rawCwd: string): { ok: true; cwd: string } | { ok: false; reason: string } {
+	const trimmed = rawCwd.trim();
+	if (!trimmed || !isAbsolute(trimmed)) {
+		return { ok: false, reason: "目录路径必须是绝对路径（例如 `/srv/repo`）" };
+	}
+	const normalized = resolve(trimmed);
+	try {
+		if (!statSync(normalized).isDirectory()) {
+			return { ok: false, reason: `路径不是目录：\`${normalized}\`` };
+		}
+	} catch {
+		return { ok: false, reason: `目录不存在或无法访问：\`${normalized}\`` };
+	}
+	return { ok: true, cwd: normalized };
+}
+
 /** Create an empty desk without binding it, publishing it atomically. Holds no conversation lock. */
-export function createDeskRecord(workspaceDir: string, name: string, now: Date): CreateDeskOutcome {
+export function createDeskRecord(workspaceDir: string, name: string, now: Date, cwd?: string): CreateDeskOutcome {
 	if (!isDeskName(name)) return { kind: "invalid", name };
+	let validatedCwd: string | undefined;
+	if (cwd !== undefined) {
+		const checked = validateCustomCwd(cwd);
+		if (!checked.ok) return { kind: "invalid_cwd", cwd, reason: checked.reason };
+		validatedCwd = checked.cwd;
+	}
 	const bindings = initializeBindings(workspaceDir);
 	const deskDir = getDeskDir(workspaceDir, name);
 	try {
@@ -123,7 +152,13 @@ export function createDeskRecord(workspaceDir: string, name: string, now: Date):
 	if (Object.values(bindings.bindings).some((binding) => binding.desk === name)) return { kind: "unavailable", name };
 	mkdirSync(workspaceDir, { recursive: true });
 	const staging = mkdtempSync(join(workspaceDir, `.desk-init-${name}-`));
-	const record: DeskRecord = { version: 1, name, createdAt: now.toISOString(), conversations: {} };
+	const record: DeskRecord = {
+		version: 1,
+		name,
+		createdAt: now.toISOString(),
+		conversations: {},
+		...(validatedCwd && validatedCwd !== deskDir ? { cwd: validatedCwd } : {}),
+	};
 	try {
 		writeFileSync(recordPath(staging), `${JSON.stringify(record, null, "\t")}\n`, { flush: true });
 		syncDirectoryBestEffort(staging);
@@ -138,6 +173,46 @@ export function createDeskRecord(workspaceDir: string, name: string, now: Date):
 	} finally {
 		rmSync(staging, { recursive: true, force: true });
 	}
+}
+
+/** Update or reset (`cwd: null`) a desk's custom `cwd` under `desk-json.lock`. */
+export async function setDeskCwd(workspaceDir: string, desk: string, cwd: string | null): Promise<DeskCwdOutcome> {
+	if (!isDeskName(desk)) return { kind: "unavailable", desk };
+	let nextCwd: string | undefined;
+	if (cwd !== null) {
+		const checked = validateCustomCwd(cwd);
+		if (!checked.ok) return { kind: "invalid_cwd", cwd, reason: checked.reason };
+		nextCwd = checked.cwd;
+	}
+	const deskDir = getDeskDir(workspaceDir, desk);
+	return withFileLock(
+		getDeskLockPath(deskDir, "desk-json.lock"),
+		() =>
+			writeQueue.run(recordPath(deskDir), async () => {
+				const summary = await readDeskRecord(workspaceDir, desk);
+				if (!summary.record) return { kind: "unavailable", desk };
+				const { cwd: _prev, ...rest } = summary.record;
+				const effective = nextCwd && nextCwd !== deskDir ? nextCwd : undefined;
+				const updated: DeskRecord = effective ? { ...rest, cwd: effective } : rest;
+				await writeJson(recordPath(deskDir), updated);
+				return { kind: "ok", desk, cwd: effective ?? deskDir, isDefault: effective === undefined };
+			}),
+		{ timeoutMs: DESK_RECORD_LOCK_TIMEOUT_MS },
+	);
+}
+
+/** Read-only lookup of a desk's effective working directory (`desk.json` `cwd`, else `deskDir`). */
+export function resolveDeskCwdSync(workspaceDir: string, desk: string): string {
+	const deskDir = getDeskDir(workspaceDir, desk);
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(recordPath(deskDir), "utf-8"));
+		if (isPlainObject(parsed) && typeof parsed.cwd === "string" && isAbsolute(parsed.cwd)) {
+			return parsed.cwd;
+		}
+	} catch {
+		// Fall back to the desk directory when `desk.json` is absent or unreadable.
+	}
+	return deskDir;
 }
 
 /**

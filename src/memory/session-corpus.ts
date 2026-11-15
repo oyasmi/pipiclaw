@@ -4,7 +4,7 @@ import { getConversationsDir, SUBAGENT_RUNS_LOG_FILENAME } from "../desk/paths.j
 import { isNodeError, readOptionalTextFile } from "../shared/os.js";
 import { isRecord } from "../shared/type-guards.js";
 
-export type SessionSearchSource = "context" | "session" | "log";
+export type SessionSearchSource = "context" | "session" | "log" | "task";
 export type SessionSearchRole = "user" | "assistant" | "tool" | "system" | "unknown";
 
 export interface SessionSearchDocument {
@@ -326,6 +326,72 @@ async function listSessionJsonlFiles(
 		.map(({ conversation, path }) => ({ conversation, path }));
 }
 
+async function readArchivedTaskDocuments(
+	deskDir: string,
+	maxFiles: number,
+	maxChars: number,
+): Promise<SessionSearchDocument[]> {
+	const archiveDir = join(deskDir, "tasks", "archive");
+	let names: string[];
+	try {
+		names = (await readdir(archiveDir)).filter((name) => name.endsWith(".md"));
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return [];
+		throw error;
+	}
+	const stated = await Promise.all(
+		names.map(async (name) => {
+			const path = join(archiveDir, name);
+			try {
+				const stats = await stat(path);
+				return stats.isFile() ? { name, path, mtimeMs: stats.mtimeMs } : null;
+			} catch {
+				return null;
+			}
+		}),
+	);
+	const files = stated
+		.filter((entry): entry is { name: string; path: string; mtimeMs: number } => entry !== null)
+		.sort((a, b) => b.mtimeMs - a.mtimeMs)
+		.slice(0, Math.min(200, Math.max(20, maxFiles * 10)));
+
+	const docs: SessionSearchDocument[] = [];
+	for (const file of files) {
+		const id = file.name.slice(0, -".md".length);
+		const markdown = await readOptionalTextFile(file.path);
+		if (!markdown.trim()) continue;
+		const logContent = await readOptionalTextFile(join(archiveDir, `${id}.jsonl`));
+		const logNotes: string[] = [];
+		let closedAt: string | undefined;
+		for (const line of logContent.split(/\r?\n/)) {
+			const parsed = parseJsonLine(line);
+			if (!isRecord(parsed)) continue;
+			if (parsed.kind === "report" && typeof parsed.text === "string" && parsed.text.trim()) {
+				logNotes.push(`[汇报] ${parsed.text.trim()}`);
+			} else if (parsed.kind === "closed") {
+				closedAt = getStringField(parsed, "ts") ?? closedAt;
+				const outcome = getStringField(parsed, "outcome") ?? "closed";
+				const note = getStringField(parsed, "note");
+				logNotes.push(`[结项 ${outcome}]${note ? ` ${note}` : ""}`);
+			}
+		}
+		const frontmatterClosedAt = /^closedAt:\s*["']?([^"'\r\n]+)["']?\s*$/m.exec(markdown)?.[1]?.trim();
+		const timestamp = closedAt ?? frontmatterClosedAt ?? new Date(file.mtimeMs).toISOString();
+		const combined = logNotes.length > 0 ? `${markdown.trim()}\n\n${logNotes.join("\n")}` : markdown.trim();
+		const document = createDocument({
+			id: `tasks/archive/${file.name}`,
+			source: "task",
+			path: file.path,
+			timestamp,
+			role: "assistant",
+			text: `[归档任务 ${id}]\n${combined}`,
+			maxChars,
+		});
+		if (document) docs.push(document);
+	}
+	return docs.reverse();
+}
+
 export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Promise<SessionSearchDocument[]> {
 	const maxFiles = Math.max(1, Math.floor(options.maxFiles));
 	const maxChars = options.maxCharsPerDocument ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
@@ -360,7 +426,10 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 		if (docs.length > maxDocuments * 2) docs = docs.slice(-maxDocuments);
 		byConversation.set(item.conversation, docs);
 	}
-	return shareBudget([...byConversation.values()].map(deduplicate), maxDocuments);
+	const archivedTasks = await readArchivedTaskDocuments(options.deskDir, maxFiles, maxChars);
+	const groups = [...byConversation.values()];
+	if (archivedTasks.length > 0) groups.push(archivedTasks);
+	return shareBudget(groups.map(deduplicate), maxDocuments);
 }
 
 function deduplicate(docs: SessionSearchDocument[]): SessionSearchDocument[] {

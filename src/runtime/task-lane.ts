@@ -96,7 +96,7 @@ export class TaskLane implements TaskControl {
 	constructor(private readonly options: TaskLaneOptions) {
 		const timing = {
 			stepTimeLimitMs: options.timing?.stepTimeLimitMs ?? STEP_TIME_LIMIT_MS,
-			stopGraceMs: options.timing?.stopGraceMs ?? 3_000,
+			stopGraceMs: options.timing?.stopGraceMs ?? 15_000,
 			maxSleepMs: options.timing?.maxSleepMs ?? MAX_SLEEP_MS,
 			notifyDebounceMs: options.timing?.notifyDebounceMs ?? NOTIFY_DEBOUNCE_MS,
 			errorBackoffMs: options.timing?.errorBackoffMs ?? ERROR_BACKOFF_MS,
@@ -204,6 +204,10 @@ export class TaskLane implements TaskControl {
 		return this.control.resume(desk, id, grants);
 	}
 
+	adopt(desk: string, id: string, channel: string): Promise<TaskControlOutcome> {
+		return this.control.adopt(desk, id, channel);
+	}
+
 	cancel(desk: string, id: string, input: { by: "user"; note: string; channel?: string }): Promise<TaskCancelOutcome> {
 		return this.control.cancel(desk, id, input);
 	}
@@ -255,12 +259,16 @@ export class TaskLane implements TaskControl {
 		let entries = (await readActiveTasks(join(deskDir, "tasks"))).filter((entry) => !entry.fields.outcome);
 		let pending = await listPendingWork(this.options, desk, now);
 		// D10: whatever state the previous process left becomes true to the facts before anything is decided.
+		let reconciled = false;
 		for (const entry of entries) {
-			if (!isFrozen(this.ctx, desk, entry.fields))
-				await this.reconcile(desk, deskDir, entry, pending.get(entry.id)?.length ?? 0);
+			if (!isFrozen(this.ctx, desk, entry.fields)) {
+				if (await this.reconcile(desk, deskDir, entry, pending.get(entry.id)?.length ?? 0)) reconciled = true;
+			}
 		}
-		entries = (await readActiveTasks(join(deskDir, "tasks"))).filter((entry) => !entry.fields.outcome);
-		pending = await listPendingWork(this.options, desk, now);
+		if (reconciled) {
+			entries = (await readActiveTasks(join(deskDir, "tasks"))).filter((entry) => !entry.fields.outcome);
+			pending = await listPendingWork(this.options, desk, now);
+		}
 		const seen: Seen[] = [];
 		for (const entry of entries) {
 			const key = taskKey(desk, entry.id);

@@ -74,6 +74,8 @@ export interface TaskControl {
 	/** Stops the running step; in-flight delegations and jobs keep running and their results are recorded. */
 	pause(desk: string, id: string, input: { by: "user"; reason: string }): Promise<TaskControlOutcome>;
 	resume(desk: string, id: string, grants: Partial<TaskBudget>): Promise<TaskControlOutcome>;
+	/** Reassigns an active task's delivery `channel` to `channel` (e.g. unfreezing a task after a DM rebound). */
+	adopt?(desk: string, id: string, channel: string): Promise<TaskControlOutcome>;
 	/** Stops the step, cancels the task's delegations and jobs, closes and archives. */
 	cancel(desk: string, id: string, input: { by: "user"; note: string; channel?: string }): Promise<TaskCancelOutcome>;
 }

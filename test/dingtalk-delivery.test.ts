@@ -90,8 +90,12 @@ class RecordingPort implements DeliveryPort {
 		this.calls.push({ method: "discardCard", args: [channelId] });
 	}
 
-	async sendPlain(channelId: string, text: string): Promise<boolean> {
-		this.calls.push({ method: "sendPlain", args: [channelId, text] });
+	async sendPlain(
+		channelId: string,
+		text: string,
+		options?: { title?: string; markdown?: boolean },
+	): Promise<boolean> {
+		this.calls.push({ method: "sendPlain", args: options ? [channelId, text, options] : [channelId, text] });
 		return this.result("sendPlain", true);
 	}
 
@@ -393,21 +397,32 @@ describe("DingTalk turn delivery: events onto cards and messages", () => {
 		]);
 	});
 
-	it("archives only an answer that reached the user, and a failing archive does not break delivery", async () => {
+	it("archives only an answer that reached the user (plain or card), forwards answer titles, and survives archive failure", async () => {
 		const { port, archive, ctx } = setup();
 		port.configure("sendPlain", false);
+		port.configure("finalizeCard", false);
 		ctx.emit(progress("observed work"));
 		ctx.emit(answer("undelivered"));
 		await ctx.finish(outcome("completed"));
-		// The plain send failed; the end-of-turn fallback put it in a card instead. Nothing was archived.
+		// Both plain send and the end-of-turn card fallback failed: nothing reached the user, so nothing is archived.
 		expect(port.methods()).toContain("finalizeCard");
 		expect(archive).not.toHaveBeenCalled();
 
+		// Card-delivered answers (final_card_only or end-of-turn card fallback) DO reach the user and must archive.
+		const cardDelivered = setup("final_card_only");
+		cardDelivered.ctx.emit(answer("card answer"));
+		await cardDelivered.ctx.finish(outcome("completed"));
+		expect(cardDelivered.archive).toHaveBeenCalledWith(CHANNEL, "card answer");
+
 		const next = setup();
 		next.archive.mockRejectedValue(new Error("disk full"));
-		next.ctx.emit(answer("answer"));
+		next.ctx.emit(progress("working"));
+		next.ctx.emit({ type: "answer", text: "answer", title: "日报汇总" });
 		await expect(next.ctx.finish(outcome("completed"))).resolves.toBeUndefined();
 		expect(next.archive).toHaveBeenCalledWith(CHANNEL, "answer");
+		expect(next.port.calls.filter((call) => call.method === "sendPlain")).toEqual([
+			{ method: "sendPlain", args: [CHANNEL, "answer", { title: "日报汇总", markdown: true }] },
+		]);
 	});
 
 	it("shows runtime commentary by its level: errors as progress, notices always, warnings either way", async () => {
