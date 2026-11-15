@@ -15,14 +15,16 @@ import type { SecurityConfig } from "../../security/types.js";
 import { withExecutionTrace } from "../../tools/contract/execution-trace.js";
 import { describeToolCall } from "../../tools/contract/presentation.js";
 import { addUsage } from "../../usage/totals.js";
+import { withSubAgentsDirWriteDeny } from "../discovery.js";
+import { formatStatus } from "../result.js";
+import type { SubAgentRunManager } from "../runs.js";
 import {
 	DEFAULT_THINKING_LEVEL,
 	type ResolvedInternalSubAgentConfig,
-	withSubAgentsDirWriteDeny,
-} from "../discovery.js";
-import { formatStatus } from "../result.js";
-import type { SubAgentRunManager } from "../runs.js";
-import type { SubAgentRunContext, SubAgentToolOptions, SubAgentWorker } from "../types.js";
+	type SubAgentRunContext,
+	type SubAgentToolOptions,
+	type SubAgentWorker,
+} from "../types.js";
 import type { InternalRunState } from "./state.js";
 
 /**

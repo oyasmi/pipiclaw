@@ -18,14 +18,10 @@ import { createFileStore } from "../src/file-store.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
 import { applyMemoryOps } from "../src/memory/store.js";
 import { localDayKey } from "../src/shared/local-time.js";
-import {
-	discoverSubAgents,
-	getSubAgentsDir,
-	type InternalSubAgentConfig,
-	resolveInlineAgent,
-	type SubAgentConfig,
-} from "../src/subagents/discovery.js";
+import { discoverSubAgents, getSubAgentsDir } from "../src/subagents/discovery.js";
+import { resolveInlineAgent } from "../src/subagents/resolve.js";
 import { buildSubAgentTask } from "../src/subagents/task-envelope.js";
+import type { InternalSubAgentConfig, SubAgentConfig } from "../src/subagents/types.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../src/tools/subagent.js";
 import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";

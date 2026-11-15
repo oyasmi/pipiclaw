@@ -6,9 +6,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { formatModelReference } from "../../models/reference.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../../usage/totals.js";
-import type { ResolvedInternalSubAgentConfig } from "../discovery.js";
 import { createDetails } from "../result.js";
-import type { SubAgentRunContext, SubAgentToolFields } from "../types.js";
+import type { ResolvedInternalSubAgentConfig, SubAgentRunContext, SubAgentToolFields } from "../types.js";
 
 export interface InternalRunState {
 	readonly startedAt: number;

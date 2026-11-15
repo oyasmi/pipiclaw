@@ -7,7 +7,6 @@ import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { shellEscape } from "../shared/os.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { logTaskDispatch, logTaskSettlement } from "../tasks/bound-work.js";
@@ -15,6 +14,7 @@ import { readStoredTask } from "../tasks/store.js";
 import { JobCompletionObserver } from "./completion-observer.js";
 import { CompletionSignal } from "./completion-signal.js";
 import { buildJobCompletionWake } from "./completion-wake.js";
+import { KILL_CONFIRMED_GONE, killJob } from "./kill.js";
 import { buildLaunchScript, type JobArtifacts, jobArtifacts, parseLaunchOutput } from "./launch.js";
 import { probeJobs } from "./probe.js";
 import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobRecord, toSnapshot } from "./record.js";
@@ -35,27 +35,6 @@ import { isTerminal, type JobRecord, type JobSnapshot, type JobStatus, parseJobR
  * arrange its own callback was a judgement call it could not make correctly, so completion is a
  * runtime guarantee instead.
  */
-
-/**
- * The outcome of one kill attempt, decided from the kill script's own printed token plus the
- * executor result — never from "the shell exited 0", which a failed `kill` inside `2>/dev/null`
- * would still do.
- * - `terminated` — we signalled the target and then confirmed the pid is gone.
- * - `gone` — the target was already gone before we signalled (or its pgid became unroutable).
- * - `identity-mismatch` — the pid now belongs to an unrelated process, so *our* process is gone.
- * - `unconfirmed` — the kill ran but the pid is still alive afterwards.
- * - `not-submitted` — the executor could not even run the kill.
- * - `no-target` — there is no pid we can safely signal (pid <= 1 / not finite).
- */
-type KillOutcome = "terminated" | "gone" | "identity-mismatch" | "unconfirmed" | "not-submitted" | "no-target";
-
-/** Outcomes that prove the job's process is gone — safe to apply a terminal status. */
-const KILL_CONFIRMED_GONE: ReadonlySet<KillOutcome> = new Set<KillOutcome>([
-	"terminated",
-	"gone",
-	"identity-mismatch",
-	"no-target",
-]);
 
 export interface JobStartOptions {
 	/** The channel the job was started from: its completion wake goes back there (spec 058, D7). */
@@ -354,7 +333,7 @@ export class DeskJobManager {
 			// not inherit the caller's AbortSignal (it may already be aborted).
 			const reason = `its record could not be persisted (${errorMessage(error)})`;
 			const failure = await this.reconcileQueue.run(id, async (): Promise<Error> => {
-				const outcome = await this.runKill(record);
+				const outcome = await killJob(this.executor, record);
 				if (!KILL_CONFIRMED_GONE.has(outcome)) {
 					// The process could not be confirmed gone (kill unconfirmed, or the executor could
 					// not run it). Deleting the only trace of a live process is exactly the orphan this
@@ -426,7 +405,7 @@ export class DeskJobManager {
 			...(launched.pgid !== undefined ? { pgid: launched.pgid } : {}),
 			...(launched.pidStartedAt ? { pidStartedAt: launched.pidStartedAt } : {}),
 		};
-		const outcome = await this.runKill(provisional); // deliberately no signal
+		const outcome = await killJob(this.executor, provisional); // deliberately no signal
 		await this.unlinkArtifacts(art);
 		const tail = KILL_CONFIRMED_GONE.has(outcome)
 			? outcome === "terminated"
@@ -607,7 +586,7 @@ export class DeskJobManager {
 		// Still running (ALIVE / UNKNOWN / torn-EXIT). A cancel or timeout whose kill could not be
 		// confirmed earlier retries here every sweep until the process is proven gone.
 		if (record.pendingKill) {
-			const outcome = await this.runKill(record, signal);
+			const outcome = await killJob(this.executor, record, signal);
 			if (record.status === "running" && KILL_CONFIRMED_GONE.has(outcome)) {
 				const t = this.takePendingTerminal(record, "lost", undefined);
 				record.exitCode = t.exitCode;
@@ -620,7 +599,7 @@ export class DeskJobManager {
 		// to a terminal status once the kill is confirmed; otherwise mark it pending and keep
 		// managing it (the sweeper retries).
 		if (Date.now() - record.startedAt > record.timeoutSeconds * 1000) {
-			const outcome = await this.runKill(record, signal);
+			const outcome = await killJob(this.executor, record, signal);
 			if (record.status !== "running") return;
 			if (KILL_CONFIRMED_GONE.has(outcome)) {
 				const t = this.takePendingTerminal(record, "failed", 124);
@@ -742,67 +721,6 @@ export class DeskJobManager {
 		await this.persist(record);
 	}
 
-	/**
-	 * The shell command that terminates `record`'s process and prints one token describing what
-	 * happened (`TERMINATED` / `GONE` / `IDENTITY_MISMATCH` / `UNCONFIRMED`), or `undefined` when
-	 * there is no pid we can safely signal.
-	 *
-	 * A negative-PGID target is used only when `setsid` gave the job pgid == pid (spec: everything
-	 * the command spawned dies with it). When a start time was captured it is checked first: a
-	 * recycled pid reads as `IDENTITY_MISMATCH` and is never signalled; a pid `ps` cannot see but
-	 * that `kill -0` says is alive reads as `UNCONFIRMED` (do not signal what we cannot prove is
-	 * ours). Legacy / nohup records have only `kill -0` liveness and a plain pid kill.
-	 */
-	private killCommand(record: Pick<JobRecord, "pid" | "pgid" | "pidStartedAt">): string | undefined {
-		const pid = record.pid;
-		if (!Number.isFinite(pid) || pid <= 1) return undefined;
-		const groupSafe = record.pgid !== undefined && record.pgid === pid;
-		const target = groupSafe ? `"-${pid}"` : `${pid}`;
-		const gate = record.pidStartedAt
-			? `__pc_cur="$(ps -o lstart= -p ${pid} 2>/dev/null)"; ` +
-				`if [ -z "$__pc_cur" ]; then ` +
-				`if kill -0 ${pid} 2>/dev/null; then printf 'UNCONFIRMED\\n'; exit 0; else printf 'GONE\\n'; exit 0; fi; fi; ` +
-				`if [ "$__pc_cur" != ${shellEscape(record.pidStartedAt)} ]; then printf 'IDENTITY_MISMATCH\\n'; exit 0; fi; `
-			: `if ! kill -0 ${pid} 2>/dev/null; then printf 'GONE\\n'; exit 0; fi; `;
-		return (
-			gate +
-			`kill -TERM ${target} 2>/dev/null; sleep 0.2; kill -KILL ${target} 2>/dev/null; sleep 0.05; ` +
-			`if kill -0 ${pid} 2>/dev/null; then printf 'UNCONFIRMED\\n'; else printf 'TERMINATED\\n'; fi`
-		);
-	}
-
-	/**
-	 * Run one kill attempt and classify it from the printed token plus the executor result — never
-	 * from "the shell exited 0". Used by cancel, timeout, the persist-failure rollback and the
-	 * interrupted-launch recovery; the last two pass no signal so an aborted caller cannot skip it.
-	 */
-	private async runKill(
-		record: Pick<JobRecord, "pid" | "pgid" | "pidStartedAt">,
-		signal?: AbortSignal,
-	): Promise<KillOutcome> {
-		const command = this.killCommand(record);
-		if (!command) return "no-target";
-		let result: ExecResult;
-		try {
-			result = await this.executor.exec(command, signal ? { signal } : {});
-		} catch {
-			return "not-submitted";
-		}
-		const token = result.stdout.trim().split("\n").pop()?.trim() ?? "";
-		switch (token) {
-			case "TERMINATED":
-				return "terminated";
-			case "GONE":
-				return "gone";
-			case "IDENTITY_MISMATCH":
-				return "identity-mismatch";
-			case "UNCONFIRMED":
-				return "unconfirmed";
-			default:
-				return "not-submitted";
-		}
-	}
-
 	async list(signal?: AbortSignal): Promise<JobSnapshot[]> {
 		const running = Array.from(this.jobs.values()).filter((r) => r.status === "running");
 		await this.refreshBatch(running, signal);
@@ -826,7 +744,7 @@ export class DeskJobManager {
 				}
 				// An explicit cancel is the model's own decision, so it needs no wake to learn about it.
 				record.contract.notify = false;
-				const outcome = await this.runKill(record, signal);
+				const outcome = await killJob(this.executor, record, signal);
 				if (KILL_CONFIRMED_GONE.has(outcome)) {
 					// A timeout kill already pending (`failed`/124) outranks this cancel — the job did
 					// overrun its budget. `takePendingTerminal` applies that precedence and only falls

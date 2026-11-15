@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { applyMemoryOps } from "../src/memory/store.js";
-import type { SubAgentConfig } from "../src/subagents/discovery.js";
+import type { SubAgentConfig } from "../src/subagents/types.js";
 import { createSubAgentTool } from "../src/tools/subagent.js";
 import { configureSubAgentRuntime, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";

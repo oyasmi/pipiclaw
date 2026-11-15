@@ -2,13 +2,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
-import {
-	discoverSubAgents,
-	getSubAgentsDir,
-	resolveConfiguredRole,
-	resolveInlineAgent,
-	type SubAgentConfig,
-} from "../src/subagents/discovery.js";
+import { discoverSubAgents, getSubAgentsDir } from "../src/subagents/discovery.js";
+import { resolveConfiguredRole, resolveInlineAgent } from "../src/subagents/resolve.js";
+import type { SubAgentConfig } from "../src/subagents/types.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**

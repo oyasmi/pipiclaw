@@ -214,14 +214,14 @@ flowchart TB
 
 ---
 
-### 3.3 P2 级代码复杂度、架构基线清零路径与评测集（`evals/`）诊断
+### 3.3 P2 级代码复杂度、架构基线治理与评测集（`evals/`）诊断（✅ 问题 1–3 已完成）
 
-1. **✅ 已修复 — 外部执行器（Harness）扩展摩擦过大**：已在叶子词汇表 [run-record.ts](../../src/subagents/run-record.ts) 收敛单一真相源 `EXTERNAL_HARNESS_IDS` / `RunHarness` 与 `ALLOWED_THINKING_LEVELS`，并在 [harness.ts](../../src/subagents/external/harness.ts) 的 `ExternalHarness` 契约上显式声明静态能力属性（`resumable`、`requiresProtocolTerminal`、`supportsImplicitVerifyThinking`、`acceptsSystemPromptFlag`、`verifiesResumeSession`、`roleWarnings`），由 [registry.ts](../../src/subagents/external/registry.ts) 的 `Record<RunHarness, ExternalHarness>` 穷尽校验驱动 [discovery.ts](../../src/subagents/discovery.ts)、[task-envelope.ts](../../src/subagents/task-envelope.ts)、[run.ts](../../src/subagents/external/run.ts)、[settlement.ts](../../src/subagents/external/settlement.ts) 与 [role-warnings.ts](../../src/subagents/external/role-warnings.ts)；同时修复了 `detectExistingFlags` 将 `-c` 误作非 Codex 适配器参数冲突的隐性缺陷，复用 `outputFormatConflicts` 与 `parseJsonObjectLines` 薄辅助函数，并将 [subagent-manage.ts](../../src/tools/subagent-manage.ts) 中的 `follow_up` 租约与派发编排下沉至 [dispatch.ts](../../src/subagents/external/dispatch.ts) 的 `dispatchExternalFollowUp`。
-2. **一举清零 [architecture-baseline.json](../../scripts/architecture-baseline.json) 中仅存的 3 个 >800 行历史例外**：
-   - [jobs/manager.ts](../../src/jobs/manager.ts)（975 行）：将纯 `Executor` 杀进程脚本引擎（`killCommand` + `runKill`，约 85 行）与产物读取/GC 辅助函数（`collectGarbage` + `readOutput`，约 110 行）拆至同目录独立文件，即可自然降至 ~770 行；
-   - [subagents/discovery.ts](../../src/subagents/discovery.ts)（1031 行）：将 Frontmatter YAML 子集解析器与角色校验/列表渲染分离；
-   - [subagents/runs.ts](../../src/subagents/runs.ts)（1025 行）：将重启对账恢复与聊天通知格式化拆出，即可让全仓实现 **100% 零例外通过 800 行门禁**。
-3. **✅ 已修复 — 随手可修的细节瑕疵**：
+1. **✅ 已完成 — 外部执行器（Harness）扩展摩擦过大**：已在叶子词汇表 [run-record.ts](../../src/subagents/run-record.ts) 收敛单一真相源 `EXTERNAL_HARNESS_IDS` / `RunHarness` 与 `ALLOWED_THINKING_LEVELS`，并在 [harness.ts](../../src/subagents/external/harness.ts) 的 `ExternalHarness` 契约上显式声明静态能力属性（`resumable`、`requiresProtocolTerminal`、`supportsImplicitVerifyThinking`、`acceptsSystemPromptFlag`、`verifiesResumeSession`、`roleWarnings`），由 [registry.ts](../../src/subagents/external/registry.ts) 的 `Record<RunHarness, ExternalHarness>` 穷尽校验驱动 [discovery.ts](../../src/subagents/discovery.ts)、[task-envelope.ts](../../src/subagents/task-envelope.ts)、[run.ts](../../src/subagents/external/run.ts)、[settlement.ts](../../src/subagents/external/settlement.ts) 与 [role-warnings.ts](../../src/subagents/external/role-warnings.ts)；同时修复了 `detectExistingFlags` 将 `-c` 误作非 Codex 适配器参数冲突的隐性缺陷，复用 `outputFormatConflicts` 与 `parseJsonObjectLines` 薄辅助函数，并将 [subagent-manage.ts](../../src/tools/subagent-manage.ts) 中的 `follow_up` 租约与派发编排下沉至 [dispatch.ts](../../src/subagents/external/dispatch.ts) 的 `dispatchExternalFollowUp`。
+2. **✅ 已完成 — [architecture-baseline.json](../../scripts/architecture-baseline.json) 超长文件按职责内聚治理（拒绝机械凑 800 行）**：
+   - ✅ **[subagents/discovery.ts](../../src/subagents/discovery.ts)（1031 行 → 631 行，已移出基线）**：将共享角色配置类型与默认常量下沉至叶子 [types.ts](../../src/subagents/types.ts)（解除了 `types.ts → discovery.ts` 的反向类型依赖），并将工具调用期参数解析独立为 [resolve.ts](../../src/subagents/resolve.ts)，使 `discovery.ts` 纯粹聚焦 `workspace/sub-agents/*.md` 发现与校验；
+   - ✅ **[jobs/manager.ts](../../src/jobs/manager.ts)（975 行 → 893 行，收紧基线）**：将不依赖管理器私有状态的进程组身份核验与杀进程脚本对称抽离至 [kill.ts](../../src/jobs/kill.ts)（与 [launch.ts](../../src/jobs/launch.ts)、[probe.ts](../../src/jobs/probe.ts) 三套宿主 Shell 协议对齐），保留状态机与 GC 生命周期在单类内的高内聚封装；
+   - ✅ **按高内聚原则保留 — [subagents/runs.ts](../../src/subagents/runs.ts)（基线由 1048 收紧至 1029 行）**：外围纯逻辑（`run-record.ts`、`run-archive.ts`、`completion-wake.ts`、`external/reconciliation.ts`）早已剥离完毕，剩余代码为维护 4 个幂等位点与锁序的单一恢复/结算状态机，不做破坏封装的碎片化硬拆。
+3. **✅ 已完成 — 随手可修的细节瑕疵**：
    - ✅ [catalog.ts](../../src/commands/catalog.ts) 中重复的 `/tasks archive` 已合并去重；
    - ✅ [presentation.ts](../../src/tools/contract/presentation.ts#L78) 中 `memory_forget` 已改为读取真实 schema 字段 `args.name`；
    - ✅ [agent-delegation.md](../../src/playbooks/agent-delegation.md#L1-L6) 已补齐 `requires-tools: subagent`，禁用委派的 `request` 模式不再暴露该手册；
@@ -268,7 +268,7 @@ flowchart LR
    - 修复 `session_search` 打分前截断 500 块的 bug（改为流式遍历打分、仅保留 Top-K 小顶堆）；
    - 修复钉钉 `replaceWithFinal` 漏归档、`deliverAnswer` 漏传 `title`、`send_media` 误抛普通 `Error`、`presentation.ts` 的 `memory_forget` 字段名、`catalog.ts` 重复 `archive`；
    - 将 `TaskLane` 的 `stopGraceMs` 放宽至 15–30s（支持延迟结算自动解除隔离），限定 `.delivery/` 坏文件故障仅影响对应任务，归档任务时一并归档/清理 `tasks/.sessions/<id>.jsonl` 与 `appenders` 缓存；
-   - 按 §3.3 拆分 3 个历史超长文件，**将 `scripts/architecture-baseline.json` 彻底清零**。
+   - ✅ 已按 §3.3 按内聚度治理历史超长文件（拆分 `discovery.ts` 为 `types.ts` + `discovery.ts` + `resolve.ts` 并移出基线，抽离 `jobs/kill.ts` 并收紧 `jobs/manager.ts` 与 `subagents/runs.ts` 水位线）。
 
 ---
 

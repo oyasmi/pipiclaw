@@ -4,11 +4,11 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage, truncate } from "../shared/text-utils.js";
-import type { SubAgentConfig, SubAgentDiscoveryResult } from "./discovery.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "./external/progress-tail.js";
 import { elapsedMs, formatCost, harnessLabel } from "./format.js";
 import type { RunNotice, RunRecord, RunResolution } from "./run-record.js";
 import type { SubAgentRunManager } from "./runs.js";
+import type { SubAgentConfig, SubAgentDiscoveryResult } from "./types.js";
 
 /**
  * `/subagents` — the human control path that does not depend on the model (spec 040 D6, polished

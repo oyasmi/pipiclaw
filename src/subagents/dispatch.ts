@@ -11,13 +11,13 @@ import { getSubAgentArtifactsDir } from "../desk/paths.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { findTaskItem, parseTaskItems } from "../tasks/contract.js";
 import { readStoredTask } from "../tasks/store.js";
-import type { ResolvedSubAgentConfig } from "./discovery.js";
 import { dispatchExternalRun } from "./external/dispatch.js";
 import { dispatchInternalRun } from "./internal/run.js";
 import { assertVerifyAdmissible } from "./task-envelope.js";
 import type {
 	DelegationParams,
 	DelegationResult,
+	ResolvedSubAgentConfig,
 	SubAgentRunContext,
 	SubAgentToolFields,
 	SubAgentToolOptions,

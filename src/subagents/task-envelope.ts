@@ -20,9 +20,8 @@ import { listMemoryEntries } from "../memory/store.js";
 import { localDayKey } from "../shared/local-time.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { ResolvedSubAgentConfig, SubAgentConfig } from "./discovery.js";
 import { getExternalHarness } from "./external/registry.js";
-import type { SubAgentRunContext, SubAgentToolOptions } from "./types.js";
+import type { ResolvedSubAgentConfig, SubAgentConfig, SubAgentRunContext, SubAgentToolOptions } from "./types.js";
 import { findWorkspaceLeaseHolder, formatWorkspaceLeaseConflict } from "./workspace-lease.js";
 
 /**

@@ -6,8 +6,7 @@ import { join } from "node:path";
 import { formatModelReference } from "../models/reference.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import type { UsageTotals } from "../usage/totals.js";
-import type { ResolvedSubAgentConfig, SubAgentConfig } from "./discovery.js";
-import type { SubAgentRunContext, SubAgentToolFields } from "./types.js";
+import type { ResolvedSubAgentConfig, SubAgentConfig, SubAgentRunContext, SubAgentToolFields } from "./types.js";
 
 /**
  * Reply budget for what a sub-agent hands back to its parent (spec 032 D4), measured in the

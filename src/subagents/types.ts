@@ -1,7 +1,8 @@
 /**
- * Shared shapes for delegation dispatch: the options the composition root hands in, the per-run
- * context, the worker surface, and the details payload every dispatch returns. Types only, so the
- * dispatch, envelope, internal and external modules can all import them without forming a cycle.
+ * Shared vocabulary and shapes for delegation: role configs, the options the composition root
+ * hands in, the per-run context, the worker surface, and the details payload every dispatch
+ * returns. Leaf module within `subagents/` so `discovery`, `resolve`, `dispatch`, `task-envelope`,
+ * `internal`, and `external` can all import it without forming a cycle.
  */
 import type { AgentEvent, AgentMessage, AgentState, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -9,9 +10,103 @@ import type { PipiclawWebToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import type { SubAgentToolName } from "../tools/contract/names.js";
 import type { UsageTotals } from "../usage/totals.js";
-import type { ResolvedInternalSubAgentConfig, SubAgentDiscoveryResult } from "./discovery.js";
+import type { RunHarness, SubAgentThinkingLevel } from "./run-record.js";
 import type { SubAgentRunManager } from "./runs.js";
+
+export const DEFAULT_SUB_AGENT_TOOLS = ["read", "bash"] as const;
+export const DEFAULT_MAX_TURNS = 32;
+export const DEFAULT_MAX_TOOL_CALLS = 96;
+export const DEFAULT_MAX_WALL_TIME_SEC = 600;
+export const DEFAULT_BASH_TIMEOUT_SEC = 120;
+/** External runs have no turn/tool-call budget (D5); wall time is their only lever. */
+export const DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC = 3600;
+export const ALLOWED_CONTEXT_MODES = ["isolated", "contextual"] as const;
+export const ALLOWED_MEMORY_MODES = ["none", "index"] as const;
+export const ALLOWED_RUNTIMES = ["internal", "external"] as const;
+export const ALLOWED_WORKLOADS = ["light", "heavy"] as const;
+export const ALLOWED_MUTATES = ["read", "write"] as const;
+
+/** Internal work/verify default, aligned with the main agent's DEFAULT_MAIN_THINKING_LEVEL
+ *  (channel-runner.ts). External work leaves thinkingLevel unset instead (see `resolve.ts`):
+ *  pipiclaw has no standing to pick a reasoning effort for another CLI's own configuration. */
+export const DEFAULT_THINKING_LEVEL: SubAgentThinkingLevel = "medium";
+
+export type SubAgentContextMode = (typeof ALLOWED_CONTEXT_MODES)[number];
+export type SubAgentMemoryMode = (typeof ALLOWED_MEMORY_MODES)[number];
+export type SubAgentRoleRuntime = (typeof ALLOWED_RUNTIMES)[number];
+export type SubAgentWorkload = (typeof ALLOWED_WORKLOADS)[number];
+export type SubAgentMutates = (typeof ALLOWED_MUTATES)[number];
+
+interface SubAgentConfigFields {
+	name: string;
+	description: string;
+	systemPrompt: string;
+	tools: SubAgentToolName[];
+	model?: Model<Api>;
+	modelRef?: string;
+	maxTurns: number;
+	maxToolCalls: number;
+	maxWallTimeSec: number;
+	bashTimeoutSec: number;
+	contextMode: SubAgentContextMode;
+	memory: SubAgentMemoryMode;
+	paths: string[];
+	/** Unset means "apply the purpose-based default at resolution time" (spec 032 D3). */
+	thinkingLevel?: SubAgentThinkingLevel;
+	filePath?: string;
+	source: "predefined" | "inline";
+	/** Defaults to "internal"; existing role files therefore parse unchanged (spec 040, D5). */
+	runtime: SubAgentRoleRuntime;
+	/** External only. */
+	harness?: RunHarness;
+	/** External only: the raw, unvalidated command line. Tokenized by the harness at invocation
+	 *  time (D4), never by discovery — discovery only checks that it is non-empty. */
+	command?: string;
+	/** exec harness only: run `command` through `/bin/sh -lc` instead of argv-direct spawn (D4). */
+	shell?: boolean;
+	/** External only: env vars appended to (and overriding) the inherited environment (D8.2). */
+	env?: Record<string, string>;
+	/** Drives system-prompt directory grouping (D11); defaults by runtime when unset. */
+	workload?: SubAgentWorkload;
+	/** Required for external (an explicit declaration); optional for internal (inferred from `tools`). */
+	mutates?: SubAgentMutates;
+	/** External only: the harness's own model string, passed through unresolved (D5) — never
+	 *  looked up in `models.json`, because pipiclaw cannot validate another CLI's model names. */
+	externalModelRef?: string;
+	/** Set when the role is otherwise valid but currently cannot be invoked (e.g. missing binary).
+	 *  The role is still listed — never silently dropped (D5) — and invocation must explain why. */
+	unavailable?: string;
+}
+
+export interface InternalSubAgentConfig extends SubAgentConfigFields {
+	runtime: "internal";
+}
+
+export interface ExternalSubAgentConfig extends SubAgentConfigFields {
+	runtime: "external";
+	harness: RunHarness;
+	command: string;
+	mutates: SubAgentMutates;
+	model?: never;
+	modelRef?: never;
+}
+
+export type SubAgentConfig = InternalSubAgentConfig | ExternalSubAgentConfig;
+
+export interface ResolvedInternalSubAgentConfig extends InternalSubAgentConfig {
+	model: Model<Api>;
+	modelRef: string;
+}
+
+export type ResolvedSubAgentConfig = ResolvedInternalSubAgentConfig | ExternalSubAgentConfig;
+
+export interface SubAgentDiscoveryResult {
+	directory: string;
+	agents: SubAgentConfig[];
+	warnings: string[];
+}
 
 /**
  * Fields every delegation dispatch returns as its tool-result details. `kind` is not among them: `withToolDetails`

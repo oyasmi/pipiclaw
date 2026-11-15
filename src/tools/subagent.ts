@@ -6,13 +6,13 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { dispatchSubAgentRun } from "../subagents/dispatch.js";
 import {
 	formatSubAgentList,
 	resolveConfiguredRole,
 	resolveInlineAgent,
 	validateSubAgentTask,
-} from "../subagents/discovery.js";
-import { dispatchSubAgentRun } from "../subagents/dispatch.js";
+} from "../subagents/resolve.js";
 import type { SubAgentToolFields, SubAgentToolOptions } from "../subagents/types.js";
 
 /** Shared by both invocation surfaces (spec 046, D2.1). */

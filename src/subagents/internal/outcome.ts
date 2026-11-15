@@ -6,10 +6,9 @@
 import { formatModelReference } from "../../models/reference.js";
 import { RecoverableToolError } from "../../shared/recoverable-error.js";
 import { extractAssistantText } from "../../shared/text-utils.js";
-import type { ResolvedInternalSubAgentConfig } from "../discovery.js";
 import { buildFailureText, buildStoppedText, createDetails, finalizeSubAgentOutput, formatStatus } from "../result.js";
 import type { SettleInput } from "../run-record.js";
-import type { DelegationResult, SubAgentRunContext, SubAgentWorker } from "../types.js";
+import type { DelegationResult, ResolvedInternalSubAgentConfig, SubAgentRunContext, SubAgentWorker } from "../types.js";
 import { resolveVerificationVerdict } from "../verification-outcome.js";
 import { changedPathsSummary, type WorkspaceBaseline } from "../workspace-summary.js";
 import type { InternalRunState } from "./state.js";

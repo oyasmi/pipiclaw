@@ -1,5 +1,6 @@
 import { createModelRuntime, wrapModelRegistry } from "../models/runtime.js";
-import { discoverSubAgents, type SubAgentDiscoveryResult } from "./discovery.js";
+import { discoverSubAgents } from "./discovery.js";
+import type { SubAgentDiscoveryResult } from "./types.js";
 
 /**
  * Resolve the role directory for `/subagents roles` when no `ChannelRunner` is currently active

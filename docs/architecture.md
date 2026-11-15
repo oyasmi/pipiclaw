@@ -46,8 +46,8 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 5 | `src/skills/` | 工作区与用户共享技能的发现、过滤、名称合并及 `/skills`（spec 063） | `loader.ts`、`catalog.ts`、`roots.ts`、`types.ts`、`commands.ts` |
 | 6 | `src/memory/` | 一条事实一文件的工位记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
 | 6 | `src/events/` | 定时/传感器事件：定义、校验、文件监视器、`/events` | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
-| 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`record.ts` |
-| 7 | `src/subagents/` | 角色发现、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`cursor-cli.ts`、`antigravity-cli.ts`、`role-warnings.ts`、`exec.ts`） |
+| 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`probe.ts`、`kill.ts`、`record.ts` |
+| 7 | `src/subagents/` | 角色发现、调用期解析、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`resolve.ts`、`types.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`cursor-cli.ts`、`antigravity-cli.ts`、`role-warnings.ts`、`exec.ts`） |
 | 8 | `src/tools/` | 交给 agent 的工具集（适配层），单一声明式注册表 | `registry.ts`（唯一事实源）、`subagent.ts`、`job.ts`、`memory-manage.ts`、各 `create*Tool` |
 | 9 | `src/agent/` | 单频道 agent 编排：SDK 会话、一轮对话、提示词、内置会话命令 | `channel-runner.ts`（门面）、`session/`（`session-host.ts`、`model-selection.ts`、`session-events.ts`、`command-extension.ts`）、`turn/`（`turn-pipeline.ts`、`turn-finish.ts`、`turn-state.ts`、`run-queue.ts`）、`prompt/`（system prompt 流水线）、`builtin-commands.ts` |
 | 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |

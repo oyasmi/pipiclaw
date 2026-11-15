@@ -8,7 +8,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../../security/config.js";
 import type { SecurityConfig } from "../../security/types.js";
 import { RecoverableToolError } from "../../shared/recoverable-error.js";
 import { createEmptyUsageTotals } from "../../usage/totals.js";
-import { type ExternalSubAgentConfig, externalRoleFingerprint, type SubAgentDiscoveryResult } from "../discovery.js";
+import { externalRoleFingerprint } from "../discovery.js";
 import { buildDispatchedText, createDetails } from "../result.js";
 import type { RunRecord } from "../run-record.js";
 import type { SubAgentRunManager } from "../runs.js";
@@ -18,7 +18,14 @@ import {
 	buildSubAgentTask,
 	resolveContextualBlocks,
 } from "../task-envelope.js";
-import type { DelegationParams, DelegationResult, SubAgentRunContext, SubAgentToolOptions } from "../types.js";
+import type {
+	DelegationParams,
+	DelegationResult,
+	ExternalSubAgentConfig,
+	SubAgentDiscoveryResult,
+	SubAgentRunContext,
+	SubAgentToolOptions,
+} from "../types.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "../workspace-lease.js";
 import { snapshotWorkspace, type WorkspaceBaseline } from "../workspace-summary.js";
 import { getExternalHarness } from "./registry.js";

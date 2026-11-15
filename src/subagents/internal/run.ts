@@ -13,7 +13,6 @@ import * as log from "../../log.js";
 import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { sleepUnref } from "../../shared/with-timeout.js";
-import type { ResolvedInternalSubAgentConfig } from "../discovery.js";
 import { graceDeadlineFor, resolveSyncGraceMs, watchAbort } from "../grace.js";
 import { buildDispatchedText, createDetails, formatStatus } from "../result.js";
 import type { SubAgentRunManager } from "../runs.js";
@@ -21,6 +20,7 @@ import { buildSubAgentTask, resolveContextualBlocks } from "../task-envelope.js"
 import type {
 	DelegationParams,
 	DelegationResult,
+	ResolvedInternalSubAgentConfig,
 	SubAgentRunContext,
 	SubAgentToolOptions,
 	SubAgentWorker,

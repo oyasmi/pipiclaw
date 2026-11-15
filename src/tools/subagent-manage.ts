@@ -4,12 +4,13 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
 import { dispatchExternalFollowUp } from "../subagents/external/dispatch.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
+import { validateSubAgentTask } from "../subagents/resolve.js";
 import type { RunRecord } from "../subagents/run-record.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
+import type { SubAgentDiscoveryResult } from "../subagents/types.js";
 
 // Spec 047, P3: `subagent_list` is zero-argument and shape-independent (like `task_list`); the
 // other three ops all take `runId`, so they stay together in `subagent_run` rather than being
