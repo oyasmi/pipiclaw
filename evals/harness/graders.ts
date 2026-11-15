@@ -205,29 +205,6 @@ export function fileNotContains(
 	return grader;
 }
 
-/**
- * Assert something about a task's loop log (spec 051, D5), wherever it currently lives — a task
- * that finished has moved both its contract and its log into `archive/`.
- */
-export function taskLog(
-	graderId: string,
-	taskId: string,
-	predicate: (log: string) => boolean,
-	why: string,
-): CodeGrader {
-	const grader = codeGrader(graderId, (ctx) => {
-		const path = [
-			join(ctx.deskDir, "tasks", `${taskId}.jsonl`),
-			join(ctx.deskDir, "tasks", "archive", `${taskId}.jsonl`),
-		].find((candidate) => existsSync(candidate));
-		if (!path) return result(grader, "fail", `task ${taskId} wrote no loop log`, "file", `tasks/${taskId}.jsonl`);
-		const log = readFileSync(path, "utf8");
-		return result(grader, predicate(log) ? "pass" : "fail", why, "file", `tasks/${taskId}.jsonl`);
-	});
-	grader.parameters = { taskId, predicateSource: String(predicate), why };
-	return grader;
-}
-
 /** The loop log's raw text, for a model grader's artifacts. */
 export function readTaskLoopLog(deskDir: string, taskId: string): string {
 	for (const path of [
@@ -262,26 +239,6 @@ export function taskFrontmatter(
 		);
 	});
 	grader.parameters = { taskId, predicateSource: String(predicate) };
-	return grader;
-}
-
-export function toolCallOrder(graderId: string, expected: string[]): CodeGrader {
-	const grader = codeGrader(graderId, (ctx) => {
-		const calls = ctx.trace.filter((event) => event.kind === "tool-call").map((event) => event.tool ?? "");
-		let cursor = 0;
-		for (const call of calls) if (call === expected[cursor]) cursor++;
-		const ok = cursor === expected.length;
-		return result(
-			grader,
-			ok ? "pass" : "fail",
-			ok
-				? `observed tool order ${expected.join(" → ")}`
-				: `expected ${expected.join(" → ")}; observed ${calls.join(", ")}`,
-			"trace",
-			"trace.jsonl",
-		);
-	});
-	grader.parameters = { expected };
 	return grader;
 }
 
@@ -363,35 +320,6 @@ export function noFailedToolResult(graderId: string, tool: string, severity: Sev
 		{ severity },
 	);
 	grader.parameters = { tool };
-	return grader;
-}
-
-/** Passes when a whitelisted argument of a tool call still carries its tail sentinel. */
-export function toolArgumentIntact(
-	graderId: string,
-	tool: string,
-	field: string,
-	sentinel: RegExp,
-	severity: Severity = "quality",
-): CodeGrader {
-	const grader = codeGrader(
-		graderId,
-		(ctx) => {
-			const calls = ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === tool);
-			const intact = calls.find((event) => sentinel.test(event.fields?.[field] ?? ""));
-			return result(
-				grader,
-				intact ? "pass" : "fail",
-				intact
-					? `a ${tool} call carried ${field} through to its tail sentinel`
-					: `no ${tool} call carried ${field} intact (${calls.length} call(s); lengths ${calls.map((event) => event.fields?.[`${field}Chars`] ?? "?").join(", ") || "none"})`,
-				"trace",
-				"trace.jsonl",
-			);
-		},
-		{ severity },
-	);
-	grader.parameters = { tool, field, sentinel: regexSpec(sentinel) };
 	return grader;
 }
 

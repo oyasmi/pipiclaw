@@ -214,7 +214,7 @@ flowchart TB
 
 ---
 
-### 3.3 P2 级代码复杂度、架构基线治理与评测集（`evals/`）诊断（✅ 问题 1–3 已完成）
+### 3.3 P2 级代码复杂度、架构基线治理与评测集（`evals/`）诊断（✅ 全部已完成）
 
 1. **✅ 已完成 — 外部执行器（Harness）扩展摩擦过大**：已在叶子词汇表 [run-record.ts](../../src/subagents/run-record.ts) 收敛单一真相源 `EXTERNAL_HARNESS_IDS` / `RunHarness` 与 `ALLOWED_THINKING_LEVELS`，并在 [harness.ts](../../src/subagents/external/harness.ts) 的 `ExternalHarness` 契约上显式声明静态能力属性（`resumable`、`requiresProtocolTerminal`、`supportsImplicitVerifyThinking`、`acceptsSystemPromptFlag`、`verifiesResumeSession`、`roleWarnings`），由 [registry.ts](../../src/subagents/external/registry.ts) 的 `Record<RunHarness, ExternalHarness>` 穷尽校验驱动 [discovery.ts](../../src/subagents/discovery.ts)、[task-envelope.ts](../../src/subagents/task-envelope.ts)、[run.ts](../../src/subagents/external/run.ts)、[settlement.ts](../../src/subagents/external/settlement.ts) 与 [role-warnings.ts](../../src/subagents/external/role-warnings.ts)；同时修复了 `detectExistingFlags` 将 `-c` 误作非 Codex 适配器参数冲突的隐性缺陷，复用 `outputFormatConflicts` 与 `parseJsonObjectLines` 薄辅助函数，并将 [subagent-manage.ts](../../src/tools/subagent-manage.ts) 中的 `follow_up` 租约与派发编排下沉至 [dispatch.ts](../../src/subagents/external/dispatch.ts) 的 `dispatchExternalFollowUp`。
 2. **✅ 已完成 — [architecture-baseline.json](../../scripts/architecture-baseline.json) 超长文件按职责内聚治理（拒绝机械凑 800 行）**：
@@ -226,10 +226,11 @@ flowchart TB
    - ✅ [presentation.ts](../../src/tools/contract/presentation.ts#L78) 中 `memory_forget` 已改为读取真实 schema 字段 `args.name`；
    - ✅ [agent-delegation.md](../../src/playbooks/agent-delegation.md#L1-L6) 已补齐 `requires-tools: subagent`，禁用委派的 `request` 模式不再暴露该手册；
    - ✅ [durable-dispatch.ts](../../src/runtime/durable-dispatch.ts#L562-L615) 的 `drainOnce` 已改为按 `createdAt` 升序排空并支持 `exhausted` 死信记录到期自动清理；[history.ts](../../src/events/history.ts) 与 [commands.ts](../../src/events/commands.ts#L280-L290) 已为 `events-history.jsonl` 接入跨工位共享的容量轮转（2 MiB × 2 份归档）与跨分片历史读取。
-4. **`evals/` 行为评测集诊断**：
-   - **区分度饱和（天花板效应）**：当前基线在 12 个 `core` 门禁上已达 **36/36（100%）**，评测器自身已告警 `discrimination low`；
-   - **Oracle Control 覆盖率偏低**：64 个用例中仅 18 个配有可执行正/负/等价控制，其余 39 个扩展回归用例处于 `uncovered`（`INCONCLUSIVE`）状态；
-   - **关键场景空白**：缺乏多工位 `cwd` 切换、多文件真实 TypeScript 重构协作、钉钉媒体/引用边界的行为探针；且 [selection.ts](../../evals/harness/selection.ts#L123-L128) 把 `src/agent/`、`src/tools/`、`src/runtime/` 全部归为 `common = true`，改一行代码即触发全集计划。
+4. **✅ 已完成 — `evals/` 行为评测集破旧立新与第二代升级**：
+   - **大刀阔斧瘦身去噪（66 → 42 个高信噪比用例）**：物理删除 24 个已退役、带步骤执教（`coached`）、同构重复或测常量的低价值旧用例及孤立 fixture，保留的 42 个场景（12 个核心 + 29 个活跃扩展 + 1 个隔离探针）100% 为自然用户目标（`journey` + `natural`）；
+   - **100% 可执行 Oracle Controls 覆盖（42/42 `qualified`）**：升级弱字符串评分器（新增真实 CLI 沙箱执行的 `cliScopeContract` 与严格类型/不变性校验的 `tsRefactorContract`），并在 [catalog.ts](../../evals/controls/catalog.ts) 为全部 42 个用例补齐正/负/等价三类离线自检控制，彻底清零 `uncovered`（`INCONCLUSIVE`）盲区；
+   - **细粒度变更选择映射**：在 [catalog.ts](../../evals/cases/catalog.ts) 与 [selection.ts](../../evals/harness/selection.ts) 解除对 `src/agent/`、`src/tools/`、`src/runtime/` 的一刀切 `common = true`，改为按家族模块依赖精准选中受影响探针（仅底座公共链路变更回退 12 个核心代表集）；
+   - **新增 3 个第二代高区分度真实协作探针**：在 [extended-families.ts](../../evals/cases/extended-families.ts) 与 [worker.ts](../../evals/harness/worker.ts)（薄扩展 `step.inbound` 走真实 `parseInboundMessage`）落地跨文件严格 TypeScript 账本重构 `C-refactor-ts-01`、多仓 `/desk cwd` 切换与归档任务回溯 `U-desk-cwd-01`（纳入日常 `dev` 集），以及钉钉日志文件 + 语音转写 + 引用回复精准唤醒目标等待任务的 `I-inbound-context-01`。
 
 ---
 
@@ -314,10 +315,10 @@ flowchart LR
 2. **经验到技能的半自动蒸馏（Trajectory-to-Skill）**
    - 当一个多步复杂任务（例如耗费 >10 步、经历过排错重试最终成功关闭的任务）执行 `task_close` 时，或在 `reflect` 周期中发现同类技术排障重复出现时，支持生成一份候选 `SKILL.md` 草稿（或通过 `/tasks distill <id>` 显式触发），经用户确认后落入 `workspace/skills/`。相比自动往 `MEMORY.md` 塞零散事实，把“完整排障套路/项目构建诀窍”沉淀为按需加载的 Skill，既不占常驻上下文，复用精度又高出一个数量级。
 
-3. **`evals/` 第二代升级**
-   - 为 `selection.ts` 建立细粒度模块→用例映射（消除改一行代码跑全集的摩擦）；
-   - 将剩余高价值扩展用例（媒体交互、记忆防投毒、外部委派、定时事件）补齐可执行 Oracle Controls；
-   - 新增 3–4 个高区分度多文件 TypeScript 协作与工位 `cwd` 隔离探针，打破当前 `core` 100% 满分的区分度瓶颈。
+3. **✅ 已完成 — `evals/` 第二代升级**
+   - 已在 [catalog.ts](../../evals/cases/catalog.ts) 与 [selection.ts](../../evals/harness/selection.ts) 建立细粒度模块→用例映射（消除改一行代码跑全集的摩擦）；
+   - 已物理清理 24 个退役/执教/同构旧用例，并为保留的全部 42 个用例（含媒体交互、记忆防投毒、外部委派、定时事件、崩溃恢复等）100% 补齐可执行正/负/等价 Oracle Controls（`selftest` 42/42 `qualified`）；
+   - 已新增多文件严格 TypeScript 重构 `C-refactor-ts-01`、跨仓 `/desk cwd` 隔离与归档回溯 `U-desk-cwd-01`、钉钉文件+语音+引用消歧 `I-inbound-context-01` 三个第二代高区分度探针。
 
 ---
 
@@ -353,4 +354,5 @@ flowchart LR
 | **P1** | ✅ 已修复 | `Desk` 多仓 `--cwd` / `/desk cwd` 人体工学 + `/tasks adopt` 接管失联任务 + 修复 `request-execution` 竞态 | [cli.ts](../../src/tui/cli.ts), [commands.ts](../../src/desk/commands.ts), [desk-runtime.ts](../../src/runtime/desk-runtime.ts), [task-control.ts](../../src/runtime/task-control.ts) | ~200 行 | 顺畅支撑一人同时推进多个本地代码仓库并保留 `DESK-3` 安全隔离 |
 | **P1** | ✅ 已修复 | Task Lane 健壮性（`stopGraceMs`、隔离恢复、`.sessions` 清理、任务压缩分流、批量 `probeAll`） | [task-lane.ts](../../src/runtime/task-lane.ts), [task-step.ts](../../src/runtime/task-step.ts), [archive.ts](../../src/tasks/archive.ts), [manager.ts](../../src/jobs/manager.ts) | ~150 行 | 长周期无人值守任务抗抖动、零内存/文件泄漏 |
 | **P1** | ✅ 已修复 | 轻量运行时托管 Git Worktree 隔离（`worktree: true`）+ `verify` 共享读租约 | [workspace-lease.ts](../../src/subagents/workspace-lease.ts), [worktree.ts](../../src/subagents/worktree.ts), [dispatch.ts](../../src/subagents/dispatch.ts) | ~250 行 | 多任务/并发校验与写委派不再互相踩脏工作树 |
-| **P2** | 待办 | 拆分 3 个超长文件清零 `architecture-baseline.json` + 收敛 Harness 注册表 | [manager.ts](../../src/jobs/manager.ts), [discovery.ts](../../src/subagents/discovery.ts), [runs.ts](../../src/subagents/runs.ts) | 纯结构重构 | 全仓零架构特例，降低后续新增执行器维护成本 |
+| **P2** | ✅ 已完成 | 治理超长文件收紧 `architecture-baseline.json` + 收敛外部 Harness 注册表 + 细节瑕疵清零 | [manager.ts](../../src/jobs/manager.ts), [discovery.ts](../../src/subagents/discovery.ts), [registry.ts](../../src/subagents/external/registry.ts) | 纯结构重构 | 消除重复枚举/特判，降低后续新增执行器维护成本 |
+| **P2** | ✅ 已完成 | `evals/` 第二代升级：物理瘦身（66→42）、42/42 `qualified` Oracle Controls、细粒度变更选择与 3 个高区分度探针 | [catalog.ts](../../evals/cases/catalog.ts), [selection.ts](../../evals/harness/selection.ts), [catalog.ts](../../evals/controls/catalog.ts), [coding.ts](../../evals/graders/coding.ts), [extended-families.ts](../../evals/cases/extended-families.ts) | 评测集升级 | 消除 `uncovered` 盲区与全集误触发，补齐多文件 TS / 多仓 `cwd` / 钉钉入站媒体引用评测 |

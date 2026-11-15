@@ -7,38 +7,33 @@ import type { TaskFrontmatter, TaskState } from "../../src/tasks/frontmatter.js"
 import { EVAL_CHANNEL_ID } from "../harness/layout.js";
 import type { TrialSetup } from "../harness/schema.js";
 
-/**
- * Typed state assertion for task graders.
- *
- * A grader comparing a raw string to a literal keeps compiling long after that value is gone —
- * spec 036 retired `escalated` and two *required* cases went on asserting it, invisible until a
- * full run burned real money to report a false red. Routing the comparison through `TaskState`
- * turns that class of rot into a compile error `npm run typecheck` already sees.
- */
-export const hasState = (fields: { state?: string }, ...states: TaskState[]): boolean =>
-	states.some((state) => fields.state === state);
-
 export async function writeTask(
 	ctx: TrialSetup,
 	id: string,
 	options: {
 		body: string;
 		state?: TaskState;
+		waiting?: TaskFrontmatter["waiting"];
 		budget?: TaskFrontmatter["budget"];
+		outcome?: TaskFrontmatter["outcome"];
+		closedAt?: string;
 		/** Start the task's usage clock, as the runtime would have when it created the task. */
 		started?: boolean;
 	} = { body: "# Goal\nEvaluate behavior.\n\n## DoD\n- [ ] Evidence recorded\n" },
 ): Promise<void> {
 	const fields: TaskFrontmatter = {
-		state: options.state ?? "queued",
+		state: options.waiting ? "waiting" : (options.state ?? "queued"),
+		waiting: options.waiting,
 		// Every task names its delivery channel (spec 058); one without it is suspended, never driven.
 		channel: EVAL_CHANNEL_ID,
 		budget: options.budget,
+		outcome: options.outcome,
+		closedAt: options.closedAt,
 		usage: options.started ? createUsage() : undefined,
 	};
-	const tasksDir = join(ctx.deskDir, "tasks");
-	await mkdir(tasksDir, { recursive: true });
-	await writeFile(join(tasksDir, `${id}.md`), renderTaskDocument(fields, options.body));
+	const targetDir = options.outcome ? join(ctx.deskDir, "tasks", "archive") : join(ctx.deskDir, "tasks");
+	await mkdir(targetDir, { recursive: true });
+	await writeFile(join(targetDir, `${id}.md`), renderTaskDocument(fields, options.body));
 }
 
 /**
@@ -117,19 +112,3 @@ export const warmupTurns = (count: number, offset = 0): Array<{ kind: "user"; te
 		text: topics[(index + offset) % topics.length] ?? "继续，用一句话总结上一条。",
 	}));
 };
-
-/**
- * A long non-ASCII value with a tail sentinel.
- *
- * The reported production failure (2026-07-24) was a streamed-JSON tail truncation on a long
- * Chinese tool argument: the trailing key vanished. Any probe for that shape needs the signal to
- * live at the *end* of the value, which is exactly what a head-clipped or truncated payload loses.
- */
-export const longNonAsciiValue = (sentinel: string, repeats = 40): string =>
-	`${Array.from(
-		{ length: repeats },
-		(_, index) => `第${index + 1}条：部署流水线在阿里云上执行，构建产物统一归档到对象存储，保留三十天。`,
-	).join("")}结尾标记：${sentinel}`;
-
-export const wakeBody = (token: string, releaseToken = "NEVER-PROVIDED") =>
-	`# Task\n\n## Goal\nPreserve the exact goal token ${token}; it must remain the sole target.\n\n## Manual\nUse the supplied task contract to preserve ${token}. Record observed progress in the last reply of each step; ask for the release token with task_ask when that is the only blocker. Do not mark done until the user supplies ${releaseToken}.\n\n## DoD\n- [ ] User supplied ${releaseToken}\n`;

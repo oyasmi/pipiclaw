@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -110,7 +110,7 @@ describe("eval supervision and evidence", () => {
 		// no model was called, and every case became a misleading behavioral failure. The subprocess
 		// probes below use test-owned worker scripts and cannot catch this production-port drift.
 		// Mutation checked 2026-10-14: original missing method => 0 requests, this case red.
-		// Mutation checked 057: removing compiled worker chdir produced the source checkout in stdout; this test went red.
+		// Mutation checked 057 / P0-1: worker runs inside the bound desk cwd rather than the evaluator's source checkout.
 		const model = await startMockProvider();
 		try {
 			model.script.route({
@@ -144,7 +144,7 @@ describe("eval supervision and evidence", () => {
 					.map((part) => part.text ?? "")
 					.join("\n")
 					.trim(),
-			).toBe(home.workspaceDir);
+			).toBe(join(home.workspaceDir, "desk-eval"));
 			expect(trace.some((entry) => entry.kind === "model-result")).toBe(true);
 			// 067: async receipts must survive sealed trace replay; filesystem-only evidence did not.
 			// Mutation checked 2026-11-04: removing compiled SDK user-message capture fails this assertion.
@@ -201,6 +201,41 @@ describe("eval supervision and evidence", () => {
 			expect(taskResult.kind).toBe("complete");
 			expect(existsSync(join(deskDir, "tasks/archive/release-plan.md"))).toBe(true);
 			expect(readFileSync(join(deskDir, "release-plan.txt"), "utf8")).toBe("staging\n周四 22:00\n");
+
+			// P2-4: step.inbound routes file attachment + ASR voice + repliedText through parseInboundMessage
+			// and runtime.ingress.receive so desk inbox attachments and quote headers reach the real turn.
+			const inboundHome = createDeterministicHome({ homeDir: temp(), mockBaseUrl: model.baseUrl });
+			const inboundDeskDir = join(inboundHome.workspaceDir, "desk-eval");
+			const inboundTrace: TraceEvent[] = [];
+			model.script.prependRoute({
+				name: "eval-inbound-context",
+				when: (request) => request.isMainTurn,
+				respond: [reply.text("已收到日志文件。"), reply.text("已收到语音指令。")],
+			});
+			const inboundCase = allCases.find((entry) => entry.id === "I-inbound-context-01")!;
+			const inboundResult = await runWorkerSegment({
+				item: inboundCase,
+				homeDir: inboundHome.homeDir,
+				preparedHome: true,
+				segment: { start: 0, end: 2, mode: "graceful", delayMs: 0 },
+				segmentNumber: 1,
+				externalBaseUrl: "",
+				trace: inboundTrace,
+				deliveries: [],
+				usage: { costUsd: 0, turns: 0 },
+				deadlineMs: Date.now() + 15_000,
+			});
+			expect(inboundResult.kind).toBe("complete");
+			const inboxFiles = readdirSync(join(inboundDeskDir, "inbox"));
+			expect(inboxFiles.some((name) => name.endsWith("gateway-error.log"))).toBe(true);
+			expect(
+				inboundTrace.some(
+					(entry) =>
+						entry.actorId === "main-agent" &&
+						entry.fields?.receivedUserMessage?.includes("[引用消息：任务 payment-hotfix 提问") &&
+						entry.fields.receivedUserMessage.includes("[语音转写]"),
+				),
+			).toBe(true);
 		} finally {
 			await model.close();
 		}

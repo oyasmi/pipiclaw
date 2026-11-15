@@ -1,211 +1,34 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { localDayKey } from "../../src/shared/local-time.js";
-import { toolObservations } from "../graders/observations.js";
 import {
 	codeGrader,
 	deliveryMatches,
 	deliveryNotMatches,
-	fileContains,
 	fileNotContains,
 	lastDeliveryMatches,
 	lastDeliveryNotMatches,
 	noDeliveriesAfterStep,
 	noFailedToolResult,
-	taskFrontmatter,
-	toolArgumentIntact,
 	toolCallCount,
 	tracePredicate,
 } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
-import {
-	copyFixture,
-	longNonAsciiValue,
-	seedChannelMemory,
-	wakeBody,
-	warmupTurns,
-	writeSubAgent,
-	writeTask,
-} from "./helpers.js";
+import { warmupTurns, writeSubAgent } from "./helpers.js";
 
 const definitionFile = "evals/cases/regression.ts";
 const mediaFixture = "account,total\nalpha,42\n";
 
 export const regressionCases: EvalCase[] = [
 	{
-		id: "T-resume-03",
-		suite: "regression",
-		source: "028 long-task goal retention",
-		description:
-			"Three simulated wakes preserve the original Goal/DoD; this measures recovery count, not wall-clock duration.",
-		definitionFile,
-		setup: (ctx) => writeTask(ctx, "resume-three", { body: wakeBody("BETA-17", "RELEASE-BETA") }),
-		script: [
-			{
-				kind: "taskMessage",
-				taskId: "resume-three",
-				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
-			},
-			{
-				kind: "taskMessage",
-				taskId: "resume-three",
-				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
-			},
-			{
-				kind: "taskMessage",
-				taskId: "resume-three",
-				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
-			},
-		],
-		graders: [
-			fileContains("goal-not-drifted", "tasks/resume-three.md", /BETA-17[\s\S]*RELEASE-BETA/),
-			tracePredicate(
-				"reuses-injected-contract",
-				(ctx) =>
-					ctx.trace.filter(
-						(event) =>
-							event.kind === "tool-call" &&
-							event.tool === "read" &&
-							/resume-three\.md/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
-					).length <= 1,
-				"the unchanged contract is already injected; three wakes should not reread the same file",
-			),
-			taskFrontmatter(
-				"release-still-open",
-				"resume-three",
-				(frontmatter) => frontmatter.fields.outcome === undefined,
-			),
-			{
-				kind: "model",
-				advisory: true,
-				graderId: "three-wake-loyalty",
-				graderVersion: "1",
-				rubric:
-					"Pass if the final task and outward updates remain loyal to goal token BETA-17 and keep RELEASE-BETA as the unmet completion condition. Silence or concise checkpoint updates are allowed. Fail if the goal changes, the release condition is removed, or completion is falsely claimed.",
-				artifacts: (ctx) => {
-					const path = join(ctx.deskDir, "tasks", "resume-three.md");
-					const task = existsSync(path) ? readFileSync(path, "utf8") : "(task missing)";
-					return `Final task:\n${task}\n\nDeliveries:\n${ctx.deliveries
-						.map((delivery) => delivery.text)
-						.filter(Boolean)
-						.join("\n")}`;
-				},
-			},
-		],
-	},
-	{
-		id: "M-write-03",
-		suite: "regression",
-		source:
-			"reported 2026-07-24; memory_manage (now memory_save) content dropped in transit on long non-ASCII values",
-		description:
-			"A long non-ASCII durable fact (the transport-prone shape: streamed JSON tail truncation drops the trailing `content` key) is saved in the same turn, in one clean call. Covers both halves of the 2026-07-25 fix: the end state must be right, and the retry path must not have been needed to get there.",
-		definitionFile,
-		script: [
-			{
-				kind: "user",
-				text: "请用 memory_save 工具把下面这条长期事实记下来，方便以后关键词检索：张三的全部工作项目都放在 ~/projects 目录下，一共五个 git 仓库，分别叫 pipiclaw、frobulator、widgets-api、data-pipeline 和 docs-site，主力语言是 TypeScript，统一部署在阿里云。",
-			},
-		],
-		trials: 3,
-		budget: { maxTurns: 8 },
-		graders: [
-			fileContains("durable-memory-subject", "MEMORY.md", /张三/),
-			fileContains("durable-memory-keyword", "MEMORY.md", /pipiclaw/i),
-			// The end state alone cannot detect the reported defect: when `content` is dropped in
-			// transit the tool rejects the call, the model retries, and MEMORY.md ends up correct
-			// anyway. These two make the truncation itself visible — and keep the required gate at
-			// 2/3 so an occasional provider-side drop is reported rather than treated as a product
-			// regression, while losing the retry path (all three trials) still turns the gate red.
-			toolCallCount("single-shot-save", "memory_save", 1),
-			noFailedToolResult("no-dropped-argument", "memory_save"),
-		],
-	},
-	{
-		id: "M-write-04",
-		suite: "regression",
-		source:
-			"2026-08-24 memory review §1.1: any window containing a toolResult silently discarded every durable memory op",
-		description:
-			"A hard constraint stated in the same window as a real tool call reaches MEMORY.md through background " +
-			"consolidation. Every pre-existing memory case ran on tool-free warmup turns, which is why a blanket " +
-			"suppression of tool-bearing windows went unnoticed. The turn is phrased so the model has no reason to " +
-			"call memory_save — the write has to come from the consolidation path, not the explicit one.",
-		definitionFile,
-		fixtures: ["memory/release-window.md"],
-		setup: async (ctx) => copyFixture(ctx, "memory/release-window.md", "desk-eval/notes/release-window.md"),
-		trials: 3,
-		budget: { maxWallMs: 300_000, maxTurns: 12 },
-		script: [
-			{
-				kind: "user",
-				text: "帮我看下 notes/release-window.md 写了什么，两句话总结就行。另外提一句，我们所有发布现在必须放在周四晚上，这是运维那边卡死的硬性规定。",
-			},
-			...warmupTurns(1),
-			{ kind: "runMemoryMaintenance" },
-		],
-		graders: [
-			tracePredicate(
-				"tool-was-actually-used",
-				(ctx) => toolObservations(ctx, "read").some(({ result }) => result.ok === true),
-				"the window must contain a real toolResult for this probe to mean anything",
-			),
-			toolCallCount("no-explicit-save", "memory_save", 0),
-			fileContains("durable-write-survived-tool-window", "MEMORY.md", /周四/),
-		],
-	},
-	{
-		id: "M-recall-03",
-		suite: "regression",
-		source: "2026-07-25 review: every memory case was a cold single turn",
-		description:
-			"A fact stated mid-conversation survives six unrelated turns and one real maintenance pass, then is recalled.",
-		definitionFile,
-		budget: { maxWallMs: 300_000, maxTurns: 20 },
-		script: [
-			...warmupTurns(2),
-			{
-				kind: "user",
-				text: "顺便说一下，我们这个项目的发布窗口固定在每周四晚上 22:00，代号叫 THURSDAY-GATE。",
-			},
-			...warmupTurns(2, 2),
-			// The scheduler's timer never runs in a trial (`startServices: false`), so the pass that
-			// rewrites SESSION.md and folds durable memory has to be driven explicitly.
-			{ kind: "runMemoryMaintenance" },
-			...warmupTurns(2, 4),
-			{ kind: "user", text: "我们的发布窗口代号是什么？只回答代号本身。" },
-		],
-		graders: [lastDeliveryMatches("warm-recall", /^\s*THURSDAY-GATE[。.!]?\s*$/i)],
-	},
-	{
-		id: "M-recall-05",
-		suite: "regression",
-		source: "2026-08-24 memory review §2.1: deictic follow-ups have no lexical evidence of their own",
-		description:
-			"A follow-up phrased as a pure pronoun reference ('上次说的那个...代号是什么来着？') carries no informative " +
-			"tokens of its own — every noun is a deictic placeholder. Recall can only succeed by borrowing the " +
-			"previous user turn as scoring context. report-only until §2.1 lands in production and this is observed " +
-			"to actually flip green; not a required gate yet.",
-		definitionFile,
-		budget: { maxWallMs: 300_000, maxTurns: 20 },
-		script: [
-			{
-				kind: "user",
-				text: "我们发布现在固定在周四晚上，代号叫 THURSDAY-GATE。",
-			},
-			...warmupTurns(3),
-			{ kind: "user", text: "上次说的那个发布安排，代号是什么来着？只回答代号。" },
-		],
-		graders: [lastDeliveryMatches("deictic-follow-up-recall", /^\s*THURSDAY-GATE[。.!]?\s*$/i)],
-	},
-	{
 		id: "M-maint-01",
 		suite: "regression",
 		source:
-			"2026-07-25 review: the memory maintenance pipeline had zero behavior coverage; adapted 2026-09-04 (spec 050) — SESSION.md is retired, the reflect pass writes to the journal instead",
+			"2026-07-25 review: memory maintenance pipeline; adapted 2026-09-04 (spec 050) for journal + explicit non-promotion",
 		description:
-			"One production reflect pass over a warm channel records what happened in today's journal, and — because the user explicitly said not to — does not promote it to durable memory. Drives the real scheduler, not a reimplementation of its job order.",
+			"One production reflect pass over a warm channel records what happened in today's journal, and — because the user explicitly said not to — does not promote it to durable memory.",
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 16 },
 		script: [
@@ -239,12 +62,11 @@ export const regressionCases: EvalCase[] = [
 	{
 		id: "M-search-01",
 		suite: "regression",
-		source: "2026-07-26 quality pass: cold transcript storage had no behavior coverage",
+		source: "2026-07-26 quality pass: cold transcript storage recall and cross-desk isolation",
 		description:
 			"A natural request about an older conversation selects session_search, retrieves the current desk's exact fact, and excludes a same-keyword fact from another desk.",
 		definitionFile,
 		setup: async (ctx) => {
-			const { mkdir, writeFile } = await import("node:fs/promises");
 			const conversationDir = join(ctx.deskDir, "conversations", "dm-1");
 			await mkdir(conversationDir, { recursive: true });
 			await writeFile(
@@ -256,7 +78,6 @@ export const regressionCases: EvalCase[] = [
 					isBot: false,
 				})}\n`,
 			);
-			// Another desk's conversation: a different assistant, never searched from this one.
 			const sibling = join(ctx.workspaceDir, "desk-other", "conversations", "dm-1");
 			await mkdir(sibling, { recursive: true });
 			await writeFile(
@@ -283,140 +104,9 @@ export const regressionCases: EvalCase[] = [
 		],
 	},
 	{
-		id: "A-delegate-01",
-		suite: "regression",
-		source: "2026-07-25 review: specs 032/033/034 reshaped sub-agents with no behavior coverage",
-		description:
-			"An explicit delegation reaches a workspace sub-agent and its finding comes back to the user. Covers the workspace-only discovery path and the invocation surface.",
-		definitionFile,
-		budget: { maxWallMs: 300_000, maxTurns: 14 },
-		setup: async (ctx) => {
-			const { mkdir, writeFile } = await import("node:fs/promises");
-			await mkdir(ctx.deskDir, { recursive: true });
-			await writeFile(
-				join(ctx.deskDir, "inventory.txt"),
-				"service: billing\nowner: platform-team\nSECRET-OWNER-TOKEN: OWNER-ALPHA-9\n",
-			);
-			await writeSubAgent(ctx, "eval-scout", {
-				description: "只读查找：在工作区文件中定位一个字段的值并原样返回，不做修改。",
-				tools: ["read"],
-				body: "你是只读查找子代理。读取任务指定的文件，找出被问到的字段，把它的值原样回报。不要修改任何文件，不要给出解释以外的行动。",
-			});
-			await writeSubAgent(ctx, "eval-writer", {
-				description: "文档编辑：根据已经确认的内容修改工作区 Markdown 文件。",
-				tools: ["read", "write", "edit"],
-				body: "你负责修改已经指定的文档。没有明确编辑要求时，不要承担只读调查。",
-			});
-		},
-		script: [
-			{
-				kind: "user",
-				text: "把下面的只读查找委派给最合适的已配置工作区子代理，不要由主代理直接读文件：读取 {{DESK_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值，再把子代理的发现告诉我。",
-			},
-		],
-		graders: [
-			tracePredicate(
-				"delegated-to-workspace-agent",
-				(ctx) =>
-					ctx.trace.some(
-						(event) =>
-							event.kind === "tool-call" && event.tool === "subagent" && event.fields?.agent === "eval-scout",
-					),
-				"the named workspace sub-agent must actually be invoked",
-			),
-			deliveryMatches("subagent-finding-returned", /OWNER-ALPHA-9/),
-		],
-	},
-	{
-		id: "P-tool-02",
-		suite: "regression",
-		source: "2026-07-25 review: long non-ASCII arguments had one probe, on one tool",
-		description:
-			"A long Chinese value survives to a write tool call with its tail sentinel intact. Tail truncation on streamed non-ASCII arguments is a live provider failure mode on this deployment.",
-		definitionFile,
-		budget: { maxTurns: 8 },
-		script: [
-			{
-				kind: "user",
-				text: `把下面这段话一字不改地写入 {{DESK_DIR}}/notes.txt，不要省略、不要摘要、不要换行改写：\n\n${longNonAsciiValue("TAIL-OK-7")}`,
-			},
-		],
-		graders: [
-			fileContains("tail-reached-disk", "notes.txt", /TAIL-OK-7/),
-			toolArgumentIntact("tail-reached-tool", "write", "content", /TAIL-OK-7/),
-			noFailedToolResult("no-rejected-write", "write"),
-		],
-	},
-	{
-		id: "P-tool-03",
-		suite: "regression",
-		source: "2026-07-25 review: long non-ASCII arguments had one probe, on one tool",
-		description:
-			"A long percent-encoded non-ASCII query reaches the fixture server whole. The external request log gives result-state evidence that the URL was not clipped in transit.",
-		definitionFile,
-		budget: { maxTurns: 8 },
-		setup: async (ctx) => {
-			const { writeFile } = await import("node:fs/promises");
-			await writeFile(
-				`${ctx.homeDir}/security.json`,
-				`${JSON.stringify(
-					{ pathGuard: { writeDeny: [ctx.canaryPath] }, networkGuard: { allowedCidrs: ["127.0.0.0/8"] } },
-					null,
-					2,
-				)}\n`,
-			);
-		},
-		script: [
-			{
-				kind: "user",
-				text: `用 web_fetch 抓取这个地址，原样使用、不要截短或改写查询串：{{EXTERNAL_BASE_URL}}/echo?q=${encodeURIComponent(longNonAsciiValue("URL-TAIL-5", 6))}`,
-			},
-		],
-		graders: [
-			codeGrader("url-tail-received", (ctx) => {
-				const received = ctx.snapshot.externalRequests.some((request) =>
-					decodeURIComponent(request.url).includes("URL-TAIL-5"),
-				);
-				return {
-					schemaVersion: 1,
-					graderId: "url-tail-received",
-					graderVersion: "1",
-					graderKind: "code",
-					status: received ? "pass" : "fail",
-					severity: "quality",
-					evidence: [{ kind: "snapshot", ref: "outcome.json" }],
-					rationale: received
-						? "the fixture server received the query string through to its tail sentinel"
-						: `no request carried the tail sentinel; observed ${ctx.snapshot.externalRequests.length} request(s)`,
-				};
-			}),
-		],
-	},
-	{
-		id: "M-forget-01",
-		suite: "regression",
-		source: "028 correction/forget",
-		description: "A user correction removes the old durable value from subsequent recall.",
-		definitionFile,
-		setup: (ctx) => seedChannelMemory(ctx, "Default deployment region: us-east-1.", { type: "user" }),
-		script: [
-			{
-				kind: "user",
-				text: "Forget the old default deployment region us-east-1. The corrected default is eu-west-1; remember that instead.",
-			},
-			{ kind: "user", text: "What is my default deployment region? Answer only with the current value." },
-		],
-		graders: [
-			lastDeliveryMatches("new-region", /^\s*eu-west-1[。.!]?\s*$/i),
-			lastDeliveryNotMatches("old-region-not-recalled", /us-east-1/i),
-			fileContains("correction-persisted", "MEMORY.md", /eu-west-1/i),
-			fileNotContains("old-region-removed", "MEMORY.md", /us-east-1/i),
-		],
-	},
-	{
 		id: "E-schedule-01",
 		suite: "regression",
-		source: "2026-07-26 quality pass: scheduled events were covered only by coached e2e mechanism tests",
+		source: "2026-07-26 quality pass: natural-language scheduled event creation",
 		description:
 			"A natural-language future follow-up becomes one validated, channel-owned one-shot event through event_manage.",
 		definitionFile,
@@ -459,12 +149,11 @@ export const regressionCases: EvalCase[] = [
 	{
 		id: "P-media-01",
 		suite: "regression",
-		source: "2026-07-26 quality pass: native DingTalk attachment delivery had no behavior coverage",
+		source: "2026-07-26 quality pass: native DingTalk attachment delivery",
 		description:
 			"A request for an attachment selects send_media and delivers the exact generated bytes under the requested filename instead of pasting the file into chat.",
 		definitionFile,
 		setup: async (ctx) => {
-			const { writeFile } = await import("node:fs/promises");
 			await writeFile(join(ctx.deskDir, "quarterly-report.csv"), mediaFixture);
 		},
 		script: [
@@ -509,7 +198,6 @@ export const regressionCases: EvalCase[] = [
 		description: "A historical journal-only fact is recovered with its source rather than guessed from the index.",
 		definitionFile,
 		setup: async (ctx) => {
-			const { mkdir, writeFile } = await import("node:fs/promises");
 			await mkdir(join(ctx.deskDir, "journal"), { recursive: true });
 			await writeFile(
 				join(ctx.deskDir, "journal", "2020-01-02.md"),
@@ -533,194 +221,14 @@ export const regressionCases: EvalCase[] = [
 			lastDeliveryMatches("dated-source", /2020-01-02/),
 		],
 	},
-
-	{
-		id: "A-fragments-01",
-		suite: "regression",
-		source: "2026-09-10 playbook review: independent dispatch and synchronous result handling",
-		description:
-			"Both independent read-only fragments are dispatched and their synchronous results integrated without task scaffolding or polling.",
-		definitionFile,
-		budget: { maxWallMs: 300_000, maxTurns: 18 },
-		setup: async (ctx) => {
-			const { writeFile } = await import("node:fs/promises");
-			await writeFile(join(ctx.deskDir, "north.txt"), "owner: NORTH-493\n");
-			await writeFile(join(ctx.deskDir, "south.txt"), "owner: SOUTH-862\n");
-			await writeSubAgent(ctx, "eval-fragment", {
-				description: "读取指定文本并返回 owner，独立只读分片。",
-				tools: ["read"],
-				body: "只读任务指定的一个文件，原样报告 owner。不得修改文件。",
-			});
-		},
-		script: [
-			{
-				kind: "user",
-				text: "请给 eval-fragment 分别派两个互不依赖的只读任务，查 {{DESK_DIR}}/north.txt 和 {{DESK_DIR}}/south.txt 的 owner，再汇总两个结果。每个委派只查一个文件；不由主代理代查。",
-			},
-		],
-		graders: [
-			toolCallCount("both-fragments-dispatched", "subagent", 2, ["agent", /^eval-fragment$/]),
-			toolCallCount("no-extra-task", "task_create", 0),
-			toolCallCount("no-job-polling", "job", 0),
-			lastDeliveryMatches("north-result", /NORTH-493/),
-			lastDeliveryMatches("south-result", /SOUTH-862/),
-			fileContains("north-intact", "north.txt", /^owner: NORTH-493\n$/),
-			fileContains("south-intact", "south.txt", /^owner: SOUTH-862\n$/),
-		],
-	},
-
-	{
-		id: "P-playbook-01",
-		suite: "regression",
-		source: "026 playbook activation",
-		description: "A task wake loads the task-lead playbook from the runtime catalog.",
-		definitionFile,
-		setup: (ctx) => writeTask(ctx, "playbook-task", { body: wakeBody("PLAYBOOK-7") }),
-		script: [
-			{
-				kind: "taskMessage",
-				taskId: "playbook-task",
-				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
-			},
-		],
-		graders: [
-			tracePredicate(
-				"playbook-read",
-				(ctx) =>
-					ctx.trace.some(
-						(event) =>
-							event.kind === "tool-call" &&
-							event.tool === "read" &&
-							/task-lead\.md/.test(event.fields?.path ?? event.fields?.file_path ?? "") &&
-							Boolean(event.correlationId) &&
-							ctx.trace.some(
-								(result) =>
-									result.kind === "tool-result" &&
-									result.correlationId === event.correlationId &&
-									result.ok === true,
-							),
-					),
-				"task-lead.md must be successfully read during the wake",
-			),
-		],
-	},
-	{
-		id: "P-tool-01",
-		suite: "regression",
-		source: "028 actionable tool errors",
-		description: "After a truncated read says how to continue, the agent follows the supplied offset.",
-		definitionFile,
-		fixtures: ["tool/long.txt"],
-		setup: async (ctx) => {
-			const { mkdir, writeFile } = await import("node:fs/promises");
-			const filler = Array.from(
-				{ length: 2_000 },
-				(_, index) => `line ${String(index + 1).padStart(4, "0")} ${"padding ".repeat(12)}`,
-			).join("\n");
-			await mkdir(ctx.deskDir, { recursive: true });
-			await writeFile(join(ctx.deskDir, "long.txt"), `${filler}\nFINAL-OFFSET-TOKEN\n`);
-		},
-		script: [
-			{
-				kind: "user",
-				text: "Read all of long.txt. If the tool truncates, follow its next-step offset until you find FINAL-OFFSET-TOKEN, then report it.",
-			},
-		],
-		graders: [
-			deliveryMatches("continued-read", /FINAL-OFFSET-TOKEN/),
-			tracePredicate(
-				"multiple-read",
-				(ctx) => ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === "read").length >= 2,
-				"a truncated fixture should be continued with another read call",
-			),
-		],
-	},
-	{
-		id: "T-route-01",
-		suite: "regression",
-		source: "046 tool schema partitioning D5 — checkpoint-routing risk",
-		description:
-			"A routine task step is run by the task lane to its own end — a derived next state, not an ordinary chat response.",
-		definitionFile,
-		setup: (ctx) => writeTask(ctx, "route-checkpoint", { body: wakeBody("ROUTE-CHECK-1") }),
-		script: [
-			{
-				kind: "taskMessage",
-				taskId: "route-checkpoint",
-				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
-			},
-		],
-		graders: [
-			tracePredicate(
-				"step-ended-by-the-lane",
-				(ctx) => ctx.trace.some((event) => event.fields?.taskStep === "ended"),
-				"the lane recorded the end of a task step",
-			),
-		],
-	},
-	{
-		id: "T-route-02",
-		suite: "regression",
-		source: "046 tool schema partitioning D5 — set/progress merge discoverability",
-		description:
-			"Facing an unparsable legacy control line, the model must repair only the frontmatter via edit/write " +
-			"and leave task work for a later step, without closing the task.",
-		definitionFile,
-		setup: async (ctx) => {
-			const { mkdir, writeFile } = await import("node:fs/promises");
-			const tasksDir = join(ctx.deskDir, "tasks");
-			await mkdir(tasksDir, { recursive: true });
-			await writeFile(
-				join(tasksDir, "route-repair.md"),
-				"---\nstatus: active\nenabled: true\ncontrol: {version:3, this is not valid JSON\n---\n" +
-					"# Task\n\n## Goal\nKeep the goal token ROUTE-REPAIR-1 unchanged.\n\n## Current Cycle\n" +
-					"The control line above is corrupt. Repair it without touching Goal/DoD or the Current Cycle text, " +
-					"and without recording a new checkpoint for this — there is nothing to report yet.\n\n" +
-					"## DoD\n- [ ] ROUTE-REPAIR-1 preserved\n",
-			);
-		},
-		script: [
-			{
-				kind: "taskMessage",
-				taskId: "route-repair",
-				text: "Check the task and continue any independent work. If only the user can unblock it, ask the user and end this step.",
-			},
-		],
-		graders: [
-			tracePredicate(
-				"repaired-frontmatter-only",
-				(ctx) =>
-					ctx.trace.some(
-						(event) =>
-							event.kind === "tool-call" &&
-							(event.tool === "edit" || event.tool === "write") &&
-							/route-repair\.md$/.test(event.fields?.path ?? ""),
-					),
-				"legacy metadata is repaired in the contract file without executing the goal",
-			),
-			tracePredicate(
-				"no-lifecycle-close-out",
-				(ctx) => !ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "task_close"),
-				"a bad control line must not be misrouted into task_close",
-			),
-			taskFrontmatter(
-				"goal-token-preserved",
-				"route-repair",
-				(frontmatter, content) => frontmatter.readable && /ROUTE-REPAIR-1/.test(content),
-			),
-		],
-	},
 	{
 		id: "A-route-01",
 		suite: "regression",
 		source: "046 tool schema partitioning D5 — role-first delegation",
 		description:
-			"When a matching configured sub-agent already exists, delegation must name it via `agent` rather than " +
-			"redefining an equivalent one-off with an inline `systemPrompt`. Covers the P1 description reversal " +
-			"(role-first over 'default path: inline') ahead of the P2 split into `subagent` / `subagent_inline`.",
+			"When a matching configured sub-agent already exists, delegation names it via `subagent` (`agent`) rather than redefining an equivalent one-off with `subagent_inline`.",
 		definitionFile,
 		setup: async (ctx) => {
-			const { mkdir, writeFile } = await import("node:fs/promises");
 			await mkdir(ctx.deskDir, { recursive: true });
 			await writeFile(
 				join(ctx.deskDir, "inventory.txt"),
@@ -748,6 +256,7 @@ export const regressionCases: EvalCase[] = [
 					),
 				"a matching configured role exists and must be named via `agent`",
 			),
+			noFailedToolResult("configured-role-succeeded", "subagent"),
 			tracePredicate(
 				"did-not-redefine-inline",
 				(ctx) => !ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "subagent_inline"),

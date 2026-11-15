@@ -1,49 +1,15 @@
 import { noteObservedEvidence } from "../graders/task-notes.js";
-import { deliveryMatches, driverDispatchCount, readTaskLoopLog, taskFrontmatter, taskLog } from "../harness/graders.js";
+import { deliveryMatches, driverDispatchCount, readTaskLoopLog, taskFrontmatter } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { writeTask } from "./helpers.js";
 
 const definitionFile = "evals/cases/task-loop-quality.ts";
 
 /**
- * Spec 051 §10: the behavioural evidence for the redesign's three claims — the loop picks a
- * ticket that actually names its blocker, its step notes carry evidence rather than intent, and a
- * budget stop leaves the user something they can act on. Mechanism is covered by the deterministic
- * e2e layer; what a real model *chooses* is only observable here.
- *
- * These are not a gate (`npm run eval` is not part of `npm run check`).
+ * Spec 051 §10: behavioural probes for step-note evidence quality and actionable budget-stop
+ * receipts. Waiting-on-bound-work is covered in core (`T-job-01` and `T-run-01`).
  */
-
 export const taskLoopQualityCases: EvalCase[] = [
-	{
-		id: "TL-ticket-01",
-		suite: "capability",
-		source: "051 D2 waiting tickets",
-		description: "A task that starts a background job parks on its work, not on a guessed timer.",
-		definitionFile,
-		budget: { maxWallMs: 240_000, maxTurns: 12 },
-		setup: (ctx) =>
-			writeTask(ctx, "await-job", {
-				started: true,
-				body:
-					"# Task\n\n## Goal\nRun `sleep 45 && echo TICKET-DONE > ticket-done.txt` as a background job, then report the file's content.\n\n" +
-					"## DoD\n- [ ] ticket-done.txt contains TICKET-DONE\n",
-			}),
-		script: [{ kind: "runTaskLane" }],
-		graders: [
-			driverDispatchCount("tl-ticket-01-dispatch", { min: 1 }),
-			// The point of the ticket model: name the thing you are actually waiting for. A `time`
-			// ticket here is a guess that happens to work; a `job` ticket is a fact the runtime can
-			// redeem the moment the job settles.
-			taskFrontmatter("parks-on-the-job", "await-job", (frontmatter) => frontmatter.fields.waiting?.kind === "work"),
-			taskLog(
-				"no-guessed-timer",
-				"await-job",
-				(log) => !/"kind":"step_end"[^\n]*"next":"time"/.test(log) || !/等一会|稍后再看|过几分钟/.test(log),
-				"a wait should be on the bound job, not a moment the model invented",
-			),
-		],
-	},
 	{
 		id: "TL-note-01",
 		suite: "capability",
@@ -96,8 +62,6 @@ export const taskLoopQualityCases: EvalCase[] = [
 				"tiny-budget",
 				(frontmatter) => frontmatter.fields.paused?.by === "runtime",
 			),
-			// The receipt is deterministic runtime text, so this is really asserting that the stop
-			// reaches the user with a command attached rather than dying in the log.
 			deliveryMatches("receipt-is-actionable", /\/tasks resume tiny-budget/),
 		],
 	},

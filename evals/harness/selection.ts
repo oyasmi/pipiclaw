@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { coreRepresentativeIds, familyCatalog, metadataForCase } from "../cases/catalog.js";
+import { coreRepresentativeIds, metadataForCase } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
 import { validateCases } from "./cases.js";
 
@@ -11,7 +11,14 @@ export const profiles = {
 	external: { trials: 1, mode: "smoke", description: "External executor smoke" },
 } as const;
 export type ProfileName = keyof typeof profiles;
-export const dailyCaseIds = ["C-fix-01", "M-overflow-01", "T-job-01", "D-verify-01", "U-path-01", "S-inject-core-01"];
+export const dailyCaseIds = [
+	"C-fix-01",
+	"M-overflow-01",
+	"T-job-01",
+	"D-verify-01",
+	"U-desk-cwd-01",
+	"S-inject-core-01",
+];
 
 export function option(args: string[], name: string): string | undefined {
 	const index = args.indexOf(name);
@@ -26,6 +33,27 @@ export function positiveInteger(value: string | undefined, fallback: number, nam
 	const parsed = Number(value);
 	if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer.`);
 	return parsed;
+}
+
+function isCommonDependency(file: string): boolean {
+	return (
+		/^(src\/(agent\/(channel-runner\.ts|types\.ts|turn\/|prompt\/)|runtime\/(bootstrap|turn-run|transports|shutdown)\.ts|config\/|models\/|shared\/|tools\/(registry\.ts|contract\/))|src\/(executor|file-store|paths|log)\.ts|evals\/harness\/)/.test(
+			file,
+		) || ["package.json", "package-lock.json"].includes(file)
+	);
+}
+
+function matchesDependency(file: string, dep: string): boolean {
+	const normalized = dep.replace(/\/\*\*$/, "/");
+	if (normalized.endsWith("/") || normalized.endsWith("-")) return file.startsWith(normalized);
+	return file === normalized || file.startsWith(`${normalized}.`) || file.startsWith(`${normalized}/`);
+}
+
+function matchesProfile(profile: ProfileName, id: string, source: string, description: string): boolean {
+	if (profile === "dev") return dailyCaseIds.includes(id);
+	if (profile === "explore") return metadataForCase(id, source, description).tags.includes("extended");
+	if (profile === "external") return id === "D-external-01";
+	return (coreRepresentativeIds as readonly string[]).includes(id);
 }
 
 export function selectCases(args: string[], listing = false, root = process.cwd()) {
@@ -51,7 +79,8 @@ export function selectCases(args: string[], listing = false, root = process.cwd(
 		option(args, arg);
 		index++;
 	}
-	const profileName = option(args, "--profile") ?? "dev";
+	const explicitProfile = option(args, "--profile");
+	const profileName = explicitProfile ?? "dev";
 	if (!Object.hasOwn(profiles, profileName))
 		throw new Error(`Unknown profile '${profileName}'; use ${Object.keys(profiles).join(", ")}.`);
 	const profile = profileName as ProfileName;
@@ -90,16 +119,8 @@ export function selectCases(args: string[], listing = false, root = process.cwd(
 		);
 	});
 	const changedSince = option(args, "--changed-since");
-	if (!explicit && !args.includes("--all") && !listing) {
-		cases = cases.filter((item) =>
-			profile === "dev" && !changedSince
-				? dailyCaseIds.includes(item.id)
-				: profile === "explore"
-					? metadataForCase(item.id, item.source, item.description).tags.includes("extended")
-					: profile === "external"
-						? item.id === "D-external-01"
-						: (coreRepresentativeIds as readonly string[]).includes(item.id),
-		);
+	if (!explicit && !args.includes("--all") && !listing && (!changedSince || explicitProfile !== undefined)) {
+		cases = cases.filter((item) => matchesProfile(profile, item.id, item.source, item.description));
 	}
 	for (const item of cases)
 		reasons[item.id] = [
@@ -120,24 +141,26 @@ export function selectCases(args: string[], listing = false, root = process.cwd(
 		if (untracked.status !== 0) throw new Error("Cannot list untracked files; check the Git workspace.");
 		const files = [...new Set(`${result.stdout}\n${untracked.stdout}`.split("\n").filter(Boolean))];
 		const candidates = cases;
-		const common = files.some(
-			(file) =>
-				/^(src\/(agent|tools|runtime|config|models|playbooks|shared|security)\/|src\/(executor|file-store|paths)\.ts|evals\/harness\/)/.test(
-					file,
-				) || ["package.json", "package-lock.json"].includes(file),
+		const common = files.some(isCommonDependency);
+		const specificMatches = new Set(
+			candidates
+				.filter((item) => {
+					const meta = metadataForCase(item.id, item.source, item.description);
+					return files.some(
+						(file) =>
+							item.definitionFile === file ||
+							(item.dependencies ?? []).includes(file) ||
+							meta.dependencies.some((dep) => matchesDependency(file, dep)),
+					);
+				})
+				.map((item) => item.id),
 		);
 		cases = candidates.filter((item) => {
-			const meta = metadataForCase(item.id, item.source, item.description);
-			const roots = familyCatalog.find((family) => family.id === meta.family)?.dependencies ?? [];
-			return (
-				common ||
-				files.some(
-					(file) =>
-						item.definitionFile === file ||
-						(item.dependencies ?? []).includes(file) ||
-						roots.some((root) => file.startsWith(root.replace(/\/\*\*$/, "/"))),
-				)
-			);
+			if (specificMatches.has(item.id)) return true;
+			if (!common) return false;
+			if (explicit || args.includes("--all")) return true;
+			if (explicitProfile !== undefined) return matchesProfile(profile, item.id, item.source, item.description);
+			return (coreRepresentativeIds as readonly string[]).includes(item.id);
 		});
 		const fallback = !cases.length && files.length > 0;
 		if (fallback)
@@ -148,7 +171,11 @@ export function selectCases(args: string[], listing = false, root = process.cwd(
 		for (const item of cases)
 			reasons[item.id]!.push(
 				`changed-since=${changedSince}`,
-				fallback ? "unmapped change: conservative fallback within selection" : "changed dependency",
+				fallback
+					? "unmapped change: conservative fallback within selection"
+					: specificMatches.has(item.id)
+						? "changed dependency"
+						: "cross-cutting dependency",
 			);
 	}
 	if (!cases.length)

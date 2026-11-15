@@ -1,12 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ChannelEvent } from "../../src/channel/channel-event.js";
+import type { InboundAttachment } from "../../src/channel/ingress.js";
 import type { MediaSendResult, OutboundMedia } from "../../src/channel/transport.js";
 import { DingTalkBot } from "../../src/dingtalk/bot.js";
+import { parseInboundMessage } from "../../src/dingtalk/inbound-media.js";
 import { DingTalkTransport } from "../../src/dingtalk/transport.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
-import { trialSeed } from "./fixture-seed.js";
+import { fixtureToken, trialSeed } from "./fixture-seed.js";
 import { traceIdentity, traceToolResultFailed } from "./identity.js";
 import { EVAL_CHANNEL_ID, EVAL_DESK, evalConversationDir, evalDeskDir, prepareEvalDesk } from "./layout.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
@@ -86,7 +88,7 @@ const TOOL_FIELDS: Record<string, string[]> = {
 	web_search: ["query"],
 	send_media: ["path", "fileName"],
 	event_manage: ["action", "name", "definition"],
-	task_list: [],
+	task_list: ["includeArchived", "query"],
 	task_create: ["id", "title", "goal", "dod"],
 	task_close: ["id", "outcome", "note"],
 	task_log: ["id"],
@@ -100,8 +102,8 @@ const TOOL_FIELDS: Record<string, string[]> = {
 	memory_search: ["query"],
 	memory_forget: ["name"],
 	session_search: ["query", "offset", "limit"],
-	subagent: ["agent", "label", "purpose"],
-	subagent_inline: ["label", "purpose", "systemPrompt", "model", "mutates"],
+	subagent: ["agent", "label", "purpose", "worktree", "workingDirectory"],
+	subagent_inline: ["label", "purpose", "systemPrompt", "model", "mutates", "worktree", "workingDirectory"],
 	subagent_list: [],
 	subagent_run: ["op", "runId", "task"],
 };
@@ -301,7 +303,8 @@ function interpolate(value: string, canaryPath: string, workspaceDir: string, de
 		.replaceAll("{{CANARY_PATH}}", canaryPath)
 		.replaceAll("{{EXTERNAL_BASE_URL}}", externalBaseUrl ?? "")
 		.replaceAll("{{WORKSPACE_DIR}}", workspaceDir)
-		.replaceAll("{{DESK_DIR}}", deskDir);
+		.replaceAll("{{DESK_DIR}}", deskDir)
+		.replace(/\{\{SEED_TOKEN:([A-Za-z0-9_-]+)\}\}/g, (_, label: string) => fixtureToken(seed, label));
 }
 
 async function main(): Promise<void> {
@@ -415,17 +418,62 @@ async function main(): Promise<void> {
 		trace({ kind: "step", fields: { kind: step.kind } });
 		if (step.kind === "user") {
 			const before = localTrace.length;
-			await sendEvent({
-				source: "human",
-				channelId,
-				ts: Date.now().toString(),
-				user: "eval",
-				userName: "Evaluator",
-				text: interpolate(step.text, canaryPath, workspaceDir, deskDir),
-			});
-			await drain();
+			const rawText = interpolate(step.text, canaryPath, workspaceDir, deskDir);
+			let effectiveText = rawText;
+			if (step.inbound) {
+				const msgtype =
+					step.inbound.msgtype ?? (step.inbound.file ? "file" : step.inbound.recognition ? "audio" : "text");
+				const repliedMsg = step.inbound.repliedText
+					? {
+							msgType: "text",
+							content: { text: interpolate(step.inbound.repliedText, canaryPath, workspaceDir, deskDir) },
+						}
+					: undefined;
+				const fileSpec = step.inbound.file
+					? {
+							fileName: interpolate(step.inbound.file.fileName, canaryPath, workspaceDir, deskDir),
+							content: interpolate(step.inbound.file.content, canaryPath, workspaceDir, deskDir),
+						}
+					: undefined;
+				const parsed = parseInboundMessage({
+					msgtype,
+					...(msgtype === "text"
+						? { text: { content: rawText, ...(repliedMsg ? { isReplyMsg: true, repliedMsg } : {}) } }
+						: {}),
+					...(repliedMsg ? { repliedMsg } : {}),
+					content: {
+						...(step.inbound.recognition
+							? { recognition: interpolate(step.inbound.recognition, canaryPath, workspaceDir, deskDir) }
+							: {}),
+						...(fileSpec ? { downloadCode: "eval-file-1", fileName: fileSpec.fileName } : {}),
+					},
+				});
+				const attachments: InboundAttachment[] | undefined = fileSpec
+					? [{ kind: "file", index: 1, fileName: fileSpec.fileName, data: Buffer.from(fileSpec.content, "utf8") }]
+					: undefined;
+				await runtime.ingress.receive({
+					channelId,
+					ts: Date.now().toString(),
+					user: "eval",
+					userName: "Evaluator",
+					text: parsed.text,
+					...(attachments ? { attachments } : {}),
+				});
+				await drain();
+				effectiveText = parsed.text;
+			} else {
+				await sendEvent({
+					source: "human",
+					channelId,
+					ts: Date.now().toString(),
+					user: "eval",
+					userName: "Evaluator",
+					text: rawText,
+				});
+				await drain();
+			}
 			if (
-				!step.text.trim().startsWith("/") &&
+				!effectiveText.trim().startsWith("/") &&
 				!localTrace.slice(before).some((event) => event.kind === "model-result")
 			) {
 				currentPhase = "fixture";

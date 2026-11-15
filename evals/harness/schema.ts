@@ -232,8 +232,15 @@ export interface TrialContext {
 	snapshot: OutcomeSnapshot;
 }
 
+export interface InboundStepSpec {
+	msgtype?: "text" | "audio" | "file";
+	recognition?: string;
+	repliedText?: string;
+	file?: { fileName: string; content: string };
+}
+
 export type Step =
-	| { kind: "user"; text: string }
+	| { kind: "user"; text: string; inbound?: InboundStepSpec }
 	| { kind: "newSession" }
 	| { kind: "compact" }
 	| { kind: "checkpoint"; id: string }

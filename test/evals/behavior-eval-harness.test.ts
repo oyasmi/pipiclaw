@@ -513,7 +513,7 @@ describe("behavior eval process and gate semantics", () => {
 	});
 
 	it("requires explicit dispatch evidence only in cases whose contract needs work", async () => {
-		for (const id of ["T-crash-01", "T-chain-recover-01", "TL-ticket-01", "TL-note-01", "TL-budget-01"]) {
+		for (const id of ["TL-note-01", "TL-budget-01"]) {
 			const item = allCases.find((item) => item.id === id)!;
 			const grader = item.graders.find((grader) => grader.graderId.includes("dispatch"))!;
 			if (grader.kind === "model") throw new Error("Expected a code oracle");

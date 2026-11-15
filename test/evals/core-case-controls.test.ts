@@ -145,7 +145,7 @@ describe("renovated core family controls", () => {
 		}
 	});
 
-	it.each(coreRepresentativeIds)(
+	it.each(allCases.map((item) => item.id))(
 		"%s qualifies declared valid, invalid and equivalent completions offline",
 		async (id) => {
 			const result = await checkOracle(allCases.find((item) => item.id === id)!);
@@ -245,13 +245,21 @@ describe("offline contributor CLI", () => {
 		expect(plan).toContain("coverage: 12 cases / 12 families; 36 trials");
 		expect(plan).toContain("未调用模型");
 		expect(selectCases([]).cases).toHaveLength(6);
+		expect(allCases).toHaveLength(42);
+		expect(selectCases(["--all"]).cases).toHaveLength(41);
+		expect(
+			allCases.every((item) => {
+				const meta = metadataForCase(item.id, item.source, item.description);
+				return meta.scope === "journey" && meta.tags.includes("natural") && meta.lifecycle !== "retired";
+			}),
+		).toBe(true);
 		expect(
 			selectCases(["--all"]).cases.every(
 				(item) =>
 					!["retired", "quarantine"].includes(metadataForCase(item.id, item.source, item.description).lifecycle),
 			),
 		).toBe(true);
-		expect(selectCases(["--case", "TL-ticket-01"]).cases).toHaveLength(1);
+		expect(selectCases(["--case", "S-net-02"]).cases).toHaveLength(1);
 		expect(() => selectCases(["--trial", "1"])).toThrow(/Unknown/);
 		for (const value of ["0", "-1", "1.5", "NaN"])
 			expect(() => selectCases(["--trials", value])).toThrow(/positive integer/);
@@ -288,6 +296,32 @@ describe("offline contributor CLI", () => {
 		expect(
 			selectCases(["--case", "U-path-01", "--changed-since", "HEAD"], false, root).cases.map((item) => item.id),
 		).toEqual(["U-path-01"]);
+		rmSync(join(root, "unmapped.txt"));
+
+		// Mutation checked 2026-11-15 (P2-4): restoring blanket src/tools/ common matching expands single-tool edits to all 13 cases; this goes red.
+		const checkSingleChange = (relPath: string, expectedIds: readonly string[]) => {
+			mkdirSync(join(root, relPath, ".."), { recursive: true });
+			writeFileSync(join(root, relPath), "// change\n");
+			try {
+				expect(selectCases(["--changed-since", "HEAD"], false, root).cases.map((item) => item.id)).toEqual(
+					expectedIds,
+				);
+			} finally {
+				rmSync(join(root, relPath), { force: true });
+			}
+		};
+		checkSingleChange("src/events/watcher.ts", ["E-schedule-01"]);
+		checkSingleChange("src/tools/event-manage.ts", ["E-schedule-01"]);
+		checkSingleChange("src/dingtalk/inbound-media.ts", ["I-inbound-context-01"]);
+		checkSingleChange("src/desk/commands.ts", ["U-desk-cwd-01"]);
+		checkSingleChange("src/agent/session/compaction.ts", ["M-compaction-01", "M-compaction-02"]);
+		mkdirSync(join(root, "src/agent/prompt"), { recursive: true });
+		writeFileSync(join(root, "src/agent/prompt/system-prompt.ts"), "// cross-cutting\n");
+		expect(
+			selectCases(["--changed-since", "HEAD"], false, root)
+				.cases.map((item) => item.id)
+				.sort(),
+		).toEqual([...coreRepresentativeIds].sort());
 	});
 
 	it("doctor gives an actionable next step for every failed prerequisite", () => {

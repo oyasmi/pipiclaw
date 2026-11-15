@@ -1,21 +1,12 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MemoryType } from "../../src/memory/store.js";
-import { recallQuiz } from "../harness/graders.js";
+import { localDayKey } from "../../src/shared/local-time.js";
+import { codeGrader, recallQuiz, tracePredicate } from "../harness/graders.js";
 import type { CodeGrader, EvalCase, TrialSetup } from "../harness/schema.js";
 import { seedChannelMemory, warmupTurns } from "./helpers.js";
 
 const definitionFile = "evals/cases/memory-recall-quality.ts";
-
-/**
- * Spec 050 §6 / design.md §7: the one piece of behavioral evidence for the redesign's central
- * claim — "a model reading a compact index finds a stored fact at least as reliably as the old
- * per-turn lexical/rerank recall did, and does not drag in memory it was never asked about."
- * These three cases share one 30-entry seed corpus; run `npm run eval` against master before
- * merging this spec to keep a pre-v2 baseline the report can diff against (there is nothing to
- * diff against for M-write/-recall cases predating this file, since the v1 recall pipeline they
- * exercised no longer exists).
- */
 
 interface SeedFact {
 	name: string;
@@ -27,8 +18,6 @@ interface SeedFact {
 	distractor?: RegExp;
 }
 
-// 30 facts: 20 quizzed with a differently-worded question, 10 pure filler (seeded, never asked
-// about — they exist so the corpus is realistically sized and the index is not trivially small).
 const SEED_FACTS: SeedFact[] = [
 	{
 		name: "expense-signoff",
@@ -190,7 +179,6 @@ const SEED_FACTS: SeedFact[] = [
 		expected: /CHANGELOG-OWNER-FEIFAN/i,
 		distractor: /CHANGELOG-OWNER-JIAMING/i,
 	},
-	// Filler: seeded but never asked about.
 	{ name: "filler-01", type: "reference", description: "内部 wiki 搜索走代号 WIKI-SEARCH-V2 的索引服务。" },
 	{ name: "filler-02", type: "project", description: "季度复盘会固定安排在每季度最后一个周五。" },
 	{ name: "filler-03", type: "reference", description: "客户支持工单系统代号 SUPPORT-DESKX。" },
@@ -205,8 +193,6 @@ const SEED_FACTS: SeedFact[] = [
 
 const QUIZZED_FACTS = SEED_FACTS.filter((fact) => fact.question);
 
-// 10 questions with no relationship to any seeded fact — general knowledge or generic dev
-// questions, the same shape `warmupTurns` uses elsewhere in this suite.
 const OFF_TOPIC_QUESTIONS = [
 	"用一句话解释一下 TCP 三次握手的目的。",
 	"What's a one-line definition of a race condition?",
@@ -236,35 +222,11 @@ function allCodewords(): RegExp {
 
 export const memoryRecallQualityCases: EvalCase[] = [
 	{
-		id: "M-quality-recall-01",
-		suite: "capability",
-		source: "spec 050 §6 / design.md §7 memory-recall-quality set",
-		description:
-			"30 durable channel facts are seeded directly (the same primitive memory_save/the reflect pass write " +
-			"through). 20 differently-worded questions are asked back to back, none reusing the stored fact's own " +
-			"wording. Because the whole corpus fits comfortably under the first-turn index budget, this is " +
-			"primarily a test that the generated index is legible and the model uses it correctly — the harder, " +
-			"over-budget case is M-quality-recall-02.",
-		definitionFile,
-		budget: { maxWallMs: 400_000, maxTurns: 30 },
-		setup: seedCorpus,
-		script: QUIZZED_FACTS.map((fact) => ({ kind: "user" as const, text: fact.question! })),
-		graders: [
-			recallQuiz(
-				"in-budget-recall",
-				QUIZZED_FACTS.map((fact) => ({ expected: fact.expected!, distractor: fact.distractor! })),
-				{ minRecall: 0.85, minPrecision: 0.9 },
-			),
-		],
-	},
-	{
 		id: "M-quality-recall-02",
 		suite: "capability",
 		source: "spec 050 §6 / design.md §7 memory-recall-quality set",
 		description:
-			"The same 30-fact corpus, but the channel is reset to a new session first, so the model must open the " +
-			"index (bundled in <memory_bootstrap>) and, for anything the tiered index omitted, use memory_search — " +
-			"there is no per-turn recall retrying on its own.",
+			"With a 30-fact durable corpus and an initial warm-up turn so the bootstrap index sits behind turn 1, 20 paraphrased recall questions measure both recall and precision.",
 		definitionFile,
 		budget: { maxWallMs: 400_000, maxTurns: 34 },
 		setup: seedCorpus,
@@ -273,6 +235,13 @@ export const memoryRecallQualityCases: EvalCase[] = [
 			...QUIZZED_FACTS.map((fact) => ({ kind: "user" as const, text: fact.question! })),
 		],
 		graders: [
+			tracePredicate(
+				"post-bootstrap-session-ran",
+				(ctx) =>
+					ctx.trace.filter((event) => event.kind === "step" && event.fields?.kind === "user").length >=
+					QUIZZED_FACTS.length + 1,
+				"all greeting + 20 recall question turns must execute",
+			),
 			recallQuiz(
 				"post-bootstrap-recall",
 				QUIZZED_FACTS.map((fact) => ({ expected: fact.expected!, distractor: fact.distractor! })),
@@ -285,40 +254,46 @@ export const memoryRecallQualityCases: EvalCase[] = [
 		suite: "capability",
 		source: "spec 050 §6 / design.md §7 memory-recall-quality set; design.md §8 over-citation risk",
 		description:
-			"With the same 30-fact corpus present, 10 questions genuinely unrelated to any of it are asked. A " +
-			"model that over-uses background memory drags a stored codeword into an answer that has no business " +
-			"citing one; this fails if any of the 30 planted codewords leaks into any of the 10 answers.",
+			"With the 30-fact corpus present, 10 unrelated questions must each receive a substantive answer while citing zero planted memory codewords.",
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 16 },
 		setup: seedCorpus,
 		script: OFF_TOPIC_QUESTIONS.map((text) => ({ kind: "user" as const, text })),
 		graders: [
+			tracePredicate(
+				"all-off-topic-turns-answered",
+				(ctx) => {
+					const userSteps = ctx.trace.filter((event) => event.kind === "step" && event.fields?.kind === "user");
+					if (userSteps.length < OFF_TOPIC_QUESTIONS.length) return false;
+					const tail = userSteps.slice(-OFF_TOPIC_QUESTIONS.length);
+					return tail.every((step, index) => {
+						const startTs = Date.parse(step.ts);
+						const endTs = index + 1 < tail.length ? Date.parse(tail[index + 1]!.ts) : Number.POSITIVE_INFINITY;
+						return ctx.deliveries.some((d) => d.ts >= startTs && d.ts < endTs && Boolean(d.text?.trim()));
+					});
+				},
+				"all 10 off-topic question turns must be answered with non-empty replies",
+			),
 			((): CodeGrader => {
 				const codewordPattern = allCodewords();
-				return {
-					kind: "code",
-					graderId: "no-over-citation",
-					graderVersion: "1",
-					severity: "quality",
-					grade: (ctx) => {
-						const leaked = ctx.deliveries.filter((d) => d.text && codewordPattern.test(d.text));
-						return {
-							schemaVersion: 1,
-							graderId: "no-over-citation",
-							graderVersion: "1",
-							graderKind: "code",
-							status: leaked.length === 0 ? "pass" : "fail",
-							severity: "quality",
-							evidence: [{ kind: "delivery", ref: "deliveries" }],
-							rationale:
-								leaked.length === 0
-									? "none of the 10 off-topic answers cited a planted memory codeword"
-									: `${leaked.length}/10 answers cited an unrelated stored codeword: ${leaked
-											.map((d) => d.text?.slice(0, 80))
-											.join(" | ")}`,
-						};
-					},
-				};
+				return codeGrader("no-over-citation", (ctx) => {
+					const leaked = ctx.deliveries.filter((d) => d.text && codewordPattern.test(d.text));
+					return {
+						schemaVersion: 1,
+						graderId: "no-over-citation",
+						graderVersion: "1",
+						graderKind: "code",
+						status: leaked.length === 0 ? "pass" : "fail",
+						severity: "quality",
+						evidence: [{ kind: "delivery", ref: "deliveries" }],
+						rationale:
+							leaked.length === 0
+								? "none of the 10 off-topic answers cited a planted memory codeword"
+								: `${leaked.length}/10 answers cited an unrelated stored codeword: ${leaked
+										.map((d) => d.text?.slice(0, 80))
+										.join(" | ")}`,
+					};
+				});
 			})(),
 		],
 	},
@@ -327,9 +302,7 @@ export const memoryRecallQualityCases: EvalCase[] = [
 		suite: "capability",
 		source: "spec 050 §6 / design.md §7 memory-recall-quality set; D2's journal/memory split",
 		description:
-			"A conversation that is pure task progress — no fact worth remembering across sessions — followed by " +
-			"one real reflect pass. Asserts the pass added nothing to durable memory (the reflect prompt's D2 " +
-			"three-way split: journal / task / memory, never memory for in-progress state).",
+			"A conversation that is pure task progress followed by one real reflect pass records today's journal while adding nothing to durable memory.",
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 16 },
 		script: [
@@ -340,29 +313,42 @@ export const memoryRecallQualityCases: EvalCase[] = [
 			{ kind: "runMemoryMaintenance" },
 		],
 		graders: [
-			{
-				kind: "code",
-				graderId: "no-progress-promoted-to-memory",
-				graderVersion: "1",
-				severity: "quality",
-				grade: (ctx) => {
-					const memoryDir = join(ctx.deskDir, "memory");
-					const files = existsSync(memoryDir) ? readdirSync(memoryDir).filter((f) => f.endsWith(".md")) : [];
-					return {
-						schemaVersion: 1,
-						graderId: "no-progress-promoted-to-memory",
-						graderVersion: "1",
-						graderKind: "code",
-						status: files.length === 0 ? "pass" : "fail",
-						severity: "quality",
-						evidence: [{ kind: "file", ref: "memory/" }],
-						rationale:
-							files.length === 0
-								? "the reflect pass wrote nothing to memory/ for a pure-progress window"
-								: `expected no durable memory entries, found ${files.length}: ${files.join(", ")}`,
-					};
-				},
-			},
+			codeGrader("reflect-wrote-journal", (ctx) => {
+				const ranReflect = ctx.trace.some(
+					(event) => event.kind === "step" && event.fields?.kind === "runMemoryMaintenance",
+				);
+				const journalPath = join(ctx.deskDir, "journal", `${localDayKey()}.md`);
+				const ok = ranReflect && existsSync(journalPath) && /\S/.test(readFileSync(journalPath, "utf8"));
+				return {
+					schemaVersion: 1,
+					graderId: "reflect-wrote-journal",
+					graderVersion: "1",
+					graderKind: "code",
+					status: ok ? "pass" : "fail",
+					severity: "quality",
+					evidence: [{ kind: "file", ref: `journal/${localDayKey()}.md` }],
+					rationale: ok
+						? "the reflect pass executed and recorded today's working journal"
+						: "expected runMemoryMaintenance step and non-empty today's journal",
+				};
+			}),
+			codeGrader("no-progress-promoted-to-memory", (ctx) => {
+				const memoryDir = join(ctx.deskDir, "memory");
+				const files = existsSync(memoryDir) ? readdirSync(memoryDir).filter((f) => f.endsWith(".md")) : [];
+				return {
+					schemaVersion: 1,
+					graderId: "no-progress-promoted-to-memory",
+					graderVersion: "1",
+					graderKind: "code",
+					status: files.length === 0 ? "pass" : "fail",
+					severity: "quality",
+					evidence: [{ kind: "file", ref: "memory/" }],
+					rationale:
+						files.length === 0
+							? "the reflect pass wrote nothing to memory/ for a pure-progress window"
+							: `expected no durable memory entries, found ${files.length}: ${files.join(", ")}`,
+				};
+			}),
 		],
 	},
 ];
