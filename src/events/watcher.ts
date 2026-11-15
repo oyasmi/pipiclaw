@@ -3,30 +3,21 @@
  * (cron, optional pre-action gate) and enqueues every occurrence through the injected event sink.
  */
 import { Cron } from "croner";
-import {
-	chmodSync,
-	existsSync,
-	type FSWatcher,
-	mkdirSync,
-	readdirSync,
-	statSync,
-	unlinkSync,
-	watch,
-	writeFileSync,
-} from "fs";
+import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSync, watch } from "fs";
 import { readFile } from "fs/promises";
-import { dirname, join, resolve } from "path";
+import { join, resolve } from "path";
 import type { ChannelEventSink, WakeEvent } from "../channel/channel-event.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
-import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
+import type { JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import type { TaskCreateInput } from "../tasks/contract-input.js";
+import { ensureEventHistoryFile, getEventHistoryAppender } from "./history.js";
 import { describeEventPayload, parseScheduledEventContent } from "./parse.js";
 import { EventPreActionError } from "./pre-action-error.js";
 import type {
@@ -87,11 +78,7 @@ export class EventsWatcher {
 	) {
 		this.startTime = Date.now();
 		this.historyAppender = options.historyPath
-			? createJsonlAppender({
-					path: options.historyPath,
-					maxPendingRecords: 4_000,
-					maxPendingBytes: 8 * 1024 * 1024,
-				})
+			? getEventHistoryAppender(options.historyPath, options.historyMaxBytes)
 			: undefined;
 	}
 
@@ -146,15 +133,7 @@ export class EventsWatcher {
 	}
 
 	private ensureHistoryFile(): void {
-		if (!this.options.historyPath) return;
-		try {
-			const historyDir = dirname(this.options.historyPath);
-			mkdirSync(historyDir, { recursive: true, mode: 0o700 });
-			writeFileSync(this.options.historyPath, "", { flag: "a", mode: 0o600 });
-			chmodSync(this.options.historyPath, 0o600);
-		} catch (err) {
-			log.logWarn("events.history.init_failed", "Event history file init failed", { reason: String(err) });
-		}
+		if (this.options.historyPath) ensureEventHistoryFile(this.options.historyPath);
 	}
 
 	private appendHistory(record: HistoryFields & { filename: string }): void {

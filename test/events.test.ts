@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WakeEvent } from "../src/channel/channel-event.js";
+import { handleEventsCommand } from "../src/events/commands.js";
 import type { EventAction, EventsWatcherOptions } from "../src/events/types.js";
 import { EventsWatcher } from "../src/events/watcher.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
@@ -199,7 +200,7 @@ describe("EventsWatcher", () => {
 		).toThrow("Unknown event type");
 	});
 
-	it("initializes an empty event history file on start", () => {
+	it("initializes an empty event history file on start and rotates bounded shards across desks", async () => {
 		const dir = createTempDir();
 		const historyPath = join(createTempDir(), "state", "events", "history.jsonl");
 		const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, historyPath);
@@ -209,6 +210,44 @@ describe("EventsWatcher", () => {
 
 		expect(existsSync(historyPath)).toBe(true);
 		expect(readFileSync(historyPath, "utf-8")).toBe("");
+
+		// Regression (P2-3d): size-based rotation shares one appender across desks and `/events history`
+		// reads across `.1` + active shard so recent records do not disappear right after rotation.
+		const rotatedPath = join(createTempDir(), "state", "events", "rotated.jsonl");
+		const deskA = new EventsWatcher(createTempDir(), new FakeBot(true), createMockExecutor(), undefined, {
+			desk: "news",
+			isBound: () => true,
+			isReachable: () => true,
+			historyPath: rotatedPath,
+			historyMaxBytes: 850,
+		});
+		const deskB = new EventsWatcher(createTempDir(), new FakeBot(true), createMockExecutor(), undefined, {
+			desk: "ops",
+			isBound: () => true,
+			isReachable: () => true,
+			historyPath: rotatedPath,
+			historyMaxBytes: 850,
+		});
+		for (let i = 1; i <= 4; i++) {
+			await getEventsWatcherPrivateApi(i % 2 === 1 ? deskA : deskB).execute(
+				`job-${i}.json`,
+				{ type: "periodic", channelId: "dingtalk:dm:1", text: `check-${i}`, schedule: "0 * * * *" },
+				false,
+			);
+		}
+		await deskA.flush();
+		await deskB.flush();
+		expect(existsSync(`${rotatedPath}.1`)).toBe(true);
+		expect(existsSync(`${rotatedPath}.3`)).toBe(false);
+		const report = await handleEventsCommand({
+			args: "history",
+			desk: "news",
+			deskDir: dir,
+			historyPath: rotatedPath,
+			describeChannel: (id) => ({ label: id, boundHere: true }),
+		});
+		expect(report).toContain("job-1");
+		expect(report).toContain("job-3");
 	});
 
 	it("refuses to schedule a hand-written immediate event (spec 031, D4)", async () => {

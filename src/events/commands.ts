@@ -11,6 +11,7 @@ import { capReply } from "../commands/reply-limits.js";
 import type { SecurityConfig } from "../security/types.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
 import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
+import { readEventHistoryLines } from "./history.js";
 import { describeEventPayload, parseScheduledEventContent } from "./parse.js";
 import type { EventHistoryRecord, ScheduledEvent } from "./types.js";
 import { EventDefinitionError, type EventProblemKind, validateScheduledEvent } from "./validation.js";
@@ -276,13 +277,10 @@ async function showHistory(options: HandleEventsCommandOptions, name?: string): 
 	const empty = eventName
 		? `暂无事件 \`${eventName}\` 的触发记录。\n事件触发后会记录在这里。`
 		: "暂无事件触发记录。\n事件触发后会记录在这里。";
-	if (!existsSync(historyPath)) return empty;
+	const lines = await readEventHistoryLines(historyPath);
+	if (lines.length === 0) return empty;
 
-	const raw = await readFile(historyPath, "utf-8");
-	const records = raw
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean)
+	const records = lines
 		.map(parseHistoryLine)
 		.filter((record): record is EventHistoryRecord => !!record)
 		.filter((record) => belongsToDesk(record, options))

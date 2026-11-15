@@ -26,6 +26,8 @@ export interface DurableDispatchRecord {
 	/** Set by `markRetryable` to back off a repeatedly-failing structured wake instead of
 	 * redelivering on the very next drain tick (spec 031's redelivery has no such gate). */
 	nextAttemptAt?: string;
+	/** Set when the record hits `MAX_DELIVERIES`; starts the dead-letter retention window. */
+	exhaustedAt?: string;
 }
 
 export interface DurableDispatchOptions {
@@ -39,15 +41,18 @@ export interface DurableDispatchOptions {
 	isReachable?: (channelId: string) => boolean;
 	leaseMs?: number;
 	intervalMs?: number;
+	/** Retention window for `exhausted` dead-letter records before `drainOnce` unlinks them (default 7 days). */
+	exhaustedRetentionMs?: number;
 	/** Called once, at most, when a dispatch id hits `MAX_DELIVERIES` without ever completing —
 	 * e.g. a structured wake whose claim/finish step fails deterministically (disk full,
-	 * permissions). The record is left on disk (not deleted) so the failure is inspectable; the
-	 * caller is expected to notify the channel. */
+	 * permissions). The record is kept on disk for the retention window so the failure is inspectable;
+	 * the caller is expected to notify the channel. */
 	onExhausted?: (record: DurableDispatchRecord) => void | Promise<void>;
 }
 
 const DEFAULT_LEASE_MS = 15 * 60_000;
 const DEFAULT_INTERVAL_MS = 30_000;
+const DEFAULT_EXHAUSTED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 /** Total delivery attempts (crash-lease redelivery and `markRetryable` failures combined) before
  * a dispatch id is given up on as a poison pill rather than retried forever. */
 const MAX_DELIVERIES = 8;
@@ -184,7 +189,8 @@ function parseRecord(raw: string, id: string): DurableDispatchRecord {
 		!Number.isSafeInteger(value.deliveries) ||
 		(value.deliveries as number) < 0 ||
 		(value.nextAttemptAt !== undefined && !date(value.nextAttemptAt)) ||
-		(value.leaseExpiresAt !== undefined && !date(value.leaseExpiresAt))
+		(value.leaseExpiresAt !== undefined && !date(value.leaseExpiresAt)) ||
+		(value.exhaustedAt !== undefined && !date(value.exhaustedAt))
 	) {
 		throw new CorruptDispatchError("Invalid dispatch structure; have the deployer inspect the record.");
 	}
@@ -217,6 +223,7 @@ export class DurableDispatchService {
 		await Promise.allSettled([...this.pendingWrites]);
 	}
 	private readonly leaseMs: number;
+	private readonly exhaustedRetentionMs: number;
 	private timer: ReturnType<typeof setInterval> | null = null;
 	/**
 	 * Dispatch ids whose turn this process is still running (spec 031, D2).
@@ -238,6 +245,7 @@ export class DurableDispatchService {
 	private readonly discardEpoch = new Map<string, number>();
 	constructor(private readonly options: DurableDispatchOptions) {
 		this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
+		this.exhaustedRetentionMs = options.exhaustedRetentionMs ?? DEFAULT_EXHAUSTED_RETENTION_MS;
 	}
 
 	start(): void {
@@ -559,10 +567,25 @@ export class DurableDispatchService {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 			throw error;
 		}
+		const candidates: Array<{ id: string; createdAtMs: number; filename: string }> = [];
 		for (const filename of filenames) {
 			if (this.stopped) break;
 			const id = this.idFromFilename(filename);
 			if (id === undefined) continue;
+			try {
+				const record = await this.read(id);
+				if (record) {
+					candidates.push({ id, createdAtMs: Date.parse(record.createdAt), filename });
+				} else {
+					this.untrack(id);
+				}
+			} catch (error) {
+				this.reportRecordFault(id, error);
+			}
+		}
+		candidates.sort((a, b) => a.createdAtMs - b.createdAtMs || a.filename.localeCompare(b.filename));
+		for (const { id } of candidates) {
+			if (this.stopped) break;
 			try {
 				await this.drainRecord(id, now);
 			} catch (error) {
@@ -582,10 +605,19 @@ export class DurableDispatchService {
 				return;
 			}
 			if (record.status === "pending") this.trackRejected(record.event.channelId, id);
-			// A poison pill: give up on redelivery for good, once. Left on disk (not deleted) so
-			// `onExhausted`'s notice stays inspectable and the record is available for manual retry.
+			// A poison pill: give up on redelivery for good, once. Kept on disk during the retention
+			// window so `onExhausted`'s notice stays inspectable, then unlinked so dead-letter files
+			// do not accumulate across every future drain tick.
 			if (record.status === "exhausted") {
 				this.untrack(id);
+				const exhaustedSinceMs = Date.parse(record.exhaustedAt ?? record.createdAt);
+				if (now - exhaustedSinceMs >= this.exhaustedRetentionMs) {
+					try {
+						await unlink(recordPath(this.options.stateDir, id));
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+					}
+				}
 				return;
 			}
 			// The turn is still running in this process: renew its lease rather than treating a
@@ -610,6 +642,7 @@ export class DurableDispatchService {
 			if (this.options.isReachable && !this.options.isReachable(record.event.channelId)) return;
 			if (record.deliveries >= MAX_DELIVERIES) {
 				record.status = "exhausted";
+				record.exhaustedAt = new Date(now).toISOString();
 				this.untrack(id);
 				record.leaseExpiresAt = undefined;
 				record.nextAttemptAt = undefined;

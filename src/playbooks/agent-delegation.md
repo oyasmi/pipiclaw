@@ -1,6 +1,7 @@
 ---
 name: agent-delegation
 description: 判断是否值得委派内部子代理（subagent）或外部 AI Agent，按能力与成本选执行器、交代上下文、并行隔离、等待与续接时。
+requires-tools: subagent
 order: 60
 ---
 

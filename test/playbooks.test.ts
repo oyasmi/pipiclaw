@@ -42,8 +42,12 @@ describe("runtime playbook catalog", () => {
 		).map((item) => item.filename);
 		expect(withoutTasks).toContain("runtime-orientation.md");
 		expect(withoutTasks.filter((name) => name.startsWith("task-"))).toEqual([]);
+		expect(withoutTasks).not.toContain("agent-delegation.md");
 
 		expect(selectRuntimePlaybooks(catalog, ALL_TOOLS)).toHaveLength(catalog.length);
+		expect(selectRuntimePlaybooks(catalog, ["subagent"]).map((item) => item.filename)).toContain(
+			"agent-delegation.md",
+		);
 		// Chat and task steps expose different halves of this any-of gate.
 		for (const taskTool of ["task_create", "task_report"]) {
 			expect(selectRuntimePlaybooks(catalog, [taskTool]).map((item) => item.name)).toContain("task-lead");

@@ -221,11 +221,11 @@ flowchart TB
    - [jobs/manager.ts](../../src/jobs/manager.ts)（975 行）：将纯 `Executor` 杀进程脚本引擎（`killCommand` + `runKill`，约 85 行）与产物读取/GC 辅助函数（`collectGarbage` + `readOutput`，约 110 行）拆至同目录独立文件，即可自然降至 ~770 行；
    - [subagents/discovery.ts](../../src/subagents/discovery.ts)（1031 行）：将 Frontmatter YAML 子集解析器与角色校验/列表渲染分离；
    - [subagents/runs.ts](../../src/subagents/runs.ts)（1025 行）：将重启对账恢复与聊天通知格式化拆出，即可让全仓实现 **100% 零例外通过 800 行门禁**。
-3. **随手可修的细节瑕疵**：
-   - [catalog.ts](../../src/commands/catalog.ts#L188) 与 [catalog.ts](../../src/commands/catalog.ts#L213) 重复定义了两次 `/tasks archive`；
-   - [presentation.ts](../../src/tools/contract/presentation.ts#L79) 中 `memory_forget` 读取了不存在的 `args.target`（实际 schema 字段为 `args.name`），导致界面永远显示 `记忆删除 "?"`；
-   - [agent-delegation.md](../../src/playbooks/agent-delegation.md#L1-L5) 漏加 `requires-tools: subagent`，导致禁用委派的 `request` 模式仍向模型暴露该手册；
-   - [durable-dispatch.ts](../../src/runtime/durable-dispatch.ts#L557) 按文件名编码字典序而非 `createdAt` 排空积压唤醒，且 `exhausted` 死信文件与 [watcher.ts](../../src/events/watcher.ts#L87-L93) 的 `events-history.jsonl` 均无容量轮转与过期清理。
+3. **✅ 已修复 — 随手可修的细节瑕疵**：
+   - ✅ [catalog.ts](../../src/commands/catalog.ts) 中重复的 `/tasks archive` 已合并去重；
+   - ✅ [presentation.ts](../../src/tools/contract/presentation.ts#L78) 中 `memory_forget` 已改为读取真实 schema 字段 `args.name`；
+   - ✅ [agent-delegation.md](../../src/playbooks/agent-delegation.md#L1-L6) 已补齐 `requires-tools: subagent`，禁用委派的 `request` 模式不再暴露该手册；
+   - ✅ [durable-dispatch.ts](../../src/runtime/durable-dispatch.ts#L562-L615) 的 `drainOnce` 已改为按 `createdAt` 升序排空并支持 `exhausted` 死信记录到期自动清理；[history.ts](../../src/events/history.ts) 与 [commands.ts](../../src/events/commands.ts#L280-L290) 已为 `events-history.jsonl` 接入跨工位共享的容量轮转（2 MiB × 2 份归档）与跨分片历史读取。
 4. **`evals/` 行为评测集诊断**：
    - **区分度饱和（天花板效应）**：当前基线在 12 个 `core` 门禁上已达 **36/36（100%）**，评测器自身已告警 `discrimination low`；
    - **Oracle Control 覆盖率偏低**：64 个用例中仅 18 个配有可执行正/负/等价控制，其余 39 个扩展回归用例处于 `uncovered`（`INCONCLUSIVE`）状态；

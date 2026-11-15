@@ -118,6 +118,7 @@ export interface EventsWatcherOptions {
 	 */
 	isReachable: (channelId: string) => boolean;
 	historyPath?: string;
+	historyMaxBytes?: number;
 	/**
 	 * Creates the task instance a template event asks for. Injected by the runtime so the events
 	 * subsystem never reads or writes task files (spec 052, INV-8).

@@ -11,9 +11,8 @@ import { isRecord } from "../../shared/type-guards.js";
  * One function per tool name, keyed in a table rather than spread across each tool's own file:
  * `session-events.ts` has only `toolName` + raw `args`, never the tool instance, so there is no
  * natural per-file seam to hang this on without importing all sixteen modules into the session
- * event handler. `test/tool-presentation.test.ts` is what actually prevents drift — it asserts
- * every registered tool name has a describer and that each survives empty/missing args, since the
- * model's args are not guaranteed well-formed at the moment a call starts.
+ * event handler. Each entry survives empty/missing args, since the model's args are not guaranteed
+ * well-formed at the moment a call starts.
  */
 
 function str(args: unknown, key: string): string | undefined {
@@ -76,7 +75,7 @@ const DESCRIBERS: Record<string, Describer> = {
 	session_search: (args) => `检索历史 "${clipText(str(args, "query") ?? "?", 40, { collapseWhitespace: true })}"`,
 	memory_save: (args) => `记忆保存${str(args, "content") ? `：${firstLine(str(args, "content") ?? "", 30)}` : ""}`,
 	memory_search: (args) => `记忆检索 "${clipText(str(args, "query") ?? "?", 40, { collapseWhitespace: true })}"`,
-	memory_forget: (args) => `记忆删除 "${clipText(str(args, "target") ?? "?", 40, { collapseWhitespace: true })}"`,
+	memory_forget: (args) => `记忆删除 "${clipText(str(args, "name") ?? "?", 40, { collapseWhitespace: true })}"`,
 	skill: (args) => {
 		const action = str(args, "action") ?? "?";
 		const name = str(args, "name");

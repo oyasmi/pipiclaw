@@ -367,8 +367,10 @@ describe("DurableDispatchService", () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const delivered: WakeEvent[] = [];
 		const exhausted: DurableDispatchRecord[] = [];
+		const retentionMs = 60 * 60_000;
 		const service = new DurableDispatchService({
 			stateDir,
+			exhaustedRetentionMs: retentionMs,
 			bot: {
 				enqueueEvent(next) {
 					delivered.push(next);
@@ -401,12 +403,42 @@ describe("DurableDispatchService", () => {
 		const stored = JSON.parse(readFileSync(join(stateDir, `${id}.json`), "utf-8"));
 		expect(stored.status).toBe("exhausted");
 
-		// The poison-pilled record is neither redelivered nor re-notified.
+		// The poison-pilled record is neither redelivered nor re-notified while within retention.
 		now = new Date(now.getTime() + 20 * 60_000);
 		vi.setSystemTime(now);
 		await service.drainOnce(Date.now());
 		expect(delivered).toHaveLength(deliveredCount);
 		expect(exhausted).toHaveLength(1);
+		expect(existsSync(join(stateDir, `${id}.json`))).toBe(true);
+
+		// Once the dead-letter retention window elapses, drainOnce unlinks it so dead letters do not accumulate forever.
+		now = new Date(now.getTime() + retentionMs);
+		vi.setSystemTime(now);
+		await service.drainOnce(Date.now());
+		expect(existsSync(join(stateDir, `${id}.json`))).toBe(false);
+
+		// Regression (P2-3d): drainOnce drains backlog by createdAt FIFO, not encoded filename lexicographical order
+		// (`event:...` sorts alphabetically before `subagent:...`, which previously starved older subagent wakes).
+		let slots = 0;
+		const ordered: string[] = [];
+		const fifoService = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					if (slots <= 0) return false;
+					slots--;
+					ordered.push(next.dispatchId!);
+					return true;
+				},
+			},
+		});
+		await fifoService.dispatch({ ...event(), dispatchId: "subagent:news:older:done" });
+		now = new Date(now.getTime() + 5_000);
+		vi.setSystemTime(now);
+		await fifoService.dispatch({ ...event(), dispatchId: "event:news:newer:1" });
+		slots = 1;
+		await fifoService.drainOnce(Date.now());
+		expect(ordered).toEqual(["subagent:news:older:done"]);
 	});
 
 	it("keeps a dispatch id containing a channel-id slash on one flat file, so a fresh instance can still find it (R1)", async () => {
