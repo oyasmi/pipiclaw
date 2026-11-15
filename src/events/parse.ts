@@ -58,8 +58,15 @@ function parsePreAction(data: Record<string, unknown>, filename: string): EventA
 	if (typeof action.command !== "string" || action.command.trim().length === 0) {
 		throw new EventDefinitionError("pre-action", `Missing or empty 'preAction.command' in ${filename}`);
 	}
-	if (action.timeout !== undefined) {
-		if (typeof action.timeout !== "number" || !Number.isFinite(action.timeout) || action.timeout <= 0) {
+	if (action.timeout !== undefined && action.timeoutMs !== undefined && action.timeout !== action.timeoutMs) {
+		throw new EventDefinitionError(
+			"pre-action",
+			`Conflicting 'preAction.timeout' and 'preAction.timeoutMs' in ${filename}; specify timeoutMs only`,
+		);
+	}
+	const rawTimeout = action.timeout ?? action.timeoutMs;
+	if (rawTimeout !== undefined) {
+		if (typeof rawTimeout !== "number" || !Number.isFinite(rawTimeout) || rawTimeout <= 0) {
 			throw new EventDefinitionError(
 				"pre-action",
 				`Invalid 'preAction.timeout' in ${filename}, expected a positive millisecond value`,
@@ -70,7 +77,7 @@ function parsePreAction(data: Record<string, unknown>, filename: string): EventA
 	return {
 		type: "bash",
 		command: action.command,
-		...(typeof action.timeout === "number" ? { timeout: action.timeout } : {}),
+		...(typeof rawTimeout === "number" ? { timeout: rawTimeout } : {}),
 	};
 }
 

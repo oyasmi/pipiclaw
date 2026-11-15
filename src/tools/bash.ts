@@ -299,6 +299,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				const jobLabel = clipText(effectiveCommand, 60, { collapseWhitespace: true });
 				const job = await options.jobManager.start(effectiveCommand, jobLabel, effectiveTimeout, {
 					channelId: options.channelId,
+					...(options.securityContext?.cwd ? { cwd: options.securityContext.cwd } : {}),
 					signal,
 					notify: willNotify,
 					...(effectiveTaskId ? { taskId: effectiveTaskId } : {}),
@@ -400,6 +401,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			}
 			try {
 				const result = await executor.exec(effectiveCommand, {
+					...(options.securityContext?.cwd ? { cwd: options.securityContext.cwd } : {}),
 					timeout: effectiveTimeout,
 					signal,
 					spillTo: spillPath,

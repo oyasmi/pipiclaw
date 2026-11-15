@@ -276,7 +276,9 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			createEventManageTool({
 				deskDir: ctx.deskDir,
 				channelId: ctx.channelId,
-				commandGuardConfig: ctx.securityConfig.commandGuard,
+				commandGuardConfig: ctx.securityConfig.enabled
+					? ctx.securityConfig.commandGuard
+					: { ...ctx.securityConfig.commandGuard, enabled: false },
 			}),
 	},
 	// Spec 064, D21: two surfaces. Chat creates, lists, messages, pauses, resumes, closes and reads

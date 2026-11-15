@@ -155,12 +155,30 @@ describe("thinkingLevel resolution matrix", () => {
 		expect(externalWork.config?.modelRef).toBeUndefined();
 		expect(externalWork.config?.thinkingLevel).toBeUndefined();
 
-		// External verify: defaults to medium.
+		// External verify: defaults to medium for harnesses with a dedicated effort flag, but stays
+		// undefined on cursor-cli / exec unless explicitly configured in the role file.
 		const externalVerify = resolveConfiguredRole([model], model, [externalWorkRole], {
 			agent: "external-worker",
 			purpose: "verify",
 		});
 		expect(externalVerify.config?.thinkingLevel).toBe("medium");
+
+		const cursorRole: SubAgentConfig = { ...externalWorkRole, name: "cursor-rev", harness: "cursor-cli" };
+		expect(
+			resolveConfiguredRole([model], model, [cursorRole], { agent: "cursor-rev", purpose: "verify" }).config
+				?.thinkingLevel,
+		).toBeUndefined();
+		expect(
+			resolveConfiguredRole([model], model, [{ ...cursorRole, thinkingLevel: "high" }], {
+				agent: "cursor-rev",
+				purpose: "verify",
+			}).config?.thinkingLevel,
+		).toBe("high");
+		const execRole: SubAgentConfig = { ...externalWorkRole, name: "exec-rev", harness: "exec" };
+		expect(
+			resolveConfiguredRole([model], model, [execRole], { agent: "exec-rev", purpose: "verify" }).config
+				?.thinkingLevel,
+		).toBeUndefined();
 	});
 
 	it("inline delegations default to medium and let an explicit thinkingLevel win", () => {

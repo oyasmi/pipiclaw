@@ -111,6 +111,7 @@ export interface SubAgentToolOptions {
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
+	appHomeDir?: string;
 	deskDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	/** `settings.subagentModel` (spec 032 D5); null/undefined means unset. */

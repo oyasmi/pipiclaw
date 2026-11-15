@@ -37,8 +37,14 @@ function toCursorEffort(level: string): string {
 	return THINKING_LEVEL_TO_CURSOR_EFFORT[level] ?? level;
 }
 
-/** A single trailing `[...]` list. Anything else that contains `[` is left untouched. */
+/** A single trailing `[...]` list. `auto` and anything else that contains `[` is left untouched. */
 function decorateCursorModel(model: string, effort: string): { model: string; warning?: string } {
+	if (model.trim() === "auto") {
+		return {
+			model,
+			warning: 'Left model id "auto" unchanged: the auto router does not accept [effort=...] overrides.',
+		};
+	}
 	if (!model.includes("[")) return { model: `${model}[effort=${effort}]` };
 	const match = /^([^[\]]*)\[([^[\]]*)\]$/.exec(model);
 	if (!match) {

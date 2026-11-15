@@ -4,6 +4,7 @@ import type { ChannelDescription } from "../channel/channel-id.js";
 import { type DeskCommandPort, handleDeskCommand } from "../desk/commands.js";
 import type { DeskConversation } from "../desk/types.js";
 import { handleEventsCommand } from "../events/commands.js";
+import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { handleSkillsCommand } from "../skills/commands.js";
 import { handleSubagentsCommand } from "../subagents/commands.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
@@ -70,14 +71,17 @@ export async function runReportCommand(
 	const { conversation, paths } = context;
 	const { channelId, desk, deskDir } = conversation;
 	switch (name) {
-		case "events":
+		case "events": {
+			const security = loadSecurityConfigWithDiagnostics(paths.appHomeDir).config;
 			return handleEventsCommand({
 				args,
 				desk,
 				deskDir,
 				historyPath: paths.eventHistoryPath,
+				commandGuardConfig: security.enabled ? security.commandGuard : undefined,
 				describeChannel: context.describeChannel,
 			});
+		}
 		case "tasks":
 			return handleTasksCommand({
 				args,

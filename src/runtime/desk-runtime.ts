@@ -72,7 +72,7 @@ export interface DeskRuntimeOptions {
 	/** Repair interrupted turns in a desk's bound conversations; runs inside activation (D6 step 1). */
 	recover: (conversations: DeskConversation[]) => Promise<void>;
 	/** Build a desk's events watcher. It is started with the services and stopped at dormancy. */
-	createWatcher: (target: { desk: string; deskDir: string }) => DeskWatcher;
+	createWatcher: (target: { desk: string; deskDir: string; cwd: string }) => DeskWatcher;
 	/** The transport's plain send, for background notices that pass the binding guard. */
 	send: (channelId: string, text: string) => Promise<boolean>;
 	/** Whether the channel has a turn in flight; `/desk bind` refuses then (D5 step 1). */
@@ -240,7 +240,9 @@ export class DeskRuntime {
 
 	private startWatcher(desk: string): void {
 		if (this.watchers.has(desk)) return;
-		const watcher = this.options.createWatcher({ desk, deskDir: getDeskDir(this.options.workspaceDir, desk) });
+		const deskDir = getDeskDir(this.options.workspaceDir, desk);
+		const cwd = this.records.get(desk)?.record?.cwd ?? deskDir;
+		const watcher = this.options.createWatcher({ desk, deskDir, cwd });
 		this.watchers.set(desk, watcher);
 		watcher.start();
 	}

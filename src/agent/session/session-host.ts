@@ -384,7 +384,7 @@ export class SessionHost {
 		this.currentSkills = loadPipiclawSkills({
 			workspaceDir: this.workspaceDir,
 			securityConfig: this.loadSecurityConfig().config,
-			securityContext: { agentWorkspaceDir: this.workspaceDir, cwd: this.cwd },
+			securityContext: { agentWorkspaceDir: this.workspaceDir, cwd: this.cwd, appHomeDir: this.appHomeDir },
 		});
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 		if (this.retired) return;
@@ -683,6 +683,7 @@ export class SessionHost {
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
+			appHomeDir: this.appHomeDir,
 			cwd: this.cwd,
 			desk: this.conversation.desk,
 			deskDir: this.deskDir,

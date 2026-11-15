@@ -8,6 +8,7 @@ import { join } from "path";
 import type { ChannelDescription } from "../channel/channel-id.js";
 import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
+import type { SecurityConfig } from "../security/types.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
 import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
 import { describeEventPayload, parseScheduledEventContent } from "./parse.js";
@@ -24,6 +25,7 @@ export interface HandleEventsCommandOptions {
 	desk: string;
 	deskDir: string;
 	historyPath: string;
+	commandGuardConfig?: SecurityConfig["commandGuard"];
 	/** Names a delivery channel and says whether it is still bound to this desk. */
 	describeChannel: (channelId: string) => ChannelDescription;
 }
@@ -151,8 +153,16 @@ async function listEvents(options: HandleEventsCommandOptions): Promise<string> 
 			const event = parseScheduledEventContent(await readFile(eventPath, "utf-8"), filename);
 			// The same definition rules the watcher applies, so "listed as fine" means "will run".
 			// The lead-time rule is creation-only (an overdue one-shot is a legitimate recovery).
-			validateScheduledEvent(event, { enforceOneShotLead: false });
-			blocks.push(formatEventSummary(name, event, options.describeChannel));
+			validateScheduledEvent(event, {
+				enforceOneShotLead: false,
+				commandGuardConfig: options.commandGuardConfig,
+			});
+			const summary = formatEventSummary(name, event, options.describeChannel);
+			blocks.push(
+				existsSync(`${eventPath}.error.txt`)
+					? `${summary}\n- ⚠️ 最近加载或触发失败，用 \`/events history ${name}\` 查看`
+					: summary,
+			);
 		} catch (error) {
 			blocks.push(`**${name}**\n- ⚠️ 无效：${describeEventProblem(error, name)}`);
 		}
@@ -206,6 +216,7 @@ async function deleteEvent(options: HandleEventsCommandOptions, name: string): P
 	}
 
 	await unlink(eventPath);
+	await unlink(`${eventPath}.error.txt`).catch(() => undefined);
 	return summary ? `已删除事件：\n\n${summary}` : `已删除事件 \`${eventName}\`。`;
 }
 

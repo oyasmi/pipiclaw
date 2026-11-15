@@ -105,6 +105,8 @@ export type SpawnTaskResult =
 export interface EventsWatcherOptions {
 	/** The desk this watcher serves; stamped on every dispatch, history record and spawn request. */
 	desk: string;
+	/** Working directory for `preAction` commands (`desk.json` `cwd` when set, else `deskDir`). */
+	cwd?: string;
 	/**
 	 * Whether a delivery channel is still bound to this desk (spec 058, D7's producer-side check).
 	 * An occurrence whose channel is not bound is skipped, never redirected.

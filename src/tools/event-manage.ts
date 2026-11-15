@@ -62,6 +62,9 @@ const eventDefinitionSchema = Type.Object(
 						description: "Command run just before delivery; exit 0 = fire, non-zero = skip.",
 					}),
 					timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout in milliseconds (not s)." })),
+					timeout: Type.Optional(
+						Type.Integer({ minimum: 1, description: "Alias for timeoutMs (milliseconds), accepted on update." }),
+					),
 				},
 				{ description: "Optional gate/sensor command." },
 			),
@@ -99,7 +102,7 @@ export type EventDefinitionInput = {
 	task?: TaskCreateInput;
 	at?: string;
 	schedule?: string;
-	preAction?: { type: "bash"; command: string; timeoutMs?: number };
+	preAction?: { type: "bash"; command: string; timeoutMs?: number; timeout?: number };
 };
 
 export interface EventManageListEntry {
@@ -201,6 +204,17 @@ function validateDefinition(
 		throw new RecoverableToolError('A periodic event needs "schedule" (a 5-field cron expression).');
 	}
 
+	if (
+		definition.preAction?.timeoutMs !== undefined &&
+		definition.preAction.timeout !== undefined &&
+		definition.preAction.timeoutMs !== definition.preAction.timeout
+	) {
+		throw new RecoverableToolError(
+			"Conflicting preAction.timeoutMs and preAction.timeout; pass only preAction.timeoutMs (in milliseconds).",
+		);
+	}
+	const preActionTimeoutMs = definition.preAction?.timeoutMs ?? definition.preAction?.timeout;
+
 	// Assemble the on-disk shape. `channelId` is bound here, never taken from the model; the
 	// preAction timeout field is `timeout` (ms) on disk but `timeoutMs` in the schema so the unit
 	// is unambiguous (fix plan §3.6).
@@ -217,7 +231,7 @@ function validateDefinition(
 					preAction: {
 						type: "bash",
 						command: definition.preAction.command,
-						...(definition.preAction.timeoutMs !== undefined ? { timeout: definition.preAction.timeoutMs } : {}),
+						...(preActionTimeoutMs !== undefined ? { timeout: preActionTimeoutMs } : {}),
 					},
 				}
 			: {}),
@@ -290,17 +304,29 @@ export async function manageEvent(
 			throw new RecoverableToolError(`Event "${eventName}" does not exist. Use action "list" to see what's here.`);
 		}
 		const existing = await readEvent(eventPath, eventName);
+		const shown =
+			existing.preAction?.timeout !== undefined
+				? {
+						...existing,
+						preAction: {
+							type: existing.preAction.type,
+							command: existing.preAction.command,
+							timeoutMs: existing.preAction.timeout,
+						},
+					}
+				: existing;
 		return {
 			action: "show",
 			name: eventName,
 			path: eventPath,
 			eventType: existing.type,
 			channelId: existing.channelId,
-			notice: JSON.stringify(existing, null, 2),
+			notice: JSON.stringify(shown, null, 2),
 		};
 	}
 
 	if (request.action === "delete") {
+		await unlink(`${eventPath}.error.txt`).catch(() => undefined);
 		if (!existsSync(eventPath)) {
 			return {
 				action: "delete",

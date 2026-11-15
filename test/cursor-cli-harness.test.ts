@@ -118,11 +118,15 @@ describe("cursor-cli harness: buildInvocation", () => {
 		expect(result.args.some((token) => token.includes("effort="))).toBe(false);
 	});
 
-	it("maps off to low and does not clamp max", () => {
+	it("maps off to low, does not clamp max, and leaves auto undecorated", () => {
 		const off = cursorCliHarness.buildInvocation({ ...baseInvocation, model: "gpt-5", thinkingLevel: "off" });
 		expect(off.args).toContain("gpt-5[effort=low]");
 		const max = cursorCliHarness.buildInvocation({ ...baseInvocation, model: "gpt-5", thinkingLevel: "max" });
 		expect(max.args).toContain("gpt-5[effort=max]");
+		const auto = cursorCliHarness.buildInvocation({ ...baseInvocation, model: "auto", thinkingLevel: "medium" });
+		expect(auto.args).toContain("auto");
+		expect(auto.args.some((token) => token.includes("effort="))).toBe(false);
+		expect(auto.warnings?.join("\n")).toMatch(/auto router does not accept/);
 	});
 
 	it("does not invent a model when thinkingLevel is set and no model is configured", () => {

@@ -26,6 +26,7 @@ export interface CreatePipiclawToolsOptions {
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
+	appHomeDir?: string;
 	/** Base for relative paths in the generic file tools, the shell's cwd and the default delegation `workingDirectory`. */
 	cwd: string;
 	desk: string;
@@ -60,6 +61,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	const securityContext = {
 		agentWorkspaceDir: options.workspaceDir,
 		cwd: options.cwd,
+		...(options.appHomeDir ? { appHomeDir: options.appHomeDir } : {}),
 	};
 	// The leaf tools (files, web, memory, skills) come from the single declarative
 	// registry so this set, the sub-agent set, and the prompt hints share one source.
@@ -98,6 +100,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		getAvailableModels: options.getAvailableModels,
 		resolveApiKey: options.resolveApiKey,
 		workspaceDir: options.workspaceDir,
+		appHomeDir: options.appHomeDir,
 		// A delegation runs in the parent's cwd unless the model passes an explicit workingDirectory.
 		workingDirectory: options.cwd,
 		deskDir: options.deskDir,

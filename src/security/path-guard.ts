@@ -29,9 +29,39 @@ const HOME_SENSITIVE_PREFIXES = [
 	"~/Library/Application Support/Firefox/",
 	"~/.config/google-chrome/",
 	"~/.mozilla/firefox/",
+	"~/.pipiclaw/state/",
 ];
 
-const HOME_SENSITIVE_FILES = ["~/.netrc", "~/.npmrc", "~/.pypirc", "~/.bash_history", "~/.zsh_history"];
+const HOME_SENSITIVE_FILES = [
+	"~/.netrc",
+	"~/.npmrc",
+	"~/.pypirc",
+	"~/.bash_history",
+	"~/.zsh_history",
+	"~/.pipiclaw/auth.json",
+	"~/.pipiclaw/channel.json",
+	"~/.pipiclaw/security.json",
+	"~/.pipiclaw/models.json",
+	"~/.pipiclaw/tools.json",
+	"~/.pipiclaw/settings.json",
+	"~/.claude/.credentials.json",
+	"~/.codex/auth.json",
+];
+
+/**
+ * Pipiclaw's own control-plane files and daemon state inside `appHomeDir` (spec 044 / P0 self-protection).
+ * Listed explicitly rather than blocking the whole `appHomeDir` prefix because `workspace/` (and in custom
+ * deployments, desk working directories) legitimately live under `appHomeDir`.
+ */
+const APP_HOME_SENSITIVE_FILES = [
+	"auth.json",
+	"channel.json",
+	"security.json",
+	"models.json",
+	"tools.json",
+	"settings.json",
+];
+const APP_HOME_SENSITIVE_PREFIXES = ["state/"];
 
 const WRITE_DENY_HOME_FILES = ["~/.bashrc", "~/.zshrc", "~/.profile", "~/.bash_profile", "~/.config/fish/config.fish"];
 
@@ -199,10 +229,17 @@ const SENSITIVE_SYSTEM_FILES = SYSTEM_SENSITIVE_FILES.map((item) => normalize(it
 const NORMALIZED_SYSTEM_DENY_PREFIXES = SYSTEM_DENY_PREFIXES.map((prefix) => normalize(prefix));
 const NORMALIZED_TEMP_PREFIXES = TEMP_PREFIXES.map((prefix) => normalize(prefix));
 
-function matchesSensitiveReadPath(path: string, homeDir: string): boolean {
+function matchesAppHomeControlPlane(path: string, appHomeDir: string | undefined): boolean {
+	if (!appHomeDir) return false;
+	const exactPaths = APP_HOME_SENSITIVE_FILES.map((file) => resolve(appHomeDir, file));
+	const prefixes = APP_HOME_SENSITIVE_PREFIXES.map((prefix) => resolve(appHomeDir, prefix));
+	return matchesAnyPath(path, exactPaths, prefixes);
+}
+
+function matchesSensitiveReadPath(path: string, homeDir: string, appHomeDir?: string): boolean {
 	const table = getSensitivePathTable(homeDir);
 
-	if (matchesAnyPath(path, table.homeFiles, table.homePrefixes)) {
+	if (matchesAnyPath(path, table.homeFiles, table.homePrefixes) || matchesAppHomeControlPlane(path, appHomeDir)) {
 		return true;
 	}
 	if (matchesAnyPath(path, SENSITIVE_SYSTEM_FILES, SENSITIVE_SYSTEM_PREFIXES)) {
@@ -220,8 +257,8 @@ function matchesSensitiveReadPath(path: string, homeDir: string): boolean {
 	return PRIVATE_KEY_NAME_HINTS.test(lowerBase) && lowerBase.startsWith("id_");
 }
 
-function matchesSensitiveWritePath(path: string, homeDir: string): boolean {
-	if (matchesSensitiveReadPath(path, homeDir)) {
+function matchesSensitiveWritePath(path: string, homeDir: string, appHomeDir?: string): boolean {
+	if (matchesSensitiveReadPath(path, homeDir, appHomeDir)) {
 		return true;
 	}
 	return getSensitivePathTable(homeDir).writeDenyHomeFiles.includes(path);
@@ -313,10 +350,13 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 	}
 
 	const homeDir = ctx.homeDir ?? homedir();
+	const rawAppHome = ctx.appHomeDir ?? process.env.PIPICLAW_HOME?.trim();
+	const resolvedAppHome = rawAppHome ? resolveRootForGuard(resolve(rawAppHome), ctx) : undefined;
 	const effectiveCtx: PathGuardContext = {
 		...ctx,
 		agentWorkspaceDir: resolveRootForGuard(ctx.agentWorkspaceDir, ctx),
 		homeDir: resolveRootForGuard(homeDir, ctx),
+		...(resolvedAppHome ? { appHomeDir: resolvedAppHome } : {}),
 	};
 	const resolvedTarget = resolveTargetPath(rawPath, ctx);
 	const guardedPath = resolveForGuard(resolvedTarget, ctx);
@@ -337,7 +377,10 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		);
 	}
 
-	if (operation === "read" && matchesSensitiveReadPath(guardedPath, effectiveCtx.homeDir ?? homeDir)) {
+	if (
+		operation === "read" &&
+		matchesSensitiveReadPath(guardedPath, effectiveCtx.homeDir ?? homeDir, resolvedAppHome)
+	) {
 		return formatBlockedResult(
 			operation,
 			rawPath,
@@ -347,7 +390,10 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		);
 	}
 
-	if (operation === "write" && matchesSensitiveWritePath(guardedPath, effectiveCtx.homeDir ?? homeDir)) {
+	if (
+		operation === "write" &&
+		matchesSensitiveWritePath(guardedPath, effectiveCtx.homeDir ?? homeDir, resolvedAppHome)
+	) {
 		return formatBlockedResult(
 			operation,
 			rawPath,

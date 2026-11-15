@@ -839,10 +839,7 @@ export function resolveConfiguredRole(
 	currentModel: Model<Api>,
 	predefinedAgents: SubAgentConfig[],
 	overrides: ConfiguredRoleOverrides,
-	/**
-	 * `settings.subagentModel` (spec 032 D5): used only when neither the role file's frontmatter
-	 * nor this call names a model (it cannot — there is no override field for it).
-	 */
+	/** `settings.subagentModel` (spec 032 D5): used only when the role file's frontmatter omits `model`. */
 	subagentDefaultModelRef?: string,
 ): { config?: ResolvedSubAgentConfig; error?: string } {
 	const baseConfig = predefinedAgents.find((agent) => agent.name === overrides.agent);
@@ -856,11 +853,14 @@ export function resolveConfiguredRole(
 	}
 
 	if (baseConfig.runtime === "external") {
+		// `cursor-cli` folds effort into `model[effort=...]` which `auto` and non-parameterized model IDs reject;
+		// `exec` has no effort flag at all. Only apply the implicit verify default when the harness accepts one.
+		const verifyDefault =
+			baseConfig.harness === "cursor-cli" || baseConfig.harness === "exec" ? undefined : DEFAULT_THINKING_LEVEL;
 		return {
 			config: {
 				...baseConfig,
-				thinkingLevel:
-					baseConfig.thinkingLevel ?? (overrides.purpose === "verify" ? DEFAULT_THINKING_LEVEL : undefined),
+				thinkingLevel: baseConfig.thinkingLevel ?? (overrides.purpose === "verify" ? verifyDefault : undefined),
 			},
 		};
 	}

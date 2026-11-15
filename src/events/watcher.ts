@@ -24,6 +24,7 @@ import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import type { TaskCreateInput } from "../tasks/contract-input.js";
 import { describeEventPayload, parseScheduledEventContent } from "./parse.js";
@@ -68,6 +69,7 @@ export class EventsWatcher {
 	private timers: Map<string, NodeJS.Timeout> = new Map();
 	private crons: Map<string, Cron> = new Map();
 	private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+	private readonly fileQueue = createSerialQueue<string>();
 	private startTime: number;
 	private watcher: FSWatcher | null = null;
 	private started = false;
@@ -144,9 +146,7 @@ export class EventsWatcher {
 	}
 
 	private ensureHistoryFile(): void {
-		if (!this.options.historyPath) {
-			return;
-		}
+		if (!this.options.historyPath) return;
 		try {
 			const historyDir = dirname(this.options.historyPath);
 			mkdirSync(historyDir, { recursive: true, mode: 0o700 });
@@ -158,9 +158,7 @@ export class EventsWatcher {
 	}
 
 	private appendHistory(record: HistoryFields & { filename: string }): void {
-		if (!this.options.historyPath) {
-			return;
-		}
+		if (!this.options.historyPath) return;
 		const { filename, ...rest } = record;
 		const fullRecord: EventHistoryRecord = {
 			ts: formatLocalTime(),
@@ -234,64 +232,55 @@ export class EventsWatcher {
 	}
 
 	private handleFileChange(filename: string): void {
-		const filePath = join(this.eventsDir, filename);
-
-		if (!existsSync(filePath)) {
-			this.handleDelete(filename);
-		} else if (this.knownFiles.has(filename)) {
-			this.cancelScheduled(filename);
-			this.handleFileSafely(filename);
-		} else {
-			this.handleFileSafely(filename);
-		}
-	}
-
-	/**
-	 * Watch callbacks are the top of their own stack, so a rejection here reaches nobody — and
-	 * `handleFile` can reject: reloading a due one-shot dispatches it inline, and dispatch
-	 * writes to disk. `scanExisting` already wraps its own calls; this is the same guard for
-	 * the live path. One bad file must not take the watcher, or the process, down with it.
-	 */
-	private handleFileSafely(filename: string): void {
-		void this.handleFile(filename).catch((err) => {
-			log.logWarn("events.file.load_failed", "Event file load failed", {
-				reason: errorMessage(err),
-				fields: { file: filename },
+		// Serialize per filename with `scanExisting`/`handleFile` so an overlapping watch event
+		// cannot race an in-flight read and overwrite `this.crons`/`this.timers` without stopping the old one.
+		void this.fileQueue
+			.run(filename, async () => {
+				if (this.stopped) return;
+				if (!existsSync(join(this.eventsDir, filename))) {
+					this.handleDelete(filename);
+					return;
+				}
+				if (this.knownFiles.has(filename)) this.cancelScheduled(filename);
+				await this.loadFile(filename);
+			})
+			.catch((err) => {
+				log.logWarn("events.file.load_failed", "Event file load failed", {
+					reason: errorMessage(err),
+					fields: { file: filename },
+				});
 			});
-		});
 	}
 
 	private handleDelete(filename: string): void {
+		this.clearInvalidMarker(filename);
 		if (!this.knownFiles.has(filename)) return;
 
 		log.logInfo(`Event file deleted: ${filename}`);
 		this.cancelScheduled(filename);
 		this.knownFiles.delete(filename);
-		this.appendHistory({
-			filename,
-			eventType: "unknown",
-			action: "deleted",
-			result: "ok",
-		});
+		this.appendHistory({ filename, eventType: "unknown", action: "deleted", result: "ok" });
 	}
 
-	private cancelScheduled(filename: string): void {
-		let cancelled = false;
+	private stopScheduled(filename: string): boolean {
+		let stoppedAny = false;
 		const timer = this.timers.get(filename);
 		if (timer) {
 			clearTimeout(timer);
 			this.timers.delete(filename);
-			cancelled = true;
+			stoppedAny = true;
 		}
-
 		const cron = this.crons.get(filename);
 		if (cron) {
 			cron.stop();
 			this.crons.delete(filename);
-			cancelled = true;
+			stoppedAny = true;
 		}
+		return stoppedAny;
+	}
 
-		if (cancelled) {
+	private cancelScheduled(filename: string): void {
+		if (this.stopScheduled(filename)) {
 			this.appendHistory({
 				filename,
 				eventType: "unknown",
@@ -302,7 +291,11 @@ export class EventsWatcher {
 		}
 	}
 
-	private async handleFile(filename: string): Promise<void> {
+	private handleFile(filename: string): Promise<void> {
+		return this.fileQueue.run(filename, () => this.loadFile(filename));
+	}
+
+	private async loadFile(filename: string): Promise<void> {
 		const filePath = join(this.eventsDir, filename);
 
 		let event: ScheduledEvent | null = null;
@@ -325,6 +318,9 @@ export class EventsWatcher {
 		// again (a reactivated desk gets a new one), so a load finishing late must not schedule a timer
 		// or cron that nothing would ever stop.
 		if (this.stopped) return;
+		// Stop any prior timer/cron before re-evaluating or re-scheduling this filename, so even two
+		// direct `handleFile` calls can never leave an orphan Cron or Timeout behind.
+		this.stopScheduled(filename);
 
 		if (!event) {
 			log.logWarn("events.file.parse_failed", "Event file parse failed", {
@@ -455,10 +451,12 @@ export class EventsWatcher {
 			}
 		}, delay);
 
+		this.stopScheduled(filename);
 		this.timers.set(filename, timer);
 	}
 
 	private handlePeriodic(filename: string, event: PeriodicEvent): void {
+		this.stopScheduled(filename);
 		try {
 			const cron = new Cron(event.schedule, { protect: true, catch: true }, async () => {
 				try {
@@ -703,7 +701,10 @@ export class EventsWatcher {
 		const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
 		let result: ExecResult;
 		try {
-			result = await this.executor.exec(action.command, { timeout: timeoutSeconds });
+			result = await this.executor.exec(action.command, {
+				timeout: timeoutSeconds,
+				...(this.options.cwd ? { cwd: this.options.cwd } : {}),
+			});
 		} catch (err) {
 			throw new EventPreActionError("failed", errorMessage(err), {
 				durationMs: Date.now() - startedAt,
@@ -788,5 +789,8 @@ export function createEventsWatcher(
 	},
 ): EventsWatcher {
 	const { deskDir, sink, executor, commandGuardConfig, ...options } = input;
-	return new EventsWatcher(join(deskDir, "events"), sink, executor, commandGuardConfig, options);
+	return new EventsWatcher(join(deskDir, "events"), sink, executor, commandGuardConfig, {
+		...options,
+		cwd: options.cwd ?? deskDir,
+	});
 }

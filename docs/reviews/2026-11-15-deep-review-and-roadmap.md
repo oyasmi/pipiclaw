@@ -1,0 +1,356 @@
+# Pipiclaw (v0.9.5+) 深度审查与演进路线图
+
+> [!IMPORTANT]
+> **总体审查结论**：在 `v0.9.5` 之后，Pipiclaw 已经越过了“能不能跑通闭环”的阶段，成长为一个在个人 Agent 领域**架构纯度极高、运行时不变量极其扎实**的“自托管异步研发控制面（Harness）”。全仓 `src/` 下 334 个 TypeScript 文件（60,835 行代码）在 AST 级架构门禁下保持 **0 分层逆向依赖、0 循环引用**，其事实派生任务状态机、脱离宿主进程的外部 CLI 联邦结算、双层透明文件记忆以及三层自证测试体系，在工程深度上已明显领先于市面上大多数以“Prompt 编排 + 插件堆砌”为主的开源个人助手。
+>
+> **下一阶段的核心矛盾**不再是“补齐基础能力”，而是解决三件事：
+> 1. **堵住实现层跨模块接缝处的隐蔽缺陷与安全缺口**（例如 `bash`/`job`/`preAction` 漏传工位 `cwd`、`~/.pipiclaw` 自保护缺失、`EventsWatcher` 异步竞态泄漏 `Cron` 等）；
+> 2. **消除单人日常高频工作流的“最后一公里摩擦”**（钉钉语音/文件/引用静默丢弃、单 DM 切换工位冻结后台任务、多仓 `cwd` 配置繁琐、历史归档任务与数天前会话检索失灵、并发写同一工作树的冲突）；
+> 3. **在严控项目总复杂度的前提下，有选择地吸收 2026 业界最佳实践**（物理级 Worktree 隔离、已完成工作检索与技能反哺、基于确定性传感器的有界主动性），同时坚决拒绝多租户、向量数据库与角色流水线膨胀。
+
+---
+
+## 一、项目定位、核心使用场景与工程品味画像
+
+### 1.1 本质定位：从“对话扳手”到“异步交付车床”
+
+阅读 [design-philosophy.md](../../docs/design-philosophy.md) 与五篇杠杆手记（[001-from-wrench-to-lathe.md](../../docs/leverage/001-from-wrench-to-lathe.md) 至 [005-fewer-roles-better-handoffs.md](../../docs/leverage/005-fewer-roles-better-handoffs.md)），可以清晰看到 Pipiclaw 鲜明的个人工程底色：
+
+- **定位不是“陪聊全能管家”，而是“单人开发者的全天候异步工程执行系统”**：钉钉（移动端随时发号施令、审批、收结果）与 TUI/WebAPI（桌面端深度沉浸研发）共享同一个守护进程与工位（Desk）真相源。
+- **稀缺资源定义极其清醒**：稀缺的不是 Token，而是**开发者的注意力与上下文转述带宽**；错误成本由 `可发现 × 可回滚 × 爆炸半径` 决定，因此允许内部探索犯便宜的错，把硬闸门设在不可逆边界。
+- **运行时与模型的职责切分克制而锋利**：“运行时守住不变量，模型负责判断”——状态持久化、唤醒投递、预算扣减、进程收养、命令拦截全部由确定性代码负责；何时拆任务、派哪个外部 CLI、验证是否通过交给模型判断。
+
+### 1.2 五大核心使用场景与支撑链路
+
+| 核心场景 | 典型交互入口 | 关键支撑模块 | 当前成熟度评估 |
+|---|---|---|---|
+| **① 移动端异步长任务委托与督办** | 钉钉单聊/群聊下达复杂目标，中途手机端审批/补充指令，异步收最终交付 | [ingress.ts](../../src/runtime/ingress.ts) → [task-lane.ts](../../src/runtime/task-lane.ts) → [state.ts](../../src/tasks/state.ts) → [delivery.ts](../../src/tasks/delivery.ts) | **核心机制极稳**；但移动端发语音/文件/引用回复、单 DM 切工位存在明显摩擦 |
+| **② 桌面终端沉浸式编码与跨端接力** | 本地运行 `pipiclaw tui` 交互改码，出门后在钉钉查看同一工位进度 | [cli.ts](../../src/tui/cli.ts) → [server.ts](../../src/webapi/server.ts) → [desk-runtime.ts](../../src/runtime/desk-runtime.ts) | **协议解耦极佳**；但缺增量流式输出、多终端嵌入式锁冲突、`--cwd` 体验待打磨 |
+| **③ 主会话领衔 + 外部顶级 CLI 联邦执行与独立验证** | 主模型理解意图后委派 `claude-main`/`codex-high`/`cursor-main`/`agy-main` 实施，再派 `codex-review` 独立核验 | [subagent.ts](../../src/tools/subagent.ts) → [runs.ts](../../src/subagents/runs.ts) → [run.ts](../../src/subagents/external/run.ts) | **进程生存与结算业界一流**；`cursor-cli` 核验存在一处 bug，并发写隔离仍靠手工命令 |
+| **④ 跨会话长期记忆沉淀与冷历史回溯** | 自动提炼用户偏好与项目事实至 Markdown，写每日工作日记，必要时检索冷日志 | [boundary-work.ts](../../src/memory/boundary-work.ts) → [reflect.ts](../../src/memory/reflect.ts) → [session-search.ts](../../src/memory/session-search.ts) | **可审计性极强**；但 `session_search` 存在 500 块截断盲区，且已归档任务不可检索 |
+| **⑤ 定时与传感器驱动的例行/守望工作** | 定时唤醒或通过 `preAction` 脚本检测外部变化后拉起独立任务实例 | [watcher.ts](../../src/events/watcher.ts) → [durable-dispatch.ts](../../src/runtime/durable-dispatch.ts) | **与一次性任务解耦清晰（Spec 052）**；存在并发重载竞态与 `timeoutMs` 往返丢失问题 |
+
+### 1.3 运行时全栈拓扑与历史演进品味
+
+```mermaid
+flowchart TB
+    subgraph Clients["接入层 (Clients)"]
+        DT["钉钉客户端 (AI Card / Markdown / Media)"]
+        TUI["终端 TUI (src/tui - OpenAI SDK Client)"]
+        EXT["外部 HTTP/WS 调用方"]
+    end
+
+    subgraph Transports["传输层 (Layer 11)"]
+        DTT["DingTalkTransport (Stream WS + 卡片增量流)"]
+        WAT["WebApiTransport (Unix Socket / TCP Responses API)"]
+    end
+
+    subgraph ControlPlane["确定性入口与控制面 (Layers 10 & 12)"]
+        ING["Ingress & 命令路由 (/stop /tasks /desk 零Token直达)"]
+        DD["DurableDispatchService (持久化唤醒 + 6合1合并)"]
+        DR["DeskRuntime (工位绑定双侧围栏 + 生命周期)"]
+    end
+
+    subgraph Execution["执行双通道 (Layers 8–9 & 12)"]
+        CHAT["Chat ChannelRunner (每通道会话 + 70%投机压缩)"]
+        TL["TaskLane (独立会话 tasks/.sessions + 事实派生状态机)"]
+    end
+
+    subgraph Capabilities["领域能力与外部联邦 (Layers 2–7)"]
+        SA["SubAgentRunManager (内置Worker + Claude/Codex/Cursor/AGY CLI)"]
+        JOB["DeskJobManager (setsid 脱离宿主作业 + lstart 身份校验)"]
+        MEM["Memory v2 (单事实MD + 墓碑 + 边界异步 Reflect)"]
+        EVT["EventsWatcher (Cron / One-shot + preAction 传感器)"]
+        GUARD["Security (Command AST Guard + Path Guard + SSRF Guard)"]
+    end
+
+    DT <--> DTT
+    TUI <--> WAT
+    EXT <--> WAT
+    DTT <--> ING
+    WAT <--> ING
+    ING --> DR
+    DR --> CHAT
+    DR --> TL
+    DD --> ING
+    CHAT --> SA & JOB & MEM & EVT & GUARD
+    TL --> SA & JOB & MEM & GUARD
+    SA -. "完成唤醒 / 任务账本" .-> DD
+    JOB -. "完成唤醒 / 任务账本" .-> DD
+    EVT -. "定时触发 / 派生任务" .-> DD
+```
+
+特别值得肯定的是项目在近期迭代中展现出的**“敢于做减法的品味”**（我们在后续建议中将严格尊重这些既定裁决，绝不开倒车）：
+- **单人可见性优先（[2026-10-30-design-focus-review.md](../../docs/reviews/2026-10-30-design-focus-review.md#L5)、[Spec 065](../../docs/specs/065-personal-delivery-focus/design.md)）**：因为只有一个真实人类用户，保留后台委派的实时通知可观测性比“为了安静而隐藏后台活动”更有价值；采用固定保留窗口（7 天作业、30 天委派记录）替代复杂的引用计数 GC。
+- **按“能力/成本/权限边界”而非“虚拟角色岗位”配置子代理（[examples/sub-agents/README.md](../../examples/sub-agents/README.md)）**：果断删掉 `planner/builder/reviewer/scout` 角色流水线，收敛为 11 个按模型能力档位命名的配置项，彻底消除了多跳传话损耗。
+- **严守上游 SDK 边界与零运行时迁移包袱（[Spec 067](../../docs/specs/067-execution-latency/design.md#L21)、[AGENTS.md](../../AGENTS.md#L114)）**：只消费官方 `@earendil-works/pi-*` 包，不维护私有补丁分支；数据格式演进只做一次性离线迁移，不在源码里堆积历史兼容分支。
+
+---
+
+## 二、设计层深度审查：沉淀的护城河 vs 结构性张力
+
+### 2.1 六大标杆级架构优势（项目核心资产）
+
+1. **物理上消灭“假等待”的事实派生任务状态机（Spec 064）**
+   - 在 [state.ts](../../src/tasks/state.ts#L58-L126) 与 [frontmatter.ts](../../src/tasks/frontmatter.ts#L242-L254) 中，模型工具没有任何参数可以直接写 `state`、`waiting` 或 `paused`。`waiting` 严格由运行时观测到的三类事实派生：在途绑定工作（`work`）、未答复的用户提问（`user`）、或明确的时间点（`until`）。一旦在途工作归零，`evaluateWaiting` 自动返回 `"queue"`，从根源上杜绝了 Agent 框架最常见的“模型自称在等结果但没有任何唤醒源”的死锁。
+   - 配合 [store.ts](../../src/tasks/store.ts#L81-L113) 的 **WAL 先行机制**（先追加带 `revision` 的 JSONL 检查点，再原子替换 `.md`）以及 [task-step.ts](../../src/runtime/task-step.ts#L154-L158) 基于 `contractSha` 的**无状态按需契约注入**（仅在首步、契约正文修改后或会话压缩冲掉旧消息后重发完整契约，其余步仅发增量 brief），既抗崩溃又极其省 Token。
+
+2. **跨守护进程重启存活的外部 CLI 联邦与两阶段幂等结算**
+   - [external/run.ts](../../src/subagents/external/run.ts#L171-L340) 将外部 CLI 的 stdout/stderr 直接重定向至磁盘文件描述符（父进程管道零缓冲），通过 `setsid` 独立进程组运行，并采集 `/proc/<pid>/stat` 的 `pidBirth`；守护进程重启后由 [reconciliation.ts](../../src/subagents/external/reconciliation.ts) 核验 PID 出生时间防止误杀复用 PID。
+   - [runs.ts](../../src/subagents/runs.ts#L508-L948) 用三个独立幂等位（`settledAt`、`usageRecorded`、`wakeEnqueued`）串起“磁盘记账 → 费用归集 → 唤醒投递”，并在 `spawn` 前强制执行同步 `appendStrict` 审计日志（[logger.ts](../../src/security/logger.ts#L35-L40)）。这套设计在单机个人运行时中达到了准分布式系统的可靠性。
+
+3. **零 Token 确定性控制面、唤醒合并与错误受众分流**
+   - `/stop`、`/new`、`/tasks`、`/subagents`、`/desk` 全部在进入模型前由确定性路由拦截；`/new` 甚至能绕过卡死的通道队列先原子切换 `active-session.json`（[ingress-commands.ts](../../src/runtime/ingress-commands.ts#L76-L154)）。
+   - [durable-dispatch.ts](../../src/runtime/durable-dispatch.ts#L434-L498) 的 `absorbPending` 将同一通道最多 6 个并发完成的子代理/作业唤醒折叠进**单次 LLM 回合**，并用 `stopEpoch` 防止 `/stop` 与合并竞态。
+   - [recoverable-error.ts](../../src/shared/recoverable-error.ts) 将“模型能自己修的参数/状态错误”与“必须惊动人类的权限/故障错误”彻底分流，配合带下一步指引的报错文案，显著降低了无谓中断。
+
+4. **全透明、防污染、不阻塞主回合的 Memory v2**
+   - 会话切换/压缩时仅用几毫秒把原始切片落盘为 `.memory-work/<conv>/<id>.json`（[boundary-work.ts](../../src/memory/boundary-work.ts)），后台串行执行单次 LLM `reflect`。
+   - 用确定性规则兜底模型幻觉：`source: user` 铁律禁止后台篡改用户显式记忆、[tombstones.ts](../../src/memory/tombstones.ts) 防止已删记忆死灰复燃、[transcript.ts](../../src/memory/transcript.ts#L24-L71) 剥离 `<memory_bootstrap>` 等注入标签防止回声自强化。
+
+5. **极致的 Prompt Cache 保护与投机式后台压缩**
+   - [turn-prompt.ts](../../src/agent/turn/turn-prompt.ts#L57-L62) 把所有易变上下文（时间戳、通道 ID、任务议程、记忆引导）全部移出 System Prompt 放入 User Turn XML 块且按稳定度排序；7 份内置 Playbook（共 9,589 units）通过渐进披露将日常常驻开销压到 ~250 units（[catalog.ts](../../src/playbooks/catalog.ts#L119-L146)）。
+   - [compaction-snapshot.ts](../../src/agent/session/compaction-snapshot.ts#L64-L188) 在 70% 水位时于工具批次间隙做后台投机压缩，并在 `SessionManager.inMemory` 中精确验算净收益达标后才提交。
+
+6. **AST 架构门禁与自证式三层评测基础设施**
+   - [check-architecture.mjs](../../scripts/check-architecture.mjs) 用 TypeScript AST 同时卡住 26 模块分层表、Tarjan 文件环、800 行上限与文档死链；[oracle-checks.ts](../../evals/harness/oracle-checks.ts) 在花一分钱调真模型前先用正/负/等价控制样本校验评分器自身，工程纪律极强。
+
+---
+
+### 2.2 五大结构性设计张力（制约下一步体验跃升的核心瓶颈）
+
+#### 张力一：`Desk`（工位）的生命周期与多仓开发模型存在“两头拧巴”
+- **单人单钉钉 DM 切换工位会“冻结”原工位后台工作**：[desk-runtime.ts](../../src/runtime/desk-runtime.ts#L341-L355) 将工位是否激活严格绑定在 `boundCount(desk) > 0` 上。个人开发者在钉钉通常只有一个单聊入口（`dingtalk:dm:<staffId>`）。当 `repo-a` 工位正在跑长任务或定时巡检，用户在单聊发 `/desk bind repo-b` 去问另一个项目一句话时，`repo-a` 的绑定通道数瞬间归零，`deactivate("repo-a")` 会**立即停掉它的 `eventsWatcher`、冻结 `TaskLane` 推进，并丢弃在途子代理/作业的聊天唤醒**！
+- **反过来，TUI 每次打开工位都会造成“永久激活泄漏”**：每次执行 `pipiclaw tui --desk repo-x` 都会在 `desk-bindings.json` 持久化一条 `webapi:conv_<id>` 绑定，关闭终端从不解绑，也没有 `/desk archive` 或 `/desk delete` 命令，导致历史工位永久处于活跃扫描态。
+- **本地多 Git 仓库指向繁琐且记忆完全孤岛化**：在 `~/projects/foo` 下直接敲 `pipiclaw tui` 默认落进 `~/.pipiclaw/workspace/desk-default` 而非当前目录；想建一个指向现有仓库的工位必须手工改 `desk.json` 的 `"cwd"`（且热修改后 `DeskRuntime.records` 内存缓存还不刷新，见第三章）。同时，用户在 A 仓库沉淀的个人通用编码习惯（提交规范、SSH 环境、行文偏好）无法与 B 仓库共享。
+
+#### 张力二：多执行体并发下的“共享工作树写所有权（Checkout Ownership）”真空
+- 引入 `TaskLane`（单工位最多 3 个并发任务）和异步外部 CLI 后，同一个仓库目录可能同时面对：**聊天主会话改文件 + 任务会话改文件 + `mutates: "write"` 外部 CLI 改文件 + `codex-review` (`purpose: "verify"`) 读 diff 核验**。
+- 目前 [workspace-lease.ts](../../src/subagents/workspace-lease.ts#L1-L95) **只互斥两个 `mutates: "write"` 的子代理**：主会话/任务领队的 `write`/`edit`/`bash` 完全无视写租约；`purpose: "verify"` 不持共享读锁（核验中途文件可被新写任务篡改）；省略 `workingDirectory` 时还会把整个 `desk-<name>/` 根目录锁死。同时，Git Worktree 的创建、交付合并与清理完全依赖模型阅读 [agent-delegation.md](../../src/playbooks/agent-delegation.md) 后手工拼 `bash` 命令，缺乏运行时级的轻量托管。
+
+#### 张力三：任务成为生产中心后的“历史归档盲区（Archive Blind Spot）”
+- 如今复杂工作都在 Task Lane 中完成并最终移入 `tasks/archive/`。但模型侧的 [factory.ts](../../src/tools/task-manage/factory.ts#L56)（`task_list`）只读活跃任务；[session-search.ts](../../src/memory/session-search.ts) 只扫 `conversations/` 下的聊天记录；`memory_search` 只搜提炼后的事实卡片。
+- 结果是：**凡是在后台任务里做过的架构权衡、踩过的坑、跑过的验证结论，一旦任务关闭归档，对未来的会话和任务就彻底“失忆”了**（这也印证了 [2026-10-30-design-focus-review.md](../../docs/reviews/2026-10-30-design-focus-review.md) 中挂起的 `D3`）。
+
+#### 张力四：外部 CLI 完全信任模型 vs 内置工具安全守卫的“内紧外松与错位摩擦”
+- 一方面，内置 `bash` 的 [command-guard.ts](../../src/security/command-guard.ts#L494-L508) 极其严格：禁止除 `echo/printf` 外的一切 `$VAR` 变量展开、禁止 `git add *.ts` 等通配符、禁止 heredoc，且在 [bash.ts](../../src/tools/bash.ts#L255) 中将不支持的 shell 语法作为致命 `GuardBlockedError`（在聊天窗弹出刺眼的“高危操作”气泡）抛出，而非让模型静默改写命令的 `RecoverableToolError`。
+- 另一方面，内置文件工具对 `~/.pipiclaw`（`APP_HOME_DIR`）却毫无防备（可直接读写密钥与安全开关，详见 §3.1），且模型一旦调用外部 CLI 子代理就天然绕过全部内置守卫。安全水位在“高频无害语法”上过紧，在“核心控制面自保”上却漏了底。
+
+#### 张力五：粗粒度回合输出契约与嵌入式守护进程模型对 TUI / WebAPI 的限制
+- [channel-context.ts](../../src/channel/channel-context.ts#L19-L45) 的 `TurnEvent` 只有完整块级事件（`thinking` 摘要、工具起止、最终完整 `answer`），没有 token 级增量 `delta`。钉钉靠卡片侧展示工具折叠进度尚可接受，但 TUI 与 WebAPI SSE/WS 客户端在模型生成长段代码/分析时会经历数十秒“完全静止 → 瞬间整屏刷出”的卡顿感。
+- `pipiclaw tui` 在无后台守护进程时通过 `bootstrapEmbedded` 抢占全局 `daemon.lock` 启动仅含 Socket 的残血运行时（钉钉不在线，且多开第二个 TUI 终端会在第一个终端退出时被直接连根拔起）。
+
+---
+
+## 三、实现层深度审查：源码级缺陷、安全漏洞与复杂度审计
+
+### 3.1 P0 级安全缺口与跨模块正确性缺陷（强烈建议优先修复）
+
+> [!WARNING]
+> 以下 5 项均已通过源码逐行核实，涉及**跨模块契约违背、控制面凭据自保缺失、SSRF 绕过以及必现崩溃/定时器泄漏**，修复成本均很低（每项约 15–60 行代码），但收益极大。
+
+#### [P0-1] `bash`、后台作业 `job` 与事件 `preAction` 全面漏传工位 `cwd`
+- **定位**：[runner-factory.ts](../../src/agent/runner-factory.ts#L14-L19)、[bash.ts](../../src/tools/bash.ts#L402-L406)、[manager.ts](../../src/jobs/manager.ts#L290)、[watcher.ts](../../src/events/watcher.ts#L706)
+- **根因与影响**：Spec 060、[runtime-orientation.md](../../src/playbooks/runtime-orientation.md#L46) 以及注入给模型的 `<runtime_turn_context>` 均明确承诺：相对路径与默认执行目录为当前工位 `cwd`（默认 `workspace/desk-<desk>/` 或 `desk.json` 自定义目录）。`read`/`write`/`edit`/`glob`/`grep` 与内外部子代理均正确绑定了该 `cwd`；唯独 `createRunner` 传入了裸 `createExecutor()`，`bash.ts` 调用 `executor.exec(...)` 未传 `cwd: securityContext.cwd`，`DeskJobManager.start`（含 [launch.ts](../../src/jobs/launch.ts#L49-L89)）和 `EventsWatcher.runPreAction` 也均未传 `cwd`。
+- **后果**：所有同步 `bash`、`bash async:true` 后台作业（无论在聊天还是任务步中！）以及事件 `preAction` 传感器，实际全部运行在**启动守护进程时的宿主 `process.cwd()`** 下！模型先 `write("foo.txt")` 再 `bash("cat foo.txt")` 会直接找不到文件，多工位自定义仓库目录在 shell 层完全失效。
+- **修复建议**：在 `createRunner` 中用 `new DirectoryExecutor(createExecutor(), conversation.cwd)` 包装（或在 `bash.ts` 显式传 `cwd: securityContext.cwd`），并将工位实时解析的 `cwd` 注入 `DeskJobManager` 与 `EventsWatcher.runPreAction`。
+
+#### [P0-2] `pathGuard` 未保护 `~/.pipiclaw`（`APP_HOME_DIR`），允许模型读取全部密钥并热关闭安全守卫
+- **定位**：[path-guard.ts](../../src/security/path-guard.ts#L16-L36)、[path-guard.ts](../../src/security/path-guard.ts#L280-L283)、[index.ts](../../src/tools/index.ts#L56-L58)、[session-host.ts](../../src/agent/session/session-host.ts#L104)
+- **根因与影响**：`pathAllowedByDefaults` 默认放行整个 `$HOME`，而内置敏感路径黑名单 `HOME_SENSITIVE_*` 仅列了 `.ssh`/`.aws`/`.gnupg` 等，**漏掉了 `~/.pipiclaw` 自身**（以及外部 CLI 凭据如 `~/.claude/.credentials.json`、`~/.codex/auth.json`）。虽然 `withSubAgentsDirWriteDeny` 拦住了写 `workspace/sub-agents/`，但一旦遭遇网页/文档间接提示词注入：
+  1. `read`/`grep` 可直接读取 `~/.pipiclaw/auth.json`（LLM API Keys / OAuth 令牌）、`channel.json`（钉钉 `clientSecret`）、`state/webapi/` 密钥哈希；
+  2. `write`/`edit` 可直接把 `~/.pipiclaw/security.json` 覆写为 `{"enabled": false}`——而 `SessionHost` 在每轮重建工具时会热加载 `security.json`，下一轮所有守卫即刻全部失效！
+- **修复建议**：在默认路径守卫中对 `appHomeDir` 下除 `workspace/` 以外的控制面文件（`auth.json`、`channel.json`、`security.json`、`models.json`、`tools.json`、`state/`）默认禁止读写（只允许宿主用户手工或通过 CLI 子命令维护），同时将 `~/.claude/.credentials.json` 与 `~/.codex/auth.json` 纳入 `HOME_SENSITIVE_FILES`。
+
+#### [P0-3] 初始化模板默认关闭 `networkGuard`，且 `web_fetch` 的 Jina 回退直接绕过 SSRF 拦截
+- **定位**：[home.ts](../../src/app/home.ts#L140-L150)、[config.ts](../../src/security/config.ts#L29)、[fetch.ts](../../src/web/fetch.ts#L75-L120)、[fetch.ts](../../src/web/fetch.ts#L248-L264)
+- **根因与影响**：
+  1. `DEFAULT_SECURITY_CONFIG` 设计上默认 `networkGuard.enabled: true`，但 `home.ts` 的 `SECURITY_CONFIG_TEMPLATE` 在初始化 `~/.pipiclaw/security.json` 时硬编码写入了 `"networkGuard": { "enabled": false }`，导致所有标准安装的实例默认裸奔。
+  2. 在 `web/fetch.ts` 中，当 `preferJina: true` 时直接跳过 `validateNetworkTarget`；当直连因 `NetworkGuardError`（如目标被判定为受限域名或私网地址）抛错时，`catch` 块在 `enableJinaFallback: true` 下竟然把被拦截的原始 URL 拼接到 `https://r.jina.ai/<url>` 继续外发请求！
+- **修复建议**：将 `SECURITY_CONFIG_TEMPLATE` 中 `networkGuard.enabled` 改为 `true`；在 `fetchWebContent` 入口无条件先跑 `validateNetworkTarget`（无论是否走 Jina），且捕获 `NetworkGuardError` 时立即重抛，绝不走 Jina fallback。
+
+#### [P0-4] `cursor-cli` 执行器在 `purpose: "verify"` 时必现参数崩溃
+- **定位**：[discovery.ts](../../src/subagents/discovery.ts#L862-L863) 与 [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts#L176-L180)
+- **根因与影响**：Cursor CLI 不支持 `--model <name>[effort=...]` 后缀（因此 [examples/sub-agents/README.md](../../examples/sub-agents/README.md#L43) 中 `cursor-main` 刻意不配 `thinkingLevel`）。然而 `resolveConfiguredRole` 在 `purpose === "verify"` 且角色未配 `thinkingLevel` 时强行注入 `DEFAULT_THINKING_LEVEL`（`"medium"`），导致 `cursor-cli.ts` 拼出 `--model auto[effort=medium]` 直接启动失败。
+- **修复建议**：在 `cursor-cli.ts` 中忽略不支持的 `[effort=...]` 模型后缀（或仅对支持 effort 后缀的 harness 注入默认核验思考档位）。
+
+#### [P0-5] `EventsWatcher` 异步重载竞态泄漏永生 `Cron`，且 `event_manage` `show → update` 静默丢失 `preAction` 超时
+- **定位**：[watcher.ts](../../src/events/watcher.ts#L105-L110)、[watcher.ts](../../src/events/watcher.ts#L241-L246)、[watcher.ts](../../src/events/watcher.ts#L458-L481) 与 [event-manage.ts](../../src/tools/event-manage.ts#L64)、[event-manage.ts](../../src/tools/event-manage.ts#L220)、[event-manage.ts](../../src/tools/event-manage.ts#L299)
+- **根因与影响**：
+  1. `start()` 中 `scanExisting()` 与 `fs.watch` 并发运行，`handleFileChange` 触发的异步 `handleFile(filename)` 未按文件名串行化；当两次 `handleFile` 重叠进入 `handlePeriodic` / `handleOneShot` 时，`this.crons.set(filename, cron)` 直接覆盖 Map 而不 `.stop()` 旧 `Cron` 实例，导致旧 `Cron` 变成内存孤儿，在守护进程存活期间无限重复触发且无法删除！
+  2. `event_manage` 入参叫 `preAction.timeoutMs`，落盘字段叫 `preAction.timeout`；但 `action: "show"` 直接返回磁盘原始 JSON（含 `timeout`）。当模型遵循 [event-scheduling.md](../../src/playbooks/event-scheduling.md#L27) 先 `show` 再原样 `update` 时，`timeoutMs` 为 `undefined`，自定义超时被静默重置回 10 秒（且 Playbook 第 46 行示例写的也是磁盘不认的 `timeoutMs`）。
+- **修复建议**：用 `createSerialQueue<string>()` 串行化单文件加载，并在 `crons.set` / `timers.set` 前防御性停止旧实例；统一 `show` 输出与 `update` 输入字段（兼容 `timeout` 与 `timeoutMs`），同时让 `/events list`（[commands.ts](../../src/events/commands.ts#L150-L158)）补齐 `commandGuardConfig` 校验与 `.error.txt` 故障展示。
+
+---
+
+### 3.2 P1 级核心体验断点、长周期退化与并发隐患
+
+#### 1. 钉钉移动端交互与投递链路断点
+- **入站语音、文件与引用回复被静默吞没**：[inbound-media.ts](../../src/dingtalk/inbound-media.ts#L45-L73) 仅解析 `text`/`picture`/`richText`。用户在手机端发**语音消息**（钉钉 Stream 自带免费高准度 `content.recognition` 语音转文字！）、发 **日志文件/PDF/压缩包**（`msgtype === "file"`，而 [media.ts](../../src/dingtalk/media.ts#L153-L191) 的 `downloadMessageFile` 与 [inbound-images.ts](../../src/runtime/inbound-images.ts#L70-L89) 的 `persistInboundFile` 其实早已写好！），或**引用某条异步任务报告进行回复**（`data.text.repliedMsg`）时，前者在 [inbound.ts](../../src/dingtalk/inbound.ts#L129-L133) 被静默丢弃（用户端石沉大海，连不支持提示都没有），后者直接丢失被引用上下文。
+- **出站 `send_media` 限额错配与错误类型误抛**：[send-media.ts](../../src/tools/send-media.ts#L71-L93) 用 5MB 的 `MAX_INLINE_BINARY_BYTES` 拦截文件（而钉钉实际支持 20MB，且此处走 `readBytes` 并未进 stdout 缓冲）；同时当发送 `.md`/`.json`/`.html`/`.patch`/`.log` 被 [media.ts](../../src/dingtalk/media.ts#L24) 白名单拒绝时，第 92 行抛出了普通 `new Error(...)` 而非 `RecoverableToolError`，直接在用户钉钉弹出报错气泡，剥夺了模型自动打包 `.zip` 或转 `.txt` 重试的机会。
+- **交付归档遗漏与通知细节**：[delivery.ts](../../src/dingtalk/delivery.ts#L324-L335) 的 `replaceWithFinal`（用于 `final_card_only` 模式及卡片回退重试）漏调了 `this.archiveBotResponse(text)`，导致机器人回复不进 `log.jsonl`；第 167 行 `deliverAnswer(event.text)` 丢弃了 `event.title`，导致手机锁屏通知标题永远是 `"Bot"`；此外当 `task_ask` 提示用户“直接回复我”时，若通道恰有活跃回合，默认的 `whenBusy: "steer"`（[ingress-busy.ts](../../src/runtime/ingress-busy.ts#L92-L116)）会把用户的回答误注入无关的聊天回合中。
+
+#### 2. 记忆与冷历史检索的长周期退化
+- **`session_search` 严重的时间视野截断 bug**：[session-search.ts](../../src/memory/session-search.ts#L268-L269) 在对查询词打分**之前**，先按时间截取了最新的 `MAX_CORPUS_CHUNKS = 500` 个分块（约 20 万字符，重度研发几天就会填满），导致**几天前的全部历史对话虽然躺在磁盘 `log.jsonl` 里，却永远不可能被搜出来**！
+- **`reflect.ts` 规模化与事务性隐患**：
+  1. [reflect.ts](../../src/memory/reflect.ts#L252) 在长达 45 秒的后台 LLM 请求期间全程持有 `.locks/memory.lock`，阻塞用户侧同步执行的 `memory_save` / `memory_forget`（超时仅 10 秒）；
+  2. 第 415–428 行将“单条低价值 `add` 被跳过”算作 `skipped > 0`，进而阻断同批次所有合法的过时记忆 `delete`；
+  3. 第 280–286 行 `touch` 操作无需任何跨日复现门槛即可直接将 `probationary` 记忆转正为永久记忆，而 `expires` 过期字段在所有读取与索引生成路径上从未被过滤；
+  4. 当用户手工沉淀的 `source: "user"` 记忆超过 1,400 units（预算的 70%）时，`condense` 因无权修改用户记忆将陷入每次后台运行都白跑一轮 LLM 的死循环（[index-budget.ts](../../src/memory/index-budget.ts#L18)）；且 [sidecar-worker.ts](../../src/memory/sidecar-worker.ts#L222) 已支持的 JSON 格式 `repair` 回调在 `reflect.ts` 调用处未接线。
+
+#### 3. Task Lane 长周期运行脆弱点与 I/O 放大
+- **3 秒 `stopGraceMs` 过短导致任务极易“永久隔离（Quarantined）”**：[task-lane.ts](../../src/runtime/task-lane.ts#L99) 与 [task-step.ts](../../src/runtime/task-step.ts#L86-L110) 在 `/tasks pause` 或步骤超时取消后只给 3 秒宽限期。一旦流式请求收尾或磁盘 flush 耗时 3.1 秒，任务即被标记为 `live.quarantined = true`，覆写暂停原因为“请联系部署者重启服务后再恢复任务”，且后续即使底层 Promise 正常结束，[task-control.ts](../../src/runtime/task-control.ts#L178-L204) 仍会拒绝 `/tasks resume` 直至整个守护进程重启。
+- **任务会话文件孤儿化、双倍全量解析与压缩死胡同**：
+  1. [archive.ts](../../src/tasks/archive.ts#L67-L131) 归档任务时只搬运 `.md` 与 `.jsonl`，**永久遗留 `tasks/.sessions/<id>.jsonl`**（周期性事件派生的任务会无限堆积会话文件），同时 [loop-log.ts](../../src/tasks/loop-log.ts#L231-L274) 的模块级 `appenders` Map 从不清理已归档任务；
+  2. [input-receipts.ts](../../src/tasks/input-receipts.ts#L23-L41) 在每步前后各把整个 `tasks/.sessions/<id>.jsonl` 从头读入内存全量 `JSON.parse` 一遍；
+  3. 若长任务（60+ 步）触发上下文压缩失败，[compaction.ts](../../src/agent/session/compaction.ts#L20) 抛出面向聊天的 `"请用 /compact 重试，或用 /new 开新会话"`——任务会话没有这两个命令，重试 3 次后任务彻底卡死。
+- **单个匿名坏投递文件冻结全工位任务报告**：[delivery.ts](../../src/tasks/delivery.ts#L351) 中只要 `tasks/.delivery/` 下出现任何一个无法归属 `taskId` 的损坏文件，整个工位**所有健康任务**的报告与完成回执都会永久停摆。
+- **扫描回路子进程风暴**：[task-lane.ts](../../src/runtime/task-lane.ts#L251-L273) 每次 `scan()` 重复读取两次活跃任务与在途工作，每次最多解析 3 遍高达 12MB 的任务日志；而 `listPendingWork()` 调 `jobs.list()`（[manager.ts](../../src/jobs/manager.ts#L805-L810)）不像 `sweep()` 那样批量调一次 `probeAll`，而是为每个运行中作业串行 `spawn` 一个 `bash + ps` 子进程。
+
+#### 4. WebAPI / TUI 运行时竞态与连接陷阱
+- **WebSocket 60 分钟硬断连直接腰斩在途回合**：[websocket.ts](../../src/webapi/routes/websocket.ts#L57-L108) 设置了无视活跃度的 60 分钟硬定时器，到期触发 `onClose()` 会立即对当前连接上未结束的响应调用 `service.cancel(live)`，导致用户在 TUI 里挂着跑满 1 小时的复杂回合被直接中断；同时 WS 协议缺少 `response.cancel` 帧，TUI 按 `Ctrl-C` 只能暴力断连重连。
+- **`request-execution.ts` 双重 `dispose` 竞态与缓存驱逐**：[request-execution.ts](../../src/runtime/request-execution.ts#L53-L80) 将无状态请求塞进与聊天共享的 `channelRunners`（上限 50），不仅突发 API 请求会驱逐热聊天会话，且 `finally` 中先 `endTurn()` 再 `await runner.dispose()` 最后才 `delete`，在异步 `dispose` 窗口内会被 LRU 淘汰器二次并发 `dispose()`。
+- **TUI 交互细节失步**：[cli.ts](../../src/tui/cli.ts#L198) 将 `@file` 自动补全根目录硬编码为 `paths.workspaceDir` 而非当前工位 `cwd`；TUI 内执行 `/desk bind` 会导致服务端重绑而客户端顶栏与 `state/tui/conversations.json` 错乱；恢复已有会话时屏幕全空，缺少最近几轮上下文回显。
+
+---
+
+### 3.3 P2 级代码复杂度、架构基线清零路径与评测集（`evals/`）诊断
+
+1. **外部执行器（Harness）扩展摩擦过大**：对照刚合入的 [Spec 068](../../docs/specs/068-antigravity-cli-harness/design.md)，每新增一个外部 CLI 需要在跨层 **7 个文件**同步修改硬编码字符串联合类型（`discovery.ts`、`run-record.ts`、`external/harness.ts`、`external/run.ts`、`channel/store.ts`、`agent/prompt/types.ts`、`tools/subagent-manage.ts`），且 4 个 CLI 适配器各自复制了一套参数扫描与 NDJSON 解析（其中 `detectExistingFlags` 还把短参数 `-c` 全局当成 Codex 配置项处理）。同时 [subagent-manage.ts](../../src/tools/subagent-manage.ts#L293-L389) 的 `follow_up` 在 `tools/` 适配层内联了约 90 行租约与外部派发逻辑，违背了 [AGENTS.md](../../AGENTS.md#L111) 的薄适配器原则。
+2. **一举清零 [architecture-baseline.json](../../scripts/architecture-baseline.json) 中仅存的 3 个 >800 行历史例外**：
+   - [jobs/manager.ts](../../src/jobs/manager.ts)（975 行）：将纯 `Executor` 杀进程脚本引擎（`killCommand` + `runKill`，约 85 行）与产物读取/GC 辅助函数（`collectGarbage` + `readOutput`，约 110 行）拆至同目录独立文件，即可自然降至 ~770 行；
+   - [subagents/discovery.ts](../../src/subagents/discovery.ts)（1031 行）：将 Frontmatter YAML 子集解析器与角色校验/列表渲染分离；
+   - [subagents/runs.ts](../../src/subagents/runs.ts)（1025 行）：将重启对账恢复与聊天通知格式化拆出，即可让全仓实现 **100% 零例外通过 800 行门禁**。
+3. **随手可修的细节瑕疵**：
+   - [catalog.ts](../../src/commands/catalog.ts#L188) 与 [catalog.ts](../../src/commands/catalog.ts#L213) 重复定义了两次 `/tasks archive`；
+   - [presentation.ts](../../src/tools/contract/presentation.ts#L79) 中 `memory_forget` 读取了不存在的 `args.target`（实际 schema 字段为 `args.name`），导致界面永远显示 `记忆删除 "?"`；
+   - [agent-delegation.md](../../src/playbooks/agent-delegation.md#L1-L5) 漏加 `requires-tools: subagent`，导致禁用委派的 `request` 模式仍向模型暴露该手册；
+   - [durable-dispatch.ts](../../src/runtime/durable-dispatch.ts#L557) 按文件名编码字典序而非 `createdAt` 排空积压唤醒，且 `exhausted` 死信文件与 [watcher.ts](../../src/events/watcher.ts#L87-L93) 的 `events-history.jsonl` 均无容量轮转与过期清理。
+4. **`evals/` 行为评测集诊断**：
+   - **区分度饱和（天花板效应）**：当前基线在 12 个 `core` 门禁上已达 **36/36（100%）**，评测器自身已告警 `discrimination low`；
+   - **Oracle Control 覆盖率偏低**：64 个用例中仅 18 个配有可执行正/负/等价控制，其余 39 个扩展回归用例处于 `uncovered`（`INCONCLUSIVE`）状态；
+   - **关键场景空白**：缺乏多工位 `cwd` 切换、多文件真实 TypeScript 重构协作、钉钉媒体/引用边界的行为探针；且 [selection.ts](../../evals/harness/selection.ts#L123-L128) 把 `src/agent/`、`src/tools/`、`src/runtime/` 全部归为 `common = true`，改一行代码即触发全集计划。
+
+---
+
+## 四、结合 2026 业界 Personal / Coding Agent 演进成果的对标思考
+
+结合项目中已有的两篇高质量前沿调研（[personal-agent-proactivity-and-voice.md](../../docs/refer/personal-agent-proactivity-and-voice.md) 与 [personal-agent-proactivity-design-notes.md](../../docs/refer/personal-agent-proactivity-design-notes.md)）以及 2026 年 Coding Agent / Personal Harness 领域的最新实践，我们提炼出**最契合 Pipiclaw 基因的五条演进判断**：
+
+| 业界演进方向（2026 代表实践） | 行业主流做法与痛点 | 对 Pipiclaw 的取舍建议（适配个人低复杂度偏好） |
+|---|---|---|
+| **1. 并行编码的物理隔离**<br>*(Claude Code `--worktree`、Codex 沙盒工作树、Worktrunk、Cursor Parallel Agents)* | 多 Agent 共享同一 Git 工作树极易互相踩脏未提交变更；主流工具已从“Prompt 叮嘱建 worktree”升级为**Harness 原生自动分配隔离 Git Worktree + 完结返回分支/Diff**。 | **强烈建议吸收（极薄实现）**：无需引入容器/VM，只需在 `subagent` 派发 `mutates: "write"` 时提供可选运行时托管 Worktree（基于 `git worktree add --detach`），结算时自动记录分支/commit 并在任务归档时回收，同时补齐主会话/核验读锁感知。 |
+| **2. 记忆与经验闭环**<br>*(Letta/Mem0 图谱库 vs OpenClaw/Claude Auto-Dream 文件级技能蒸馏)* | 重型方案引入外部向量库 + 知识图谱，运维重、黑盒难调且极易召回噪声；轻量高杠杆方案坚持 **Markdown 真相源 + BM25/倒排全文检索 + 将反复成功的任务轨迹蒸馏为可复用 `SKILL.md`**。 | **坚持文件真相源，拒绝向量数据库**：① 修好 `session_search` 全量轻量词频评分（流式扫描无需建库）；② 将 `tasks/archive/*.md` 纳入统一历史工作检索；③ 增加“任务复盘 → 提议生成/更新 `workspace/skills/`”的半自动沉淀闭环。 |
+| **3. 主动性（Proactivity）范式**<br>*(Grok Bot / Muse 群聊陪伴抢话 vs OpenAI Dots / DeepSeek Super-agent 委托守望)* | 开放式“每条消息过分类器抢话”适合社交陪聊，但在研发个人助手里极易沦为打扰噪音，且难以验证收益。真正高价值的个人主动性是 **Scoped Watch（受托守望）**：用户明确声明关注条件（PR CI 变红、长跑实验收敛、依赖发布、日志异常），由零成本确定性传感器轮询，命中后才唤醒模型研判。 | **沿作者 11-06 设计笔记收敛落地**：不做群聊主动插话（Grok Bot 模式），而是把现有 `events` 的 `preAction` 升级为**带状态水位线（cursor/hash）的轻量 Watch 传感器 + Shadow Mode（静默记账期）**，把打扰门槛锁死在确定性退出码与冷却预算里。 |
+| **4. 外部工具生态桥接**<br>*(常驻多 MCP Server vs CLI-First + 按需单次桥接)* | 把十几个 MCP Server 挂进常驻会话会吞噬数千至上万 System Prompt Token，且长连接子进程脆弱。2026 高效 Coding Harness 普遍回归 **CLI-First**（模型天然擅长调 `gh`、`kubectl`、`sqlite3`、`mcporter` 单次命令 + Skill 说明文档）。 | **保持核心工具面极简（15 个以内）**：不在 Pipiclaw 内核维护复杂的常驻 MCP 进程池；通过一份薄 Skill 配合单次 CLI 调用接入外部 SaaS/数据源，把复杂度挡在守护进程之外。 |
+| **5. 语音与移动伴行架构**<br>*(GPT-Live 客户端工具委托、钉钉原生语音消息 vs 全双工 WebRTC)* | 全双工实时语音（Realtime Voice）延迟敏感、状态复杂，若塞进核心 Daemon 会严重污染确定性通道队列。而移动通勤场景 **80% 的真实需求是“松手发一条语音指令 + 异步收结构化文字/卡片结果”**。 | **两步走**：第一步用极小改动接通钉钉原生入站语音（直接消费 `content.recognition` ASR 文本 + 原音频落盘）；第二步若未来需要全双工实时语音，严格作为 **`WebApiTransport` 的独立进程外客户端**（类似 `src/tui` 的地位）构建。 |
+
+---
+
+## 五、Pipiclaw 下一阶段演进路线图（严控复杂度的四阶段计划）
+
+> [!TIP]
+> **复杂度预算守则**：本路线图遵循 **“先修内功与高频摩擦，再做高杠杆增量；不加新基础设施依赖，不破 13 层架构表”** 的原则。阶段 H0 与 H1 完成后，Pipiclaw 完全具备正式发布 **`v1.0.0`** 的工程成色。
+
+```mermaid
+flowchart LR
+    H0["H0: v0.9.6 安全与正确性封板 (3–5天)"] --> H1["H1: v1.0 零摩擦单人研发闭环 (2–3周)"]
+    H1 --> H2["H2: v1.1 有界守望与经验反哺 (3–4周)"]
+    H2 --> H3["H3: v1.2+ 进程外多模态客户端 (按需演进)"]
+```
+
+### 阶段 H0：`v0.9.6` 安全与正确性封板（Pre-1.0 Hardening，高确定性低风险）
+
+1. **统一 Shell 执行目录语义（修 [P0-1]）**：修复 `runner-factory.ts` / `bash.ts`、`DeskJobManager`、`EventsWatcher.preAction` 的 `cwd` 漏传，补一条跨 `write → bash → job` 的确定性 E2E 用例（遵循 [AGENTS.md](../../AGENTS.md) 先破后立做 mutation check）。
+2. **补齐控制面自保护与 SSRF 闭环（修 [P0-2]、[P0-3]）**：在 `path-guard.ts` 锁死 `appHomeDir` 下的配置/密钥/状态目录写权限与敏感凭据读权限；将 `home.ts` 模板 `networkGuard.enabled` 设为 `true`，并在 `web/fetch.ts` 堵住 Jina 对 `NetworkGuardError` 的绕过。
+3. **修复外部执行器与事件调度必现缺陷（修 [P0-4]、[P0-5]）**：修复 `cursor-cli` 在 `purpose: "verify"` 下的 `[effort=...]` 崩溃；串行化 `EventsWatcher.handleFile` 并停止被替换的旧 `Cron`/Timer；对齐 `event_manage` 的 `timeout` / `timeoutMs`。
+4. **顺手消除低垂缺陷与清零架构基线**：
+   - 修复 `session_search` 打分前截断 500 块的 bug（改为流式遍历打分、仅保留 Top-K 小顶堆）；
+   - 修复钉钉 `replaceWithFinal` 漏归档、`deliverAnswer` 漏传 `title`、`send_media` 误抛普通 `Error`、`presentation.ts` 的 `memory_forget` 字段名、`catalog.ts` 重复 `archive`；
+   - 将 `TaskLane` 的 `stopGraceMs` 放宽至 15–30s（支持延迟结算自动解除隔离），限定 `.delivery/` 坏文件故障仅影响对应任务，归档任务时一并归档/清理 `tasks/.sessions/<id>.jsonl` 与 `appenders` 缓存；
+   - 按 §3.3 拆分 3 个历史超长文件，**将 `scripts/architecture-baseline.json` 彻底清零**。
+
+---
+
+### 阶段 H1：`v1.0` 零摩擦单人高杠杆工作流（核心体验跃升）
+
+#### 方向 1.1：钉钉移动生产力“全接住”闭环
+- **原生接入语音、文件与引用回复**：
+  - `msgtype === "audio"`：优先提取 `content.recognition` 作为用户输入文本（标注 `[语音转写]`），同时可选保存原音频至 `inbox/`；
+  - `msgtype === "file"`：复用已有的 `downloadMessageFile` + `persistInboundFile` 落盘至工位 `inbox/`，在消息中注入文件路径与大小供模型直接 `read` / `bash` 处理；
+  - `repliedMsg`：当用户引用历史消息（尤其是引用某条任务报告或提问回执）时，将引用摘要拼入 `<replied_message>` 上下文；若引用的消息携带明确 `[task:<id>]` 标记，可直接确定性路由至 `task_message`！
+  - 对暂不支持的富媒体类型返回一行清晰的中文引导，彻底消灭“发消息无回音”。
+- **后台任务委派通知精细化（尊重 Spec 065 可见性裁决）**：保留实时通知，但在任务触发的委派通知上附带 `[任务 <id>]` 来源标签；当 `wake-coalescing` 合并 $K$ 个聊天子代理完成唤醒时，将 $K$ 条散碎完成提示合并为单条汇总提示。
+
+#### 方向 1.2：`Desk` 多仓人体工学与双层记忆共享
+- **极简仓库绑定体验**：支持 `pipiclaw tui --here`（或 `--cwd <path>`）与 `/desk new <name> [cwd]`、`/desk cwd <path>`，并在 `/desk list` 展示当前 `cwd`；修复 `DeskRuntime` 修改 `desk.json` 后的热刷新与 TUI `@file` 补全根目录。
+- **解耦“活跃后台工作”与“当前聊天通道绑定”**：工位只要仍有 `running/waiting` 的 Task 或启用的定时 Event，即保持后台激活推进（结果投递至任务记录的归属通道）；用户在唯一钉钉 DM 中临时 `/desk bind repo-b` 聊天不再冻结 `repo-a` 的后台长任务！同时提供 `/desk archive <name>` 干净回收不再使用的临时项目工位。
+- **“用户全局层 + 工位项目层”记忆清晰分工**：允许 `memory_save`（及 `reflect` 中高置信度的跨项目个人习惯）指定 `scope: "user" | "desk"`（底层对应已有的 `workspace/MEMORY.md` 或 `workspace/memory/` 与 `desk-<name>/memory/`），彻底打通多仓库间的个人工程偏好复用。
+
+#### 方向 1.3：运行时辅助的轻量 Git Worktree 隔离与读写租约
+- **薄封装而非重沙盒**：
+  - 在 `workspace-lease.ts` 中引入读写锁语义：`purpose: "verify"` 持共享读租约（防止核验中途被写操作污染），主会话/任务会话的 `write`/`edit` 检查目标路径是否存在活跃的子代理独占写租约（冲突时抛 `RecoverableToolError` 引导模型等待或改用 worktree）；
+  - 为 `subagent` 增加可选 `worktree: true`（仅当目标目录为 Git 仓库且 `mutates: "write"` 时生效）：由运行时在 `.git/pipiclaw-worktrees/<runId>` 自动创建独立分支/分离头工作树，执行完毕后在结算结果中结构化返回 `branch`、`headSha`、`changedFiles` 摘要，并在父任务关闭或超时后自动 `git worktree remove` 回收干净工作树（有未合并改动时保留并提示）。
+
+#### 方向 1.4：打通“已完成任务归档（Task Archive）”检索与 Shell 守卫降噪
+- **统一历史工作召回**：为 `task_list` 增加 `includeArchived` / 关键词过滤，或提供轻量 `work_search`（同时覆盖 `tasks/archive/*.md` 的目标/最终交付摘要与全量 `conversations/*/log.jsonl`），让模型在接新需求时能秒查“上次这个模块是怎么改的”。
+- **Shell 守卫减摩**：在 [bash.ts](../../src/tools/bash.ts#L255) 中将 `unsupported-shell`（语法受限但非恶意命令）改为抛 `RecoverableToolError`（不弹用户侧高危告警，直接指导模型改用 `python3 -c` / `node -e` 或文件工具），并评估在安全参数位置放开无副作用的只读 glob / heredoc。
+- **外部 Harness 注册表收敛**：用单一声明式 `HARNESS_SPECS` 表收拢 7 处重复联合类型，并将 `subagent-manage.ts` 中的 `follow_up` 执行逻辑下沉回 `src/subagents/`。
+
+#### 方向 1.5：WebAPI / TUI 增量流式与单机守护进程收敛
+- 在 `TurnOutputPort` 增加可选增量事件 `answer_delta` / `thinking_delta`，让 TUI 与 WebAPI 客户端获得丝滑的实时逐字流式反馈（钉钉端可继续按字节水位节流刷新）；
+- 为 WebSocket 补齐 `response.cancel` 控制帧，在有活跃回合时顺延 `MAX_WS_CONNECTION_MS`；独立隔离 `request-execution.ts` 的无状态 Runner 字典；
+- 优化 `pipiclaw tui` 启动策略：当检测到已有另一个嵌入式 TUI 持有锁时给出明确提示（或支持一键自动拉起后台常驻 `pipiclaw daemon`），并为嵌入式模式补齐 `SIGHUP`/`SIGTERM` 优雅停机钩子。
+
+---
+
+### 阶段 H2：`v1.1` 有界主动性与自进化能力（放大长期复利）
+
+1. **受托守望原语（Scoped Watch = 带水位线的 Event Sensor + Shadow Mode）**
+   - 直接深化 [personal-agent-proactivity-design-notes.md](../../docs/refer/personal-agent-proactivity-design-notes.md) 的思路，不引入新顶层模块，而是在 `src/events/` 上做最小增强：
+     - 为周期性事件的 `preAction` 提供一个专属状态目录/环境变量（如 `$PIPICLAW_EVENT_STATE_FILE`）与标准输出传递：传感器脚本（如 `gh pr checks`、`git fetch` 比对远端、监控日志新增错误行）仅在**状态发生有意义跃迁**时以 `exit 0` 输出变化摘要，将该摘要直接注入唤醒事件或派生任务契约；无变化时 `exit 1` 零 Token 静默跳过；
+     - 支持 `mode: "shadow" | "notify"`：新建的守望规则可先在 `shadow` 模式下只写记录不推钉钉，由 `/events history` 审阅命中率后再转正，彻底杜绝垃圾推送。
+
+2. **经验到技能的半自动蒸馏（Trajectory-to-Skill）**
+   - 当一个多步复杂任务（例如耗费 >10 步、经历过排错重试最终成功关闭的任务）执行 `task_close` 时，或在 `reflect` 周期中发现同类技术排障重复出现时，支持生成一份候选 `SKILL.md` 草稿（或通过 `/tasks distill <id>` 显式触发），经用户确认后落入 `workspace/skills/`。相比自动往 `MEMORY.md` 塞零散事实，把“完整排障套路/项目构建诀窍”沉淀为按需加载的 Skill，既不占常驻上下文，复用精度又高出一个数量级。
+
+3. **`evals/` 第二代升级**
+   - 为 `selection.ts` 建立细粒度模块→用例映射（消除改一行代码跑全集的摩擦）；
+   - 将剩余高价值扩展用例（媒体交互、记忆防投毒、外部委派、定时事件）补齐可执行 Oracle Controls；
+   - 新增 3–4 个高区分度多文件 TypeScript 协作与工位 `cwd` 隔离探针，打破当前 `core` 100% 满分的区分度瓶颈。
+
+---
+
+### 阶段 H3：`v1.2+` 进程外生态与多模态外设（按需选做）
+
+- **语音实时伴行客户端（Out-of-Process Voice Frontend）**：若未来希望在通勤/散步时拥有双向语音交互，**绝不把音频编解码与 WebRTC 塞进 `src/runtime/`**，而是完全仿照 `src/tui/` 的架构，基于 `WebApiTransport` 编写独立的语音前端进程（连接 Qwen-Audio-Realtime / OpenAI Realtime 作为语音壳，复杂编码与仓库查询通过 Responses API 委托给本地 Pipiclaw 守护进程执行）。
+- **轻量移动端/Web 看板客户端（可选）**：同样作为 `WebApiTransport` 的纯前端消费者展示跨工位任务时间线与 Diff 审阅，核心 Daemon 零膨胀。
+
+---
+
+## 六、明确建议“不做什么”（Anti-Roadmap / 复杂度防火墙）
+
+为了守护 Pipiclaw 最宝贵的“单人可控、全栈透明、心智负担低”的特质，建议在未来迭代中**明确拒绝**以下诱惑：
+
+1. **绝不引入外部向量数据库、图数据库或重型存储引擎（Postgres / Redis / Qdrant / Neo4j）**：个人规模（数千条对话分块、数百个归档任务、百余条精选记忆）在内存中做流式 BM25 / 词项匹配只需几毫秒，纯文本 Markdown + JSONL 的 `grep`/`git` 可审计性无可替代。
+2. **绝不恢复“多角色拟人化流水线 / 辩论委员会（Planner → Coder → QA → PM Swarm）”**：保持“1 个拥有完整上下文的 Leader + 按能力/成本/隔离边界划分的执行器 + 1 次独立核验”的最短链路。
+3. **绝不在核心 Daemon 内置浏览器自动化引擎（Playwright/Puppeteer）或常驻 MCP 进程管理器**：需要网页交互或外部系统集成时，一律通过外部 CLI / 单次脚本 + Skill 说明按需调用。
+4. **绝不做开放式群聊“察言观色主动插话”分类器**：坚持“用户显式点名或确定性传感器触发才说话”，守住零打扰底线。
+5. **绝不做多租户权限体系、RBAC 或云端同步账号系统**：保持单宿主、单信任域的纯粹假设。
+6. **绝不为了兼容旧磁盘格式而在运行时保留双轨读取代码**：继续坚持 [AGENTS.md](../../AGENTS.md#L114) 的离线一次性迁移原则。
+
+---
+
+## 七、优先行动清单速查表（Actionable Checklist）
+
+| 优先级 | 事项 | 核心涉及文件 | 预估改动量 | 预期收益 |
+|---|---|---|---|---|
+| **P0** | 修复 `bash` / `job` / `preAction` 漏传工位 `cwd` | [runner-factory.ts](../../src/agent/runner-factory.ts), [manager.ts](../../src/jobs/manager.ts), [watcher.ts](../../src/events/watcher.ts) | ~40 行 | 彻底对齐文件工具与 Shell 工具的目录语义，激活多仓工位 |
+| **P0** | 保护 `~/.pipiclaw` 控制面文件 + 启用默认 SSRF 守卫并堵住 Jina 绕过 | [path-guard.ts](../../src/security/path-guard.ts), [home.ts](../../src/app/home.ts), [fetch.ts](../../src/web/fetch.ts) | ~60 行 | 防止间接注入窃取密钥或热关闭 `security.json` |
+| **P0** | 修复 `cursor-cli` 核验崩溃、`EventsWatcher` 竞态泄漏与 `timeoutMs` 丢失 | [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts), [watcher.ts](../../src/events/watcher.ts), [event-manage.ts](../../src/tools/event-manage.ts) | ~70 行 | 消除必现参数报错与重复定时任务幽灵 |
+| **P1** | 修复 `session_search` 500 块预截断 + 打通 `tasks/archive` 历史检索 | [session-search.ts](../../src/memory/session-search.ts), [factory.ts](../../src/tools/task-manage/factory.ts) | ~120 行 | 恢复数天前冷历史召回，消除已完成任务失忆 |
+| **P1** | 钉钉入站接入 `audio`（ASR）、`file`、`repliedMsg` + 修复归档与 `send_media` | [inbound-media.ts](../../src/dingtalk/inbound-media.ts), [delivery.ts](../../src/dingtalk/delivery.ts), [send-media.ts](../../src/tools/send-media.ts) | ~180 行 | 手机端发语音、传日志、引用回复任务无缝闭环 |
+| **P1** | `Desk` 多仓 `--cwd` 人体工学 + 解耦单 DM 切工位与后台活跃任务推进 | [cli.ts](../../src/tui/cli.ts), [commands.ts](../../src/desk/commands.ts), [desk-runtime.ts](../../src/runtime/desk-runtime.ts) | ~200 行 | 顺畅支撑一人同时推进多个本地代码仓库 |
+| **P1** | Task Lane 健壮性（`stopGraceMs`、`.sessions` 清理、`.delivery` 故障隔离、批量 `probeAll`） | [task-lane.ts](../../src/runtime/task-lane.ts), [archive.ts](../../src/tasks/archive.ts), [delivery.ts](../../src/tasks/delivery.ts) | ~150 行 | 长周期无人值守任务抗抖动、零内存/文件泄漏 |
+| **P1** | 轻量运行时托管 Git Worktree 隔离 + `verify` 读租约 | [workspace-lease.ts](../../src/subagents/workspace-lease.ts), [dispatch.ts](../../src/subagents/dispatch.ts) | ~250 行 | 多任务/主从并发编码不再互相踩脏工作树 |
+| **P2** | 拆分 3 个超长文件清零 `architecture-baseline.json` + 收敛 Harness 注册表 | [manager.ts](../../src/jobs/manager.ts), [discovery.ts](../../src/subagents/discovery.ts), [runs.ts](../../src/subagents/runs.ts) | 纯结构重构 | 全仓零架构特例，降低后续新增执行器维护成本 |

@@ -27,6 +27,7 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const managers = new Set<DeskJobManager>();
 const fakeSpillFiles = new Set<string>();
+const makeTempDeskDir = useTempDirs("pipiclaw-job-desk-");
 
 function managedJobManager(...args: ConstructorParameters<typeof DeskJobManager>): DeskJobManager {
 	const manager = new DeskJobManager(...args);
@@ -68,6 +69,7 @@ class FakeJobExecutor implements Executor {
 	public abortMidLaunch = false;
 	public output = "job output here";
 	public readonly commands: string[] = [];
+	public readonly execOptions: Array<ExecOptions | undefined> = [];
 	/** The AbortSignal each `kill`-shaped command was invoked with — asserted to never be aborted
 	 *  on the persist-failure rollback / interrupted-launch paths. */
 	public readonly killSignals: Array<AbortSignal | undefined> = [];
@@ -75,6 +77,7 @@ class FakeJobExecutor implements Executor {
 
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		this.commands.push(command);
+		this.execOptions.push(options);
 		const spillMatch = command.match(/> '([^']*)' 2>&1/);
 		if (spillMatch) fakeSpillFiles.add(spillMatch[1]);
 		if (command.includes("command -v setsid")) {
@@ -138,6 +141,14 @@ describe("DeskJobManager", () => {
 			second.stop();
 			vi.useRealTimers();
 		}
+		const deskDir = makeTempDeskDir();
+		const deskScoped = managedJobManager({ desk: "news", deskDir }, firstExecutor);
+		await deskScoped.start("sleep 10", "default-cwd", 300, { channelId: "dingtalk:dm:1" });
+		await deskScoped.start("sleep 10", "override-cwd", 300, {
+			channelId: "dingtalk:dm:1",
+			cwd: "/desk/custom",
+		});
+		expect(firstExecutor.execOptions.slice(-2).map((o) => o?.cwd)).toEqual([deskDir, "/desk/custom"]);
 	});
 
 	it("sweeps and reaps a finished job even when nobody polls it", async () => {

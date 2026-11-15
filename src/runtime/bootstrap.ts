@@ -151,7 +151,7 @@ interface RuntimeContextOptions {
 	/** A `state/daemon.lock` the caller already holds (the embedded runtime); taken here when absent. */
 	daemonLock?: FileLockHandle;
 	/** Builds one desk's events watcher (tests pass an inert one). */
-	createEventsWatcher?: (target: { desk: string; deskDir: string }) => {
+	createEventsWatcher?: (target: { desk: string; deskDir: string; cwd: string }) => {
 		start(): void;
 		stop(): void;
 		flush?(): Promise<void>;
@@ -267,24 +267,25 @@ async function buildRuntimeContext(
 				});
 			}
 		},
-		createWatcher: (target) =>
-			options.createEventsWatcher
-				? options.createEventsWatcher(target)
-				: createEventsWatcher({
-						...target,
-						isBound: (channelId) => deskRuntime.isBoundTo(channelId, target.desk),
-						isReachable: (channelId) => transports.isReachable(channelId),
-						sink: ingress,
-						executor,
-						commandGuardConfig: loadSecurityConfigWithDiagnostics(appHomeDir).config.commandGuard,
-						historyPath: options.paths.eventHistoryPath,
-						dispatch,
-						spawnTask: createTaskSpawner({
-							getDeskDir: (desk) => getDeskDir(workspaceDir, desk),
-							wake: () => taskLane.notify(),
-							notify: (desk, channelId, text) => deskRuntime.sendFromDesk(desk, channelId, text),
-						}),
-					}),
+		createWatcher: (target) => {
+			if (options.createEventsWatcher) return options.createEventsWatcher(target);
+			const security = loadSecurityConfigWithDiagnostics(appHomeDir).config;
+			return createEventsWatcher({
+				...target,
+				isBound: (channelId) => deskRuntime.isBoundTo(channelId, target.desk),
+				isReachable: (channelId) => transports.isReachable(channelId),
+				sink: ingress,
+				executor,
+				commandGuardConfig: security.enabled ? security.commandGuard : undefined,
+				historyPath: options.paths.eventHistoryPath,
+				dispatch,
+				spawnTask: createTaskSpawner({
+					getDeskDir: (desk) => getDeskDir(workspaceDir, desk),
+					wake: () => taskLane.notify(),
+					notify: (desk, channelId, text) => deskRuntime.sendFromDesk(desk, channelId, text),
+				}),
+			});
+		},
 		send: (channelId, text) => pushTo(channelId, { text }),
 		isChannelBusy: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 		releaseRunner: (channelId) => releaseCachedRunner(channelRunners, channelId),

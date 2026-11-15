@@ -112,10 +112,18 @@ describe("bash tool", () => {
 			}
 			return { code: 0, stdout: "", stderr: "" };
 		});
-		const jobManager = new DeskJobManager({ desk: "news" }, executor);
-		const tool = createBashTool(executor, { jobManager, channelId: "dingtalk:dm:1" });
+		const deskDir = tempDir();
+		const jobManager = new DeskJobManager({ desk: "news", deskDir }, executor);
+		const tool = createBashTool(executor, {
+			jobManager,
+			channelId: "dingtalk:dm:1",
+			securityContext: { agentWorkspaceDir: deskDir, cwd: "/desk/custom-cwd" },
+		});
 
 		const result = await tool.execute("call", { command: "npm install", async: true });
+		expect(executor.calls[0]?.options?.cwd).toBe("/desk/custom-cwd");
+		await tool.execute("sync-call", { command: "pwd" });
+		expect(executor.calls[1]?.options?.cwd).toBe("/desk/custom-cwd");
 
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Background job");

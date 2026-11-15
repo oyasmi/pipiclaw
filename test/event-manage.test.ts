@@ -182,7 +182,7 @@ describe("manageEvent create", () => {
 		expect(await listEventFiles()).toEqual(["task.dm1.demo.sensor.json"]);
 	});
 
-	it("maps the schema's timeoutMs onto the on-disk preAction.timeout (ms)", async () => {
+	it("maps the schema's timeoutMs onto the on-disk preAction.timeout (ms) and round-trips through show -> update", async () => {
 		await manageEvent(opts(), {
 			action: "create",
 			name: "task.dm1.demo.gated",
@@ -195,6 +195,47 @@ describe("manageEvent create", () => {
 		});
 		const onDisk = JSON.parse(await readFile(join(eventsDir, "task.dm1.demo.gated.json"), "utf-8"));
 		expect(onDisk.preAction).toMatchObject({ type: "bash", command: "echo hi", timeout: 4000 });
+
+		// `show` projects `timeoutMs` so feeding its JSON back into `update` preserves the custom timeout.
+		const shown = JSON.parse(
+			(await manageEvent(opts(), { action: "show", name: "task.dm1.demo.gated" })).notice,
+		) as Record<string, unknown>;
+		expect(shown.preAction).toMatchObject({ type: "bash", command: "echo hi", timeoutMs: 4000 });
+		expect(shown.preAction).not.toHaveProperty("timeout");
+		const { channelId: _ignored, ...roundTripDef } = shown;
+		await manageEvent(opts(), {
+			action: "update",
+			name: "task.dm1.demo.gated",
+			definition: roundTripDef as EventDefinitionInput,
+		});
+		const updatedOnDisk = JSON.parse(await readFile(join(eventsDir, "task.dm1.demo.gated.json"), "utf-8"));
+		expect(updatedOnDisk.preAction).toMatchObject({ type: "bash", command: "echo hi", timeout: 4000 });
+
+		// Hand-edited files using `timeoutMs` directly are accepted by the parser; conflicting values are rejected.
+		expect(
+			parseScheduledEventContent(
+				JSON.stringify({
+					type: "periodic",
+					channelId: "dingtalk:dm:1",
+					text: "x",
+					schedule: "*/10 * * * *",
+					preAction: { type: "bash", command: "true", timeoutMs: 5000 },
+				}),
+				"hand.json",
+			).preAction?.timeout,
+		).toBe(5000);
+		expect(() =>
+			parseScheduledEventContent(
+				JSON.stringify({
+					type: "periodic",
+					channelId: "dingtalk:dm:1",
+					text: "x",
+					schedule: "*/10 * * * *",
+					preAction: { type: "bash", command: "true", timeout: 3000, timeoutMs: 5000 },
+				}),
+				"conflict.json",
+			),
+		).toThrow(/Conflicting/);
 	});
 
 	it("rejects a preAction-gated periodic below the 5-minute hard sub-floor", async () => {
@@ -313,8 +354,9 @@ describe("manageEvent show / update", () => {
 });
 
 describe("manageEvent delete", () => {
-	it("deletes an owned event and is a no-op for a non-existent one", async () => {
+	it("deletes an owned event, removes any .error.txt sidecar, and is a no-op for a non-existent one", async () => {
 		await manageEvent(opts(), { action: "create", name: "gone", definition: validPeriodic });
+		await writeFile(join(eventsDir, "gone.json.error.txt"), "load error");
 		const result = await manageEvent(opts(), { action: "delete", name: "gone" });
 		expect(result.deleted).toBe(true);
 		expect(await listEventFiles()).toEqual([]);

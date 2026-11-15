@@ -48,6 +48,8 @@ export interface SecurityRuntimeContext {
 	/** Base for relative paths — the desk directory for a desk-bound caller; `process.cwd()` when omitted. */
 	cwd?: string;
 	homeDir?: string;
+	/** App-home root (`~/.pipiclaw` or `PIPICLAW_HOME`) whose control-plane files and `state/` are sensitive. */
+	appHomeDir?: string;
 }
 
 export interface PathGuardContext extends SecurityRuntimeContext {

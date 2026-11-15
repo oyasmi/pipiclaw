@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, realpathSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBindingsPath } from "../../../src/desk/paths.js";
@@ -57,6 +57,36 @@ describe("E2E deterministic: path guard", () => {
 		const delivered = harness.deliveries.map((d) => d.text ?? "").join("\n");
 		expect(delivered.split("\n").some((line) => line.includes("✕") && line.includes(target))).toBe(true);
 		expect(delivered).not.toMatch(/Path blocked|Resolved path/);
+
+		// P0-1 & P0-2 full-stack extension (2026-11-15):
+		// 1) `appHomeDir` control-plane files (`security.json`, `auth.json`) live under temp in E2E;
+		//    SessionHost -> createPipiclawTools -> guardPath must still refuse read/write and audit them.
+		// 2) `write` and `bash` in the same desk turn must resolve relative paths against the desk's `cwd`,
+		//    not the daemon's `process.cwd()`.
+		// Mutation checks (2026-11-15, verified red): disabling `matchesAppHomeControlPlane` in
+		// `path-guard.ts` lets `security.json` be overwritten; dropping `securityContext.cwd` in
+		// `bash.ts` writes `bash-pwd.txt` in `process.cwd()` instead of `deskDir`.
+		const securityPath = join(harness.homeDir, "security.json");
+		const authPath = join(harness.homeDir, "auth.json");
+		harness.model.script.route({
+			name: "self-protect-and-desk-cwd",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("CHECK_CONTROL_AND_CWD"),
+			respond: [
+				reply.toolCall("write", { path: securityPath, content: '{"enabled":false}' }),
+				reply.toolCall("read", { path: authPath }),
+				reply.toolCall("write", { path: "desk-cwd-probe.txt", content: "DESK_CWD_OK" }),
+				reply.toolCall("bash", { command: "pwd > bash-pwd.txt" }),
+				reply.text("已完成检查。"),
+			],
+		});
+		await harness.sendUserMessage("CHECK_CONTROL_AND_CWD");
+		expect(existsSync(securityPath) ? readFileSync(securityPath, "utf8") : "").not.toContain('"enabled":false');
+		expect(harness.readAuditLog()).toContain("security.json");
+		expect(harness.readAuditLog()).toContain("auth.json");
+		expect(readFileSync(join(harness.deskDir, "desk-cwd-probe.txt"), "utf8")).toBe("DESK_CWD_OK");
+		expect(realpathSync(readFileSync(join(harness.deskDir, "bash-pwd.txt"), "utf8").trim())).toBe(
+			realpathSync(harness.deskDir),
+		);
 	});
 
 	it("A19: `/desk bind` is refused while the channel has a turn in flight", async () => {

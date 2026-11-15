@@ -109,6 +109,7 @@ export function buildSubagentTools(
 			securityContext: {
 				agentWorkspaceDir: options.workspaceDir,
 				cwd: runContext.workingDirectory,
+				...(options.appHomeDir ? { appHomeDir: options.appHomeDir } : {}),
 			},
 			channelId: options.runtimeContext.channelId,
 			deskDir: options.deskDir,

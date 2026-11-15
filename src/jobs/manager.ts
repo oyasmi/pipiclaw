@@ -60,6 +60,8 @@ const KILL_CONFIRMED_GONE: ReadonlySet<KillOutcome> = new Set<KillOutcome>([
 export interface JobStartOptions {
 	/** The channel the job was started from: its completion wake goes back there (spec 058, D7). */
 	channelId: string;
+	/** Working directory for the background process; falls back to the desk directory when omitted. */
+	cwd?: string;
 	signal?: AbortSignal;
 	notify?: boolean;
 	/** The task whose step starts the job (spec 064, INV-8): its completion is recorded there instead of waking `channelId`. */
@@ -242,9 +244,7 @@ export class DeskJobManager {
 				(earliest, expiry) => (earliest === undefined ? expiry : Math.min(earliest, expiry)),
 				undefined,
 			);
-		if (nextExpiry === undefined) {
-			return;
-		}
+		if (nextExpiry === undefined) return;
 		this.garbageCollectionTimer = setTimeout(
 			() => {
 				this.garbageCollectionTimer = undefined;
@@ -277,17 +277,16 @@ export class DeskJobManager {
 			);
 		}
 		const id = randomBytes(6).toString("hex");
-		if (this.options.spillDir) {
-			await mkdir(this.options.spillDir, { recursive: true }).catch(() => undefined);
-		}
+		if (this.options.spillDir) await mkdir(this.options.spillDir, { recursive: true }).catch(() => undefined);
 		const spillFile = jobSpillPath(id, this.options.spillDir);
 		const art = jobArtifacts(spillFile);
 		const launch = buildLaunchScript(command, art);
+		const cwd = options.cwd ?? this.target.deskDir;
 		this.observer.add(id, art.exitFile);
 
 		let result: ExecResult;
 		try {
-			result = await this.executor.exec(launch, { signal: options.signal });
+			result = await this.executor.exec(launch, { signal: options.signal, ...(cwd ? { cwd } : {}) });
 		} catch (error) {
 			// The launch was aborted (or the executor could not run it). A detached child may
 			// already be running — try to recover its pid and clean it up honestly.

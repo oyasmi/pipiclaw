@@ -429,15 +429,33 @@ describe("EventsWatcher", () => {
 		expect(existsSync(join(dir, "broken.json.error.txt"))).toBe(true);
 	});
 
-	it("schedules nothing from a load that finishes after stop (spec 058 dormancy)", async () => {
-		// Failure caught: a desk going dormant while a periodic file is mid-load leaves an orphan cron
-		// on the discarded watcher; on reactivation it fires alongside the new watcher's cron.
-		// Mutation check (run: goes red): drop the `stopped` check in `handleFile`.
+	it("schedules nothing from a load that finishes after stop and stops replaced crons across concurrent reloads", async () => {
+		// Failure caught: (1) a desk going dormant while a periodic file is mid-load leaves an orphan cron;
+		// (2) concurrent `scanExisting`/`handleFile` + `fs.watch` `handleFileChange` overwrote `this.crons`
+		// without `.stop()`ing the earlier `Cron`, leaking an immortal duplicate schedule.
 		const dir = createTempDir();
 		writeFileSync(
 			join(dir, "digest.json"),
 			JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:1", text: "digest", schedule: "0 9 * * *" }),
 		);
+		const liveWatcher = createWatcher(dir);
+		const liveApi = getEventsWatcherPrivateApi(liveWatcher);
+		await Promise.all([
+			liveApi.handleFile("digest.json"),
+			(liveWatcher as unknown as { handleFileChange(name: string): void }).handleFileChange("digest.json"),
+		]);
+		const firstCron = liveApi.crons.get("digest.json") as unknown as { isStopped(): boolean };
+		expect(liveApi.crons.size).toBe(1);
+		expect(firstCron.isStopped()).toBe(false);
+		writeFileSync(
+			join(dir, "digest.json"),
+			JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:1", text: "digest v2", schedule: "0 10 * * *" }),
+		);
+		await liveApi.handleFile("digest.json");
+		expect(firstCron.isStopped()).toBe(true);
+		expect(liveApi.crons.size).toBe(1);
+		liveWatcher.stop();
+
 		const watcher = createWatcher(dir);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 		const loading = privateApi.handleFile("digest.json"); // suspended in its readFile
@@ -893,7 +911,7 @@ describe("EventsWatcher", () => {
 			expect(bot.events).toHaveLength(0);
 		});
 
-		it("converts action timeout from milliseconds to executor seconds", async () => {
+		it("converts action timeout from milliseconds to executor seconds and forwards the desk cwd", async () => {
 			const execSpy = vi.fn(
 				async (_command: string, _options?: ExecOptions): Promise<ExecResult> => ({
 					stdout: "",
@@ -901,12 +919,17 @@ describe("EventsWatcher", () => {
 					code: 0,
 				}),
 			);
-			const watcher = createWatcher(createTempDir(), new FakeBot(), createMockExecutor(execSpy));
+			const watcher = new EventsWatcher(createTempDir(), new FakeBot(), createMockExecutor(execSpy), undefined, {
+				desk: "news",
+				cwd: "/desk/custom-cwd",
+				isBound: () => true,
+				isReachable: () => true,
+			});
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.runPreAction({ type: "bash", command: "true", timeout: 100 }, "timeout-ms.json");
 
-			expect(execSpy).toHaveBeenCalledWith("true", { timeout: 1 });
+			expect(execSpy).toHaveBeenCalledWith("true", { timeout: 1, cwd: "/desk/custom-cwd" });
 		});
 	});
 });
