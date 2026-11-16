@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { ChannelContext } from "../channel/channel-context.js";
 import type { Ingress } from "../channel/ingress.js";
 import type { MediaSendResult, PushMessage, Transport, TransportPolicy, TurnInfo } from "../channel/transport.js";
+import { StartupRefusal } from "../desk/startup-error.js";
 import type { ConversationKind } from "../desk/types.js";
 import type { SecurityLogEvent } from "../security/types.js";
 import type { WebApiConfig } from "./config.js";
@@ -20,6 +21,8 @@ export interface WebApiTransportDeps {
 	config: WebApiConfig;
 	/** `<app home>/state/webapi` */
 	stateDir: string;
+	/** Optional path to `channel.json` so `webapi.keys` updates take effect without restarting the daemon. */
+	channelConfigPath?: string;
 	/** Where requests and refused requests are recorded (the security audit log). */
 	audit: (event: SecurityLogEvent) => void;
 	/** Test overrides. */
@@ -49,8 +52,8 @@ export class WebApiTransport implements Transport {
 
 	async start(ingress: Ingress): Promise<void> {
 		if (this.deps.config.socket && Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES) {
-			throw new Error(
-				`The Web API socket path ${this.socketPath} is too long for a unix socket; use a shorter PIPICLAW_HOME.`,
+			throw new StartupRefusal(
+				`Web API 本机 socket 路径过长（${this.socketPath}），超出系统 Unix Socket 长度限制；请通过 PIPICLAW_HOME 指定更短的目录路径。`,
 			);
 		}
 		const store = await WebApiStore.open(this.deps.stateDir);
@@ -63,6 +66,7 @@ export class WebApiTransport implements Transport {
 			config: this.deps.config,
 			service,
 			socketPath: this.socketPath,
+			channelConfigPath: this.deps.channelConfigPath,
 			audit: this.deps.audit,
 			...(this.deps.maxWebSocketMs ? { maxWebSocketMs: this.deps.maxWebSocketMs } : {}),
 		});
@@ -72,6 +76,17 @@ export class WebApiTransport implements Transport {
 			// Nothing is kept on `this`, so `stop()` could not reach these: release them here.
 			await service.shutdown().catch(() => undefined);
 			await store.close().catch(() => undefined);
+			const code =
+				error && typeof error === "object" && "code" in error ? (error as { code?: unknown }).code : undefined;
+			if (this.deps.config.tcp && (code === "EADDRINUSE" || code === "EACCES")) {
+				const address = `${this.deps.config.tcp.host}:${this.deps.config.tcp.port}`;
+				const where = this.deps.channelConfigPath ?? "channel.json";
+				throw new StartupRefusal(
+					code === "EADDRINUSE"
+						? `Web API 无法监听 ${address}：该端口已被其他进程占用。\n请关闭占用该端口的程序，或在 ${where} 中修改 \`webapi.tcp\` 端口（若仅使用终端 TUI，也可将 \`webapi.tcp\` 设为 null）。`
+						: `Web API 无权限监听 ${address}。\n请在 ${where} 中将 \`webapi.tcp\` 修改为 1024 以上的可用端口。`,
+				);
+			}
 			throw error;
 		}
 		this.service = service;

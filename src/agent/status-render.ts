@@ -41,6 +41,9 @@ export function renderStatus(options: RenderStatusOptions): string {
 	} else if (runner && snapshot) {
 		try {
 			let modelLine = `- 模型：\`${snapshot.model}\`（思考档位 \`${snapshot.thinkingLevel}\`）`;
+			if (snapshot.modelConfigured === false) {
+				modelLine += " · ⚠️ 未检测到凭据（在终端执行 `pipiclaw auth login` 或配置 `models.json`）";
+			}
 			if (snapshot.fallback) {
 				const until = new Date(snapshot.fallback.cooldownUntilMs);
 				const hh = String(until.getHours()).padStart(2, "0");

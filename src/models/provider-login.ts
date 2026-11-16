@@ -189,14 +189,14 @@ export async function renderAuthStatus(runtime: ModelRuntime, authPath: string):
 	}
 
 	lines.push("");
-	lines.push(`auth.json: ${authPath}`);
+	lines.push(`凭据文件：${authPath}`);
 
 	const modelsError = runtime.getError();
 	if (modelsError) {
-		lines.push(`models.json error: ${modelsError}`);
+		lines.push(`⚠️ models.json 配置错误：${modelsError}`);
 	}
 
-	lines.push("Note: a running daemon or TUI session must be restarted to pick up new credentials.");
+	lines.push("提示：已运行的会话可发送 `/reload` 或重启服务以加载新凭据。");
 
 	return lines.join("\n");
 }

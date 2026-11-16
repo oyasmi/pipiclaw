@@ -4,16 +4,20 @@
  * the daemon's socket, or — when no daemon is running — to a runtime it starts inside this
  * process (D26, `startEmbeddedRuntime`, supplied by the entry so `tui/` never imports `runtime/`).
  */
+import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { ensureModelOnboarding, type ModelReadiness } from "../app/auth-command.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
 	type BootstrapPaths,
+	bootstrapAppHome,
 	DEFAULT_BOOTSTRAP_PATHS,
+	printBootstrapSummary,
 	readCliVersion,
 } from "../app/home.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
-import { DEFAULT_DESK, normalizeDeskName } from "../desk/paths.js";
+import { DEFAULT_DESK, getDeskDir, normalizeDeskName } from "../desk/paths.js";
 import { resolveDeskCwdSync } from "../desk/registry.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -55,13 +59,13 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 		if (arg === "--desk") {
 			desk = args[index + 1];
 			if (!desk || desk.startsWith("-"))
-				return { kind: "error", message: "--desk needs a name; omit it to open default." };
+				return { kind: "error", message: "--desk 需要指定工位名称；省略时默认打开 default 工位。" };
 			index += 1;
 		} else if (arg.startsWith("--desk=")) {
 			desk = arg.slice("--desk=".length);
 		} else if (arg === "--cwd") {
 			cwd = args[index + 1];
-			if (!cwd || cwd.startsWith("-")) return { kind: "error", message: "--cwd needs a directory path." };
+			if (!cwd || cwd.startsWith("-")) return { kind: "error", message: "--cwd 需要指定目录路径。" };
 			index += 1;
 		} else if (arg.startsWith("--cwd=")) {
 			cwd = arg.slice("--cwd=".length);
@@ -82,7 +86,7 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 		} else if (arg.startsWith("--")) {
 			// An unknown long option is a typo, not part of the prompt — reject it
 			// instead of silently sending `--pritn` to the model as prompt text.
-			return { kind: "error", message: `Unknown option: ${arg}` };
+			return { kind: "error", message: `未知参数：${arg}` };
 		} else {
 			positional.push(arg);
 		}
@@ -102,25 +106,23 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 }
 
 function printTuiHelp(io: BootstrapIO): void {
-	io.log("Usage: pipiclaw tui [options] [prompt]");
+	io.log("用法：pipiclaw tui [options] [prompt]");
 	io.log("");
-	io.log("Chat with the pipiclaw agent in the terminal, using the same config and the");
-	io.log("same assistant as the DingTalk runtime.");
+	io.log("在终端中与 Pipiclaw 助手对话（与后台服务共享同一套配置、记忆、任务与文件）。");
 	io.log("");
-	io.log("The terminal is a client of the Web API's local socket. With a daemon running it");
-	io.log("connects to it; otherwise it runs the runtime itself until you exit. It opens the");
-	io.log("default desk and resumes this desk's last conversation, sharing the desk's memory,");
-	io.log("tasks and files with the channels bound to it.");
+	io.log("终端通过本机 Web API socket 连接服务：若后台服务已在运行则直接连接；");
+	io.log("否则在当前终端进程内自动启动运行时，退出终端时一并关闭。");
+	io.log("默认打开 default 工位并续接该工位上次的终端会话。");
 	io.log("");
-	io.log("Options:");
-	io.log("  --desk <name>             Open a desk (default: default)");
-	io.log("  --cwd <dir>               Set the desk's working directory (repo path)");
-	io.log("  --create                  Create the desk first (like `/desk new`)");
-	io.log("  --new                     Start a new conversation instead of resuming");
-	io.log("  --print, -p               One-shot: run [prompt] (or stdin), print the answer, exit");
-	io.log("  --plain                   Use the line-based frontend instead of the full-screen UI");
-	io.log("  --quiet, -q               Print only the final answer, no progress (implies --plain)");
-	io.log("  --version                 Print the version and exit");
+	io.log("选项：");
+	io.log("  --desk <名称>             打开指定工位（默认：default）");
+	io.log("  --cwd <目录>              设置该工位的工作目录（如 `--cwd .` 绑定当前仓库）");
+	io.log("  --create                  先新建该工位（等价于 `/desk new`）");
+	io.log("  --new                     开启全新会话而非续接上次会话");
+	io.log("  --print, -p               单次执行：运行 [prompt]（或标准输入），输出结果后退出");
+	io.log("  --plain                   使用行模式输出替代全屏终端界面");
+	io.log("  --quiet, -q               仅输出最终回复，不展示中间进度（自动启用 --plain）");
+	io.log("  --version                 输出当前版本号并退出");
 }
 
 async function readStdin(): Promise<string> {
@@ -139,6 +141,10 @@ export interface EmbeddedRuntimeHandle {
 export interface TuiHooks {
 	/** Start the runtime in this process, or `undefined` when a daemon already holds the app home. */
 	startEmbeddedRuntime(paths: BootstrapPaths, io: BootstrapIO): Promise<EmbeddedRuntimeHandle | undefined>;
+	/** Override TTY interactivity detection (for deterministic unit tests). */
+	interactive?: boolean;
+	confirmModelLogin?: () => Promise<boolean>;
+	performModelLogin?: () => Promise<void>;
 }
 
 export async function runTui(
@@ -159,13 +165,29 @@ export async function runTui(
 	}
 	if (parsed.kind === "error") {
 		io.error(parsed.message);
-		io.error(`Run \`pipiclaw tui --help\` for usage.`);
+		io.error("运行 `pipiclaw tui --help` 查看用法。");
 		throw new BootstrapExitError(1);
 	}
 
 	let initialPrompt = parsed.positional.join(" ").trim() || undefined;
 	if (parsed.print && !initialPrompt && process.stdin.isTTY !== true) {
 		initialPrompt = (await readStdin()).trim() || undefined;
+	}
+
+	const boot = bootstrapAppHome(paths);
+	printBootstrapSummary(boot, io, paths);
+
+	let readiness: ModelReadiness | undefined;
+	if (!parsed.print) {
+		const interactive =
+			hooks.interactive ?? (io === console && process.stdin.isTTY === true && process.stderr.isTTY === true);
+		readiness = await ensureModelOnboarding({
+			paths,
+			io,
+			interactive,
+			confirmLogin: hooks.confirmModelLogin,
+			performLogin: hooks.performModelLogin,
+		});
 	}
 
 	// The pi-tui frontend owns stdout; the plain frontend prints only the final answer. Either way
@@ -191,7 +213,7 @@ export async function runTui(
 	try {
 		if (!embedded) requireSocket(paths, io);
 		try {
-			await runClient(parsed, initialPrompt, paths, io);
+			await runClient(parsed, initialPrompt, paths, io, boot.initialWebApiKey, readiness);
 		} catch (error) {
 			if (error instanceof BootstrapExitError) throw error;
 			// A refused or failed request is a message for the user, not a stack trace.
@@ -212,6 +234,8 @@ async function runClient(
 	initialPrompt: string | undefined,
 	paths: BootstrapPaths,
 	io: BootstrapIO,
+	initialWebApiKey?: string,
+	readiness?: ModelReadiness,
 ): Promise<void> {
 	const client = createSocketClient(paths);
 	const resolvedCwdArg = parsed.cwd ? resolve(parsed.cwd) : undefined;
@@ -231,20 +255,46 @@ async function runClient(
 	}
 
 	const deskName = normalizeDeskName(parsed.desk ?? DEFAULT_DESK);
+	const deskCwd = resolveDeskCwdSync(paths.workspaceDir, deskName);
+	const defaultDeskDir = getDeskDir(paths.workspaceDir, deskName);
+	const notices = [...replies];
+	if (initialWebApiKey) {
+		notices.unshift(
+			`🔑 已自动生成本机 Web API 默认密钥（仅展示一次，请保存）：\`${initialWebApiKey}\`（接口：http://127.0.0.1:8787/v1）`,
+		);
+	}
+	if (readiness && !readiness.ready) {
+		notices.push(
+			"⚠️ 当前尚未配置可用模型凭据；可退出后执行 `pipiclaw auth login`，或配置环境变量 / `models.json` 后发送 `/reload`。",
+		);
+	}
+	const launchCwd = process.cwd();
+	if (
+		!parsed.cwd &&
+		deskCwd === defaultDeskDir &&
+		launchCwd !== deskCwd &&
+		launchCwd !== homedir() &&
+		!launchCwd.startsWith(paths.appHomeDir)
+	) {
+		notices.push(
+			`💡 当前工位工作目录为默认目录；如需操作当前终端所在目录，可发送 \`/desk cwd ${launchCwd}\`（或下次启动加 \`--cwd .\`）。`,
+		);
+	}
+
 	const frontend = createFrontend({
 		plain: parsed.plain,
 		quiet: parsed.quiet,
 		interactive: true,
 		commands: TUI_SLASH_COMMANDS,
-		basePath: resolveDeskCwdSync(paths.workspaceDir, deskName),
+		basePath: deskCwd,
 	});
 	const traits = traitsOf(new PipiclawSettingsManager(paths.appHomeDir).getTuiSettings().responseMode);
 	const session = new TuiSession({
 		link: createLink(client, paths, id),
 		frontend,
 		traits,
-		label: `终端 · ${parsed.desk ?? "default"}`,
-		notices: replies,
+		label: `终端 · 工位 ${deskName} · 目录 ${deskCwd}`,
+		notices,
 	});
 	await session.startInteractive(initialPrompt);
 }

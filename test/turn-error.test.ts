@@ -6,6 +6,7 @@ import { classifyTurnError, renderTurnErrorReply } from "../src/agent/turn/turn-
 // step, so the table pins classes against real provider wording — never the reply text.
 describe("classifyTurnError", () => {
 	it.each([
+		["No API key found for provider: anthropic.", "missing_credentials"],
 		['401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}', "auth"],
 		["403 Forbidden", "auth"],
 		["Incorrect API key provided: sk-proj-****", "auth"],

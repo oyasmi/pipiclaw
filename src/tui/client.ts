@@ -73,18 +73,18 @@ export function requireSocket(paths: BootstrapPaths, io: BootstrapIO): void {
 	try {
 		const raw: unknown = JSON.parse(readFileSync(join(paths.appHomeDir, "state", "daemon.lock"), "utf-8"));
 		if (isPlainObject(raw) && typeof raw.pid === "number") {
-			const started = typeof raw.startedAt === "string" ? `, started at ${raw.startedAt}` : "";
-			lockDetail = ` (lock held by PID ${raw.pid}${started})`;
+			const started = typeof raw.startedAt === "string" ? `，启动于 ${raw.startedAt}` : "";
+			lockDetail = `（进程 PID ${raw.pid}${started}）`;
 		}
 	} catch {
 		// Lock file unreadable or absent; omit holder details.
 	}
 	io.error(
 		[
-			`Cannot reach the Web API socket (${socketPath}).`,
-			`A Pipiclaw daemon is running${lockDetail}, but it has no Web API socket. Either:`,
-			'  - set `"webapi": { "enabled": true, "socket": true }` in channel.json and restart the daemon, or',
-			"  - stop the daemon, and `pipiclaw tui` will run the runtime itself.",
+			`无法连接本机 Web API socket（${socketPath}）。`,
+			`检测到后台已有 Pipiclaw 服务正在运行${lockDetail}，但未开启本机 socket。你可以：`,
+			`  1) 在 ${paths.channelConfigPath} 中设置 \`"webapi": { "enabled": true, "socket": true }\` 并重启后台服务；或`,
+			"  2) 先停止后台服务，再直接运行 `pipiclaw tui`（由终端内嵌启动运行时）。",
 		].join("\n"),
 	);
 	throw new BootstrapExitError(1);
@@ -168,9 +168,7 @@ export async function openConversation(
 	};
 	const desk = normalizeDeskName(options.desk ?? DEFAULT_DESK);
 	if (!isDeskName(desk)) {
-		fail(
-			`Invalid desk name "${desk}": use 1-32 lowercase letters, digits or hyphens, not starting or ending with "-".`,
-		);
+		fail(`工位名称 "${desk}" 不合法：请使用 1–32 位小写字母、数字或连字符 '-'，且首尾不能为 '-'。`);
 	}
 	const state = readState(paths);
 
@@ -198,7 +196,7 @@ export async function openConversation(
 		replies.push(await ask(client, id, `/desk bind ${desk}`));
 		if ((await boundDesk(paths, id)) !== desk) {
 			for (const reply of replies) io.error(reply);
-			fail(`Could not open desk "${desk}".`);
+			fail(`无法打开工位 "${desk}"。`);
 		}
 		if (options.cwd && !options.create) {
 			replies.push(await ask(client, id, `/desk cwd ${options.cwd}`));

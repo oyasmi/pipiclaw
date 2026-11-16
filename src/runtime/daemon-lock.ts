@@ -19,8 +19,8 @@ export async function tryAcquireDaemonLock(
 	return {
 		kind: "held",
 		holder: result.heldBy
-			? `pid ${result.heldBy.pid} on ${result.heldBy.hostname} since ${result.heldBy.acquiredAt}`
-			: "another process",
+			? `pid ${result.heldBy.pid}（主机 ${result.heldBy.hostname}，启动于 ${result.heldBy.acquiredAt}）`
+			: "另一个进程",
 	};
 }
 
@@ -29,6 +29,6 @@ export async function acquireDaemonLock(appHomeDir: string): Promise<FileLockHan
 	const result = await tryAcquireDaemonLock(appHomeDir);
 	if (result.kind === "acquired") return result.handle;
 	throw new StartupRefusal(
-		`Another Pipiclaw runtime is already using ${appHomeDir} (${result.holder}). Stop it first; if no Pipiclaw process is running, delete ${lockPath(appHomeDir)}.`,
+		`目录 ${appHomeDir} 已被另一个 Pipiclaw 进程占用（${result.holder}）。\n如需与正在运行的服务对话，请直接执行 \`pipiclaw tui\`；如需重启服务，请先停止原进程（若确认无进程运行，可删除锁文件 ${lockPath(appHomeDir)}）。`,
 	);
 }

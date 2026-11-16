@@ -43,6 +43,22 @@ function handleError(error: unknown): never {
 	process.exit(1);
 }
 
+const MIN_NODE_MAJOR = 22;
+const MIN_NODE_MINOR = 19;
+
+function ensureSupportedNodeVersion(): void {
+	const [majorRaw = "0", minorRaw = "0"] = process.versions.node.split(".");
+	const major = Number.parseInt(majorRaw, 10);
+	const minor = Number.parseInt(minorRaw, 10);
+	if (major > MIN_NODE_MAJOR || (major === MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR)) return;
+	console.error(
+		`错误：Pipiclaw 需要 Node.js >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}.0（当前版本：v${process.versions.node}）。请升级 Node.js 后重试。`,
+	);
+	process.exit(1);
+}
+
+ensureSupportedNodeVersion();
+
 const command = process.argv[2];
 
 if (command === "tui") {
@@ -60,15 +76,15 @@ if (command === "tui") {
 	// readline keeps stdin open, so exit explicitly on success too.
 	runAuth(process.argv).then(() => process.exit(0), handleError);
 } else if (command === undefined || command === "run" || command.startsWith("-")) {
-	// Default mode: the long-lived DingTalk daemon. `run` names it explicitly;
+	// Default mode: the long-lived daemon. `run` names it explicitly;
 	// a bare `pipiclaw` still runs it, and leading flags (--version/--help) are
 	// handled by bootstrap's parseArgs. The daemon does not resolve, so there is
 	// no success path to exit on — only surface fatal errors.
 	installFatalRejectionHandler();
 	bootstrap(process.argv).catch(handleError);
 } else {
-	console.error(`Unknown command: ${command}`);
+	console.error(`未知子命令：${command}`);
 	for (const line of formatCliCommandsHelp("pipiclaw")) console.error(line);
-	console.error("Run `pipiclaw --help` for usage.");
+	console.error("运行 `pipiclaw --help` 查看完整用法。");
 	process.exit(1);
 }

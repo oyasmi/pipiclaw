@@ -10,7 +10,10 @@ import {
 	parseArgs,
 } from "../src/app/home.js";
 import { prepareAppServices } from "../src/app/services.js";
+import { createModelRuntime } from "../src/models/runtime.js";
 import { bootstrap } from "../src/runtime/bootstrap.js";
+import { authenticate } from "../src/webapi/auth.js";
+import { parseWebApiConfig } from "../src/webapi/config.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-bootstrap-");
@@ -64,41 +67,99 @@ describe("parseArgs", () => {
 			expect(err).toBeInstanceOf(BootstrapExitError);
 			expect((err as BootstrapExitError).code).toBe(1);
 		}
-		expect(io.error).toHaveBeenCalledWith("Unknown option: --bogus");
+		expect(io.error).toHaveBeenCalledWith("未知参数：--bogus");
 	});
 });
 
 describe("bootstrap", () => {
-	// Spec 053 D11: writing the templates on a first run is the expected outcome, so it exits 0
-	// with a guide; a template that is still unfilled on the next run is a real config error.
-	it("exits 0 after creating the channel template and 1 while it is still a placeholder", async () => {
+	it("starts out of the box with Web API enabled + a generated default key, prompts login when interactive without credentials, and refuses unfilled DingTalk placeholders when enabled", async () => {
 		const paths = createBootstrapPaths();
-		const exitCode = async () =>
-			bootstrap(["node", "pipiclaw"], {
+		const io = createIO();
+		const prevAnthropic = process.env.ANTHROPIC_API_KEY;
+		const prevOpenAI = process.env.OPENAI_API_KEY;
+		delete process.env.ANTHROPIC_API_KEY;
+		delete process.env.OPENAI_API_KEY;
+
+		try {
+			let loginRan = 0;
+			const app = await bootstrap(["node", "pipiclaw"], {
 				paths,
-				io: createIO(),
+				io,
 				registerSignalHandlers: false,
 				startServices: false,
-			}).then(
-				() => undefined,
-				(error: unknown) => (error instanceof BootstrapExitError ? error.code : error),
-			);
+				interactive: true,
+				confirmModelLogin: async () => true,
+				performModelLogin: async () => {
+					loginRan += 1;
+				},
+			});
+			await app.shutdown();
 
-		expect(await exitCode()).toBe(0);
-		expect(existsSync(paths.channelConfigPath)).toBe(true);
-		expect(await exitCode()).toBe(1);
+			expect(loginRan).toBe(1);
+			const logged = io.log.mock.calls.flat().join("\n");
+			const printedKey = logged
+				.split("\n")
+				.map((line) => line.trim())
+				.find((line) => line.startsWith("pk_"));
+			expect(printedKey).toBeDefined();
+
+			const channelConfig = JSON.parse(readFileSync(paths.channelConfigPath, "utf8"));
+			expect(channelConfig.dingtalk).toMatchObject({
+				enabled: false,
+				robotCode: "",
+				cardTemplateId: "",
+				allowFrom: [],
+			});
+			expect(channelConfig.webapi).toMatchObject({
+				enabled: true,
+				socket: true,
+				tcp: "127.0.0.1:8787",
+				tls: null,
+			});
+			const parsedWebApi = parseWebApiConfig(channelConfig.webapi);
+			expect(authenticate(`Bearer ${printedKey}`, parsedWebApi.keys)).toMatchObject({
+				name: "default",
+				desks: ["default"],
+				local: false,
+			});
+
+			// Enabling DingTalk without filling real credentials still refuses cleanly with exit code 1.
+			channelConfig.dingtalk.enabled = true;
+			writeFileSync(paths.channelConfigPath, JSON.stringify(channelConfig, null, 2));
+			await expect(
+				bootstrap(["node", "pipiclaw"], {
+					paths,
+					io: createIO(),
+					registerSignalHandlers: false,
+					startServices: false,
+				}),
+			).rejects.toMatchObject({ code: 1 });
+		} finally {
+			if (prevAnthropic !== undefined) process.env.ANTHROPIC_API_KEY = prevAnthropic;
+			if (prevOpenAI !== undefined) process.env.OPENAI_API_KEY = prevOpenAI;
+		}
 	});
 
-	it("creates app home templates and leaves an idempotent second run", () => {
+	it("creates self-documenting app home templates and leaves an idempotent second run", async () => {
 		const paths = createBootstrapPaths();
 
 		const first = bootstrapAppHome(paths);
 		expect(first.channelTemplateCreated).toBe(true);
+		expect(first.initialWebApiKey).toMatch(/^pk_/);
 		expect(existsSync(paths.channelConfigPath)).toBe(true);
 		expect(existsSync(paths.toolsConfigPath)).toBe(true);
 		expect(JSON.parse(readFileSync(paths.toolsConfigPath, "utf8"))).toMatchObject({
 			tools: { web: { enable: false, search: { provider: "duckduckgo" } } },
 		});
+		expect(JSON.parse(readFileSync(paths.settingsConfigPath, "utf8"))).toMatchObject({
+			defaultThinkingLevel: "medium",
+			compaction: { enabled: true },
+		});
+		const modelRuntime = await createModelRuntime({
+			authConfigPath: paths.authConfigPath,
+			modelsConfigPath: paths.modelsConfigPath,
+		});
+		expect(modelRuntime.getError()).toBeUndefined();
 		expect(existsSync(paths.securityConfigPath)).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "SOUL.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "AGENTS.md"))).toBe(true);

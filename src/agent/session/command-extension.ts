@@ -183,7 +183,9 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 				if (!args.trim()) {
 					const current = currentModel ? `\`${formatModelReference(currentModel)}\`` : "（无）";
 					const available =
-						availableModels.length > 0 ? formatModelList(availableModels, currentModel) : "- （无可用模型）";
+						availableModels.length > 0
+							? formatModelList(availableModels, currentModel)
+							: "- 暂无可用模型（尚未检测到模型凭据；请在终端执行 `pipiclaw auth login`、设置供应商环境变量，或配置 `models.json` 后发送 `/reload`）";
 					const report = `**模型**
 
 当前模型：${current}

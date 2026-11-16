@@ -4,6 +4,7 @@
  * decides whether a key and a Host check apply); everything that guards the door lives in the
  * `onRequest` hook, which runs before the body is read (INV-6).
  */
+import { readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import rateLimit from "@fastify/rate-limit";
@@ -11,9 +12,11 @@ import websocket from "@fastify/websocket";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import * as log from "../log.js";
 import type { SecurityLogEvent } from "../security/types.js";
+import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isPlainObject } from "../shared/type-guards.js";
 import { authenticate, LOCAL_PRINCIPAL, type Principal } from "./auth.js";
-import type { WebApiConfig } from "./config.js";
+import { parseWebApiConfig, type WebApiConfig, type WebApiKey } from "./config.js";
 import { badRequest, forbidden, notFound, serverError, tooManyRequests, unauthorized, WebApiError } from "./errors.js";
 import { type Listener, type RouteContext, sendError } from "./http.js";
 import {
@@ -35,8 +38,33 @@ export interface ServerDeps {
 	service: WebApiService;
 	/** Where the local socket is created; its directory is made private. */
 	socketPath: string;
+	/** When present, `webapi.keys` is reloaded whenever `channel.json`'s file stamp changes. */
+	channelConfigPath?: string;
 	audit: (event: SecurityLogEvent) => void;
 	maxWebSocketMs?: number;
+}
+
+function createKeyResolver(initialKeys: readonly WebApiKey[], channelConfigPath?: string): () => readonly WebApiKey[] {
+	if (!channelConfigPath) return () => initialKeys;
+	let currentKeys = initialKeys;
+	let lastStamp = fileStamp(channelConfigPath);
+	return () => {
+		const stamp = fileStamp(channelConfigPath);
+		if (stamp === lastStamp) return currentKeys;
+		lastStamp = stamp;
+		if (!stamp) return currentKeys;
+		try {
+			const parsed: unknown = JSON.parse(readFileSync(channelConfigPath, "utf-8"));
+			if (isPlainObject(parsed) && isPlainObject(parsed.webapi)) {
+				currentKeys = parseWebApiConfig(parsed.webapi).keys;
+			}
+		} catch (error) {
+			log.logWarn("webapi.keys.reload_failed", "Web API keys reload failed; keeping previous keys", {
+				reason: errorMessage(error),
+			});
+		}
+		return currentKeys;
+	};
 }
 
 /** Hosts a loopback TCP listener answers to: a rebinding page cannot make a browser send these. */
@@ -136,6 +164,7 @@ async function buildApp(
 	}
 
 	const hosts = allowedHosts(deps.config);
+	const resolveKeys = createKeyResolver(deps.config.keys, deps.channelConfigPath);
 	const remoteOf = (request: FastifyRequest): string => (listener === "socket" ? "socket" : request.ip);
 	const refuse = (
 		request: FastifyRequest,
@@ -181,7 +210,7 @@ async function buildApp(
 			return;
 		}
 		const header = request.headers.authorization;
-		const principal = authenticate(header, deps.config.keys);
+		const principal = authenticate(header, resolveKeys());
 		if (!principal) return refuse(request, reply, header ? "invalid_key" : "missing_key", unauthorized());
 		request.principal = principal;
 	});

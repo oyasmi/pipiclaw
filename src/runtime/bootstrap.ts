@@ -9,6 +9,7 @@ import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js"
 import { createRunner } from "../agent/runner-factory.js";
 import { scanConversationsForInterruptedTurns } from "../agent/turn/turn-recovery.js";
 import type { AgentRunner, RunnerFactoryPaths } from "../agent/types.js";
+import { ensureModelOnboarding, type ModelReadiness } from "../app/auth-command.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -17,7 +18,7 @@ import {
 	DEFAULT_BOOTSTRAP_PATHS,
 	parseArgs,
 	printBootstrapSummary,
-	printFirstRunGuide,
+	printStartupReadySummary,
 	readCliVersion,
 } from "../app/home.js";
 import { prepareAppServices } from "../app/services.js";
@@ -69,6 +70,10 @@ export interface BootstrapOptions {
 	paths?: BootstrapPaths;
 	registerSignalHandlers?: boolean;
 	startServices?: boolean;
+	/** Override TTY interactivity detection for first-run model login onboarding. */
+	interactive?: boolean;
+	confirmModelLogin?: () => Promise<boolean>;
+	performModelLogin?: () => Promise<void>;
 	/** Host these transports instead of the ones `channel.json` turns on (tests and embedders). */
 	transports?: Transport[];
 }
@@ -381,6 +386,7 @@ async function buildRuntimeContext(
 			void releaseCachedRunner(channelRunners, channelId);
 		}
 
+		runtimeSettingsManager.reload();
 		const runner = createRunner(conversation, { ...runnerPaths(conversation, channelId), getTaskControl });
 		channelRunners.set(channelId, runner);
 		void evictIdleRunnersOverCap(channelRunners);
@@ -663,11 +669,32 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	const bootstrapResult = bootstrapAppHome(paths);
 	printBootstrapSummary(bootstrapResult, io, paths);
 
-	// A freshly written template is the expected first-run outcome, not a failure: guide and exit 0.
-	// A template that exists but is still unfilled is caught by the transport loader (`loadTransports`) and exits 1.
-	if (bootstrapResult.channelTemplateCreated) {
-		printFirstRunGuide(io, paths);
-		throw new BootstrapExitError(0);
+	let daemonLock: FileLockHandle | undefined;
+	try {
+		daemonLock = await acquireDaemonLock(paths.appHomeDir);
+	} catch (error) {
+		if (!(error instanceof StartupRefusal)) throw error;
+		io.error(error.message);
+		throw new BootstrapExitError(1);
+	}
+
+	let readiness: ModelReadiness | undefined;
+	if (startServices || options.interactive !== undefined) {
+		const interactive =
+			options.interactive ??
+			(startServices && options.io === undefined && process.stdin.isTTY === true && process.stderr.isTTY === true);
+		try {
+			readiness = await ensureModelOnboarding({
+				paths,
+				io,
+				interactive,
+				confirmLogin: options.confirmModelLogin,
+				performLogin: options.performModelLogin,
+			});
+		} catch (error) {
+			await daemonLock.release();
+			throw error;
+		}
 	}
 
 	const { settingsManager } = prepareAppServices(paths);
@@ -677,6 +704,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	try {
 		runtime = await createRuntimeContext({
 			paths,
+			daemonLock,
 			...(options.transports ? { transports: options.transports } : {}),
 			registerSignalHandlers,
 			startServices,
@@ -686,6 +714,15 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 		if (!(error instanceof StartupRefusal)) throw error;
 		io.error(error.message);
 		throw new BootstrapExitError(1);
+	}
+
+	if (startServices) {
+		printStartupReadySummary(
+			io,
+			paths,
+			runtime.transports.all().map((transport) => transport.name),
+			readiness,
+		);
 	}
 
 	return {

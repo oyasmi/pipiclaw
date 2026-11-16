@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
 
 /**
  * Resolve an API key for the given model's provider.
@@ -23,7 +24,7 @@ export async function getApiKeyForModel(modelRegistry: ModelRegistry, model: Mod
 	}
 
 	throw new Error(
-		`No API key found for provider: ${model.provider}.\n\n` +
-			"Configure credentials in ~/.pipiclaw/auth.json or ~/.pipiclaw/models.json, or set the matching provider environment variable.",
+		`No API key found for provider: ${model.provider}. ` +
+			`请在终端执行 \`pipiclaw auth login\` 登录，设置对应供应商的环境变量，或在 ${AUTH_CONFIG_PATH} / ${MODELS_CONFIG_PATH} 中配置凭据。`,
 	);
 }

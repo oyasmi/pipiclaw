@@ -10,42 +10,48 @@ Web API 是 Pipiclaw 的第二个渠道（与钉钉并列）。它的形状是 *
 
 终端界面（`pipiclaw tui`）也是这个 API 的客户端，用的是同一个本机 socket。
 
-## 打开它
+## 默认配置与开关
 
-在 `channel.json` 里打开 `webapi` 段（旧版本的 `channel.json` 结构见[迁移说明](./channel-migration.md)）：
+首次初始化 `~/.pipiclaw/channel.json` 时，`webapi` 段**默认已打开**（旧版本的 `channel.json` 结构见[迁移说明](./channel-migration.md)）：
 
 ```json
 {
-  "dingtalk": { "enabled": false },
+  "dingtalk": { "enabled": false, "...": "..." },
   "webapi": {
     "enabled": true,
-    "socket": true
+    "socket": true,
+    "tcp": "127.0.0.1:8787",
+    "tls": null,
+    "keys": [
+      { "name": "default", "sha256": "...", "desks": ["default"] }
+    ]
   }
 }
 ```
 
-| 字段 | 默认 | 说明 |
+| 字段 | 初始模板值 | 说明 |
 |---|---|---|
-| `enabled` | `false` | 关闭时不加载任何 Web API 代码，也不监听 |
+| `enabled` | `true` | 关闭时不加载任何 Web API 代码，也不监听 |
 | `socket` | `true` | 在 `state/webapi/api.sock` 上监听本机 unix socket，权限 `0600`，目录 `0700`。**走 socket 不需要 key**：能打开这个文件的就是运行 daemon 的系统用户 |
-| `tcp` | 不监听 | `"host:port"`（IPv6 写 `"[::1]:8787"`）。TCP 上每个请求都必须带 key |
-| `tls` | 无 | `{ "cert": "/abs/cert.pem", "key": "/abs/key.pem" }`。可选。不配置时 TCP 是明文 HTTP（bearer key 明文过网络）：只适合 TLS 由前置反向代理终止、或可信内网 |
-| `keys` | `[]` | `[{ "name", "sha256", "desks" }]`，用命令管理，见下 |
+| `tcp` | `"127.0.0.1:8787"` | `"host:port"`（IPv6 写 `"[::1]:8787"`），设为 `null` 或 `""` 关闭 TCP 监听。TCP 上每个请求都必须带 key |
+| `tls` | `null` | `{ "cert": "/abs/cert.pem", "key": "/abs/key.pem" }` 或 `null`。可选。不配置时 TCP 是明文 HTTP（bearer key 明文过网络）：只适合本机回环、前置反向代理终止 TLS 或可信内网 |
+| `keys` | `[default]` | `[{ "name", "sha256", "desks" }]`；首次初始化自动生成一把 `default` key（明文打印一次），后续用命令管理，见下 |
 
 至少要开一个监听（`socket` 或 `tcp`），否则拒绝启动。所有启动问题都会逐项列出并以非 0 退出，不会带着半截配置运行。
 
 ### key
 
 ```bash
-pipiclaw webapi key add ci --desk default --desk lab   # 生成 key，只显示一次，只保存它的 SHA-256
+pipiclaw webapi key add ci                          # 默认授权 default 工位；生成 key 只显示一次，只保存 SHA-256
+pipiclaw webapi key add ops --desk default --desk lab
 pipiclaw webapi key list
 pipiclaw webapi key remove ci
 ```
 
 - key 形如 `pk_…`（256 位随机），请求头 `Authorization: Bearer pk_…`。
-- `desks` 限定这把 key 能使用哪些工位：新会话默认用第一个；`/desk bind` 到不在列表里的工位会被拒绝（`desk_not_allowed`）。
+- `desks` 限定这把 key 能使用哪些工位（省略 `--desk` 时默认 `default`）：新会话默认用第一个；`/desk bind` 到不在列表里的工位会被拒绝（`desk_not_allowed`）。
 - 一把 key 创建的会话和 Response，别的 key 看不到（返回 404）；本机 socket 视为 `local`，能看到全部；因此 TCP key 不能取名 `local`。
-- 改动在 daemon **下次启动**时生效。
+- 新增或删除 key 后，正在运行的 daemon **会自动加载生效，无需重启**。
 
 ## 连接
 

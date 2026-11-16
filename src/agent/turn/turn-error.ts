@@ -9,9 +9,10 @@
  * Only stable features are matched — HTTP status codes and the phrases providers have used for
  * years. Anything unrecognised is `other`, which still carries a next step.
  */
-export type TurnErrorKind = "auth" | "rate_limit" | "context_overflow" | "network" | "other";
+export type TurnErrorKind = "missing_credentials" | "auth" | "rate_limit" | "context_overflow" | "network" | "other";
 
 const PATTERNS: ReadonlyArray<[Exclude<TurnErrorKind, "other">, RegExp]> = [
+	["missing_credentials", /\bno api[ _-]?key found\b|missing[ _-]?api[ _-]?key|尚未配置.*模型凭据/i],
 	[
 		"auth",
 		/\b40[13]\b|unauthori[sz]ed|forbidden|invalid[ _-]?(?:x-)?api[ _-]?key|incorrect api key|authentication[ _-]?(?:error|failed)|(?:token|credential)s? (?:has |have )?expired/i,
@@ -40,6 +41,12 @@ export function classifyTurnError(message: string): TurnErrorKind {
 /** What the user is told for each class: a reason (absent for `other`) and what to do next. */
 export function describeTurnError(kind: TurnErrorKind): { reason?: string; nextStep: string } {
 	switch (kind) {
+		case "missing_credentials":
+			return {
+				reason: "尚未配置可用的模型凭据。",
+				nextStep:
+					"请在终端执行 `pipiclaw auth login` 登录，或设置供应商环境变量（如 `ANTHROPIC_API_KEY`），或在 `models.json` 中配置模型网关后发送 `/reload`。",
+			};
 		case "auth":
 			return {
 				reason: "模型凭据无效或已过期。",

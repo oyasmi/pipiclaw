@@ -1,8 +1,12 @@
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ChannelConfigError } from "../src/channel/config.js";
-import { authenticate, generateKey, hashKey } from "../src/webapi/auth.js";
+import {
+	ChannelConfigError,
+	generateWebApiKey as generateKey,
+	hashWebApiKey as hashKey,
+} from "../src/channel/config.js";
+import { authenticate } from "../src/webapi/auth.js";
 import { isLoopbackHost, parseTcpAddress, parseWebApiConfig } from "../src/webapi/config.js";
 import { runWebApiCommand } from "../src/webapi/key-command.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -34,11 +38,13 @@ describe("webapi config", () => {
 	});
 
 	it("refuses unsafe or empty setups, and accepts the safe ones", () => {
-		expect(issuesOf({ socket: false })[0]).toMatch(/nothing to listen on/);
+		expect(issuesOf({ socket: false })[0]).toMatch(/监听/);
+		expect(issuesOf({ socket: true, tcp: null, tls: null })).toEqual([]);
+		expect(issuesOf({ socket: true, tcp: "", tls: { cert: "", key: "" } })).toEqual([]);
 		expect(issuesOf({ tcp: "0.0.0.0:8787" })).toEqual([]);
 		expect(issuesOf({ tcp: "0.0.0.0:8787", tls: { cert: "/c.pem", key: "/k.pem" } })).toEqual([]);
 		expect(issuesOf({ tcp: "127.0.0.1:8787", keys: [goodKey] })).toEqual([]);
-		expect(issuesOf({ tls: { cert: "rel.pem", key: "/k.pem" } })[0]).toMatch(/absolute/);
+		expect(issuesOf({ tls: { cert: "rel.pem", key: "/k.pem" } })[0]).toMatch(/绝对路径/);
 
 		const keyIssues = issuesOf({
 			keys: [
@@ -48,7 +54,7 @@ describe("webapi config", () => {
 				{ name: "no-desk", sha256: hashKey("x"), desks: ["UPPER"] },
 			],
 		});
-		expect(keyIssues.join("\n")).toMatch(/used twice/);
+		expect(keyIssues.join("\n")).toMatch(/重复/);
 		expect(keyIssues.join("\n")).toMatch(/keys\[2\]\.name/);
 		expect(keyIssues.join("\n")).toMatch(/keys\[2\]\.sha256/);
 		expect(keyIssues.join("\n")).toMatch(/keys\[3\]\.desks/);
@@ -58,25 +64,33 @@ describe("webapi config", () => {
 describe("webapi keys", () => {
 	const tempDir = useTempDirs();
 
-	it("a key made by the command authenticates, others do not, and channel.json stays owner-only", async () => {
+	it("a key made by the command bootstraps a missing home, defaults desk to default, authenticates, and stays owner-only", async () => {
 		const home = tempDir();
 		const paths = bootstrapPathsIn(home);
-		writeFileSync(paths.channelConfigPath, JSON.stringify({ webapi: { enabled: true } }), { mode: 0o600 });
 		const lines: string[] = [];
 		const io = {
 			log: (...args: unknown[]) => void lines.push(args.join(" ")),
 			error: (...args: unknown[]) => void lines.push(args.join(" ")),
 		};
 
-		await runWebApiCommand(["node", "pipiclaw", "webapi", "key", "add", "ci", "--desk", "default"], paths, io);
-		const key = lines.find((line) => line.trim().startsWith("pk_"))?.trim();
-		expect(key).toBeDefined();
+		// Running `webapi key add` before any `pipiclaw` run initializes channel.json (with `default` key)
+		// and omitting `--desk` defaults to `default`.
+		await runWebApiCommand(["node", "pipiclaw", "webapi", "key", "add", "ci"], paths, io);
+		const printedKeys = lines.map((line) => line.trim()).filter((line) => line.startsWith("pk_"));
+		expect(printedKeys).toHaveLength(2); // initial `default` key + newly added `ci` key
+		const key = printedKeys[1]!;
 
 		const config = JSON.parse(readFileSync(paths.channelConfigPath, "utf-8"));
 		const parsed = parseWebApiConfig(config.webapi);
-		expect(config.webapi.keys[0].sha256).not.toContain(key);
+		expect(config.webapi.keys.map((entry: { name: string }) => entry.name)).toEqual(["default", "ci"]);
+		expect(JSON.stringify(config.webapi.keys)).not.toContain(key);
 		expect(authenticate(`Bearer ${key}`, parsed.keys)).toMatchObject({
 			name: "ci",
+			desks: ["default"],
+			local: false,
+		});
+		expect(authenticate(`Bearer ${printedKeys[0]}`, parsed.keys)).toMatchObject({
+			name: "default",
 			desks: ["default"],
 			local: false,
 		});
@@ -86,6 +100,8 @@ describe("webapi keys", () => {
 		expect(statSync(paths.channelConfigPath).mode & 0o777).toBe(0o600);
 
 		await runWebApiCommand(["node", "pipiclaw", "webapi", "key", "remove", "ci"], paths, io);
-		expect(JSON.parse(readFileSync(join(home, "channel.json"), "utf-8")).webapi.keys).toEqual([]);
+		expect(
+			JSON.parse(readFileSync(join(home, "channel.json"), "utf-8")).webapi.keys.map((e: { name: string }) => e.name),
+		).toEqual(["default"]);
 	});
 });

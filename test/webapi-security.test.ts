@@ -1,13 +1,16 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { generateKey, hashKey } from "../src/webapi/auth.js";
+import { generateWebApiKey as generateKey, hashWebApiKey as hashKey } from "../src/channel/config.js";
+import type { Ingress } from "../src/channel/ingress.js";
+import { StartupRefusal } from "../src/desk/startup-error.js";
 import type { WebApiConfig } from "../src/webapi/config.js";
 import { RATE_LIMIT_PER_MINUTE } from "../src/webapi/limits.js";
 import { WebApiServer } from "../src/webapi/server.js";
 import type { WebApiService } from "../src/webapi/service.js";
+import { WebApiTransport } from "../src/webapi/transport.js";
 
 const key = generateKey();
 const otherKey = generateKey();
@@ -29,11 +32,12 @@ describe("webapi door guards", () => {
 		await Promise.all(apps.splice(0).map((app) => app.close()));
 	});
 
-	async function app(listener: "tcp" | "socket") {
+	async function app(listener: "tcp" | "socket", channelConfigPath?: string) {
 		const instance = await WebApiServer.build(listener, {
 			config,
 			service: {} as WebApiService,
 			socketPath: "/unused",
+			channelConfigPath,
 			audit: (event) => audited.push(event as never),
 		});
 		apps.push(instance);
@@ -41,29 +45,58 @@ describe("webapi door guards", () => {
 	}
 	const bearer = { authorization: `Bearer ${key}`, host: HOST };
 
-	it("turns away a bad caller before reading its body", async () => {
-		const tcp = await app("tcp");
-		// A malformed body would be a 400 if it were parsed; 401 proves the door shut first (INV-6).
-		const garbage = {
-			method: "POST",
-			url: "/v1/responses",
-			payload: "{not json",
-			headers: { host: HOST, "content-type": "application/json", origin: "https://client.example" },
-		} as const;
-		for (const headers of [garbage.headers, { ...garbage.headers, authorization: "Bearer wrong" }]) {
-			const res = await tcp.inject({ ...garbage, headers });
-			expect(res.statusCode).toBe(401);
-			expect(res.headers["access-control-allow-origin"]).toBe("*");
-			expect(res.json().error).toMatchObject({
-				type: "invalid_request_error",
-				code: "invalid_api_key",
-				param: null,
-			});
+	it("turns away a bad caller before reading its body, and hot-reloads keys when channel.json changes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-keys-"));
+		const channelConfigPath = join(dir, "channel.json");
+		writeFileSync(channelConfigPath, JSON.stringify({ webapi: { enabled: true, keys: config.keys } }));
+		try {
+			const tcp = await app("tcp", channelConfigPath);
+			// A malformed body would be a 400 if it were parsed; 401 proves the door shut first (INV-6).
+			const garbage = {
+				method: "POST",
+				url: "/v1/responses",
+				payload: "{not json",
+				headers: { host: HOST, "content-type": "application/json", origin: "https://client.example" },
+			} as const;
+			for (const headers of [garbage.headers, { ...garbage.headers, authorization: "Bearer wrong" }]) {
+				const res = await tcp.inject({ ...garbage, headers });
+				expect(res.statusCode).toBe(401);
+				expect(res.headers["access-control-allow-origin"]).toBe("*");
+				expect(res.json().error).toMatchObject({
+					type: "invalid_request_error",
+					code: "invalid_api_key",
+					param: null,
+				});
+			}
+			expect(audited.filter((e) => e.type === "webapi-auth").map((e) => e.reason)).toEqual([
+				"missing_key",
+				"invalid_key",
+			]);
+
+			// Adding a new key to channel.json takes effect immediately without restarting the server.
+			const dynamicKey = generateKey();
+			expect(
+				(await tcp.inject({ url: "/v1/models", headers: { host: HOST, authorization: `Bearer ${dynamicKey}` } }))
+					.statusCode,
+			).toBe(401);
+			writeFileSync(
+				channelConfigPath,
+				JSON.stringify({
+					webapi: {
+						enabled: true,
+						keys: [...config.keys, { name: "added", sha256: hashKey(dynamicKey), desks: ["default"] }],
+					},
+				}),
+			);
+			const future = new Date(Date.now() + 5_000);
+			utimesSync(channelConfigPath, future, future);
+			expect(
+				(await tcp.inject({ url: "/v1/models", headers: { host: HOST, authorization: `Bearer ${dynamicKey}` } }))
+					.statusCode,
+			).toBe(200);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
-		expect(audited.filter((e) => e.type === "webapi-auth").map((e) => e.reason)).toEqual([
-			"missing_key",
-			"invalid_key",
-		]);
 	});
 
 	it("allows browser requests and unauthenticated preflight, but a foreign Host only on the socket", async () => {
@@ -181,6 +214,16 @@ describe("webapi door guards", () => {
 				audit: () => undefined,
 			});
 			await expect(server.start()).rejects.toMatchObject({ code: "EADDRINUSE" });
+			expect(existsSync(socketPath)).toBe(false);
+
+			// Transport boundary translates port conflicts into a clean StartupRefusal instead of a stack trace.
+			const transport = new WebApiTransport({
+				config: { ...config, tcp: { host: "127.0.0.1", port, loopback: true } },
+				stateDir: dir,
+				channelConfigPath: "/tmp/channel.json",
+				audit: () => undefined,
+			});
+			await expect(transport.start({} as Ingress)).rejects.toBeInstanceOf(StartupRefusal);
 			expect(existsSync(socketPath)).toBe(false);
 		} finally {
 			busy.close();

@@ -72,36 +72,47 @@ workspace 下的文件是另一类：它们是给模型读的**内容**（身份
 | 加可复用流程 | `workspace/skills/` 或 `~/.agents/skills/` | 有效工作区同名技能优先；默认在工作区创建，外部修改后发送 `/reload` |
 | 让 LLM 请求走代理 | 环境变量 `PIPICLAW_PROXY` | 见下方「LLM 请求走代理」 |
 
-## 渠道最小配置
+## 渠道默认与最小配置
 
-`channel.json`：
+首次初始化 `~/.pipiclaw/channel.json` 时，**默认已启用 `webapi`**（同时监听本机 Socket 与 `127.0.0.1:8787`，并自动生成一把 `default` 访问密钥在终端展示一次），`dingtalk` 默认关闭：
 
 ```json
 {
   "dingtalk": {
-    "enabled": true,
+    "enabled": false,
     "clientId": "your-dingtalk-client-id",
     "clientSecret": "your-dingtalk-client-secret",
     "robotCode": "",
     "cardTemplateId": "",
     "cardTemplateKey": "content",
-    "allowFrom": []
+    "allowFrom": [],
+    "busyMessageDefault": "steer",
+    "responseMode": "full_progress_then_plain_final",
+    "cardAutoLayout": true
   },
-  "webapi": { "enabled": false, "socket": true }
+  "webapi": {
+    "enabled": true,
+    "socket": true,
+    "tcp": "127.0.0.1:8787",
+    "tls": null,
+    "keys": [
+      { "name": "default", "sha256": "<自动生成的 SHA-256>", "desks": ["default"] }
+    ]
+  }
 }
 ```
 
 要点：
 
-- `dingtalk` 和 `webapi` 两段各有 `enabled` 开关，至少打开一个；关闭的一段不会被检查，也不加载代码。Web API 的字段见 [Web API](./webapi.md)。
-- 硬性必填只有 `clientId` 和 `clientSecret`（`dingtalk.enabled: true` 时）。
+- `dingtalk` 和 `webapi` 两段各有 `enabled` 开关，至少打开一个；关闭的一段不会被检查，也不加载代码。Web API 的详细字段见 [Web API](./webapi.md)。
+- 接入钉钉时，将 `dingtalk.enabled` 改为 `true`，硬性必填只有 `clientId` 和 `clientSecret`。
 - `robotCode` 留空时回退到 `clientId`。
 - `cardTemplateId` 留空也能工作，但不会使用 AI Card；正式使用建议补上。
 - `allowFrom: []` 或省略表示允许所有发送者；灰度时填 staff ID。
 - `busyMessageDefault` 默认 `"steer"`，也可设 `"followUp"` / `"followup"`。
 - `responseMode` 默认 `"full_progress_then_plain_final"`：先显示等待卡，再累积进度，较长时收短后继续；有进度时结论另发，快速答复可直接写入等待卡。另有滚动进度与只显示最终卡片的模式，见[交互指南](./interaction-and-commands.md#钉钉中的输出形态)。
 
-保留任何 `your-*` 占位值都会让启动检查失败。
+启用 `dingtalk` 时，保留任何 `your-*` 占位值都会让启动检查失败并明确指出需替换的字段。
 
 ## 模型配置
 

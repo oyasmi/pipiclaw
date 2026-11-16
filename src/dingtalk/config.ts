@@ -47,46 +47,46 @@ function listChannelConfigIssues(config: Partial<DingTalkConfig>): string[] {
 	const issues: string[] = [];
 
 	if (!config.clientId) {
-		issues.push("Missing required field `clientId`.");
+		issues.push("缺少必填项 `clientId`（如暂不接入钉钉，可将 `dingtalk.enabled` 设为 false）。");
 	} else if (isPlaceholderString(config.clientId)) {
-		issues.push("Replace placeholder value for `clientId`.");
-	}
-
-	if (!config.clientSecret) {
-		issues.push("Missing required field `clientSecret`.");
-	} else if (isPlaceholderString(config.clientSecret)) {
-		issues.push("Replace placeholder value for `clientSecret`.");
-	}
-
-	if (config.robotCode && isPlaceholderString(config.robotCode)) {
-		issues.push("Replace placeholder value for `robotCode`, or set it to an empty string to reuse `clientId`.");
-	}
-
-	if (config.cardTemplateId && isPlaceholderString(config.cardTemplateId)) {
 		issues.push(
-			"Replace placeholder value for `cardTemplateId`, or set it to an empty string to disable AI Card streaming.",
+			"请将 `clientId` 的占位值（your-*）替换为真实的钉钉应用 Client ID（如暂不接入钉钉，可将 `dingtalk.enabled` 设为 false）。",
 		);
 	}
 
+	if (!config.clientSecret) {
+		issues.push("缺少必填项 `clientSecret`。");
+	} else if (isPlaceholderString(config.clientSecret)) {
+		issues.push("请将 `clientSecret` 的占位值（your-*）替换为真实的钉钉应用 Client Secret。");
+	}
+
+	if (config.robotCode && isPlaceholderString(config.robotCode)) {
+		issues.push('请替换 `robotCode` 的占位值，或将其设为空字符串 `""` 以自动复用 `clientId`。');
+	}
+
+	if (config.cardTemplateId && isPlaceholderString(config.cardTemplateId)) {
+		issues.push('请替换 `cardTemplateId` 的占位值，或将其设为空字符串 `""` 以暂不启用 AI Card 流式卡片。');
+	}
+
 	if (Array.isArray(config.allowFrom) && config.allowFrom.some((value) => isPlaceholderString(value))) {
-		issues.push("Replace placeholder values in `allowFrom`, or set it to an empty array to allow all users.");
+		issues.push("请替换 `allowFrom` 中的占位值，或设为空数组 `[]` 以允许应用可见范围内的成员使用。");
 	}
 
 	const busyMessageDefault = (config as { busyMessageDefault?: unknown }).busyMessageDefault;
 	if (busyMessageDefault !== undefined && !isBusyMessageDefaultConfig(busyMessageDefault)) {
-		issues.push('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
+		issues.push('`busyMessageDefault` 无效：仅支持 "steer"、"followUp" 或 "followup"。');
 	}
 
 	const responseMode = (config as { responseMode?: unknown }).responseMode;
 	if (responseMode !== undefined && !isResponseModeConfig(responseMode)) {
 		issues.push(
-			'Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
+			'`responseMode` 无效：仅支持 "full_progress_then_plain_final"、"rolling_progress_then_plain_final" 或 "final_card_only"。',
 		);
 	}
 
 	const cardAutoLayout = (config as { cardAutoLayout?: unknown }).cardAutoLayout;
 	if (cardAutoLayout !== undefined && typeof cardAutoLayout !== "boolean") {
-		issues.push("Invalid `cardAutoLayout`: expected boolean.");
+		issues.push("`cardAutoLayout` 无效：必须是布尔值（true 或 false）。");
 	}
 
 	return issues;

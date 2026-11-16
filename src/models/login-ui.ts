@@ -74,17 +74,17 @@ export class ReadlineLoginUi implements LoginUi {
 				break;
 			}
 			case "auth_url": {
-				this.output.write(`${event.instructions ?? "Open this URL to continue:"}\n`);
+				this.output.write(`${event.instructions ?? "请在浏览器打开以下链接完成授权："}\n`);
 				this.output.write(`  ${hyperlink(event.url)}\n`);
 				if (!this.noBrowser) openBrowser(event.url);
 				break;
 			}
 			case "device_code": {
-				this.output.write(`Open ${hyperlink(event.verificationUri)} and enter this code:\n`);
+				this.output.write(`请打开 ${hyperlink(event.verificationUri)} 并输入以下授权码：\n`);
 				this.output.write(`  ${event.userCode}\n`);
 				if (event.expiresInSeconds) {
 					const minutes = Math.round(event.expiresInSeconds / 60);
-					this.output.write(`  (expires in ~${minutes} min)\n`);
+					this.output.write(`  （有效期约 ${minutes} 分钟）\n`);
 				}
 				break;
 			}
@@ -173,7 +173,7 @@ export class ReadlineLoginUi implements LoginUi {
 			const byId = prompt.options.find((option) => option.id.toLowerCase() === raw.toLowerCase());
 			if (byId) return byId.id;
 
-			this.output.write(`Invalid choice: ${raw}. Enter a number 1-${prompt.options.length}.\n`);
+			this.output.write(`输入无效：${raw}。请输入 1-${prompt.options.length} 之间的序号。\n`);
 		}
 	}
 }

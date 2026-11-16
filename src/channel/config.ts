@@ -4,6 +4,7 @@
  * that transport's own business, and a section that is off is never looked at beyond its switch,
  * so credentials can stay in the file while a transport is disabled.
  */
+import { createHash, randomBytes } from "node:crypto";
 import { docsUrl } from "../paths.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
@@ -13,6 +14,13 @@ export type ChannelSectionName = (typeof CHANNEL_SECTION_NAMES)[number];
 
 /** The raw content of every section that is switched on. */
 export type EnabledChannelSections = Partial<Record<ChannelSectionName, unknown>>;
+
+export const hashWebApiKey = (key: string): string => createHash("sha256").update(key).digest("hex");
+
+/** A new Web API bearer key: `pk_` and 256 random bits. Shown once; only its SHA-256 hash is persisted. */
+export function generateWebApiKey(): string {
+	return `pk_${randomBytes(32).toString("base64url")}`;
+}
 
 /** `channel.json` (or one of its sections) cannot be used; `issues` say what to fix. */
 export class ChannelConfigError extends Error {
@@ -27,17 +35,17 @@ export function parseChannelConfig(text: string): EnabledChannelSections {
 	try {
 		parsed = JSON.parse(text);
 	} catch (error) {
-		throw new ChannelConfigError([`Not valid JSON: ${errorMessage(error)}`]);
+		throw new ChannelConfigError([`JSON 格式无效：${errorMessage(error)}`]);
 	}
 	if (!isPlainObject(parsed)) {
-		throw new ChannelConfigError(["Expected a JSON object with a `dingtalk` and/or a `webapi` section."]);
+		throw new ChannelConfigError(["顶层必须是包含 `dingtalk` 和/或 `webapi` 段的 JSON 对象。"]);
 	}
 
 	const issues: string[] = [];
 	for (const key of Object.keys(parsed)) {
 		if (!(CHANNEL_SECTION_NAMES as readonly string[]).includes(key)) {
 			issues.push(
-				`Unknown top-level key \`${key}\`. channel.json has one section per transport (${CHANNEL_SECTION_NAMES.map((name) => `\`${name}\``).join(", ")}); move transport settings into their section (${docsUrl("configuration.md")}).`,
+				`未知的顶层配置项 \`${key}\`。channel.json 按渠道分段（${CHANNEL_SECTION_NAMES.map((name) => `\`${name}\``).join("、")}），请将渠道参数移入对应分段中（${docsUrl("configuration.md")}）。`,
 			);
 		}
 	}
@@ -47,11 +55,11 @@ export function parseChannelConfig(text: string): EnabledChannelSections {
 		const section = parsed[name];
 		if (section === undefined) continue;
 		if (!isPlainObject(section)) {
-			issues.push(`\`${name}\` must be an object.`);
+			issues.push(`\`${name}\` 段必须是 JSON 对象。`);
 			continue;
 		}
 		if (typeof section.enabled !== "boolean") {
-			issues.push(`\`${name}.enabled\` must be true or false.`);
+			issues.push(`\`${name}.enabled\` 必须是布尔值（true 或 false）。`);
 			continue;
 		}
 		if (section.enabled) enabled[name] = section;

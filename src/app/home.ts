@@ -7,6 +7,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../agent/prompt/workspace-templates.js";
+import { generateWebApiKey, hashWebApiKey } from "../channel/config.js";
 import { initializeDefaultDesk } from "../desk/default.js";
 import * as log from "../log.js";
 import {
@@ -14,7 +15,6 @@ import {
 	APP_NAME,
 	AUTH_CONFIG_PATH,
 	CHANNEL_CONFIG_PATH,
-	docsUrl,
 	EVENT_HISTORY_PATH,
 	MODELS_CONFIG_PATH,
 	SECURITY_CONFIG_PATH,
@@ -45,6 +45,8 @@ export interface BootstrapIO {
 export interface BootstrapResult {
 	created: string[];
 	channelTemplateCreated: boolean;
+	/** Generated once when `channel.json` is first created; only its SHA-256 hash is written to disk. */
+	initialWebApiKey?: string;
 }
 
 const DEFAULT_MEMORY = `# Workspace Memory
@@ -90,27 +92,74 @@ This file records durable environment facts and notable machine-level changes.
 <!-- Record important config or environment changes that affect future work. -->
 `;
 
-const CHANNEL_CONFIG_TEMPLATE = {
-	dingtalk: {
-		enabled: true,
-		clientId: "your-dingtalk-client-id",
-		clientSecret: "your-dingtalk-client-secret",
-		robotCode: "your-robot-code",
-		cardTemplateId: "your-card-template-id",
-		cardTemplateKey: "content",
-		allowFrom: ["your-staff-id"],
-		busyMessageDefault: "steer",
-		responseMode: "full_progress_then_plain_final",
-		cardAutoLayout: true,
+function createChannelConfigTemplate(): { config: Record<string, unknown>; initialWebApiKey: string } {
+	const initialWebApiKey = generateWebApiKey();
+	return {
+		initialWebApiKey,
+		config: {
+			dingtalk: {
+				enabled: false,
+				clientId: "your-dingtalk-client-id",
+				clientSecret: "your-dingtalk-client-secret",
+				robotCode: "",
+				cardTemplateId: "",
+				cardTemplateKey: "content",
+				allowFrom: [],
+				busyMessageDefault: "steer",
+				responseMode: "full_progress_then_plain_final",
+				cardAutoLayout: true,
+			},
+			webapi: {
+				enabled: true,
+				socket: true,
+				tcp: "127.0.0.1:8787",
+				tls: null,
+				keys: [
+					{
+						name: "default",
+						sha256: hashWebApiKey(initialWebApiKey),
+						desks: ["default"],
+					},
+				],
+			},
+		},
+	};
+}
+
+const MODELS_CONFIG_TEMPLATE = {
+	providers: {},
+	_examples: {
+		"my-gateway": {
+			baseUrl: "https://api.deepseek.com/v1",
+			api: "openai-completions",
+			apiKey: "DEEPSEEK_API_KEY",
+			compat: {
+				supportsDeveloperRole: false,
+				supportsReasoningEffort: false,
+			},
+			models: [{ id: "deepseek-chat" }],
+		},
 	},
-	webapi: {
-		enabled: false,
-		socket: true,
-		keys: [],
-	},
+	_notes: [
+		"将 _examples 中的条目复制到 providers 下，即可接入 OpenAI 兼容网关、DeepSeek、通义或本地 Ollama。",
+		"apiKey 可直接填写密钥字符串、环境变量名（如 DEEPSEEK_API_KEY），或 !command。",
+		"配置后可在 settings.json 中补充 defaultProvider 与 defaultModel 指定默认模型。",
+	],
 };
 
-const MODELS_CONFIG_TEMPLATE = { providers: {} };
+const SETTINGS_CONFIG_TEMPLATE = {
+	defaultThinkingLevel: "medium",
+	fallbackModel: null,
+	subagentModel: null,
+	compaction: { enabled: true },
+	retry: { enabled: true },
+	memoryMaintenance: { enabled: true },
+	sessionSearch: { summarizeWithModel: false },
+	logging: { level: "info", file: { enabled: true } },
+	tui: { responseMode: "full_progress_then_plain_final" },
+	delegation: { notices: "live" },
+};
+
 const TOOLS_CONFIG_TEMPLATE = {
 	tools: {
 		web: {
@@ -130,10 +179,10 @@ const TOOLS_CONFIG_TEMPLATE = {
 		proxy: "http://127.0.0.1:7890",
 	},
 	_notes: [
-		"Set tools.web.enable to true to register web_search and web_fetch.",
-		"Choose a search provider and configure its credentials if needed.",
-		"If needed, copy _examples.proxy to tools.web.proxy.",
-		"tools.tasks.enabled is the master switch for autonomous long-running tasks (task_* tools + task driver + task digest).",
+		"将 tools.web.enable 设为 true 可启用联网搜索（web_search）与网页读取（web_fetch）。",
+		"默认搜索源 duckduckgo 无需 API Key；也可切换为 tavily、jina 或 searxng。",
+		"如需为网页工具单独配置代理，可将 _examples.proxy 填入 tools.web.proxy。",
+		"tools.tasks.enabled 是后台长程任务的总开关。",
 	],
 };
 
@@ -278,16 +327,28 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 		paths.securityConfigPath,
 	];
 
-	const channelTemplateCreated = writeJsonFileIfMissing(
-		paths.channelConfigPath,
-		CHANNEL_CONFIG_TEMPLATE,
-		"channel.json",
+	let channelTemplateCreated = false;
+	let initialWebApiKey: string | undefined;
+	if (!existsSync(paths.channelConfigPath)) {
+		const generated = createChannelConfigTemplate();
+		channelTemplateCreated = writeJsonFileIfMissing(
+			paths.channelConfigPath,
+			generated.config,
+			"channel.json",
+			created,
+			SECRET_FILE_MODE,
+		);
+		if (channelTemplateCreated) initialWebApiKey = generated.initialWebApiKey;
+	}
+	writeJsonFileIfMissing(paths.authConfigPath, {}, "auth.json", created, SECRET_FILE_MODE);
+	writeJsonFileIfMissing(paths.modelsConfigPath, MODELS_CONFIG_TEMPLATE, "models.json", created, SECRET_FILE_MODE);
+	writeJsonFileIfMissing(
+		paths.settingsConfigPath,
+		SETTINGS_CONFIG_TEMPLATE,
+		"settings.json",
 		created,
 		SECRET_FILE_MODE,
 	);
-	writeJsonFileIfMissing(paths.authConfigPath, {}, "auth.json", created, SECRET_FILE_MODE);
-	writeJsonFileIfMissing(paths.modelsConfigPath, MODELS_CONFIG_TEMPLATE, "models.json", created, SECRET_FILE_MODE);
-	writeJsonFileIfMissing(paths.settingsConfigPath, {}, "settings.json", created, SECRET_FILE_MODE);
 	writeJsonFileIfMissing(paths.toolsConfigPath, TOOLS_CONFIG_TEMPLATE, "tools.json", created, SECRET_FILE_MODE);
 	writeJsonFileIfMissing(
 		paths.securityConfigPath,
@@ -302,7 +363,11 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 		hardenExistingSecretFile(secretPath);
 	}
 
-	return { created, channelTemplateCreated };
+	return {
+		created,
+		channelTemplateCreated,
+		...(initialWebApiKey ? { initialWebApiKey } : {}),
+	};
 }
 
 export function printBootstrapSummary(
@@ -314,43 +379,84 @@ export function printBootstrapSummary(
 		return;
 	}
 
-	io.log(`Initialized ${paths.appName} under ${paths.appHomeDir}:`);
+	io.log(`已初始化 ${paths.appName} 配置目录（${paths.appHomeDir}）：`);
 	for (const item of result.created) {
 		io.log(`  - ${item}`);
 	}
 	io.log("");
+
+	if (result.initialWebApiKey) {
+		io.log("==================================================================");
+		io.log("🔑 已自动生成本机 Web API 默认密钥（名称：default，授权工位：default）");
+		io.log("   明文密钥仅展示这一次，请立即妥善保存（配置文件仅保存其 SHA-256）：");
+		io.log("");
+		io.log(`   ${result.initialWebApiKey}`);
+		io.log("");
+		io.log("   本机 HTTP 接口：http://127.0.0.1:8787/v1 （Authorization: Bearer <密钥>）");
+		io.log(
+			`   若遗忘可执行 \`${paths.appName} webapi key remove default && ${paths.appName} webapi key add default\` 重新生成。`,
+		);
+		io.log("==================================================================");
+		io.log("");
+	}
 }
 
-/**
- * What a new deployer does after the very first run created the templates (spec 053, D11). A
- * fresh template is not an error, so the caller exits 0 after this; it names the required fields,
- * where they come from, and the model credential step the daemon cannot run without.
- */
-export function printFirstRunGuide(io: BootstrapIO = console, paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): void {
-	io.log("Next steps:");
-	io.log(`  1. Edit ${paths.channelConfigPath} — switch on at least one channel:`);
-	io.log("     DingTalk: fill the `dingtalk` section — required: clientId, clientSecret (DingTalk Open");
-	io.log("     Platform → your app → Credentials). Optional: cardTemplateId for AI Card streaming; set it");
-	io.log("     to an empty string to disable cards.");
-	io.log("     Web API: set `webapi.enabled` to true (a local socket; see the docs for keys and TCP).");
-	io.log(
-		`  2. Configure a model: run \`${paths.appName} auth login\`, or add a provider to ${paths.modelsConfigPath}.`,
-	);
-	io.log(`  3. Run \`${paths.appName}\` again.`);
-	io.log(`Docs: ${docsUrl("configuration.md")}`);
+export function printStartupReadySummary(
+	io: BootstrapIO,
+	paths: BootstrapPaths,
+	transportNames: readonly string[],
+	modelStatus?: { ready: boolean; activeModelRef: string },
+): void {
+	let tcpAddress: string | undefined;
+	let tlsEnabled = false;
+	if (transportNames.includes("webapi")) {
+		try {
+			const raw = JSON.parse(readFileSync(paths.channelConfigPath, "utf-8")) as {
+				webapi?: { tcp?: unknown; tls?: unknown };
+			};
+			if (typeof raw.webapi?.tcp === "string" && raw.webapi.tcp.trim()) {
+				tcpAddress = raw.webapi.tcp.trim();
+			}
+			tlsEnabled = Boolean(raw.webapi?.tls);
+		} catch {
+			// Best-effort summary only; actual config was already validated by loadTransports.
+		}
+	}
+
+	io.log("");
+	io.log(`🚀 ${paths.appName} 服务已启动（配置目录：${paths.appHomeDir}）`);
+	if (transportNames.includes("webapi")) {
+		const scheme = tlsEnabled ? "https" : "http";
+		io.log(
+			`  - Web API：已启用${tcpAddress ? `（本机接口 ${scheme}://${tcpAddress}/v1 + 本机 Socket）` : "（本机 Socket）"}`,
+		);
+	}
+	if (transportNames.includes("dingtalk")) {
+		io.log("  - 钉钉渠道：已启用（可在钉钉私聊或群内 @机器人 对话）");
+	} else {
+		io.log(`  - 钉钉渠道：未启用（如需接入，编辑 ${paths.channelConfigPath} 中 dingtalk 段即可）`);
+	}
+	if (modelStatus) {
+		io.log(
+			modelStatus.ready
+				? `  - 默认模型：${modelStatus.activeModelRef}（已就绪）`
+				: `  - 模型状态：⚠️ 尚未检测到凭据（请执行 \`${paths.appName} auth login\` 或配置 ${paths.modelsConfigPath}）`,
+		);
+	}
+	io.log(`  - 立即对话：打开新终端运行 \`${paths.appName} tui\`（在项目目录下可加 \`--cwd .\`）`);
+	io.log("");
 }
 
 /**
  * The one place that lists `pipiclaw`'s top-level subcommands. `parseArgs`'s own `--help` uses it;
- * `main.ts`'s unknown-subcommand branch used to hand-copy the same three lines separately (review
- * 2026-08-24 §1.10) — it now calls this instead, so the two can't drift apart again.
+ * `main.ts`'s unknown-subcommand branch calls this too so the two cannot drift apart.
  */
 export function formatCliCommandsHelp(appName: string): string[] {
 	return [
-		`  ${appName} [run] [options]         Run the daemon (default)`,
-		`  ${appName} tui [options] [prompt]   Chat with the agent in the terminal`,
-		`  ${appName} auth status|login|logout Manage provider credentials`,
-		`  ${appName} webapi key add|list|remove Manage Web API keys`,
+		`  ${appName} [run] [options]           启动后台常驻服务（默认开启本机 Web API，按需开启钉钉）`,
+		`  ${appName} tui [options] [prompt]    在终端与助手交互对话（自动连接常驻服务或内嵌运行）`,
+		`  ${appName} auth status|login|logout  管理模型供应商登录凭据（订阅 OAuth / API Key）`,
+		`  ${appName} webapi key add|list|remove 管理 Web API 访问密钥`,
 	];
 }
 
@@ -368,22 +474,22 @@ export function parseArgs(
 			continue;
 		}
 		if (arg === "--help" || arg === "-h") {
-			io.log(`Usage:`);
+			io.log("用法：");
 			for (const line of formatCliCommandsHelp(paths.appName)) io.log(line);
 			io.log("");
-			io.log("Options:");
-			io.log("  --version                   Print the current version and exit");
-			io.log("  --help, -h                  Show this help and exit");
+			io.log("选项：");
+			io.log("  --version                   输出当前版本号并退出");
+			io.log("  --help, -h                  显示帮助信息并退出");
 			io.log("");
-			io.log(`Config:    ${paths.channelConfigPath}`);
-			io.log(`Workspace: ${paths.workspaceDir}`);
+			io.log(`渠道配置：${paths.channelConfigPath}`);
+			io.log(`工作空间：${paths.workspaceDir}`);
 			throw new BootstrapExitError(0);
 		} else if (arg === "--version") {
 			io.log(readCliVersion());
 			throw new BootstrapExitError(0);
 		} else {
-			io.error(`Unknown option: ${arg}`);
-			io.error(`Run \`${paths.appName} --help\` for usage.`);
+			io.error(`未知参数：${arg}`);
+			io.error(`运行 \`${paths.appName} --help\` 查看用法。`);
 			throw new BootstrapExitError(1);
 		}
 	}

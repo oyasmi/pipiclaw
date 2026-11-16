@@ -89,7 +89,7 @@ export async function loadTransports(deps: {
 		sections = parseChannelConfig(readFileSync(channelConfigPath, "utf-8"));
 	} catch (error) {
 		if (!(error instanceof ChannelConfigError)) {
-			throw new StartupRefusal(`Cannot read ${channelConfigPath}: ${errorMessage(error)}`);
+			throw new StartupRefusal(`无法读取渠道配置文件 ${channelConfigPath}：${errorMessage(error)}`);
 		}
 		throw new StartupRefusal(configurationRefusal(channelConfigPath, appName, error.issues));
 	}
@@ -114,6 +114,7 @@ export async function loadTransports(deps: {
 				new WebApiTransport({
 					config: parseWebApiConfig(sections.webapi),
 					stateDir: join(deps.stateDir, "webapi"),
+					channelConfigPath,
 					audit: deps.audit,
 				}),
 			);
@@ -125,7 +126,7 @@ export async function loadTransports(deps: {
 
 	if (transports.length === 0) {
 		throw new StartupRefusal(
-			`No channel is switched on in ${channelConfigPath}. Set \`dingtalk.enabled\` or \`webapi.enabled\` to true, then run \`${appName}\` again.\nDocs: ${docsUrl("configuration.md")}`,
+			`${channelConfigPath} 中未启用任何渠道。请将 \`webapi.enabled\` 或 \`dingtalk.enabled\` 设为 true 后重新运行 \`${appName}\`。\n配置文档：${docsUrl("configuration.md")}`,
 		);
 	}
 	return transports;
@@ -133,10 +134,10 @@ export async function loadTransports(deps: {
 
 function configurationRefusal(path: string, appName: string, issues: readonly string[]): string {
 	return [
-		`Configuration is not ready: ${path}`,
+		`渠道配置尚未就绪（${path}）：`,
 		...issues.map((issue) => `  - ${issue}`),
 		"",
-		`Fix ${path} and run \`${appName}\` again.`,
-		`Docs: ${docsUrl("configuration.md")}`,
+		`请修正 ${path} 后重新运行 \`${appName}\`。`,
+		`配置文档：${docsUrl("configuration.md")}`,
 	].join("\n");
 }

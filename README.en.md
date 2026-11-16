@@ -88,16 +88,16 @@ Please install and initialize Pipiclaw for me:
 
 1. Check Node.js >= 22.19.0; stop and explain if it is not met.
 2. Run npm install -g @oyasmi/pipiclaw; on a permission failure do not sudo on your own.
-3. Run pipiclaw once to initialize ~/.pipiclaw/; prompting to complete channel.json and exiting because it is still a template is normal.
-4. Ask me whether I want to use an API key, a custom provider, or a subscription login supported by pipiclaw auth login; do not invent missing values.
-5. If I want to connect DingTalk, collect clientId, clientSecret, optional cardTemplateId, and allowFrom item by item, write them into the dingtalk section of channel.json, and remove all your-* placeholder values.
-6. When configuration is done, ask first whether to start. Terminal mode uses pipiclaw tui; DingTalk mode uses pipiclaw, and after it starts I can DM the bot or @mention it in a group right away.
+3. Run `pipiclaw auth status` once to initialize ~/.pipiclaw/, and share the generated initial Web API key (`pk_...`) printed on stdout with me.
+4. Ask me whether I want to use an environment API key, a custom provider in ~/.pipiclaw/models.json, or run `pipiclaw auth login` myself; do not invent missing values.
+5. If I want to connect DingTalk, collect clientId, clientSecret, optional cardTemplateId, and allowFrom item by item, write them into the dingtalk section of channel.json, and set dingtalk.enabled to true.
+6. When configuration is done, ask first whether to start. Terminal mode uses `pipiclaw tui` (or `pipiclaw tui --cwd .` inside a repo); background daemon mode uses `pipiclaw` (local Web API socket + http://127.0.0.1:8787/v1 are enabled out of the box).
 7. Honestly list the operations performed, files changed, verification results, and information still missing; do not pretend it succeeded.
 ```
 
 </details>
 
-### Step 1: Install & Try in the Terminal in 60 Seconds
+### Step 1: Install & Run Out of the Box (No DingTalk Setup Needed)
 
 Prerequisites: **Node.js `>= 22.19.0`** on **Linux / macOS** (on Windows, use **WSL2**).
 
@@ -105,20 +105,28 @@ Prerequisites: **Node.js `>= 22.19.0`** on **Linux / macOS** (on Windows, use **
 npm install -g @oyasmi/pipiclaw
 ```
 
-Terminal mode needs **no DingTalk setup** — just one working model credential (pick either):
+On first run, Pipiclaw automatically initializes `~/.pipiclaw/`, **enables the local Web API (`socket` + `http://127.0.0.1:8787/v1`) with a generated default key (`pk_...`)**, and prompts you to log in if no model credential is configured yet.
+
+You can also configure a model beforehand (pick either):
 
 ```bash
-# Option A: Export an API key (Anthropic shown as example)
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Option B: Interactive login for supported subscription providers
+# Option A: Interactive login for supported subscription / API-key providers
 pipiclaw auth login
+
+# Option B: Export an API key (Anthropic shown as example)
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Launch the interactive terminal UI (automatically initializes `~/.pipiclaw/` and your `default` desk on first run):
+Launch the interactive terminal UI (pass `--cwd .` inside a repository to bind the desk's working directory):
 
 ```bash
 pipiclaw tui
+```
+
+Or start the background daemon directly (both `pipiclaw tui` and OpenAI SDK clients connect right away):
+
+```bash
+pipiclaw
 ```
 
 Or run a quick one-liner to verify the end-to-end model connection:
@@ -127,9 +135,9 @@ Or run a quick one-liner to verify the end-to-end model connection:
 pipiclaw tui --print "Reply with only: Pipiclaw is ready"
 ```
 
-> Using an OpenAI-compatible proxy/gateway, DeepSeek, GLM, or local models? Check the [Configuration Quickstart](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md).
+> Using an OpenAI-compatible proxy/gateway, DeepSeek, GLM, or local Ollama? Copy the built-in `_examples` block in `~/.pipiclaw/models.json`, or check the [Configuration Quickstart](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md).
 
-### Step 2: Connect DingTalk (No Public IP Required)
+### Step 2: Connect DingTalk When Needed (No Public IP Required)
 
 Pipiclaw uses **DingTalk Stream Mode**, so any laptop or private server with outbound internet access connects directly — no public IP, domain name, or webhook relay required:
 
@@ -137,7 +145,7 @@ Pipiclaw uses **DingTalk Stream Mode**, so any laptop or private server with out
 2. Add the **Bot** capability, choose **Stream Mode** for message receiving, and publish the app.
 3. *(Recommended)* Create an AI Card template and copy its **`Card Template ID`** for live streaming progress cards.
 
-Edit `~/.pipiclaw/channel.json` (remove all `your-*` placeholders):
+Edit `~/.pipiclaw/channel.json` — set `dingtalk.enabled` to `true` and fill in your credentials:
 
 ```json
 {
@@ -150,7 +158,13 @@ Edit `~/.pipiclaw/channel.json` (remove all `your-*` placeholders):
     "cardTemplateKey": "content",
     "allowFrom": []
   },
-  "webapi": { "enabled": false, "socket": true }
+  "webapi": {
+    "enabled": true,
+    "socket": true,
+    "tcp": "127.0.0.1:8787",
+    "tls": null,
+    "keys": [{ "name": "default", "sha256": "...", "desks": ["default"] }]
+  }
 }
 ```
 

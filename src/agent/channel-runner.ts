@@ -498,9 +498,14 @@ export class ChannelRunner implements AgentRunner {
 		// The runner exists before its SDK session does (first message of a fresh channel).
 		if (!this.host.sessionInitialized) return undefined;
 		const model = this.session.model ?? this.models.activeModel;
+		const availableModels = this.host.modelRegistry.getAvailable();
+		const modelConfigured =
+			availableModels.some((candidate) => candidate.provider === model.provider && candidate.id === model.id) ||
+			(model.provider === "anthropic" && Boolean(process.env.ANTHROPIC_API_KEY?.trim()));
 		const contextTokens = this.session.getContextUsage()?.tokens;
 		return {
 			model: formatModelReference(model),
+			modelConfigured,
 			contextTokens: typeof contextTokens === "number" ? contextTokens : undefined,
 			contextWindow: model.contextWindow || 200000,
 			thinkingLevel: this.session.thinkingLevel,

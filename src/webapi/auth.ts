@@ -3,7 +3,8 @@
  * a TCP request must carry a bearer key whose SHA-256 matches a configured one. The comparison
  * visits every stored hash, so how long it takes does not say which key was close.
  */
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
+import { hashWebApiKey } from "../channel/config.js";
 import type { WebApiKey } from "./config.js";
 
 export interface Principal {
@@ -16,13 +17,6 @@ export interface Principal {
 
 export const LOCAL_PRINCIPAL: Principal = { name: "local", local: true };
 
-export const hashKey = (key: string): string => createHash("sha256").update(key).digest("hex");
-
-/** A new key: `pk_` and 256 random bits. Shown once; only its hash is kept. */
-export function generateKey(): string {
-	return `pk_${randomBytes(32).toString("base64url")}`;
-}
-
 function bearerToken(header: string | undefined): string | undefined {
 	const match = /^Bearer[ \t]+(\S+)$/i.exec(header ?? "");
 	return match?.[1];
@@ -31,7 +25,7 @@ function bearerToken(header: string | undefined): string | undefined {
 export function authenticate(authorization: string | undefined, keys: readonly WebApiKey[]): Principal | undefined {
 	const token = bearerToken(authorization);
 	if (token === undefined) return undefined;
-	const presented = Buffer.from(hashKey(token), "hex");
+	const presented = Buffer.from(hashWebApiKey(token), "hex");
 	let match: WebApiKey | undefined;
 	for (const key of keys) {
 		// Every stored hash is compared, whether or not an earlier one already matched.

@@ -29,17 +29,35 @@ describe("pipiclaw tui startup", () => {
 		expect(errors.join("\n")).toContain("PID 4242");
 	});
 
-	it("stops the runtime it started even when the client fails", async () => {
+	it("stops the runtime it started even when the client fails, and offers interactive login when no model credentials exist", async () => {
+		const prevAnthropic = process.env.ANTHROPIC_API_KEY;
+		const prevOpenAI = process.env.OPENAI_API_KEY;
+		delete process.env.ANTHROPIC_API_KEY;
+		delete process.env.OPENAI_API_KEY;
 		let stopped = 0;
-		await expect(
-			runTui(
-				["node", "pipiclaw", "tui", "--print", "x"],
-				{ startEmbeddedRuntime: async () => ({ stop: async () => void stopped++ }) },
-				{ log: () => undefined, error: () => undefined },
-				// No socket was ever created here: the client cannot connect.
-				bootstrapPathsIn(tempDir()),
-			),
-		).rejects.toThrow();
-		expect(stopped).toBe(1);
+		let loginPrompted = 0;
+		try {
+			await expect(
+				runTui(
+					["node", "pipiclaw", "tui"],
+					{
+						startEmbeddedRuntime: async () => ({ stop: async () => void stopped++ }),
+						interactive: true,
+						confirmModelLogin: async () => true,
+						performModelLogin: async () => {
+							loginPrompted++;
+						},
+					},
+					{ log: () => undefined, error: () => undefined },
+					// No socket was ever created here: the client cannot connect after login finishes.
+					bootstrapPathsIn(tempDir()),
+				),
+			).rejects.toThrow();
+			expect(loginPrompted).toBe(1);
+			expect(stopped).toBe(1);
+		} finally {
+			if (prevAnthropic !== undefined) process.env.ANTHROPIC_API_KEY = prevAnthropic;
+			if (prevOpenAI !== undefined) process.env.OPENAI_API_KEY = prevOpenAI;
+		}
 	});
 });

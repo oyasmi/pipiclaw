@@ -61,57 +61,62 @@ export function parseWebApiConfig(section: unknown): WebApiConfig {
 	const issues: string[] = [];
 	const raw = isPlainObject(section) ? section : {};
 	const socket = raw.socket === undefined ? true : raw.socket;
-	if (typeof socket !== "boolean") issues.push("webapi: `socket` must be true or false.");
+	if (typeof socket !== "boolean") issues.push("webapi: `socket` 必须是布尔值（true 或 false）。");
 
 	let tcp: WebApiTcp | undefined;
-	if (raw.tcp !== undefined) {
+	if (raw.tcp !== undefined && raw.tcp !== null && raw.tcp !== "") {
 		tcp = typeof raw.tcp === "string" ? parseTcpAddress(raw.tcp) : undefined;
-		if (!tcp) issues.push("webapi: `tcp` must be `host:port` (an IPv6 host in brackets, e.g. `[::1]:8787`).");
+		if (!tcp)
+			issues.push(
+				"webapi: `tcp` 格式必须是 `host:port`（如 `127.0.0.1:8787`，IPv6 需加方括号如 `[::1]:8787`），或设为 null 关闭 TCP 监听。",
+			);
 	}
 
 	let tls: WebApiConfig["tls"];
-	if (raw.tls !== undefined) {
+	if (raw.tls !== undefined && raw.tls !== null) {
 		const cert = isPlainObject(raw.tls) ? raw.tls.cert : undefined;
 		const key = isPlainObject(raw.tls) ? raw.tls.key : undefined;
-		if (typeof cert === "string" && typeof key === "string" && isAbsolute(cert) && isAbsolute(key)) {
+		if (cert === "" && key === "") {
+			tls = undefined;
+		} else if (typeof cert === "string" && typeof key === "string" && isAbsolute(cert) && isAbsolute(key)) {
 			tls = { cert, key };
 		} else {
-			issues.push("webapi: `tls` needs absolute `cert` and `key` paths.");
+			issues.push("webapi: `tls` 需要填写绝对路径的 `cert` 与 `key`（不启用 TLS 请设为 null）。");
 		}
 	}
 
 	if (socket === false && !tcp && issues.length === 0) {
-		issues.push("webapi: nothing to listen on — set `socket` to true, or give `tcp` an address.");
+		issues.push("webapi: 未开启任何监听地址——请将 `socket` 设为 true，或为 `tcp` 配置 `host:port`。");
 	}
 
 	const keys: WebApiKey[] = [];
 	if (raw.keys !== undefined && !Array.isArray(raw.keys)) {
-		issues.push("webapi: `keys` must be an array.");
+		issues.push("webapi: `keys` 必须是数组。");
 	}
 	const seen = new Set<string>();
 	for (const [index, entry] of (Array.isArray(raw.keys) ? raw.keys : []).entries()) {
 		const where = `webapi: keys[${index}]`;
 		if (!isPlainObject(entry)) {
-			issues.push(`${where} must be an object.`);
+			issues.push(`${where} 必须是 JSON 对象。`);
 			continue;
 		}
 		const { name, sha256, desks } = entry;
 		if (typeof name !== "string" || !KEY_NAME_PATTERN.test(name)) {
-			issues.push(`${where}.name must match ${KEY_NAME_PATTERN}.`);
+			issues.push(`${where}.name 必须匹配 ${KEY_NAME_PATTERN}。`);
 		} else if (name === RESERVED_KEY_NAME) {
-			issues.push(`${where}.name \`${name}\` is reserved for the local socket.`);
+			issues.push(`${where}.name \`${name}\` 为本机 socket 保留名称，不可用于 TCP key。`);
 		} else if (seen.has(name)) {
-			issues.push(`${where}.name \`${name}\` is used twice.`);
+			issues.push(`${where}.name \`${name}\` 重复定义。`);
 		}
 		if (typeof sha256 !== "string" || !SHA256_HEX.test(sha256)) {
-			issues.push(`${where}.sha256 must be 64 lower-case hex characters.`);
+			issues.push(`${where}.sha256 必须是 64 位小写十六进制字符（请使用 \`pipiclaw webapi key add\` 生成）。`);
 		}
 		if (
 			!Array.isArray(desks) ||
 			desks.length === 0 ||
 			!desks.every((desk) => typeof desk === "string" && isDeskName(desk))
 		) {
-			issues.push(`${where}.desks must list at least one valid desk name.`);
+			issues.push(`${where}.desks 必须至少包含一个合法的工位名称（如 ["default"]）。`);
 		}
 		if (typeof name === "string" && typeof sha256 === "string" && Array.isArray(desks)) {
 			seen.add(name);

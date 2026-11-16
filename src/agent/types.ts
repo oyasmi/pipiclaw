@@ -18,6 +18,8 @@ import type { TurnOutput } from "./turn/turn-output.js";
 
 export interface RunnerStatusSnapshot {
 	model: string;
+	/** False when the active model currently has no configured credentials. */
+	modelConfigured?: boolean;
 	contextTokens?: number;
 	contextWindow: number;
 	thinkingLevel: string;

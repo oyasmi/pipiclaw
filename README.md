@@ -85,16 +85,16 @@
 
 1. 检查 Node.js >= 22.19.0，不满足就停止并说明。
 2. 执行 npm install -g @oyasmi/pipiclaw；权限失败时不要自行 sudo。
-3. 运行一次 pipiclaw 初始化 ~/.pipiclaw/；它因 channel.json 仍是模板而提示补全并退出是正常现象。
-4. 询问我要使用 API key、自定义 provider，还是 pipiclaw auth login 支持的订阅登录；不要编造缺失值。
-5. 如果我要接入钉钉，逐项收集 clientId、clientSecret、可选的 cardTemplateId 和 allowFrom，写入 channel.json 的 dingtalk 段，并清除所有 your-* 占位值。
-6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui；钉钉模式用 pipiclaw，启动后直接私聊或在群里 @机器人即可对话。
+3. 运行一次 pipiclaw webapi key list（或 pipiclaw auth status）初始化 ~/.pipiclaw/，并把终端输出的初始默认 Web API Key（pk_...）如实保留告知我。
+4. 询问我要使用环境变量 API key、自定义 provider（写入 ~/.pipiclaw/models.json，内附示例），还是由我自己运行 pipiclaw auth login 登录订阅账号；不要编造缺失值。
+5. 如果我要接入钉钉，逐项收集 clientId、clientSecret、可选的 cardTemplateId 和 allowFrom，写入 channel.json 的 dingtalk 段并将 dingtalk.enabled 设为 true。
+6. 配置完成后先询问是否启动。终端对话用 pipiclaw tui（在项目下可加 --cwd .）；常驻服务用 pipiclaw（默认已开启本机 Web API Socket 与 http://127.0.0.1:8787/v1）。
 7. 如实列出做过的操作、修改的文件、验证结果和仍缺少的信息，不要假装成功。
 ```
 
 </details>
 
-### 第 1 步：安装并在终端 60 秒跑通
+### 第 1 步：安装并立即跑通（免配钉钉，开箱即用）
 
 环境要求：**Node.js `>= 22.19.0`**，支持 **Linux / macOS**（Windows 请使用 **WSL2**）。
 
@@ -102,20 +102,28 @@
 npm install -g @oyasmi/pipiclaw
 ```
 
-终端模式**不需要配置钉钉**，只需配置一个可用模型（任选其一）：
+首次运行 `pipiclaw` 或 `pipiclaw tui` 时，会自动创建 `~/.pipiclaw/` 配置目录、**默认开启本机 Web API（本机 Socket + `http://127.0.0.1:8787/v1`，并自动生成一把默认密钥 `pk_...`）**；若尚未检测到模型凭据，还会直接引导你完成登录。
+
+你也可以提前任选一种方式配好模型：
 
 ```bash
-# 方式 A：通过环境变量设置 API Key（以 Anthropic 为例）
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# 方式 B：交互式登录受支持的模型订阅账号
+# 方式 A：交互式登录订阅账号或填写 API Key（登录完可直接设为默认模型）
 pipiclaw auth login
+
+# 方式 B：通过环境变量设置 API Key（以 Anthropic 为例）
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-直接启动终端对话（首次运行会自动创建 `~/.pipiclaw/` 配置目录和默认工位）：
+启动终端对话（进入具体代码仓库时可加 `--cwd .` 将默认工位绑定到当前目录）：
 
 ```bash
 pipiclaw tui
+```
+
+或者直接启动常驻后台服务（本机 `pipiclaw tui` 与 OpenAI SDK 脚本均可直连）：
+
+```bash
+pipiclaw
 ```
 
 你也可以用单次命令快速验证模型链路是否真正调通：
@@ -124,9 +132,9 @@ pipiclaw tui
 pipiclaw tui --print "只回复：Pipiclaw 已就绪"
 ```
 
-> 如需配置 OpenAI 兼容中转网关、DeepSeek / GLM / 本地模型或固定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md)。
+> 如需配置 OpenAI 兼容中转网关、DeepSeek / 通义 / GLM / 本地 Ollama，直接参考自动生成的 `~/.pipiclaw/models.json` 内置 `_examples` 样例，或查看[配置速查](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md)。
 
-### 第 2 步：接入钉钉（免公网 IP）
+### 第 2 步：按需接入钉钉（免公网 IP）
 
 得益于钉钉 **Stream 模式**，你的电脑或内网服务器只要能上网就能直连钉钉，无需公网 IP、域名或内网穿透：
 
@@ -134,7 +142,7 @@ pipiclaw tui --print "只回复：Pipiclaw 已就绪"
 2. 在应用中添加**机器人**能力，消息接收模式选择 **Stream 模式**并发布。
 3. *（推荐）* 创建一个 AI Card 卡片模板并记录 **`Card Template ID`**，即可获得丝滑的实时流式输出体验。
 
-编辑 `~/.pipiclaw/channel.json`（请确保删掉所有 `your-*` 占位符）：
+编辑 `~/.pipiclaw/channel.json` 的 `dingtalk` 段，将 `enabled` 改为 `true` 并填入凭据：
 
 ```json
 {
@@ -147,7 +155,13 @@ pipiclaw tui --print "只回复：Pipiclaw 已就绪"
     "cardTemplateKey": "content",
     "allowFrom": []
   },
-  "webapi": { "enabled": false, "socket": true }
+  "webapi": {
+    "enabled": true,
+    "socket": true,
+    "tcp": "127.0.0.1:8787",
+    "tls": null,
+    "keys": [{ "name": "default", "sha256": "...", "desks": ["default"] }]
+  }
 }
 ```
 
