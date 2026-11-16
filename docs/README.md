@@ -1,68 +1,80 @@
-# Pipiclaw 文档
+# Pipiclaw 用户文档中心
 
-这里是 Pipiclaw 的完整用户与开发文档。第一次使用请先从[项目 README](../README.md)完成终端体验或钉钉接入；之后按你现在要解决的问题选择入口，不需要从头通读。
+欢迎来到 Pipiclaw 文档中心！你不需要从头到尾通读——请直接按你**手头想解决的问题**跳到对应指南。
 
-## 我想先把它用起来
+> 💡 **第一次接触 Pipiclaw？**
+> 1. 先跟着 **[项目主页：快速开始](../README.md#快速开始)** 用 1 分钟跑通终端对话，或用 5 分钟接入钉钉机器人。
+> 2. 跑通后看一眼 **[交互与命令](./interaction-and-commands.md)**，学会如何在助手忙碌时中途纠偏（`/steer`）、查看状态（`/status`）和切换工位（`/desk`）。
+> 3. 再按需打开下方的模型配置、联网搜索、外部 Coding Agent 委派或后台任务。
 
-| 目标 | 从这里开始 |
+---
+
+## 🚀 起步与日常配置
+
+解决“怎么连上模型、怎么改配置、怎么在钉钉/终端/脚本里顺手交互”：
+
+| 你想做什么 | 推荐阅读 | 你能得到什么 |
+|---|---|---|
+| 在终端或钉钉完成安装与第一次对话 | [快速开始](../README.md#快速开始) | 60 秒终端验证、免公网 IP 接入钉钉、一键 AI 辅助安装提示词 |
+| 搞清楚私聊、群聊、AI Card 模式与斜杠命令 | [交互与命令](./interaction-and-commands.md) | 忙时如何插话/排队/叫停、AI Card 三种展示模式、工位（Desk）切换方法 |
+| 配置自定义模型、中转网关、网络代理或联网工具 | [配置速查](./configuration.md) | 一张表看懂 `~/.pipiclaw/` 下 6 个配置文件该改哪一个，附常用配置模板 |
+| 查询某个配置项的准确字段名、默认值与优先级 | [配置字段参考](./configuration-reference.md) | 全量配置项字典，适合精细调优时按名索骥 |
+| 用官方 OpenAI SDK 从 Python / JS 脚本连接助手 | [Web API 手册](./webapi.md) | 开启本地 Socket 或 TCP 接口、管理访问密钥、可直接运行的 SDK 代码示例 |
+
+---
+
+## 🛠️ 让助手真正帮你干活
+
+把 Pipiclaw 从“一问一答的聊天框”升级为“能记忆、会调兵遣将、能在后台持续交付的工作台”：
+
+| 你想做什么 | 推荐阅读 | 你能得到什么 |
+|---|---|---|
+| 调度本机的 Claude Code、Codex、Cursor 或 Antigravity | [智能体委派指南](./sub-agents.md) · [角色示例库](../examples/sub-agents/README.md) | 如何启用外部 Coding Agent、后台异步完成唤醒、继续追问、只读独立审查与自己编写角色 |
+| 交办跨小时的后台复杂任务，或设置定时提醒/巡检 | [事件与任务](./events-and-tasks.md) | 后台长程任务的查看/传话/暂停/追加预算，以及单次提醒、Cron 周期巡检与零 Token 脚本过滤 |
+| 让助手记住项目规矩、翻看工作日记或忘掉旧信息 | [记忆管理](./memory.md) | 长期记忆、按天工作日记、30 天观察期的工作方式，以及如何用 `/memory forget` 彻底删除记忆 |
+| 把个人或团队的常用套路沉淀成可复用技能 | [Skills 指南](./skills.md) | 在工作区或 `~/.agents/skills/` 编写与共享技能，免重复输入长提示词 |
+| 了解助手自带哪些读写、命令与检索能力 | [内置工具总览](./tools.md) | 文件读写编辑、命令执行、后台作业、历史会话检索与网页抓取的能力边界 |
+| **进阶必读**：会用功能之后，如何成倍放大个人产出 | [使用杠杆（Leverage）](./leverage/README.md) | 5 篇实战思考：如何把触发、上下文与验收逐步交出去，把助手从“手拧扳手”用成“自动车床” |
+
+> [!TIP]
+> Pipiclaw 内置了随版本自动更新的机制说明（如任务、委派与定时事件的内部用法），按需供模型自动查阅。你在编写自己的 `~/.pipiclaw/workspace/AGENTS.md` 时，**只需写你自己的项目规范与偏好**，无需把本手册里的产品机制复制进去。
+
+---
+
+## 🛡️ 24 小时常驻、安全与运维
+
+准备把 Pipiclaw 长期跑在开发机、Mac mini 或服务器上时阅读：
+
+| 你想做什么 | 推荐阅读 | 你能得到什么 |
+|---|---|---|
+| 用 `systemd` / `pm2` 托管后台常驻、备份或排查故障 | [部署与运维指南](./deployment-and-operations.md) | 标准服务文件模板、环境变量隔离、升级步骤、日志位置与常见故障自查表 |
+| 控制文件、命令、网络访问权限与外部 CLI 边界 | [安全指南](./security.md) | 默认安全守卫拦什么、如何放开或收紧策略、外部 Coding Agent 的真实权限边界 |
+| 多人/多群共用或同时跑多个项目时评估边界 | [并发与容量](./scaling-and-concurrency.md) | 多频道并行与单频道串行规则、共享代码目录冲突防范、何时该分「工位」或拆实例 |
+| 深入了解断线重连、模型回退、后台压缩等底层表现 | [运行机制详解](./runtime-mechanisms.md) | 备用模型自动切换、空闲零消耗记忆整理、后台任务恢复等机制的准确行为说明 |
+
+---
+
+## 📦 旧版本升级数据迁移
+
+> **新安装用户请直接跳过本节。** 仅当你从早期旧版本（0.9 之前等历史目录格式）升级、且启动时提示存储结构变更时，才需要让本机 AI Agent 按以下说明执行一次性迁移：
+
+- [工位迁移说明](./desk-migration.md) · [渠道层迁移说明](./channel-migration.md) · [任务迁移说明](./task-migration.md)
+
+---
+
+<details>
+<summary><b>🔧 源码架构与项目开发参考（面向贡献者与二次开发者）</b></summary>
+
+如果你想阅读源码、理解设计取舍、运行评测或提交 Pull Request，可参考以下开发文档：
+
+| 文档 | 内容说明 |
 |---|---|
-| 在终端或钉钉中完成第一次对话 | [项目 README：快速开始](../README.md#快速开始) |
-| 理解私聊、群聊、AI Card、忙时消息和斜杠命令 | [交互与命令](./interaction-and-commands.md) |
-| 配置钉钉、模型、Web 工具或代理 | [配置速查](./configuration.md) |
-| 用官方 OpenAI SDK 从脚本或客户端连接自己的助手（已实现子集） | [Web API](./webapi.md) |
-| 查某个配置字段的准确取值和默认值 | [配置字段参考](./configuration-reference.md) |
+| [设计哲学](./design-philosophy.md) | 为什么这样设计状态持久化、运行时边界、分层记忆与可验证交付 |
+| [架构文档](./architecture.md) | 源码目录地图、模块分层依赖、运行时拓扑与磁盘存储布局 |
+| [开发与工程规范 (AGENTS.md)](../AGENTS.md) | 模块边界守卫、代码规范、测试分层与提交流程要求 |
+| [Runtime Playbooks](./runtime-playbooks.md) | 内置运行手册如何按需加载给模型，以及体积预算管理 |
+| [行为评测指南](./evals.md) | 真实模型行为评测（`eval`）、离线门控与诊断重放 |
+| [设计记录 (Specs)](./specs/README.md) · [历史归档](./archive/README.md) | 历次核心特性的设计方案（Spec 050–068）与早期归档记录 |
+| 探索性调研笔记（未实施预研） | [主动工作与实时语音调研](./refer/personal-agent-proactivity-and-voice.md) · [主动性机制与设计取舍](./refer/personal-agent-proactivity-design-notes.md) |
 
-## 我想让它完成实际工作
-
-| 目标 | 从这里开始 |
-|---|---|
-| 把工作委派给内置子智能体、Claude Code、Codex CLI、Cursor CLI 或 Antigravity CLI | [智能体委派](./sub-agents.md) |
-| 了解它能读写什么、能调用哪些能力 | [工具总览](./tools.md) |
-| 让它记住约定、找回历史或忘掉旧信息 | [记忆](./memory.md) |
-| 建立提醒、周期检查或跨会话长期任务 | [事件与任务](./events-and-tasks.md) |
-| 把个人或项目方法沉淀成可复用 skill | [Skills：工作区与用户共享](./skills.md) |
-| 想让它持续产出、而不是每次等你动一下 | [使用杠杆](./leverage/README.md) |
-
-## 我要长期运行和治理它
-
-| 目标 | 从这里开始 |
-|---|---|
-| 决定文件、命令、网络和外部智能体能碰什么 | [安全指南](./security.md) |
-| 部署常驻进程、看日志、升级、备份或排障 | [部署与运维](./deployment-and-operations.md) |
-| 让 AI agent 按具体数据完成一次性存储迁移 | [工位迁移说明](./desk-migration.md)、[渠道层迁移说明](./channel-migration.md)、[任务迁移说明](./task-migration.md)，执行前核对目标版本 |
-| 理解 fallback、记忆维护、后台作业、委派和任务车道 | [运行机制](./runtime-mechanisms.md) |
-| 评估并发、资源占用和拆分实例的时机 | [并发与容量](./scaling-and-concurrency.md) |
-
-## 我要理解或修改源码
-
-| 文档 | 内容 |
-|---|---|
-| [架构](./architecture.md) | 当前实现的源码地图、运行时拓扑、消息生命周期、并发表和磁盘布局 |
-| [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
-| [主动工作与实时语音调研](./refer/personal-agent-proactivity-and-voice.md) | Grok Bot、Muse、Dots 的官方证据；Qwen、GPT-Live、Ming/Fun 模型比较，主动时机与语音接入方案（2026-10-31，未实施） |
-| [主动性机制与设计取舍](./refer/personal-agent-proactivity-design-notes.md) | Grok Bot、DeepSeek Super-agent、OpenClaw 的证据；主动介入的分寸、心跳与 watchdog、现有任务约束及分阶段验证建议（2026-11-06，未实施） |
-| [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
-| [行为评测使用指南](./evals.md) | 无人参与的 `cycle`、评分器校验、短报告、证据重放与兼容参照 |
-| [设计记录](./specs/README.md) | 保留的 spec 050–068、实施状态及当前行为的判断顺序 |
-| [历史文档归档](./archive/README.md) | 编号 050 之前的完整 spec，以及已完成的实施清单、review 和快照 |
-| [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
-
-## 文档的责任边界
-
-- `README.md` 负责产品定位、适用场景和成功主路径。
-- `configuration.md` 负责“该改哪个文件、常见场景怎么配”。
-- `configuration-reference.md` 负责字段、默认值和解析优先级。
-- `runtime-mechanisms.md` 负责解释配置背后的运行行为。
-- `architecture.md` 负责解释代码位置和组件关系。
-- `sub-agents.md` 是智能体委派的用户级权威文档。
-- `leverage/` 负责“会用之后怎么用出更大产出”的观点与实践，不定义行为契约。
-- `refer/` 保存带日期与信源的调研材料，区分产品事实、代码现状和候选建议，不作为功能已实现的承诺。
-- `security.md` 是权限、隔离与授权边界的用户级权威文档。
-
-`docs/` 面向人，允许跳读、示例和完整参考；`src/playbooks/` 面向 agent，只有小型目录常驻系统提示，正文按需读取。不要把 runtime playbook 复制进 workspace 的 `AGENTS.md` 或 skill：升级会更新内置机制，副本不会同步。
-
-## 维护方式
-
-更新行为说明时先对照实现与测试，再同步用户指南、字段参考和运行时 playbook。工具参数以当前 schema 为准；示例区分工具对象与磁盘格式，涉及日期须说明需要替换为未来时刻。
-
-历史设计保留问题、约束、方案取舍和关键实现偏离；过时的 spec 文档移到 `docs/archive/specs/`，不删除。spec 的实施清单、review 和旧 prompt 快照也按此归档；其他已失去价值的一次性 review 可删除。Changelog 是发布记录；测试/eval fixture 与评测 baseline 是验证数据，不按过期手册清理。
+</details>

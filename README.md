@@ -1,130 +1,84 @@
+<div align="center">
+
 # Pipiclaw
 
-<p align="left">
-  <strong>简体中文</strong> | <a href="./README.en.md">English</a>
+**住进钉钉与终端的全天候个人 AI 研发助手**
+
+交办目标，合上手机——让它记住你的项目约定，统筹你手头的大模型与 Coding Agent 在后台持续推进，带着验证证据向你交付。
+
+<p>
+  <strong>简体中文</strong> · <a href="./README.en.md">English</a> · <a href="https://github.com/oyasmi/pipiclaw/blob/master/docs/README.md">完整文档</a>
 </p>
 
-<p align="left">
-  <a href="https://www.npmjs.com/package/@oyasmi/pipiclaw"><img src="https://img.shields.io/npm/v/@oyasmi/pipiclaw?color=blue&label=npm" alt="npm version"></a>
-  <img src="https://img.shields.io/badge/node-%3E%3D22.19.0-brightgreen" alt="Node.js >= 22.19.0">
-  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL2-lightgrey" alt="Platform">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-orange" alt="License: AGPL v3"></a>
+<p>
+  <a href="https://www.npmjs.com/package/@oyasmi/pipiclaw"><img src="https://img.shields.io/npm/v/@oyasmi/pipiclaw?color=2563eb&label=npm" alt="npm version"></a>
+  <a href="https://github.com/oyasmi/pipiclaw/actions/workflows/ci.yml"><img src="https://github.com/oyasmi/pipiclaw/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D22.19.0-16a34a" alt="Node.js >= 22.19.0">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL2-64748b" alt="Platform">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-ea580c" alt="License: AGPL v3"></a>
 </p>
 
-> **把钉钉和终端变成永不下线的 AI 研发工作台——交办目标、合上电脑，让它调动你的模型与 Coding Agent 在后台持续推进，带着验证证据向你交付。**
+**[为什么用它](#为什么用-pipiclaw) · [真实体验](#真实工作流体验) · [快速开始](#快速开始) · [核心能力](#核心能力) · [常用命令](#常用命令) · [常见问题](#常见问题) · [文档导航](#文档导航)**
 
-**Pipiclaw** 是面向个人开发者、以钉钉为主要入口的 AI 编程助手运行时（Runtime）。你可以在钉钉、终端或脚本中交办目标，让它保留完整的工作上下文、在后台独立推进长程任务，并按需调度你已有的大模型、**Claude Code**、**Codex CLI**、**Cursor CLI**、**Antigravity CLI** 或自定义执行器。推进过程中，你可以随时查看进展、补充要求、暂停或接管，最终拿到可检查的代码、报告与验证依据。
-
-**[核心亮点](#核心亮点) · [工作原理](#工作原理) · [典型场景](#典型场景) · [快速开始](#快速开始) · [常用命令](#常用命令) · [文档导航](#文档)**
+</div>
 
 ---
 
-## 核心亮点
+## 为什么用 Pipiclaw
 
-### 🚀 1. 人走活不停：独立「任务车道」与定时事件
+你手头可能已经有 **Claude Code**、**Codex CLI**、**Cursor** 或各类大模型订阅，但日常研发依然有三个明显的断层：
 
-传统的命令行 AI 工具一旦关掉窗口或结束对话，上下文和在途工作就随之中断。Pipiclaw 将工作的连续性从单次聊天中解放出来：
+1. **人走活就停**：命令行工具绑死在终端窗口里——出门、开会或关掉窗口，正在跑的工作就断了，没法在手机上随时交办和跟进。
+2. **多工具来回倒手**：查日志用一个模型、写代码开 Claude Code、做 Code Review 又切去 Codex，上下文全靠人肉复制粘贴。
+3. **每次重头交代背景**：新开一个会话，项目的目录约定、发布禁忌、个人偏好又要重新说一遍。
 
-- **后台任务车道（Task Lane）**：跨小时、跨会话的一次性复杂项目在后台独立的任务车道中推进，**与日常聊天互不阻塞**。每个任务由人类可读的 Markdown **任务说明**（目标、完成标准 DoD、**工作项**）和 JSONL **任务记录**（步骤、派发与结果）驱动，状态完全由运行时根据真实观察到的在途事实推导，不会因为模型“幻觉”而卡死在虚假等待中。
-- **定时事件与传感器（Events）**：支持单次（`one-shot`）与周期（`periodic` Cron）触发。既能通过前置脚本（`preAction`）做**零 Token 消耗**的本地条件传感器，也能按事件模板每次自动派生独立的任务实例（例如每日代码巡检、周报汇总），上一次未完成时自动防重跳过。
-- **确定性预算与止损**：内置步数与美元预算、空转检测、单步超时和连续报错守护。触及边界时自动暂停并通知你，绝不在后台失控烧钱。
+**Pipiclaw 把这些碎片串成一个真正属于你的个人助手**：它常驻在你的开发机或服务器上，免公网 IP 接入钉钉，同时提供终端界面与兼容官方 OpenAI SDK 的本地接口。你在哪里说话，它就在哪里接单、记忆、调度执行器，并把可验收的结果推回给你。
 
-### 🤝 2. 一套工作流，统领你手头的全部顶级 Coding Agent
-
-不必在多个 CLI 窗口间来回切换、手动搬运上下文。Pipiclaw 让主智能体充当负责人，按能力、成本和执行边界把具体工作委派给最合适的执行器：
-
-- **内置子智能体（Internal）**：在进程内隔离上下文中秒级启动，复用 Pipiclaw 的安全守卫，适合代码检索、日志筛查与快速分析。
-- **外部重型执行器（External）**：直接拉起本机真实的 **Claude Code**、**Codex CLI**、**Cursor CLI**、**Antigravity CLI (`agy`)**、GLM 包装脚本或任意自定义命令，处理跨多文件实现、编写并反复运行测试等重度工程任务。
-- **异步唤醒、会话续接与独立检查**：外部委派在后台运行（记录与管理产物保留 30 天），完成后自动唤醒发起频道；支持在已完成的外部会话上继续追问（Session 续接），也支持调用 CLI 强制只读的角色（如 `codex-review`）对改动做独立审查（`purpose: verify`）。
-
-### 💬 3. 原生驻留钉钉 + 终端 TUI + OpenAI 兼容 Web API
-
-- **免公网 IP 接入钉钉**：基于钉钉 **Stream Mode**，开发机或内网服务器安装即连，无需自建消息中转服务或公网回调地址。
-- **AI Card 实时流式交互**：卡片实时展示思考过程、工具调用与阶段状态；模型正在忙时，直接发消息即可动态微调方向（`/steer`），或用 `/followup` 排队下一件事、用 `/stop` 立即中止；生成的报表、截图和导出文件直接作为**钉钉原生附件**交付。
-- **一个大脑，多端同源**：单个机器人实例可同时服务多个私聊和群聊（不同频道并行推进，同一频道内串行防冲突）。终端界面（`pipiclaw tui`）与你自己的脚本客户端通过兼容官方 **OpenAI SDK（Responses API 已实现子集）** 的本地 Socket / TCP **Web API** 连接同一个助手。
-
-### 🧠 4. 记得住约定、分得清场合：分层记忆与「工位（Desk）」
-
-- **默认互通，按需隔离**：终端、钉钉私聊和群聊默认绑定在 `default` 工位下，共享长期记忆、工作日记、任务与文件，开箱即聊；需要把不同项目或用途隔开时，用 `/desk new <名字>` 即可开辟独立工位。
-- **三层透明记忆，告别“关键词猜谜”**：
-  - **工位记忆（`memory/*.md`）**：一事一文件，自动生成 `MEMORY.md` 索引并在会话首轮整份注入——只要在索引预算内，模型一眼看到全部约定，不会因为你没说中关键词而“失忆”。
-  - **工作日记（`journal/YYYY-MM-DD.md`）**：按天记录进展、决策与卡点，不把临时进度污染成永久规则。
-  - **自动反思与观察期**：在上下文压缩、开启新会话或频道空闲时自动整理记忆；新学到的日常知识先进入 30 天**观察期**，验证有用才转正；用 `/memory forget` 删除的条目会留下哈希防线，防止后台整理再次将其“复活”。空闲检查先过本地确定性闸门，无新内容时**零 Token 待机**。
-
-### 🛡️ 5. 能自主，更能一秒接管：绕过模型的控制面与本地数据主权
-
-- **不经过 LLM 的硬控制面**：`/help`、`/stop`、`/steer`、`/followup`、`/tasks`、`/subagents`、`/events`、`/desk`、`/status`、`/usage`、`/context` 等命令由运行时直接处理。**哪怕模型服务不可用或当前回合卡死**，你依然能在钉钉或终端实时查看状态、暂停任务，或用 `/subagents cancel` 直接终止外部子进程。
-- **配置与数据完全归你**：支持内置 Provider、OpenAI 兼容网关、API Key 与订阅登录（`pipiclaw auth login`）。记忆、任务、角色、事件和账本全部是 `~/.pipiclaw/` 下可直接阅读和 Git 备份的纯文本文件；内置命令、路径与网络守卫及审计日志。
+| 对比维度 | 普通聊天机器人 | 单个终端 Coding CLI | **Pipiclaw** |
+|---|---|---|---|
+| **随时随地触达** | 手机可聊，但碰不到本机代码与环境 | 能改代码，但你必须守在电脑终端前 | **钉钉私聊/群聊 + 终端 + SDK 同源连接** |
+| **长耗时复杂任务** | 单轮问答为主，超时即断 | 占用当前窗口，关掉或断网即停 | **独立后台任务通道，跨小时推进，与聊天互不阻塞** |
+| **多工具协同** | 单一模型孤立回答 | 各跑各的 CLI，手动搬运上下文 | **统一调度内置模型与 Claude / Codex / Cursor / Antigravity** |
+| **跨会话记忆** | 换个窗口就忘，或靠脆弱的关键词检索 | 仅限静态规则文件 | **自动沉淀长期记忆 + 按天工作日记，可查可删** |
+| **失控接管能力** | 只能干等生成结束 | 在电脑前按 `Ctrl-C` | **手机/终端随时 `/stop`、`/steer`、暂停任务或强杀子进程** |
 
 ---
 
-## 工作原理
+## 真实工作流体验
 
-```mermaid
-flowchart LR
-    subgraph Entries["交互入口（Channels）"]
-        DT["📱 钉钉私聊 / 群聊<br/>(Stream Mode + AI Card)"]
-        TUI["💻 终端界面<br/>(pipiclaw tui)"]
-        API["🔌 脚本与客户端<br/>(OpenAI SDK / Web API)"]
-    end
+下面是你在日常研发中使用 Pipiclaw 的典型一幕：
 
-    subgraph Runtime["Pipiclaw 运行时（Daemon）"]
-        CP["⚡ 确定性控制面<br/>(/stop /steer /tasks /subagents ...)"]
-        CR["🧭 频道调度与会话主机<br/>(按频道串行 · 跨频道并行)"]
-        TL["🛤️ 后台任务车道 (Task Lane)<br/>(独立推进 · 预算与超时守护)"]
-        EV["⏰ 定时事件与传感器<br/>(Cron / One-shot / preAction)"]
-    end
+```text
+09:15  [地铁上 · 钉钉私聊]
+你 ──▶ "把用户导出接口改成流式响应并补齐大文件单测，改完让 codex-review 独立检查一遍再发我。"
 
-    subgraph Desk["工位上下文（Desk: default / 自定义）"]
-        MEM["🧠 分层记忆与工作日记<br/>(memory/*.md · journal/)"]
-        TSK["📋 任务说明与任务记录<br/>(tasks/<id>.md · <id>.jsonl)"]
-    end
+09:16  [后台建单推进 · 不占聊天]
+助手 ─▶ 建立后台长程任务，拆解工作项，拉起本机 claude-main 编写代码并运行测试。
+       （与此同时，你依然可以在同一个钉钉窗口里正常问它别的线上问题，互不卡顿。）
 
-    subgraph Executors["执行器与工具（Executors & Guards）"]
-        INT["🔍 内置工具与内置子智能体<br/>(命令 / 路径 / 网络守卫)"]
-        EXT["🛠️ 外部 Coding Agent<br/>Claude Code · Codex · Cursor · Antigravity"]
-    end
+09:32  [中途随时微调]
+你 ──▶ "/tasks" 查看进度，顺手发一句："/tasks msg export-stream 记得兼容带 BOM 的 CSV 导出"
 
-    DT & TUI & API --> CP & CR
-    EV -->|唤醒 / 生成任务实例| CR & TL
-    CR <--> Desk
-    TL <--> Desk
-    CR & TL --> INT & EXT
+09:48  [独立复核与交付]
+助手 ─▶ claude-main 测试通过 → 自动拉起只读的 codex-review 核查改动 diff → 汇总改动说明、
+       测试输出与压测对比表，作为钉钉卡片与原生文件附件推送到你的手机。
 ```
 
-### 核心概念速览
+除此之外，你还可以用它做：
 
-| 概念 | 是什么 | 解决什么问题 |
-|---|---|---|
-| **频道（Channel）** | 一个钉钉私聊、一个钉钉群，或一个 Web API / TUI 会话 | 保持每段对话历史独立，作为你交办、查看和接管工作的遥控器 |
-| **工位（Desk）** | 一套命名的工作积累（默认 `default`，可按需新建） | 汇总同一工作上下文下的记忆、工作日记、任务、定时事件与工作目录 |
-| **任务（Task）** | 后台任务车道里推进的一次性项目（`.md` 说明 + `.jsonl` 记录） | 让跨小时、跨多步的复杂交付在后台独立推进，不占用聊天，重启可恢复 |
-| **事件（Event）** | 单次或 Cron 定时触发器，可带本地 `preAction` 门控或任务模板 | 回答“什么时候唤醒”，驱动定时提醒、零 Token 巡检或周期性生成任务实例 |
-| **委派（Sub-Agent）** | 进程内轻量角色（`internal`）或外部 CLI 进程（`external`） | 回答“这一步由谁来做”，把已有订阅和异构 Coding Agent 纳入同一套工作流 |
-
----
-
-## 典型场景
-
-- **📱 随时随地的个人移动研发台**：在钉钉交办“把某模块迁移到新接口并补齐测试”，合上电脑；后台任务自动拆解工作项、调用 Claude Code / Codex 实现并跑通测试，再派 `codex-review` 独立核查 diff，最后把改动摘要与测试证据推回钉钉。
-- **⏰ 零打扰的周期巡检与报告**：配置每日或每周定时事件模板，先用本地脚本检查仓库是否有新提交或异常日志，有变化时才生成后台任务深入分析并投递钉钉卡片与附件。
-- **🔀 多模型与多 Agent 混合调度**：日常对话使用响应快或高性价比的模型，疑难架构与排障交给 `claude-high` / `codex-high` / `cursor-high`，明确批处理交给 `codex-flash` / `glm-flash`，长上下文协作交给 `agy-main`，充分利用手头每一份订阅额度。
-- **🤝 个人多入口与小团队共享协作**：在多个钉钉群和私聊中维持各自独立的对话，默认共享同一份项目积累；需要为特定专项隔离背景时，随时切换工位。
-- **🔌 用官方 OpenAI SDK 把助手接入自有工作流**：开启 Web API，用几行 Python / JS 代码从 CI 脚本、内部工具或自定义前端调用你的个人助手，共享工位记忆与工具生态。
-
-> [!NOTE]
-> **适用边界说明**：Pipiclaw 面向个人开发者（及共同使用同一个助手的小范围协作），支持自托管与单实例运行。它不是多租户 SaaS 平台，也不提供操作系统级沙箱；**外部智能体（External Agents）会绕过 Pipiclaw 的内置命令/路径守卫**，其真实权限由目标 CLI 自身的 sandbox 参数、运行系统账号与宿主环境共同决定。
+- **⏰ 零打扰的每日巡检**：设置 Cron 定时事件，先跑本地脚本检查仓库是否有新提交或报错日志——**没变化时零 Token 消耗**，发现异常才自动建单深入排查并推钉钉报告。
+- **🔀 把每份订阅用在刀刃上**：日常快问快答用高性价比模型；架构攻坚派给 `claude-high` / `codex-high` / `cursor-high`；批量机械修改交给 `codex-flash` / `glm-flash`；长上下文分析交给 `agy-main`。
+- **🗂️ 多项目干净隔离**：默认所有入口共享一套记忆；需要把公司项目、个人副业或专项实验分开时，发一句 `/desk new side-project` 即可切换独立「工位」。
+- **🔌 几行代码接入自有脚本**：开启内置 Web API，直接用官方 Python / JS `openai` SDK 在 CI 或内部脚本里调用你的助手。
 
 ---
 
 ## 快速开始
 
-下面按顺序完成**安装 → 30 秒终端验证 → 钉钉接入 → 外部 Coding Agent 启用**。如果你已经有明确目标，可直接跳到对应小节。
+按顺序只需几分钟：**终端 60 秒跑通 → 5 分钟接入钉钉 → 按需接入外部 Coding Agent → 后台常驻运行**。
 
 <details>
-<summary>💡 <b>偷懒方式：让你常用的 AI Agent（Claude Code / Codex / Cursor 等）帮你一键安装配置</b></summary>
-
-把下面这段话直接复制给你的本机 AI Agent：
+<summary>💡 <b>偷懒捷径：复制这段话给你本机的 Claude Code / Codex / Cursor，让它帮你装好</b></summary>
 
 ```text
 请帮我安装并初始化 Pipiclaw：
@@ -134,80 +88,62 @@ flowchart LR
 3. 运行一次 pipiclaw 初始化 ~/.pipiclaw/；它因 channel.json 仍是模板而提示补全并退出是正常现象。
 4. 询问我要使用 API key、自定义 provider，还是 pipiclaw auth login 支持的订阅登录；不要编造缺失值。
 5. 如果我要接入钉钉，逐项收集 clientId、clientSecret、可选的 cardTemplateId 和 allowFrom，写入 channel.json 的 dingtalk 段，并清除所有 your-* 占位值。
-6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui；钉钉模式用 pipiclaw，启动后直接私聊或在群里 @机器人，无需创建或绑定工位。
+6. 配置完成后先询问是否启动。终端模式用 pipiclaw tui；钉钉模式用 pipiclaw，启动后直接私聊或在群里 @机器人即可对话。
 7. 如实列出做过的操作、修改的文件、验证结果和仍缺少的信息，不要假装成功。
 ```
 
 </details>
 
-### 1. 环境要求与安装
+### 第 1 步：安装并在终端 60 秒跑通
 
-- **Node.js**：`>= 22.19.0`
-- **操作系统**：Linux / macOS（Windows 请使用 WSL2）
+环境要求：**Node.js `>= 22.19.0`**，支持 **Linux / macOS**（Windows 请使用 **WSL2**）。
 
 ```bash
 npm install -g @oyasmi/pipiclaw
-pipiclaw tui --help
 ```
 
-首次实际启动 `pipiclaw` 或 `pipiclaw tui` 时，会自动初始化 `~/.pipiclaw/`（可通过环境变量 `PIPICLAW_HOME=/your/path` 整体迁移）：
-
-```text
-~/.pipiclaw/
-├── channel.json      # 渠道开关与配置：钉钉应用 (dingtalk)、Web API (webapi)
-├── auth.json         # 模型凭据与登录态
-├── models.json       # 自定义模型提供方与网关配置
-├── settings.json     # 默认模型与运行时设置
-├── tools.json        # Web 搜索/抓取、任务等能力开关
-├── security.json     # 命令、路径与网络守卫策略
-└── workspace/        # 共享规则 (AGENTS.md / SOUL.md)、skills/、sub-agents/，以及默认工位 desk-default/
-```
-
-### 2. 最快体验：30 秒在终端跑通
-
-终端模式无需配置钉钉凭据，只需一个可用模型。任选一种方式配置凭据：
+终端模式**不需要配置钉钉**，只需配置一个可用模型（任选其一）：
 
 ```bash
-# 方式 A：通过环境变量提供 API Key
+# 方式 A：通过环境变量设置 API Key（以 Anthropic 为例）
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# 方式 B：登录 SDK 支持的订阅 Provider
+# 方式 B：交互式登录受支持的模型订阅账号
 pipiclaw auth login
 ```
 
-启动交互式终端（首次运行会自动初始化默认工位 `default`）：
+直接启动终端对话（首次运行会自动创建 `~/.pipiclaw/` 配置目录和默认工位）：
 
 ```bash
 pipiclaw tui
 ```
 
-或者用脚本化的一句话测试真实调用链路：
+你也可以用单次命令快速验证模型链路是否真正调通：
 
 ```bash
-pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
+pipiclaw tui --print "只回复：Pipiclaw 已就绪"
 ```
 
-> 看到模型实际回复才代表调用链路已跑通（`--help` 或 `/model` 仅代表 CLI 和模型目录可见）。如需接入 OpenAI 兼容网关、本地模型或固定默认模型，请查看[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
+> 如需配置 OpenAI 兼容中转网关、DeepSeek / GLM / 本地模型或固定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md)。
 
-### 3. 接入钉钉（无需公网 IP）
+### 第 2 步：接入钉钉（免公网 IP）
 
-前往[钉钉开放平台](https://open-dev.dingtalk.com/)创建企业内部应用：
+得益于钉钉 **Stream 模式**，你的电脑或内网服务器只要能上网就能直连钉钉，无需公网 IP、域名或内网穿透：
 
-1. 获取应用的 **`Client ID`** 和 **`Client Secret`**
-2. 添加应用能力：**机器人**
-3. 消息接收模式选择：**Stream 模式**（无需公网服务器）
-4. *（推荐）* 创建 AI Card 卡片模板并记录 **`Card Template ID`**（流式体验最佳）
+1. 打开[钉钉开放平台](https://open-dev.dingtalk.com/)，创建一个**企业内部应用**，获取 **`Client ID`** 和 **`Client Secret`**。
+2. 在应用中添加**机器人**能力，消息接收模式选择 **Stream 模式**并发布。
+3. *（推荐）* 创建一个 AI Card 卡片模板并记录 **`Card Template ID`**，即可获得丝滑的实时流式输出体验。
 
-编辑 `~/.pipiclaw/channel.json`（务必清除所有 `your-*` 占位值）：
+编辑 `~/.pipiclaw/channel.json`（请确保删掉所有 `your-*` 占位符）：
 
 ```json
 {
   "dingtalk": {
     "enabled": true,
-    "clientId": "your-dingtalk-client-id",
-    "clientSecret": "your-dingtalk-client-secret",
+    "clientId": "填入你的 Client ID",
+    "clientSecret": "填入你的 Client Secret",
     "robotCode": "",
-    "cardTemplateId": "",
+    "cardTemplateId": "填入卡片模板 ID（可先留空）",
     "cardTemplateKey": "content",
     "allowFrom": []
   },
@@ -215,131 +151,241 @@ pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
 }
 ```
 
-- **必填项**：仅 `clientId` 和 `clientSecret` 为硬性必填；`robotCode` 留空时自动回退到 `clientId`；`cardTemplateId` 可暂留空（后续正式使用强烈建议开启 AI Card）。
-- **访问控制**：`allowFrom: []` 表示允许所有发送者；灰度测试期建议填入你的钉钉 `staffId`。
-- **Web API**：若同时想用官方 OpenAI SDK 从外部脚本连接助手，可将 `webapi.enabled` 设为 `true`（详见 [Web API 手册](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md)）。
+- `clientId` 与 `clientSecret` 是仅有的两个必填项；`robotCode` 留空会自动使用 `clientId`。
+- `allowFrom: []` 表示允许应用可见范围内的成员对话；只想自己用时可填入你的钉钉 `staffId`。
 
-启动常驻守护进程：
+启动服务：
 
 ```bash
 pipiclaw
 ```
 
-现在打开钉钉，直接**私聊机器人**或把它**拉进群聊后 @它**——无需手动创建或绑定工位，新频道首次发消息会自动接入默认工位。先发 `/model` 检查模型，再发一条普通消息验证：
+现在打开手机或桌面钉钉，**直接私聊机器人**，或把它拉进群聊后 **@它** 即可开始对话！建议先发 `/status` 检查状态，再发一句日常指令试试。
 
-```text
-请介绍一下你自己，并说明你现在能做什么
-```
+### 第 3 步：接入 Claude Code / Codex / Cursor / Antigravity（可选）
 
-*(若首条消息未跑通，请参考[部署与排障](https://github.com/oyasmi/pipiclaw/blob/main/docs/deployment-and-operations.md)排查。)*
-
-### 4. 启用外部 Coding Agent 委派（Claude / Codex / Cursor / Antigravity）
-
-先在运行 Pipiclaw 的同一系统账号下安装并登录你拥有的 CLI（如 `claude`、`codex`、Cursor 的 `agent` 或 Antigravity 的 `agy`）。
-
-随包附带了按执行器、能力与成本组织好的推荐条目（`flash` / `main` / `high` 及只读审查 `codex-review`）。按需复制你实际拥有账号的一两个主力条目到工作区即可：
+如果你本机已经安装并登录了 `claude`、`codex`、Cursor 的 `agent` 或 Antigravity 的 `agy`，两行命令就能把它们纳入 Pipiclaw 统一调度：
 
 ```bash
 mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
 
-# 示例：启用 Claude Code 与 Codex 的主力条目，以及只读独立审查条目
+# 按你实际拥有的账号挑选复制（此处以 Claude、Codex 主力档与只读审查档为例）
 cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main,codex-review}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 
-*(仓库同样提供 `cursor-main`、`cursor-high`、`agy-main`、`glm-high`、`glm-flash` 等条目，详见[示例配置说明](./examples/sub-agents/README.md)。)*
+*(安装包内还附带了 `claude-high`、`codex-high`、`codex-flash`、`cursor-main`、`cursor-high`、`agy-main`、`glm-high`、`glm-flash` 等配置，详见[委派示例说明](https://github.com/oyasmi/pipiclaw/blob/master/examples/sub-agents/README.md)。)*
 
-无需重启进程，直接在聊天中发送：
-
-```text
-/subagents roles
-```
-
-确认条目状态为可用后，直接用自然语言向主智能体交代目标与验收要求，它会自行选择合适的执行器：
+**无需重启**，直接在钉钉或终端发送 `/subagents roles` 看到状态可用后，就能直接用自然语言发号施令了：
 
 ```text
-请把这个跨模块实现交给合适的执行器，完成后对最终改动做一次独立检查，把结论和验证依据发给我。
+请把这个模块的重构交给合适的外部执行器完成，跑通测试后再做一次独立只读审查，最后把结论发给我。
 ```
 
 > [!IMPORTANT]
-> 外部智能体不经过 Pipiclaw 的命令和路径守卫，且除 `codex-review` 外的示例条目默认开启了放开权限的 CLI 参数。启用前请务必阅读[智能体委派指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md)中的安全边界说明，并在常驻 `pipiclaw` 守护进程下运行长时委派。
+> **权限提醒**：外部 Coding Agent 是独立 CLI 进程，不经过 Pipiclaw 内置的命令与路径守卫（除只读的 `codex-review` 外，示例模板默认开启了自动执行参数）。启用前请了解[智能体委派安全边界](https://github.com/oyasmi/pipiclaw/blob/master/docs/sub-agents.md)。
 
-### 5. 可选：启用联网搜索与网页抓取
+### 第 4 步：托管为 24 小时后台服务（推荐）
 
-`web_search` 与 `web_fetch` 默认关闭。编辑 `~/.pipiclaw/tools.json`，将 `tools.web.enable` 设为 `true` 即可启用（支持 DuckDuckGo、Tavily、Jina、SearXNG，默认免 Key 使用 DuckDuckGo）。完整配置见[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
+确认跑通后，建议用 `pm2` 或 `systemd` 在开发机、Mac mini 或常开云主机上托管运行，真正实现“关掉终端也不掉线”：
+
+```bash
+# 快速使用 pm2 常驻后台
+pm2 start pipiclaw --name pipiclaw && pm2 save
+```
+
+完整的 `systemd` 服务配置、环境变量隔离与排障方法见[部署与运维指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/deployment-and-operations.md)。
+
+---
+
+## 核心能力
+
+### 💬 1. 丝滑的多端实时交互
+
+- **AI Card 实时流式卡片**：在钉钉里实时呈现思考进度与正在执行的工具；遇到长耗时操作，不用傻等——直接发消息就能中途纠偏（`/steer`），或用 `/followup` 把下一件事排好队。
+- **原生文件直达手机**：生成的 Markdown 报告、CSV 数据表、截图或导出压缩包，直接作为钉钉原生附件发送给你。
+- **开放的本地与远程接口**：终端 `pipiclaw tui` 和你自己的 Python / JS 脚本都通过内置的 **OpenAI Responses 兼容 Web API** 连向同一个助手（详见 [Web API 手册](https://github.com/oyasmi/pipiclaw/blob/master/docs/webapi.md)）。
+
+### 🛤️ 2. 不占聊天的后台长程任务与定时事件
+
+- **独立后台推进**：复杂工程任务进入专属后台通道逐步完成，每一步工作项与执行记录清晰落盘，进程重启后自动恢复推进，不会因为一次对话结束而半途而废。
+- **预算与异常熔断**：每个任务都受步数上限、花费预算、超时与连续报错保护；遇到需要你拍板的问题或触及预算边界时，主动暂停并在钉钉呼叫你。
+- **单次提醒与周期巡检**：支持定时提醒、Cron 周期巡检与本地脚本前置过滤，让助手从“你戳一下才动一下”升级为按节奏主动交付。
+
+### 🤝 3. 内外兼修的多智能体委派
+
+- **主助手统筹全局**：主助手负责理解你的真实意图、维护上下文并验收结果；查资料、筛日志等轻量活交给毫秒级启动的**内置子智能体**，跨文件编码与测试迭代交给 **Claude Code / Codex / Cursor / Antigravity**。
+- **后台异步完成即唤醒**：外部 Agent 在后台慢慢跑，跑完自动回到原频道向你汇报；你还可以在已跑完的外部会话上继续追问，或者用 `/subagents cancel` 随时终止。
+
+### 🧠 4. 透明、克制、可遗忘的分层记忆
+
+- **长期记忆 + 工作日记**：重要的项目规范与个人偏好按条存入 `memory/*.md`，新开会话自动完整加载，无需猜关键词；当天的阶段性进展自动归入按天的**工作日记**（`journal/`），不把临时状态混成永久规则。
+- **观察期与彻底遗忘**：后台自动整理的日常新知先进入 30 天**观察期**；过时或错误的信息只需发一句 `/memory forget <名称>` 即可物理删除并永久屏蔽，绝不会在后续整理中“死而复生”。
+
+### 🛡️ 5. 随时一秒接管，数据 100% 归你
+
+- **不经过大模型的硬控制开关**：`/stop`、`/tasks`、`/subagents`、`/status`、`/usage` 等核心控制命令由本地运行时直接响应。**哪怕模型接口宕机或回复卡住**，你依然能瞬间查状态、停任务、杀进程。
+- **纯文本本地存储**：所有配置、记忆、任务说明、工作日记与花费账单都是 `~/.pipiclaw/` 下的纯文本文件，随时可读、可改、可用 Git 备份；内置命令、路径与网络访问守卫。
+
+### 一张图看懂日常协作结构
+
+```mermaid
+flowchart LR
+    subgraph You["你的使用入口（频道 Channel）"]
+        DT["📱 钉钉私聊 / 群聊"]
+        TUI["💻 终端 (pipiclaw tui)"]
+        SDK["🔌 自有脚本 (OpenAI SDK)"]
+    end
+
+    subgraph Assistant["你的 Pipiclaw 助手"]
+        CMD["⚡ 秒级斜杠控制<br/>(/stop · /tasks · /subagents ...)"]
+        CHAT["💬 日常对话与调度"]
+        TASK["🛤️ 后台长程任务与定时事件"]
+    end
+
+    subgraph Desk["工位（Desk：默认 default / 按需新建）"]
+        MEM["🧠 长期记忆 · 工作日记 · 项目目录"]
+    end
+
+    subgraph Workers["调用的工具与 Coding Agent"]
+        LOCAL["🔍 内置工具与轻量检索子智能体"]
+        CLI["🛠️ Claude Code · Codex · Cursor · Antigravity"]
+    end
+
+    DT & TUI & SDK --> CMD & CHAT
+    CHAT & TASK <--> Desk
+    CHAT & TASK --> LOCAL & CLI
+```
+
+| 日常概念 | 一句话理解 |
+|---|---|
+| **频道（Channel）** | 你和助手说话的窗口（一个钉钉私聊、一个群聊，或一个终端会话），各自对话历史独立。 |
+| **工位（Desk）** | 一套独立的工作台（含记忆、日记、任务、定时事件与代码目录）。默认所有频道共用 `default` 工位；想隔离项目时新建切换即可。 |
+| **任务（Task）** | 交办给后台慢慢推进的复杂事项，不阻塞当前聊天，支持随时查看、追问、暂停或追加预算。 |
+| **事件（Event）** | 定好时间自动唤醒助手的闹钟或 Cron 巡检器，支持先跑本地脚本判断“有没有事需要处理”。 |
+| **委派（Sub-Agent）** | 助手喊来干具体活的帮手——可以是内置轻量检索员，也可以是你本机的 Claude Code / Codex 等重装工具。 |
 
 ---
 
 ## 常用命令
 
-Pipiclaw 的斜杠命令分为**运行时直接处理（回合进行中随时可用、不经过模型）**和**会话级命令**两类：
+在钉钉聊天框或终端中输入 `/` 即可使用控制命令（发送 `/help` 查看全量列表，发送 `/help <命令名>` 查看详细示例）：
 
-### 随时可用（由运行时直接响应，模型忙或卡住时仍有效）
+### ⚡ 随时可用（即使助手正在回复、甚至模型卡住时也能立即生效）
 
-| 命令 | 作用 |
+| 命令 | 你什么时候会用到它 |
 |---|---|
-| `/help [命令名]` | 查看当前版本的完整命令列表，或某个命令的子命令与示例（如 `/help tasks`） |
-| `/status` | 查看运行状态、当前模型、上下文占用、运行时长、版本与后台任务概况 |
-| `/stop` | 停止当前聊天回合并清空后续排队消息（暂停后台任务请用 `/tasks pause`，终止委派请用 `/subagents cancel`） |
-| `/steer <消息>` | 在当前工具调用结束后，动态调整正在运行的回合方向（忙时直接发普通消息默认按此处理） |
-| `/followup <消息>` | 将请求排入队列，等当前回合完整结束后再执行 |
-| `/tasks [show\|log\|msg\|pause\|resume\|cancel\|archive\|doctor]` | 查看、对话（`msg`）、暂停、恢复或取消后台长程任务 |
-| `/subagents [list\|show\|output\|cancel\|roles]` | 查看运行中/已完成的委派详情、输出日志、角色目录，或直接终止（`cancel`） |
-| `/events <list\|show\|delete\|history>` | 查看、删除定时事件或检查触发历史 |
-| `/desk [list\|new <名字>\|bind <名字>]` | 查看工位绑定、创建新工位，或将当前频道切换到另一个工位 |
-| `/usage [7d\|month]` | 查看本工位与全局的模型 Token 消耗与花费明细 |
-| `/context [detail]` | 透视实际发给模型的系统提示词分段、工具定义与上一轮上下文占用 |
-| `/skills [list\|show <name>]` | 查看已加载的工作区与用户共享技能 |
-| `/new` | 开启全新对话会话 |
+| `/help [命令名]` | 忘记命令用法时，查看总表或某个命令的具体示例（如 `/help tasks`） |
+| `/status` | 一眼看清当前运行状态、所用模型、上下文占用与后台任务概况 |
+| `/stop` | 立即叫停当前正在生成的聊天回复，并清空排队的后续消息 |
+| `/steer <补充内容>` | 助手正在干活时，不等它停下就顺手微调方向（忙时直接发普通消息默认就是这个效果） |
+| `/followup <下一件事>` | 助手正忙时，把下一条请求排好队，等当前回复完整结束后再执行 |
+| `/tasks [show\|msg\|pause\|resume\|cancel...]` | 查看后台长程任务进度、向任务传话（`msg`）、暂停、恢复追加预算或取消任务 |
+| `/subagents [list\|show\|output\|cancel\|roles]` | 查看正在跑的 Claude / Codex 等委派任务、看实时输出，或用 `cancel` 直接强行终止 |
+| `/events <list\|show\|delete\|history>` | 查看已设定的定时提醒与周期巡检，检查触发历史或删除事件 |
+| `/desk [list\|new\|cwd\|bind]` | 查看工位列表、新建工位或设置工作目录（注：将当前频道切换工位的 `bind` 需等当前回复结束） |
+| `/usage [7d\|month]` | 查看当前工位和全局的 Token 消耗与账单花费明细 |
+| `/context [detail]` | 查看当前到底给大模型发了多少系统提示词、工具和上下文 |
+| `/skills [list\|show <名称>]` | 查看已加载的可复用技能清单 |
+| `/new` | 清空当前聊天上下文，开启一段全新的对话（长期记忆仍保留） |
 
-### 空闲时可用（需等当前回合结束）
+### 🛋️ 空闲时可用（等当前这一轮回复结束后使用）
 
-| 命令 | 作用 |
+| 命令 | 你什么时候会用到它 |
 |---|---|
-| `/memory [status\|list\|show\|forget\|journal]` | 查看工位长期记忆、观察期条目、某天的工作日记，或直接删除并屏蔽某条记忆（`forget`） |
-| `/model [provider/modelId\|modelId]` | 查看当前模型，或通过精确名称/唯一子串切换模型 |
-| `/thinking [off\|minimal\|low\|medium\|high\|xhigh\|max\|cycle]` | 查看或切换当前模型的思考推理档位 |
-| `/compact [压缩要求]` | 手动压缩当前会话上下文，可附加保留重点的要求 |
-| `/session` | 查看当前会话的消息统计、Token 用量与模型信息 |
-| `/reload` | 重新加载技能、工具与资源配置，保留当前对话历史 |
-
-完整交互说明见[交互与命令](https://github.com/oyasmi/pipiclaw/blob/main/docs/interaction-and-commands.md)。
+| `/memory [status\|list\|show\|forget\|journal]` | 查看助手记住了哪些规则、翻看某天的工作日记，或用 `forget` 彻底删掉某条记忆 |
+| `/model [模型名或关键词]` | 查看当前模型，或按名称/子串快速切换主力模型 |
+| `/thinking [low\|medium\|high\|cycle...]` | 调整模型的思考推理深度（日常对话调低省时间，复杂排障调高保质量） |
+| `/compact [保留重点说明]` | 当对话变长时手动压缩上下文，可顺带叮嘱“保留某某结论” |
+| `/session` | 查看当前这段对话的消息轮数与累计用量 |
+| `/reload` | 修改了外部技能（Skills）或配置文件后，免重启热加载生效 |
 
 ---
 
-## 文档
+## 数据存在哪、怎么改配置
 
-完整文档索引位于 **[docs/README.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/README.md)**。你可以按手头的问题直接进入对应专题：
+Pipiclaw 的所有配置与数据都集中存放在 `~/.pipiclaw/`（可通过环境变量 `PIPICLAW_HOME` 改到任意路径），买新电脑或迁移服务器只需备份这一个文件夹：
 
-| 我想了解 / 解决 | 推荐文档 |
-|---|---|
-| 💬 私聊、群聊、AI Card、忙时消息与斜杠命令细节 | [交互与命令](https://github.com/oyasmi/pipiclaw/blob/main/docs/interaction-and-commands.md) |
-| 🤝 接入 Claude Code / Codex / Cursor / Antigravity 与编写角色 | [智能体委派](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md) · [示例说明](./examples/sub-agents/README.md) |
-| 📋 后台任务车道、定时事件、Cron 模板与预算守护 | [事件与任务](https://github.com/oyasmi/pipiclaw/blob/main/docs/events-and-tasks.md) |
-| 🧠 分层记忆、工作日记、观察期与遗忘机制 | [记忆](https://github.com/oyasmi/pipiclaw/blob/main/docs/memory.md) |
-| ⚙️ 配置模型、企业网关、代理、Web 工具与工作区 | [配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md) · [配置字段参考](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration-reference.md) |
-| 🔌 用官方 OpenAI SDK 从脚本或自有前端连接助手 | [Web API](https://github.com/oyasmi/pipiclaw/blob/main/docs/webapi.md) |
-| 🧩 沉淀个人与项目的可复用方法（Skills） | [Skills 指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/skills.md) |
-| 💡 会用之后，如何最大化放大个人研发产出 | [使用杠杆（Leverage）](https://github.com/oyasmi/pipiclaw/blob/main/docs/leverage/README.md) · [设计哲学](https://github.com/oyasmi/pipiclaw/blob/main/docs/design-philosophy.md) |
-| 🛡️ 默认安全守卫、路径/命令边界与外部 Agent 授权 | [安全指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/security.md) |
-| 🚀 常驻进程部署、升级、备份、并发边界与排障 | [部署与运维](https://github.com/oyasmi/pipiclaw/blob/main/docs/deployment-and-operations.md) · [并发与容量](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md) |
-| 🏗️ 源码模块分层、运行时拓扑与架构设计 | [架构](https://github.com/oyasmi/pipiclaw/blob/main/docs/architecture.md) · [运行机制](https://github.com/oyasmi/pipiclaw/blob/main/docs/runtime-mechanisms.md) |
-
----
-
-## 开发
-
-```bash
-npm install
-npm run build
-npm run check      # lint + typecheck + arch + deadcode + unit test
+```text
+~/.pipiclaw/
+├── channel.json      # 钉钉机器人凭据、AI Card 模板与 Web API 开关
+├── auth.json         # 模型登录凭据（通常由 pipiclaw auth login 自动维护）
+├── models.json       # 自定义模型接口（OpenAI 兼容网关、本地模型等）
+├── settings.json     # 默认模型、备用模型切换与全局偏好
+├── tools.json        # 联网搜索/网页抓取（默认关闭，可免 Key 开 DuckDuckGo）等开关
+├── security.json     # 命令、路径与网络访问守卫规则
+└── workspace/        # 你的个人化资产：
+    ├── SOUL.md       # 定制助手的性格、语气与回复习惯
+    ├── AGENTS.md     # 跨项目通用的工作守则与红线要求
+    ├── skills/       # 你沉淀的可复用工作流技能（同时支持读取 ~/.agents/skills/）
+    ├── sub-agents/   # 启用的外部 Coding Agent 角色文件
+    └── desk-default/ # 默认工位的长期记忆 (memory/)、工作日记 (journal/) 与任务记录 (tasks/)
 ```
 
-- **日常最小验证**：`npm run typecheck` 与 `npm run test`
-- **架构与依赖方向检查**：`npm run arch`
-- **确定性全栈测试（离线、零 API 成本）**：`npm run test:e2e`
-- **真实模型冒烟测试**：`npm run test:e2e:live`
+细节随查随改，详见 **[配置速查手册](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md)**。
+
+---
+
+## 常见问题
+
+<details>
+<summary><b>1. 接入钉钉需要买云服务器、域名或公网 IP 吗？</b></summary>
+
+**完全不需要。** Pipiclaw 采用钉钉官方的 Stream 长连接模式，只要运行它的电脑或内网主机能正常访问互联网，就能主动连上钉钉收发消息。
+</details>
+
+<details>
+<summary><b>2. 我把笔记本电脑合上盖子，它还能继续跑后台任务吗？</b></summary>
+
+Pipiclaw 是运行在你自己机器上的本地程序：如果装在笔记本上且合盖进入系统休眠，进程也会随之暂停（唤醒后会自动恢复连接与未完任务）。如果你想**全天候 24 小时随时在手机上使唤它**，推荐把它装在常开的台式开发机、Mac mini、家用服务器或云主机上。
+</details>
+
+<details>
+<summary><b>3. 调用 Claude Code / Codex / Cursor 会额外收费吗？安全吗？</b></summary>
+
+Pipiclaw 本身不收取任何中转费用，它直接调用你本机已安装并登录的官方 CLI，消耗的是你原有的订阅额度或 API Key。
+**安全边界请注意**：Pipiclaw 是面向个人开发者（及小范围熟人共享同一助手）的自托管工具，不是多租户隔离平台。外部 Coding Agent 作为本机子进程运行，拥有当前系统账号的真实读写与执行权限，**不受 Pipiclaw 内置命令/路径守卫限制**。建议在专门的工作目录或独立系统账号下运行。详见[安全指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/security.md)。
+</details>
+
+<details>
+<summary><b>4. 如何开启联网搜索？如何升级版本？</b></summary>
+
+- **开启联网**：编辑 `~/.pipiclaw/tools.json`，将 `tools.web.enable` 设为 `true` 即可（默认使用免 API Key 的 DuckDuckGo，也支持配置 Tavily、Jina、SearXNG）。
+- **版本升级**：执行 `npm install -g @oyasmi/pipiclaw@latest` 并重启 `pipiclaw` 进程即可，`~/.pipiclaw/` 下的所有记忆与配置都会完好保留。
+</details>
+
+---
+
+## 文档导航
+
+完整的用户手册位于 **[文档中心（docs/README.md）](https://github.com/oyasmi/pipiclaw/blob/master/docs/README.md)**，按场景即查即用：
+
+| 你想做什么 | 对应指南 |
+|---|---|
+| 💬 玩转私聊、群聊、AI Card 输出模式与斜杠命令 | [交互与命令](https://github.com/oyasmi/pipiclaw/blob/master/docs/interaction-and-commands.md) |
+| ⚙️ 配置自定义模型、中转网关、网络代理与联网搜索 | [配置速查](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md) · [配置字段参考](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration-reference.md) |
+| 🤝 接入与定制 Claude Code / Codex / Cursor / Antigravity | [智能体委派指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/sub-agents.md) · [角色示例库](https://github.com/oyasmi/pipiclaw/blob/master/examples/sub-agents/README.md) |
+| 📋 用好后台长程任务、Cron 定时巡检与预算保护 | [事件与任务](https://github.com/oyasmi/pipiclaw/blob/master/docs/events-and-tasks.md) |
+| 🧠 管理长期记忆、工作日记、观察期与彻底遗忘 | [记忆管理](https://github.com/oyasmi/pipiclaw/blob/master/docs/memory.md) |
+| 🧩 把常用研发流程打包成可复用的个人/项目技能 | [Skills 指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/skills.md) · [内置工具总览](https://github.com/oyasmi/pipiclaw/blob/master/docs/tools.md) |
+| 🔌 用官方 OpenAI SDK 从外部脚本或自定义前端接入 | [Web API 手册](https://github.com/oyasmi/pipiclaw/blob/master/docs/webapi.md) |
+| 💡 进阶实践：如何真正把 AI 助手从“扳手”用成“车床” | [使用杠杆（Leverage）](https://github.com/oyasmi/pipiclaw/blob/master/docs/leverage/README.md) · [设计哲学](https://github.com/oyasmi/pipiclaw/blob/master/docs/design-philosophy.md) |
+| 🚀 24 小时后台托管、备份迁移、权限守卫与故障排查 | [部署与运维](https://github.com/oyasmi/pipiclaw/blob/master/docs/deployment-and-operations.md) · [安全指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/security.md) · [并发与容量](https://github.com/oyasmi/pipiclaw/blob/master/docs/scaling-and-concurrency.md) |
+
+---
+
+## 从源码构建与参与贡献
+
+如果你想从源码本地构建、调试或参与项目开发：
+
+```bash
+git clone https://github.com/oyasmi/pipiclaw.git
+cd pipiclaw
+npm install && npm run build && npm run check
+```
+
+了解模块架构、运行机制与开发规范，请阅读[架构文档](https://github.com/oyasmi/pipiclaw/blob/master/docs/architecture.md)、[运行机制](https://github.com/oyasmi/pipiclaw/blob/master/docs/runtime-mechanisms.md)与 [AGENTS.md](https://github.com/oyasmi/pipiclaw/blob/master/AGENTS.md)。欢迎提交 Issue 与 Pull Request！
 
 ---
 
