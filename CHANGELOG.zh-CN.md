@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [0.9.6-beta.2] - 2026-11-17
+
+### 不兼容变更
+
+- **汇报频道离开工位后，后台工作继续推进。** 未暂停的任务，以及会派生任务的定时事件，在工位上仍有这类工作时继续执行，即使当前没有频道绑定到该工位。汇报、提问和结项回执留在 `tasks/.delivery/`，等原频道重新绑定，或在应接收汇报的频道执行 `/tasks adopt <id>` 后，按原顺序送达。结果不会投到别的工位。汇报频道缺失、所属渠道关闭，或工位已归档时，执行仍然停止。此前这些工作会一直冻结到原频道重新绑定，因此现在切换工位仍可能继续消耗模型。
+
+### 新增
+
+- **多仓库工位操作。** `pipiclaw tui --here` 打开工作目录就是当前目录的工位；没有则新建，且不会替换 `default`，也不会和同名目录的另一个检出撞车。`--cwd <目录>`、`/desk new <名字> [cwd]` 和 `/desk cwd [path|--reset]` 设置该目录；回合、任务步骤或检出写租约进行中时，`/desk cwd` 会被拒绝。手工改过的 `desk.json` 按文件戳自动重新加载，终端横幅显示当前工作目录。`/desk archive <名字>` 与 `/desk unarchive <名字>` 停用空闲工位、解开残留的 `webapi:conv_*` 终端绑定，并暂停该工位的定时事件。
+- **托管 Git worktree 与检出读写租约。** 委派可设 `worktree: true`。运行时在 `<git 公共目录>/pipiclaw-worktrees/<runId>` 创建分支 `pipiclaw/<runId>`，`follow_up` 沿用同一检出，并在工具结果、运行记录、完成通知、任务结算输入和 `/subagents show` 中返回 `branch`、`headSha` 与 `changedFiles`。没有改动的工作树在结算时删除；已合并且干净的工作树在父任务关闭或 24 小时后删除。仍有未提交改动或未合并提交的工作树会保留，并在回执里写明。`purpose: "verify"` 持有共享读租约，写入委派持有独占写租约。主会话的 `write` 与 `edit` 会拒绝落在任一租约上的路径。持锁的内部执行者、工位控制面路径，以及该工作树内部的路径除外。`bash` 和 Pipiclaw 之外的进程不受这把租约约束。
+- **钉钉语音、文件与引用。** 语音消息使用钉钉语音识别文本，并标为 `[语音转写]`；没有识别结果时保存音频文件。不超过 20 MB 的文件落入工位 `inbox/`。引用较早的消息时，正文前会加上截断后的引用摘要。暂不支持的富媒体类型会收到明确的中文说明，而不是没有回音。`send_media` 上限为 20 MB，发送失败时返回模型可以自行处理的错误。经卡片送达的回答会归档，事件标题会随投递带上。属于某个任务的委派通知会标明该任务。
+- **Web API 与终端的增量流式输出。** 回合会送出正文和推理的增量。WebSocket 客户端可以发送 `response.cancel`。终端渲染这些增量，空闲连接会安静轮换；运行时已启动但本机 socket 不在时，会显示 `daemon.lock` 的持有者；嵌入式运行时在 `SIGHUP` 和 `SIGTERM` 时关闭。
+- **首次运行即启用本机 Web API。** 新建的 app home 启用 `webapi`（本机 socket 与 `tcp: 127.0.0.1:8787`），钉钉默认关闭。会生成名为 `default` 的 bearer 密钥，明文只打印一次，落盘的是 SHA-256。已有的 `channel.json` 不会被改写。`pipiclaw webapi key` 在 home 不存在时会先创建它，`--desk` 默认 `default`。`channel.json` 里的密钥变更无需重启即可生效。在终端里第一次运行 `pipiclaw` 或 `pipiclaw tui` 且尚未配置模型凭据时，会进入登录引导；`/status` 和 `/model` 会标明这一状态，没有凭据的回合会说明如何补上。端口冲突或不支持的 Node.js 版本会在启动时直接报错。
+- **找回已完成的任务。** `task_list` 支持 `includeArchived` 和 `query`。`session_search` 会索引已归档任务文件及其汇报、提问、消息和结项摘要；有查询词时不再在打分前丢弃文本块。
+
+### 变更
+
+- 静态命令解析器无法接受的命令，会作为模型可自行改正的拒绝返回，不再当成面向用户的安全告警。`stat`、`file`、`du`、`diff`、`jq`、`sha256sum` 和 `md5sum` 可以在与 `ls`、`cat` 相同的安全参数位置使用通配符。
+- 任务车道等待步骤停止的时间为 15 秒。被隔离的步骤会释放 runner，因此 `/tasks resume` 可以开一个干净会话继续。归档任务时删除 `tasks/.sessions/<id>.jsonl`。任务会话的压缩提示不再建议 `/compact` 或 `/new`。
+- 事件历史在 2 MiB 时轮转，保留两份归档，读取时跨这些文件。持久化唤醒按 `createdAt` 从早到晚排空，过期的死信会被删除。同一窗口里多次聊天委派完成会合并成一条通知。
+- 用户与运维文档围绕[快速开始](docs/quickstart.md)重排，包括不接钉钉的本机用法、`--here` / `--cwd`、工位归档、`/tasks adopt` 和 worktree 租约。迁移说明与 Pi SDK 升级说明位于 `docs/migrations/`。
+
+### 修复
+
+- **Shell、后台作业和事件传感器使用工位工作目录。** `bash`（含 `async: true`）和事件 `preAction` 在工位 `cwd` 中执行，与文件工具相同。`/desk cwd` 变更后会刷新已缓存的 runner。`DeskJobManager.list()` 一次批量探测作业状态。
+- **模型不能读取或改写控制面。** app home（含自定义 `PIPICLAW_HOME`）下的 `auth.json`、`channel.json`、`security.json`、`models.json`、`tools.json`、`settings.json` 和 `state/` 禁止读取和写入。`workspace/` 仍可使用。`~/.claude/.credentials.json` 与 `~/.codex/auth.json` 按密钥处理。这些文件请在宿主机上修改。
+- **Jina 抓取不能绕过网络守卫。** 被守卫拒绝的目标不会再经 `r.jina.ai` 重试，无论是直接走 Jina 还是作为回退。
+- **`cursor-cli` 与 `exec` 的检查委派不再注入 `thinkingLevel: medium`。** Cursor 收到的 `model: auto` 不带 effort 后缀，检查委派不会在启动时失败。
+- **事件重载不再泄漏定时器。** 同一事件文件的加载串行进行，被替换的 cron 或 timer 会先停止。`event_manage` 的 show 与 update 会保留自定义的 `preAction` 超时，字段写成 `timeout` 或 `timeoutMs` 都可以。`/events list` 会显示命令守卫失败，以及事件旁的 `.error.txt`。
+- 一次性 Web API runner 会先移出池子再释放，后续回合不会被释放两次。损坏的任务投递记录只挡住该任务。被隔离的步骤在结算时不会写下 `/tasks resume` 清不掉的暂停。
+
 ## [0.9.6-beta.1] - 2026-11-15
 
 ### 不兼容变更

@@ -4,6 +4,37 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.6-beta.2] - 2026-11-17
+
+### Breaking
+
+- **Background work continues after the report channel leaves the desk.** A non-paused task, and a scheduled event that spawns tasks, keeps running on a desk that still has that work even when no chat channel is bound to it. Reports, questions and close receipts stay in `tasks/.delivery/` and flush in order when that channel binds back, or when you run `/tasks adopt <id>` from the channel that should receive them. They are never delivered to another desk. Execution still stops when the task's transport is off, the report channel is missing, or the desk is archived. Previously this work froze until the original channel was bound again, so switching desks can now keep using the model.
+
+### Added
+
+- **Desk ergonomics for several checkouts.** `pipiclaw tui --here` opens the desk whose working directory is the current directory, or creates one without replacing `default` or colliding with another checkout of the same directory name. `--cwd <dir>`, `/desk new <name> [cwd]` and `/desk cwd [path|--reset]` set that directory; `/desk cwd` is refused while a turn, a task step, or a checkout write lease is in progress. A hand-edited `desk.json` is reloaded from its file stamp, and the terminal banner shows the active directory. `/desk archive <name>` and `/desk unarchive <name>` retire an idle desk, drop leftover `webapi:conv_*` terminal bindings, and pause its scheduled events.
+- **Managed Git worktrees and checkout leases.** A delegation may set `worktree: true`. The runtime creates `<git-common-dir>/pipiclaw-worktrees/<runId>` on branch `pipiclaw/<runId>`, carries that checkout across `follow_up`, and returns `branch`, `headSha` and `changedFiles` on the tool result, the run record, the completion wake, the task settlement brief and `/subagents show`. An unchanged worktree is removed at settlement; a clean merged one is removed when the parent task closes or after 24 hours. A dirty or unmerged worktree is kept and named in the receipt. `purpose: "verify"` holds a shared read lease and a write delegation an exclusive write lease. The main session's `write` and `edit` refuse a path covered by either lease. The owning internal worker, desk control-plane paths, and paths inside that worktree are exempt. `bash` and processes outside Pipiclaw are not covered by the lease.
+- **DingTalk voice, files and quotes.** A voice message uses DingTalk's ASR text, marked `[语音转写]`, and falls back to saving the audio file. A file up to 20 MB is stored in the desk `inbox/`. Replying to an earlier message prefixes a clipped quote. Unsupported rich-message types get an explicit Chinese hint instead of silence. `send_media` accepts 20 MB and returns a recoverable error when sending fails. Answers delivered by card are archived, and an event title is forwarded with the delivery. A delegation notice that belongs to a task names that task.
+- **Incremental Web API and terminal streaming.** Turns emit text and reasoning deltas. A WebSocket client can send `response.cancel`. The terminal renders those deltas, quietly rotates an idle connection, names the `daemon.lock` holder when a runtime is up but the local socket is missing, and shuts an embedded runtime down on `SIGHUP` and `SIGTERM`.
+- **A local Web API on first run.** A new app home enables `webapi` (local socket and `tcp: 127.0.0.1:8787`) and leaves DingTalk disabled. It generates a `default` bearer key, prints it once, and stores only the SHA-256. An existing `channel.json` is not rewritten. `pipiclaw webapi key` creates the home if it is missing and defaults `--desk` to `default`. Key changes in `channel.json` reload without a restart. The first `pipiclaw` or `pipiclaw tui` on a TTY with no model credentials walks through login; `/status` and `/model` report that state, and a turn without credentials says how to fix it. A port conflict or an unsupported Node.js version fails at startup with a direct error.
+- **Recall of finished tasks.** `task_list` accepts `includeArchived` and `query`. `session_search` indexes archived task files and their report, question, message and close summaries, and no longer drops chunks before scoring when a query is present.
+
+### Changed
+
+- Commands the static shell parser cannot accept are returned to the model as a recoverable rejection, not a user-facing security alert. `stat`, `file`, `du`, `diff`, `jq`, `sha256sum` and `md5sum` may use globs in the same safe argument positions as `ls` and `cat`.
+- The task lane waits 15 seconds for a step to stop. A quarantined step releases its runner so `/tasks resume` can start a clean session. Archiving a task removes `tasks/.sessions/<id>.jsonl`. Compaction guidance for a task session no longer suggests `/compact` or `/new`.
+- Event history rotates at 2 MiB with two archives and is read across those files. Durable wakes drain in `createdAt` order, and expired dead letters are removed. Several chat delegation completions in one window become one notice.
+- User and operator docs are reorganized around a [Quick Start](docs/quickstart.md), including local use without DingTalk, `--here` / `--cwd`, desk archive, `/tasks adopt` and worktree leases. Migration and Pi SDK notes live under `docs/migrations/`.
+
+### Fixed
+
+- **Shell commands, background jobs and event sensors use the desk working directory.** `bash`, including `async: true`, and an event `preAction` run in the desk `cwd`, the same directory as the file tools. Changing `/desk cwd` refreshes cached runners. `DeskJobManager.list()` probes jobs in one batch.
+- **The model cannot read or rewrite the control plane.** `auth.json`, `channel.json`, `security.json`, `models.json`, `tools.json`, `settings.json` and `state/` under the app home — including a custom `PIPICLAW_HOME` — are blocked for both read and write. `workspace/` stays available. `~/.claude/.credentials.json` and `~/.codex/auth.json` are treated as secrets. Change those files on the host.
+- **Jina fetch cannot bypass the network guard.** A target the guard rejects is not retried through `r.jina.ai`, whether Jina was requested directly or as a fallback.
+- **`cursor-cli` and `exec` verify runs no longer inject `thinkingLevel: medium`.** Cursor receives `model: auto` without an effort suffix, so a verify delegation no longer fails at startup.
+- **Event reloads no longer leak timers.** Loads of one event file are serialized, and a replaced cron or timer is stopped. `event_manage` show and update keep a custom `preAction` timeout whether the field is `timeout` or `timeoutMs`. `/events list` reports a command-guard failure and a `.error.txt` beside the event.
+- A one-shot Web API runner is taken out of the pool before it is disposed, so a later turn is not disposed twice. A corrupt task delivery record blocks only that task. A step that was quarantined settles without a pause that `/tasks resume` cannot clear.
+
 ## [0.9.6-beta.1] - 2026-11-15
 
 ### Breaking
