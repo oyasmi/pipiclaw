@@ -6,13 +6,14 @@
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import OpenAI from "openai";
 import { ResponsesWS } from "openai/resources/responses/ws";
 import { Agent, fetch as undiciFetch } from "undici";
 import { BootstrapExitError, type BootstrapIO, type BootstrapPaths } from "../app/home.js";
 import { loadBindings } from "../desk/bindings.js";
-import { DEFAULT_DESK, isDeskName, normalizeDeskName } from "../desk/paths.js";
+import { DEFAULT_DESK, deriveDeskNameFromPath, isDeskName, normalizeDeskName } from "../desk/paths.js";
+import { listDesks, readDeskRecordSync } from "../desk/registry.js";
 import { webapiSocketPath } from "../paths.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { isPlainObject } from "../shared/type-guards.js";
@@ -24,6 +25,10 @@ export interface OpenOptions {
 	desk?: string;
 	/** Optional repository / working directory to configure on the desk (`--cwd`). */
 	cwd?: string;
+	/** Automatically open or create a desk dedicated to `hereDir ?? process.cwd()` (`--here`). */
+	here?: boolean;
+	/** Override `process.cwd()` for `--here` in deterministic tests. */
+	hereDir?: string;
 	/** Create the desk first — an explicit creation, like `/desk new`. */
 	create: boolean;
 	/** Start a new conversation instead of resuming the desk's last one. */
@@ -151,6 +156,39 @@ async function ask(client: OpenAI, conversationId: string, input: string): Promi
 	return response.output_text;
 }
 
+async function resolveHereTarget(
+	paths: BootstrapPaths,
+	targetCwd: string,
+	fail: (message: string) => never,
+): Promise<{ desk: string; cwd?: string; create: boolean }> {
+	const desks = await listDesks(paths.workspaceDir);
+	const matchedByCwd = desks.find(
+		(entry) => entry.availability === "available" && (entry.record?.cwd ?? entry.deskDir) === targetCwd,
+	);
+	if (matchedByCwd) {
+		return { desk: matchedByCwd.name, create: false };
+	}
+	const slug = deriveDeskNameFromPath(targetCwd);
+	const summary = readDeskRecordSync(paths.workspaceDir, slug);
+	if (summary.availability === "missing") {
+		const { bindings } = await loadBindings(paths.workspaceDir);
+		if (Object.values(bindings).some((binding) => binding.desk === slug)) {
+			fail(`工位 "${slug}" 已有绑定但记录缺失，请联系部署者恢复，或改用 \`--desk <新名称> --create --cwd .\`。`);
+		}
+		return { desk: slug, cwd: targetCwd, create: true };
+	}
+	if (!summary.record) {
+		fail(`工位 "${slug}" 当前不可用（desk.json 有误），请检查后再试，或改用 \`--desk <新名称> --create --cwd .\`。`);
+	}
+	const existingCwd = summary.record.cwd ?? summary.deskDir;
+	if (existingCwd !== targetCwd) {
+		fail(
+			`同名工位 "${slug}" 已存在且绑定到其他目录（${existingCwd}）。请改用 \`pipiclaw tui --desk <新名称> --create --cwd .\` 指定不重名的工位。`,
+		);
+	}
+	return { desk: slug, create: false };
+}
+
 /**
  * Find or make the conversation for `--desk`: resume the desk's last one while it is still bound
  * to that desk, else start one and bind it (`/desk new` first with `--create`). Returns the
@@ -161,18 +199,23 @@ export async function openConversation(
 	paths: BootstrapPaths,
 	options: OpenOptions,
 	io: BootstrapIO,
-): Promise<{ id: string; replies: string[] }> {
+): Promise<{ id: string; desk: string; replies: string[] }> {
 	const fail = (message: string): never => {
 		io.error(message);
 		throw new BootstrapExitError(1);
 	};
-	const desk = normalizeDeskName(options.desk ?? DEFAULT_DESK);
+	const resolvedHere = options.here
+		? await resolveHereTarget(paths, resolve(options.hereDir ?? process.cwd()), fail)
+		: undefined;
+	const desk = resolvedHere ? resolvedHere.desk : normalizeDeskName(options.desk ?? DEFAULT_DESK);
+	const create = resolvedHere ? resolvedHere.create : options.create;
+	const cwd = resolvedHere ? resolvedHere.cwd : options.cwd;
 	if (!isDeskName(desk)) {
 		fail(`工位名称 "${desk}" 不合法：请使用 1–32 位小写字母、数字或连字符 '-'，且首尾不能为 '-'。`);
 	}
 	const state = readState(paths);
 
-	if (!options.fresh && !options.create && state[desk]) {
+	if (!options.fresh && !create && state[desk]) {
 		const id = state[desk];
 		const exists = await client.conversations.retrieve(id).then(
 			() => true,
@@ -180,32 +223,33 @@ export async function openConversation(
 		);
 		// A conversation rebound to another desk since is not this desk's any more.
 		const bound = exists ? await boundDesk(paths, id) : undefined;
-		if (exists && (bound === desk || (bound === undefined && desk === DEFAULT_DESK))) {
-			const replies = options.cwd ? [await ask(client, id, `/desk cwd ${options.cwd}`)] : [];
-			return { id, replies };
+		const isArchived = Boolean(readDeskRecordSync(paths.workspaceDir, desk).record?.archivedAt);
+		if (!isArchived && exists && (bound === desk || (bound === undefined && desk === DEFAULT_DESK))) {
+			const replies = cwd ? [await ask(client, id, `/desk cwd ${cwd}`)] : [];
+			return { id, desk, replies };
 		}
 	}
 
 	const id = (await client.conversations.create({})).id;
 	const replies: string[] = [];
 	// A conversation starts on the default desk by itself; any other desk is an explicit request.
-	if (desk !== DEFAULT_DESK || options.create) {
-		if (options.create) {
-			replies.push(await ask(client, id, options.cwd ? `/desk new ${desk} ${options.cwd}` : `/desk new ${desk}`));
+	if (desk !== DEFAULT_DESK || create) {
+		if (create) {
+			replies.push(await ask(client, id, cwd ? `/desk new ${desk} ${cwd}` : `/desk new ${desk}`));
 		}
 		replies.push(await ask(client, id, `/desk bind ${desk}`));
 		if ((await boundDesk(paths, id)) !== desk) {
 			for (const reply of replies) io.error(reply);
 			fail(`无法打开工位 "${desk}"。`);
 		}
-		if (options.cwd && !options.create) {
-			replies.push(await ask(client, id, `/desk cwd ${options.cwd}`));
+		if (cwd && !create) {
+			replies.push(await ask(client, id, `/desk cwd ${cwd}`));
 		}
-	} else if (options.cwd) {
-		replies.push(await ask(client, id, `/desk cwd ${options.cwd}`));
+	} else if (cwd) {
+		replies.push(await ask(client, id, `/desk cwd ${cwd}`));
 	}
 	await writeState(paths, { ...state, [desk]: id });
-	return { id, replies };
+	return { id, desk, replies };
 }
 
 /** `--print`: one synchronous request, the answer on stdout. */

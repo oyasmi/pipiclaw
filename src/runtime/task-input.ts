@@ -17,7 +17,7 @@ function eligible(ctx: LaneContext, live: LiveTask, step: NonNullable<LiveTask["
 		!live.quarantined &&
 		!ctx.isStopped() &&
 		ctx.options.isEnabled?.() !== false &&
-		ctx.options.isBoundTo(live.channelId, live.desk) &&
+		!!live.channelId &&
 		ctx.options.isReachable(live.channelId) &&
 		!live.intent.ask &&
 		!live.intent.waitUntil &&

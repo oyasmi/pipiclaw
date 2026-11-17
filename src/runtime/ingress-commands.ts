@@ -32,6 +32,11 @@ function lazyTaskControl(get: () => TaskControl | undefined): TaskControl {
 		message: (...args) => control().message(...args),
 		pause: (...args) => control().pause(...args),
 		resume: (...args) => control().resume(...args),
+		adopt: (desk, id, channel) => {
+			const current = control();
+			if (!current.adopt) throw new Error("当前环境不支持接管任务汇报频道。");
+			return current.adopt(desk, id, channel);
+		},
 		cancel: (...args) => control().cancel(...args),
 	};
 }
@@ -59,16 +64,32 @@ export function createCommandHandlers(deps: IngressDeps, resetChannelQueue: (cha
 			...(event.source === "human" && event.ref !== undefined ? { ref: event.ref } : {}),
 		});
 
-	/** The desk port a command runs with: a sender limited to some desks may bind only to those. */
+	/** The desk port a command runs with: a sender limited to some desks may bind/archive only those. */
 	const deskPortFor = (event: ChannelEvent) => {
 		const port = deskPort(event.channelId);
 		const allowed = event.source === "human" ? event.allowedDesks : undefined;
-		const bind = port.bind;
-		if (!allowed || !bind) return port;
+		if (!allowed) return port;
+		const { bind, archive, unarchive } = port;
 		return {
 			...port,
-			bind: async (name: string) =>
-				allowed.includes(name) ? bind(name) : { kind: "forbidden" as const, desk: name },
+			...(bind
+				? {
+						bind: async (name: string) =>
+							allowed.includes(name) ? bind(name) : { kind: "forbidden" as const, desk: name },
+					}
+				: {}),
+			...(archive
+				? {
+						archive: async (name: string) =>
+							allowed.includes(name) ? archive(name) : { kind: "forbidden" as const, desk: name },
+					}
+				: {}),
+			...(unarchive
+				? {
+						unarchive: async (name: string) =>
+							allowed.includes(name) ? unarchive(name) : { kind: "forbidden" as const, desk: name },
+					}
+				: {}),
 		};
 	};
 

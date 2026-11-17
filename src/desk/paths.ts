@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, join, resolve } from "node:path";
 import type { ConversationKind } from "./types.js";
 
 /**
@@ -29,6 +30,24 @@ export function isDeskName(value: string): boolean {
 /** What a user typed, as a candidate desk name: trimmed and lower-cased (validity is checked separately). */
 export function normalizeDeskName(value: string): string {
 	return value.trim().toLowerCase();
+}
+
+/**
+ * Deterministic desk name for `pipiclaw tui --here`: slugifies the directory basename into the
+ * valid 1–32 char desk grammar, avoids clobbering `default`, and falls back to a path hash when
+ * the basename has no ASCII alphanumerics.
+ */
+export function deriveDeskNameFromPath(dirPath: string): string {
+	const resolved = resolve(dirPath);
+	const rawSlug = basename(resolved)
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 32)
+		.replace(/-+$/g, "");
+	if (rawSlug === DEFAULT_DESK) return "dir-default";
+	if (rawSlug && isDeskName(rawSlug)) return rawSlug;
+	return `repo-${createHash("sha256").update(resolved).digest("hex").slice(0, 8)}`;
 }
 
 export function isConversationName(value: string): boolean {

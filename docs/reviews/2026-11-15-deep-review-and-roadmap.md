@@ -210,7 +210,7 @@ flowchart TB
 #### 4. WebAPI / TUI 运行时竞态与连接陷阱（✅ 核心项已修复）
 - **按规格保留 — WebSocket `maxMs` 寿命上限**：[websocket.ts](../../src/webapi/routes/websocket.ts#L57-L108) 的连接时长上限属于 Spec 061 D19 契约，`response.cancel` 控制帧留待 H1.5 流式协议演进一并设计。
 - **✅ 已修复 — `request-execution.ts` 双重 `dispose` 竞态与缓存驱逐**：[request-execution.ts](../../src/runtime/request-execution.ts) 在回合结束时先将一次性 runner 从 `running` 与 `runners` 池摘除再执行 `endTurn()` + `dispose()`，彻底消除 LRU 误驱逐与二次并发 `dispose()`。
-- **✅ 已修复 — TUI 多仓 `--cwd`、补全根路径与 `/desk cwd`**：[cli.ts](../../src/tui/cli.ts) 与 [client.ts](../../src/tui/client.ts) 已支持 `--cwd <dir>` 并将 `@file` 补全 `basePath` 对齐到当前工位 `cwd`；新增 `/desk new <name> [cwd]`、`/desk cwd [path|--reset]` 与失联任务接管命令 `/tasks adopt <id>`（[commands.ts](../../src/desk/commands.ts)、[commands.ts](../../src/tasks/commands.ts)，同时删除 [catalog.ts](../../src/commands/catalog.ts) 中重复的 `archive` 条目）。
+- **✅ 已修复 — TUI 多仓 `--here` / `--cwd`、补全根路径与 `/desk cwd` / `archive`**：[cli.ts](../../src/tui/cli.ts) 与 [client.ts](../../src/tui/client.ts) 已支持 `--here`（自动匹配或创建当前目录专属工位）与 `--cwd <dir>` 并将 `@file` 补全 `basePath` 对齐到当前工位 `cwd`；新增 `/desk new <name> [cwd]`、`/desk cwd [path|--reset]`（含在途任务步骤与写租约保护及 `desk.json` mtime 自动热刷新）、`/desk archive <name>` / `/desk unarchive <name>` 与任务汇报接管命令 `/tasks adopt <id>`（[commands.ts](../../src/desk/commands.ts)、[desk-runtime.ts](../../src/runtime/desk-runtime.ts)、[commands.ts](../../src/tasks/commands.ts)）。
 
 ---
 
@@ -255,7 +255,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    H0["✅ H0: v0.9.6 安全与正确性封板 (已完成)"] --> H1["H1: v1.0 零摩擦单人研发闭环 (2–3周)"]
+    H0["✅ H0: v0.9.6 安全与正确性封板 (已完成)"] --> H1["✅ H1: v1.0 零摩擦单人研发闭环 (已完成)"]
     H1 --> H2["H2: v1.1 有界守望与经验反哺 (3–4周)"]
     H2 --> H3["H3: v1.2+ 进程外多模态客户端 (按需演进)"]
 ```
@@ -273,7 +273,7 @@ flowchart LR
 
 ---
 
-### 阶段 H1：`v1.0` 零摩擦单人高杠杆工作流（核心体验跃升）
+### 阶段 H1：`v1.0` 零摩擦单人高杠杆工作流（核心体验跃升）— ✅ 已完成
 
 #### 方向 1.1：钉钉移动生产力“全接住”闭环（✅ 已完成）
 - **原生接入语音、文件与引用回复**：
@@ -283,10 +283,10 @@ flowchart LR
   - 对暂不支持的富媒体类型返回一行清晰的中文引导，彻底消灭“发消息无回音”（已在 [inbound.ts](../../src/dingtalk/inbound.ts) 中覆盖所有无法提取正文或附件的非文本消息类型）。
 - **后台任务委派通知精细化（尊重 Spec 065 可见性裁决）**：保留实时通知，但在任务触发的委派通知与进度回执上附带任务来源标签（已在 [receipts.ts](../../src/tasks/receipts.ts)、[runs.ts](../../src/subagents/runs.ts) 与 [commands.ts](../../src/subagents/commands.ts) 接入 `reportReceipt` 与 `taskId`）；当 `wake-coalescing` 合并 $K$ 个聊天子代理完成唤醒时，将 $K$ 条散碎完成提示合并为单条汇总提示。
 
-#### 方向 1.2：`Desk` 多仓人体工学与双层记忆共享
-- **极简仓库绑定体验**：支持 `pipiclaw tui --here`（或 `--cwd <path>`）与 `/desk new <name> [cwd]`、`/desk cwd <path>`，并在 `/desk list` 展示当前 `cwd`；修复 `DeskRuntime` 修改 `desk.json` 后的热刷新与 TUI `@file` 补全根目录。
-- **解耦“活跃后台工作”与“当前聊天通道绑定”**：工位只要仍有 `running/waiting` 的 Task 或启用的定时 Event，即保持后台激活推进（结果投递至任务记录的归属通道）；用户在唯一钉钉 DM 中临时 `/desk bind repo-b` 聊天不再冻结 `repo-a` 的后台长任务！同时提供 `/desk archive <name>` 干净回收不再使用的临时项目工位。
-- **“用户全局层 + 工位项目层”记忆清晰分工**：允许 `memory_save`（及 `reflect` 中高置信度的跨项目个人习惯）指定 `scope: "user" | "desk"`（底层对应已有的 `workspace/MEMORY.md` 或 `workspace/memory/` 与 `desk-<name>/memory/`），彻底打通多仓库间的个人工程偏好复用。
+#### 方向 1.2：`Desk` 多仓人体工学与双层记忆共享（✅ 已完成）
+- **✅ 已完成 — 极简仓库绑定体验**：支持 `pipiclaw tui --here`（[cli.ts](../../src/tui/cli.ts)、[client.ts](../../src/tui/client.ts)、[paths.ts](../../src/desk/paths.ts)，优先复用同 `cwd` 工位或按目录名自动创建并防同名异构目录误覆盖）与 `--cwd <path>`、`/desk new <name> [cwd]`、`/desk cwd [path|--reset]`（含在途任务步骤/写租约忙碌保护），在 `/desk list` 展示当前 `cwd` 与后台任务/待收汇报状态，并在 [desk-runtime.ts](../../src/runtime/desk-runtime.ts) 基于 `fileStamp` 支持手工编辑 `desk.json` 后的自动热刷新及 TUI `@file` 补全根目录对齐。
+- **✅ 已完成 — 解耦“活跃后台工作”与“当前聊天通道绑定”（严守 `INV-5` / `DESK-3` 投递隔离）**：在 [desk-runtime.ts](../../src/runtime/desk-runtime.ts)、[task-lane.ts](../../src/runtime/task-lane.ts)、[task-step.ts](../../src/runtime/task-step.ts) 与 [watcher.ts](../../src/events/watcher.ts) 中将“后台计算推进”与“通道出站投递”精确拆离——工位只要仍有非暂停的未结项 `Task` 或 `task` 模板定时 `Event` 即保持后台激活推进（全部完成后由 `reconcileActivity` 自动休眠）；用户在唯一钉钉 DM 中临时 `/desk bind repo-b` 期间，`repo-a` 后台任务照常推进完结，其进度报告、结项回执与提问安全暂存于 `tasks/.delivery/`（绝不跨工位串台投递，合成聊天唤醒继续丢弃），待用户切回 `repo-a` 或执行 `/tasks adopt <id>` 时立即按 FIFO 顺序补发；同时新增 `/desk archive <name>` 与 `/desk unarchive <name>` 干净清理残留 `webapi:conv_*` 终端绑定并暂停闲置工位定时事件。
+- **✅ 已裁决并对齐文档 — “用户全局层 + 工位项目层”记忆清晰边界**：坚持工具极简与跨仓库防污染原则（[Spec 060 §4](../specs/060-desk/design.md#L112)），不为 `memory_save` / `memory_forget` / `/memory` 或后台 `reflect` 增加跨工位 `scope` 写入分支——专用记忆工具严格只写工位级 `desk-<name>/memory/`，工作区全局层（`workspace/MEMORY.md`、`AGENTS.md`、`ENVIRONMENT.md`、`skills/`）由用户直接维护或在用户明确要求时由 Agent 通过通用文件读写工具维护（已在 [runtime-orientation.md](../../src/playbooks/runtime-orientation.md) 与 [interaction-and-commands.md](../interaction-and-commands.md) 明确对齐）。
 
 #### 方向 1.3：运行时辅助的轻量 Git Worktree 隔离与读写租约（✅ 已完成）
 - **薄封装而非重沙盒**：
@@ -351,7 +351,7 @@ flowchart LR
 | **P0** | ✅ 已修复 | 修复 `cursor-cli` 核验崩溃、`EventsWatcher` 竞态泄漏与 `timeoutMs` 丢失 | [cursor-cli.ts](../../src/subagents/external/cursor-cli.ts), [watcher.ts](../../src/events/watcher.ts), [event-manage.ts](../../src/tools/event-manage.ts) | ~70 行 | 消除必现参数报错与重复定时任务幽灵 |
 | **P1** | ✅ 已修复 | 修复 `session_search` 500 块预截断 + 打通 `tasks/archive` 历史检索 | [session-search.ts](../../src/memory/session-search.ts), [session-corpus.ts](../../src/memory/session-corpus.ts), [lifecycle.ts](../../src/tools/task-manage/lifecycle.ts) | ~120 行 | 恢复数天前冷历史召回，消除已完成任务失忆 |
 | **P1** | ✅ 已修复 | 钉钉入站接入 `audio`（ASR）、`file`、`repliedMsg` + 修复归档与 `send_media` | [inbound-media.ts](../../src/dingtalk/inbound-media.ts), [delivery.ts](../../src/dingtalk/delivery.ts), [send-media.ts](../../src/tools/send-media.ts) | ~180 行 | 手机端发语音、传日志、引用回复任务无缝闭环 |
-| **P1** | ✅ 已修复 | `Desk` 多仓 `--cwd` / `/desk cwd` 人体工学 + `/tasks adopt` 接管失联任务 + 修复 `request-execution` 竞态 | [cli.ts](../../src/tui/cli.ts), [commands.ts](../../src/desk/commands.ts), [desk-runtime.ts](../../src/runtime/desk-runtime.ts), [task-control.ts](../../src/runtime/task-control.ts) | ~200 行 | 顺畅支撑一人同时推进多个本地代码仓库并保留 `DESK-3` 安全隔离 |
+| **P1** | ✅ 已修复 | `Desk` 多仓 `--here` / `--cwd` / `/desk cwd` / `/desk archive` + 后台任务解耦推进（暂存投递严守 `DESK-3`）+ `/tasks adopt` | [cli.ts](../../src/tui/cli.ts), [commands.ts](../../src/desk/commands.ts), [desk-runtime.ts](../../src/runtime/desk-runtime.ts), [task-lane.ts](../../src/runtime/task-lane.ts) | ~320 行 | 单钉钉 DM 切工位不再冻结原仓库长任务，支持一键打开当前仓库与归档闲置工位 |
 | **P1** | ✅ 已修复 | Task Lane 健壮性（`stopGraceMs`、隔离恢复、`.sessions` 清理、任务压缩分流、批量 `probeAll`） | [task-lane.ts](../../src/runtime/task-lane.ts), [task-step.ts](../../src/runtime/task-step.ts), [archive.ts](../../src/tasks/archive.ts), [manager.ts](../../src/jobs/manager.ts) | ~150 行 | 长周期无人值守任务抗抖动、零内存/文件泄漏 |
 | **P1** | ✅ 已修复 | 轻量运行时托管 Git Worktree 隔离（`worktree: true`）+ `verify` 共享读租约 | [workspace-lease.ts](../../src/subagents/workspace-lease.ts), [worktree.ts](../../src/subagents/worktree.ts), [dispatch.ts](../../src/subagents/dispatch.ts) | ~250 行 | 多任务/并发校验与写委派不再互相踩脏工作树 |
 | **P2** | ✅ 已完成 | 治理超长文件收紧 `architecture-baseline.json` + 收敛外部 Harness 注册表 + 细节瑕疵清零 | [manager.ts](../../src/jobs/manager.ts), [discovery.ts](../../src/subagents/discovery.ts), [registry.ts](../../src/subagents/external/registry.ts) | 纯结构重构 | 消除重复枚举/特判，降低后续新增执行器维护成本 |

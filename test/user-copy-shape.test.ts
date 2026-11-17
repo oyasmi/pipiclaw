@@ -415,8 +415,9 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		}));
 		const bindOutcomes: BindOutcome[] = [
 			{ kind: "bound", desk: "lab" },
+			{ kind: "bound", desk: "lab", unarchived: true },
 			{ kind: "bound", desk: "lab", previousDesk: "news", previousDeskDormant: true },
-			{ kind: "bound", desk: "lab", previousDesk: "news", suspendedTasks: 2, suspendedEvents: 1 },
+			{ kind: "bound", desk: "lab", previousDesk: "news", backgroundTasks: 2, suspendedEvents: 1 },
 			{ kind: "same", desk: "lab" },
 			{ kind: "busy", desk: "lab" },
 			{ kind: "unknown", desk: "lab" },
@@ -427,9 +428,12 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			list: async () => desks,
 			channelIndexPath: "/home/u/.pipiclaw/workspace/CHANNELS.md",
 			create: async (name) => ({ kind: "created", record: { version: 1, name, createdAt: "", conversations: {} } }),
+			cwd: async () => ({ kind: "busy", desk: "lab", reason: "后台任务 `weekly` 正在执行当前步骤" }),
+			archive: async (desk) => ({ kind: "archived", desk, unboundTerminals: 1, stoppedEvents: 2 }),
+			unarchive: async (desk) => ({ kind: "unarchived", desk, activated: true }),
 			...(bind ? { bind: async () => outcome ?? bindOutcomes[0] } : {}),
 		});
-		for (const args of ["", "list", "new lab", "bogus", "new"]) {
+		for (const args of ["", "list", "new lab", "cwd /srv/repo", "archive lab", "unarchive lab", "bogus", "new"]) {
 			expectUserCopyShape(`/desk ${args}`, await handleDeskCommand(args, port(true)));
 		}
 		expectUserCopyShape("/desk (empty)", await handleDeskCommand("", { ...port(true), list: async () => [] }));

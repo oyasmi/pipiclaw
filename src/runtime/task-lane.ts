@@ -21,10 +21,12 @@ import { askReceipt, pausedReceipt } from "../tasks/receipts.js";
 import { checkGuards, evaluateWaiting, type GuardVerdict } from "../tasks/state.js";
 import { pauseTask, readStoredTask, reconcileTaskState, requeueWaiting } from "../tasks/store.js";
 import { finishTaskClose } from "./task-close.js";
-import { isFrozen, LaneControl } from "./task-control.js";
+import { LaneControl } from "./task-control.js";
 import { TaskInputDelivery } from "./task-input.js";
 import {
+	canDeliverToChannel,
 	ERROR_BACKOFF_MS,
+	isFrozen,
 	type LaneContext,
 	type LiveTask,
 	MAX_EXECUTING_TASKS,
@@ -180,6 +182,11 @@ export class TaskLane implements TaskControl {
 		return this.ctx.live.get(taskKey(desk, id))?.driving ?? false;
 	}
 
+	runningTaskInDesk(desk: string): string | undefined {
+		for (const live of this.ctx.live.values()) if (live.desk === desk && live.driving) return live.taskId;
+		return undefined;
+	}
+
 	created(): void {
 		this.control.created();
 	}
@@ -286,15 +293,7 @@ export class TaskLane implements TaskControl {
 			const channel = entry.fields.channel;
 			log.logInfoEvent("tasks.task.frozen", "Task frozen: report channel not usable", {
 				channelId: channel,
-				fields: {
-					taskId: entry.id,
-					desk,
-					reason: !channel
-						? "channel_missing"
-						: this.options.isBoundTo(channel, desk)
-							? "channel_unreachable"
-							: "channel_not_bound",
-				},
+				fields: { taskId: entry.id, desk, reason: !channel ? "channel_missing" : "channel_unreachable" },
 			});
 		} else if (!frozen && this.frozenLogged.delete(key)) {
 			log.logInfoEvent("tasks.task.unfrozen", "Task unfrozen: report channel usable again", {
@@ -373,6 +372,7 @@ export class TaskLane implements TaskControl {
 				}
 			}
 			candidates.set(scan.desk, ready);
+			if (!scan.seen.some((item) => item.entry.fields.state !== "paused")) this.options.onDeskIdle?.(scan.desk);
 		}
 		if (!enabled) return;
 
@@ -642,11 +642,13 @@ export class TaskLane implements TaskControl {
 			return;
 		}
 		const doc = await readStoredTask(deskDir, id);
+		const targetChannel = doc?.fields.channel ?? channel;
 		if (
 			!doc ||
 			doc.fields.state !== "waiting" ||
 			doc.fields.waiting?.kind !== "user" ||
-			isFrozen(this.ctx, desk, doc.fields)
+			isFrozen(this.ctx, desk, doc.fields) ||
+			!canDeliverToChannel(this.ctx, desk, targetChannel)
 		)
 			return;
 		const question = doc.fields.waiting.question;
@@ -655,7 +657,7 @@ export class TaskLane implements TaskControl {
 		if (records.some((record) => record.kind === "ask_delivered" && record.seq === seq)) return;
 		this.questionRetry.set(key, this.ctx.now() + 60_000);
 		try {
-			if (await this.options.deliver(desk, doc.fields.channel ?? channel, askReceipt(id, question))) {
+			if (await this.options.deliver(desk, targetChannel, askReceipt(id, question))) {
 				await withTaskMutation(deskDir, id, async () => {
 					const current = await readStoredTask(deskDir, id);
 					if (
@@ -745,7 +747,7 @@ export class TaskLane implements TaskControl {
 				await drainTaskDeliveries(
 					deskDir,
 					(channel, text) => this.options.deliver(desk, channel, text),
-					(channel) => this.options.isBoundTo(channel, desk) && this.options.isReachable(channel),
+					(channel) => canDeliverToChannel(this.ctx, desk, channel),
 					this.ctx.now(),
 				),
 			);

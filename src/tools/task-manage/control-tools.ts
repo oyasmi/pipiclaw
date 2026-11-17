@@ -31,7 +31,7 @@ const MESSAGE_NOTICES = {
 	queued_for_next_step: "已记下，任务的下一步会看到。",
 	woke: "已记下，任务被叫醒并会继续推进。",
 	held_paused: "任务已暂停：已记下，恢复后下一步会看到。",
-	held_frozen: "任务的汇报频道未绑定到本工位，任务已冻结：已记下，频道绑定回来后下一步会看到。",
+	held_frozen: "任务的汇报频道当前不可达，任务已冻结：已记下，渠道恢复或接管后下一步会看到。",
 } as const;
 
 export async function messageTask(

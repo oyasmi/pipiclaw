@@ -12,7 +12,7 @@ import type {
 	TaskMessageOutcome,
 } from "../tasks/control.js";
 import { drainTaskDeliveries, redirectTaskDeliveries } from "../tasks/delivery.js";
-import type { TaskBudget, TaskFrontmatter } from "../tasks/frontmatter.js";
+import type { TaskBudget } from "../tasks/frontmatter.js";
 import { taskInputTag } from "../tasks/input-receipts.js";
 import { appendTaskLog, readTaskLog } from "../tasks/loop-log.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
@@ -27,15 +27,9 @@ import {
 } from "../tasks/store.js";
 import { describeToolCall } from "../tools/contract/presentation.js";
 import { submitTaskInput } from "./task-input.js";
-import { type LaneContext, taskKey } from "./task-lane-types.js";
+import { canDeliverToChannel, isFrozen, type LaneContext, taskKey } from "./task-lane-types.js";
 import { listPendingWork } from "./task-pending.js";
 import { abortStep } from "./task-step.js";
-
-/** Whether a task's report channel can currently be reached (INV-7). */
-export function isFrozen(ctx: LaneContext, desk: string, fields: TaskFrontmatter): boolean {
-	const channel = fields.channel;
-	return !channel || !ctx.options.isBoundTo(channel, desk) || !ctx.options.isReachable(channel);
-}
 
 /**
  * The chat-facing control surface of the lane (spec 064, D24): every write is made inside the
@@ -203,7 +197,7 @@ export class LaneControl implements TaskControl {
 		await drainTaskDeliveries(
 			deskDir,
 			(targetChannel, text) => ctx.options.deliver(desk, targetChannel, text),
-			(targetChannel) => ctx.options.isBoundTo(targetChannel, desk) && ctx.options.isReachable(targetChannel),
+			(targetChannel) => canDeliverToChannel(ctx, desk, targetChannel),
 			ctx.now(),
 		).catch(() => undefined);
 		ctx.notify();
@@ -252,7 +246,7 @@ export class LaneControl implements TaskControl {
 			await drainTaskDeliveries(
 				deskDir,
 				(channel, text) => ctx.options.deliver(desk, channel, text),
-				(channel) => ctx.options.isBoundTo(channel, desk) && ctx.options.isReachable(channel),
+				(channel) => canDeliverToChannel(ctx, desk, channel),
 				ctx.now(),
 			).catch((error: unknown) =>
 				log.logWarn("tasks.delivery.drain_failed", "Task delivery drain failed", {

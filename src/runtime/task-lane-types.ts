@@ -3,6 +3,7 @@ import type { ChannelStore } from "../channel/store.js";
 import type { DeskJobManager } from "../jobs/manager.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import type { TaskSessionContext, TaskStepIntent } from "../tasks/control.js";
+import type { TaskFrontmatter } from "../tasks/frontmatter.js";
 
 /** Executing tasks per desk and per daemon (spec 064, D12). Code constants, not settings. */
 export const MAX_EXECUTING_TASKS_PER_DESK = 3;
@@ -41,13 +42,15 @@ export interface TaskLaneOptions {
 	getActiveDesks: () => ReadonlyArray<{ desk: string; deskDir: string }>;
 	/** The directory of a desk the runtime knows, or `undefined`. */
 	getDeskDir: (desk: string) => string | undefined;
-	/** The current working directory of `desk` for `channelId`, so a retained runner notices `/desk cwd` updates. */
+	/** The current working directory of `desk`, so a retained runner notices `/desk cwd` or `desk.json` updates. */
 	getDeskCwd?: (desk: string, channelId: string) => string | undefined;
 	/**
-	 * Whether a report channel is bound to a desk right now. A task whose `channel` is missing or not
-	 * bound to its own desk is frozen: the lane does not touch it (INV-7).
+	 * Whether a report channel is bound to a desk right now. Gates outbound channel deliveries (INV-5),
+	 * while background step execution continues in the task's own session.
 	 */
 	isBoundTo: (channelId: string, desk: string) => boolean;
+	/** Called when an active desk scan sees no non-paused open tasks, allowing unbound desks to go dormant. */
+	onDeskIdle?: (desk: string) => void;
 	/** Whether the channel's transport is switched on in this process (spec 061, INV-8). */
 	isReachable: (channelId: string) => boolean;
 	/** Build the runner for one task (the `task` profile). The lane owns it from here and disposes it. */
@@ -130,4 +133,15 @@ export interface LaneContext {
 
 export function taskKey(desk: string, taskId: string): string {
 	return `${desk}\0${taskId}`;
+}
+
+/** Whether a task's execution must be held back (missing channel or disabled transport; spec 061 INV-8). */
+export function isFrozen(ctx: LaneContext, _desk: string, fields: TaskFrontmatter): boolean {
+	const channel = fields.channel;
+	return !channel || !ctx.options.isReachable(channel);
+}
+
+/** Whether outbound task deliveries (reports, receipts, questions) may be sent to `channel` right now (INV-5). */
+export function canDeliverToChannel(ctx: LaneContext, desk: string, channel: string | undefined): boolean {
+	return !!channel && ctx.options.isBoundTo(channel, desk) && ctx.options.isReachable(channel);
 }

@@ -11,29 +11,37 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadBindings, writeBindings } from "../desk/bindings.js";
-import type { BindOutcome } from "../desk/commands.js";
-import { getDeskDir, isDeskName, normalizeDeskName } from "../desk/paths.js";
+import { type BindOutcome, buildDeskList, type DeskListItem, type DeskRuntimeActivity } from "../desk/commands.js";
+import { DEFAULT_DESK, DESK_RECORD_FILENAME, getDeskDir, isDeskName, normalizeDeskName } from "../desk/paths.js";
 import {
 	allocateConversation,
 	createDeskRecord,
 	findConversation,
+	listDesks,
 	readDeskRecord,
+	readDeskRecordSync,
+	setDeskArchived,
 	setDeskCwd,
+	validateCustomCwd,
 } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
 import type {
+	ArchiveDeskOutcome,
 	BindingsFile,
 	ConversationKind,
 	CreateDeskOutcome,
 	DeskConversation,
 	DeskCwdOutcome,
 	DeskSummary,
+	UnarchiveDeskOutcome,
 } from "../desk/types.js";
 import { parseScheduledEventContent } from "../events/parse.js";
 import * as log from "../log.js";
+import { fileStamp } from "../shared/format.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { readActiveTasks } from "../tasks/contract.js";
+import { readTaskDeliveries } from "../tasks/delivery.js";
 
 export type ChannelResolution =
 	| { kind: "bound"; conversation: DeskConversation }
@@ -85,18 +93,28 @@ export interface DeskRuntimeOptions {
 	/** Whether the channel has a turn in flight; `/desk bind` refuses then (D5 step 1). */
 	isChannelBusy: (channelId: string) => boolean;
 	/**
+	 * Optional check for active execution in `desk` (e.g. a running task step or checkout lease on
+	 * `currentCwd`); returns a short Chinese reason to refuse mutating `cwd` or archiving mid-flight.
+	 */
+	isDeskBusy?: (desk: string, currentCwd: string) => string | undefined;
+	/** Human-readable channel label for `/desk` messages. */
+	describeChannel?: (channelId: string) => string;
+	/**
 	 * Drop the channel's cached runner and dispose it — its final reflect lands in the desk it was
 	 * bound to (D5 step 5). Called only after the new binding is on disk.
 	 */
 	releaseRunner: (channelId: string) => Promise<void>;
 	/** A binding changed (the channel index rewrites its desk column). */
 	onBindingChanged?: (channelId: string) => void;
+	/** A desk was activated or gained a bound channel (wakes the task lane to drain held deliveries). */
+	onActivated?: (desk: string) => void;
 }
 
 export class DeskRuntime {
 	private bindings: BindingsFile = { version: 1, bindings: {} };
-	/** Every desk a binding points at, as last read from disk. */
+	/** Every desk a binding or scan has touched, kept fresh when `desk.json`'s stamp changes. */
 	private readonly records = new Map<string, DeskSummary>();
+	private readonly recordStamps = new Map<string, string>();
 	private readonly active = new Set<string>();
 	private readonly watchers = new Map<string, DeskWatcher>();
 	/** Activation and dormancy of one desk run in order, so interleaved calls settle on the last one. */
@@ -133,6 +151,7 @@ export class DeskRuntime {
 	private async refreshRecord(desk: string): Promise<DeskSummary> {
 		const summary = await readDeskRecord(this.options.workspaceDir, desk);
 		this.records.set(desk, summary);
+		if (summary.deskDir) this.recordStamps.set(desk, deskRecordStamp(summary.deskDir));
 		if (summary.availability !== "available") {
 			log.logWarn("desk.record.unavailable", "Bound desk is unavailable", {
 				reason: summary.reason,
@@ -142,10 +161,32 @@ export class DeskRuntime {
 		return summary;
 	}
 
+	private syncRecordIfChanged(desk: string): DeskSummary | undefined {
+		if (!isDeskName(desk)) return this.records.get(desk);
+		const deskDir = getDeskDir(this.options.workspaceDir, desk);
+		const stamp = deskRecordStamp(deskDir);
+		if (this.recordStamps.get(desk) === stamp && this.records.has(desk)) {
+			return this.records.get(desk);
+		}
+		const prevCwd = this.records.get(desk)?.record?.cwd;
+		const summary = readDeskRecordSync(this.options.workspaceDir, desk);
+		this.records.set(desk, summary);
+		this.recordStamps.set(desk, stamp);
+		const nextCwd = summary.record?.cwd;
+		if (prevCwd !== nextCwd && this.active.has(desk) && this.servicesStarted) {
+			void this.stopWatcher(desk).then(() => {
+				if (this.active.has(desk) && this.servicesStarted && !summary.record?.archivedAt) {
+					this.startWatcher(desk);
+				}
+			});
+		}
+		return summary;
+	}
+
 	resolve(channelId: string): ChannelResolution {
 		const binding = this.bindings.bindings[channelId];
 		if (!binding) return { kind: "unbound" };
-		const summary = this.records.get(binding.desk);
+		const summary = this.syncRecordIfChanged(binding.desk);
 		if (!summary?.record) {
 			return { kind: "unavailable", desk: binding.desk, reason: summary?.reason ?? "desk not loaded" };
 		}
@@ -154,6 +195,32 @@ export class DeskRuntime {
 			return { kind: "unavailable", desk: binding.desk, reason: `no conversation registered for ${channelId}` };
 		}
 		return { kind: "bound", conversation };
+	}
+
+	/** Effective working directory of `desk`, independent of whether any channel is currently bound to it. */
+	deskCwd(desk: string): string | undefined {
+		const summary = this.syncRecordIfChanged(desk);
+		return summary?.record ? (summary.record.cwd ?? summary.deskDir) : undefined;
+	}
+
+	/**
+	 * Build the `DeskConversation` a task runner in `desk` needs for `channelId`, even after
+	 * `channelId` has rebound to another desk (Direction 1.2: background task execution is decoupled
+	 * from current chat binding; `desk.json` retains the registered conversation record).
+	 */
+	taskConversation(desk: string, channelId: string): DeskConversation | undefined {
+		const summary = this.syncRecordIfChanged(desk);
+		if (!summary?.record || summary.record.archivedAt) return undefined;
+		return (
+			findConversation(summary.record, summary.deskDir, channelId) ?? {
+				desk,
+				deskDir: summary.deskDir,
+				cwd: summary.record.cwd ?? summary.deskDir,
+				channelId,
+				conversation: "task",
+				conversationDir: join(summary.deskDir, "tasks", ".sessions"),
+			}
+		);
 	}
 
 	/** The producer- and admission-side check of INV-5: is this channel bound to this (available) desk? */
@@ -201,9 +268,23 @@ export class DeskRuntime {
 			.map(([channelId]) => channelId);
 	}
 
-	/** Startup: activate every desk that has at least one binding. */
+	/** Startup: activate every non-archived desk that has a binding or retained background work. */
 	async activateBound(): Promise<void> {
-		for (const desk of new Set(Object.values(this.bindings.bindings).map((binding) => binding.desk))) {
+		const candidates = new Set(Object.values(this.bindings.bindings).map((binding) => binding.desk));
+		for (const summary of await listDesks(this.options.workspaceDir)) {
+			this.records.set(summary.name, summary);
+			if (summary.deskDir) this.recordStamps.set(summary.name, deskRecordStamp(summary.deskDir));
+			if (
+				summary.availability === "available" &&
+				summary.record &&
+				!summary.record.archivedAt &&
+				!candidates.has(summary.name) &&
+				(await hasRetainedBackgroundWork(summary.deskDir))
+			) {
+				candidates.add(summary.name);
+			}
+		}
+		for (const desk of candidates) {
 			await this.activate(desk);
 		}
 	}
@@ -216,18 +297,20 @@ export class DeskRuntime {
 		return this.lifecycle.run(desk, async () => {
 			if (this.active.has(desk)) return;
 			const summary = await this.refreshRecord(desk);
-			if (!summary.record) return;
+			if (!summary.record || summary.record.archivedAt) return;
 			const conversations = this.boundChannelsOf(desk).flatMap((channelId) => {
 				const resolution = this.resolve(channelId);
 				return resolution.kind === "bound" ? [resolution.conversation] : [];
 			});
-			try {
-				await this.options.recover(conversations);
-			} catch (error) {
-				log.logWarn("desk.activate.recover_failed", "Interrupted-turn repair failed during activation", {
-					reason: errorMessage(error),
-					fields: { desk },
-				});
+			if (conversations.length > 0) {
+				try {
+					await this.options.recover(conversations);
+				} catch (error) {
+					log.logWarn("desk.activate.recover_failed", "Interrupted-turn repair failed during activation", {
+						reason: errorMessage(error),
+						fields: { desk },
+					});
+				}
 			}
 			this.active.add(desk);
 			if (this.servicesStarted) this.startWatcher(desk);
@@ -242,6 +325,20 @@ export class DeskRuntime {
 			await this.stopWatcher(desk);
 			this.active.delete(desk);
 			log.logInfoEvent("desk.deactivated", "Desk went dormant: no bound channel", { fields: { desk } });
+		});
+	}
+
+	/** Put an unbound desk to sleep once its last runnable task and task-spawning event are gone. */
+	reconcileActivity(desk: string): Promise<void> {
+		if (!this.active.has(desk) || this.boundChannelsOf(desk).length > 0) return Promise.resolve();
+		return this.lifecycle.run(desk, async () => {
+			if (!this.active.has(desk) || this.boundChannelsOf(desk).length > 0) return;
+			const summary = await this.refreshRecord(desk);
+			if (!summary.record || summary.record.archivedAt || !(await hasRetainedBackgroundWork(summary.deskDir))) {
+				await this.stopWatcher(desk);
+				this.active.delete(desk);
+				log.logInfoEvent("desk.deactivated", "Desk went dormant: background work finished", { fields: { desk } });
+			}
 		});
 	}
 
@@ -267,6 +364,29 @@ export class DeskRuntime {
 		return Promise.resolve(createDeskRecord(this.options.workspaceDir, normalizeDeskName(name), new Date(), cwd));
 	}
 
+	/** `/desk list` rows enriched with live background task and pending-delivery counts. */
+	async listDeskItems(askingChannelId: string, labelOf: (channelId: string) => string): Promise<DeskListItem[]> {
+		const desks = await listDesks(this.options.workspaceDir);
+		const activity = new Map<string, DeskRuntimeActivity>();
+		await Promise.all(
+			desks.map(async (summary) => {
+				if (summary.availability !== "available" || !summary.record || summary.record.archivedAt) return;
+				const activeTasks = (await readActiveTasks(join(summary.deskDir, "tasks")).catch(() => [])).filter(
+					(entry) => !entry.fields.outcome && entry.fields.state !== "paused",
+				).length;
+				const pendingDeliveries = (await readTaskDeliveries(summary.deskDir).catch(() => [])).filter(
+					(item) => !item.sentAt,
+				).length;
+				activity.set(summary.name, {
+					activeTasks,
+					pendingDeliveries,
+					active: this.active.has(summary.name),
+				});
+			}),
+		);
+		return buildDeskList(desks, this.bindingTable(), this.boundDesk(askingChannelId), labelOf, activity);
+	}
+
 	/** `/desk cwd`: view or update the working directory of `channelId`'s bound desk. */
 	async cwd(channelId: string, input: { cwd?: string; reset?: boolean }): Promise<DeskCwdOutcome> {
 		const resolution = this.resolve(channelId);
@@ -274,13 +394,29 @@ export class DeskRuntime {
 			return { kind: "unavailable", desk: resolvedDesk(resolution) ?? "" };
 		}
 		const { desk, deskDir } = resolution.conversation;
+		const summary = await this.refreshRecord(desk);
+		if (!summary.record) return { kind: "unavailable", desk };
+		const currentEffective = summary.record.cwd ?? deskDir;
 		if (!input.cwd && !input.reset) {
-			const summary = await this.refreshRecord(desk);
-			if (!summary.record) return { kind: "unavailable", desk };
-			const effective = summary.record.cwd ?? deskDir;
-			return { kind: "ok", desk, cwd: effective, isDefault: summary.record.cwd === undefined };
+			return { kind: "ok", desk, cwd: currentEffective, isDefault: summary.record.cwd === undefined };
 		}
-		const outcome = await setDeskCwd(this.options.workspaceDir, desk, input.reset ? null : (input.cwd ?? ""));
+		let targetEffective = deskDir;
+		if (!input.reset) {
+			const checked = validateCustomCwd(input.cwd ?? "");
+			if (!checked.ok) return { kind: "invalid_cwd", cwd: input.cwd ?? "", reason: checked.reason };
+			targetEffective = checked.cwd;
+		}
+		if (targetEffective === currentEffective) {
+			return { kind: "ok", desk, cwd: currentEffective, isDefault: summary.record.cwd === undefined };
+		}
+		if (this.boundChannelsOf(desk).some((boundChannel) => this.options.isChannelBusy(boundChannel))) {
+			return { kind: "busy", desk, reason: "有聊天回合正在运行" };
+		}
+		const busyReason = this.options.isDeskBusy?.(desk, currentEffective);
+		if (busyReason) {
+			return { kind: "busy", desk, reason: busyReason };
+		}
+		const outcome = await setDeskCwd(this.options.workspaceDir, desk, input.reset ? null : targetEffective);
 		if (outcome.kind !== "ok") return outcome;
 		await this.refreshRecord(desk);
 		if (this.active.has(desk) && this.servicesStarted) {
@@ -293,6 +429,93 @@ export class DeskRuntime {
 			}
 		}
 		return outcome;
+	}
+
+	/** `/desk archive <name>`: retire an idle desk, unbinding stale terminal sessions and stopping events. */
+	archive(askingChannelId: string | undefined, name: string): Promise<ArchiveDeskOutcome> {
+		return this.bindingWrites.run("bindings", async () => {
+			const desk = normalizeDeskName(name);
+			if (!isDeskName(desk)) return { kind: "invalid", desk };
+			if (desk === DEFAULT_DESK) return { kind: "default" };
+			const summary = await readDeskRecord(this.options.workspaceDir, desk);
+			if (summary.availability === "missing") return { kind: "unknown", desk };
+			if (!summary.record) return { kind: "unavailable", desk };
+			if (summary.record.archivedAt) return { kind: "already_archived", desk };
+
+			const bound = this.boundChannelsOf(desk);
+			if (askingChannelId && bound.includes(askingChannelId)) {
+				return { kind: "current_channel", desk };
+			}
+			const nonTerminals = bound.filter((channelId) => this.options.conversationKindOf(channelId) !== "webapi");
+			if (nonTerminals.length > 0) {
+				return {
+					kind: "bound_channels",
+					desk,
+					channels: nonTerminals.map((channelId) => this.options.describeChannel?.(channelId) ?? channelId),
+				};
+			}
+			const terminals = bound.filter((channelId) => this.options.conversationKindOf(channelId) === "webapi");
+			if (terminals.some((channelId) => this.options.isChannelBusy(channelId))) {
+				return { kind: "busy", desk, reason: "有正在运行的终端回合" };
+			}
+			const busyReason = this.options.isDeskBusy?.(desk, summary.record.cwd ?? summary.deskDir);
+			if (busyReason) return { kind: "busy", desk, reason: busyReason };
+
+			const openTasks = (await readActiveTasks(join(summary.deskDir, "tasks")).catch(() => [])).filter(
+				(entry) => !entry.fields.outcome,
+			);
+			if (openTasks.length > 0) {
+				return { kind: "open_tasks", desk, count: openTasks.length, sampleId: openTasks[0]!.id };
+			}
+
+			if (terminals.length > 0) {
+				const nextBindings = { ...this.bindings.bindings };
+				for (const channelId of terminals) delete nextBindings[channelId];
+				const next: BindingsFile = { ...this.bindings, bindings: nextBindings };
+				await writeBindings(this.options.workspaceDir, next);
+				this.bindings = next;
+				for (const channelId of terminals) {
+					log.logInfoEvent("desk.unbound", "Terminal channel unbound on desk archive", {
+						channelId,
+						fields: { desk },
+					});
+					this.options.onBindingChanged?.(channelId);
+					await this.options.releaseRunner(channelId).catch(() => undefined);
+				}
+			}
+
+			const stoppedEvents = await countScheduledEvents(summary.deskDir);
+			await setDeskArchived(this.options.workspaceDir, desk, new Date().toISOString());
+			await this.refreshRecord(desk);
+			await this.deactivate(desk);
+			log.logInfoEvent("desk.archived", "Desk archived", {
+				fields: { desk, unboundTerminals: terminals.length, stoppedEvents },
+			});
+			return { kind: "archived", desk, unboundTerminals: terminals.length, stoppedEvents };
+		});
+	}
+
+	/** `/desk unarchive <name>`: clear `archivedAt` and re-activate if work is waiting. */
+	unarchive(name: string): Promise<UnarchiveDeskOutcome> {
+		return this.bindingWrites.run("bindings", async () => {
+			const desk = normalizeDeskName(name);
+			if (!isDeskName(desk)) return { kind: "invalid", desk };
+			const summary = await readDeskRecord(this.options.workspaceDir, desk);
+			if (summary.availability === "missing") return { kind: "unknown", desk };
+			if (!summary.record) return { kind: "unavailable", desk };
+			if (!summary.record.archivedAt) return { kind: "not_archived", desk };
+
+			await setDeskArchived(this.options.workspaceDir, desk, null);
+			await this.refreshRecord(desk);
+			if (this.boundChannelsOf(desk).length > 0 || (await hasRetainedBackgroundWork(summary.deskDir))) {
+				await this.activate(desk);
+				this.options.onActivated?.(desk);
+			}
+			log.logInfoEvent("desk.unarchived", "Desk unarchived", {
+				fields: { desk, activated: this.active.has(desk) },
+			});
+			return { kind: "unarchived", desk, activated: this.active.has(desk) };
+		});
 	}
 
 	/** `/desk bind` from `channelId`, in D5's order. Throws only when the bindings write itself fails. */
@@ -332,7 +555,12 @@ export class DeskRuntime {
 		if (!summary.record) return { kind: "unavailable", desk };
 		if (this.options.isChannelBusy(channelId)) return { kind: "busy", desk };
 		const previous = this.bindings.bindings[channelId]?.desk;
-		if (previous === desk) return { kind: "same", desk };
+		if (previous === desk && !summary.record.archivedAt) return { kind: "same", desk };
+		let unarchived = false;
+		if (summary.record.archivedAt) {
+			await setDeskArchived(this.options.workspaceDir, desk, null);
+			unarchived = true;
+		}
 		this.records.set(desk, summary);
 
 		// 2–3. Give the channel its conversation in the target, then commit the binding. Until the
@@ -356,6 +584,7 @@ export class DeskRuntime {
 		// cannot undo the committed binding; the next restart activates the desk again.
 		try {
 			await this.activate(desk);
+			this.options.onActivated?.(desk);
 		} catch (error) {
 			log.logWarn("desk.bind.activate_failed", "Activating the desk after a bind failed", {
 				channelId,
@@ -375,26 +604,37 @@ export class DeskRuntime {
 			});
 		}
 
-		// 6. The old desk: dormant if it lost its last channel, otherwise report what is now suspended.
-		if (!previous) return { kind: "bound", desk };
-		if (this.boundChannelsOf(previous).length === 0) {
-			await this.deactivate(previous);
-			return { kind: "bound", desk, previousDesk: previous, previousDeskDormant: true };
+		// 6. The old desk: stays active while it still has open tasks or task-spawning events; goes
+		// dormant only when both bound channels and runnable background work are gone.
+		if (!previous || previous === desk) {
+			return { kind: "bound", desk, ...(unarchived ? { unarchived: true } : {}) };
 		}
-		const suspended = await countDeliveringTo(getDeskDir(this.options.workspaceDir, previous), channelId);
+		const previousDir = getDeskDir(this.options.workspaceDir, previous);
+		const departure = await inspectChannelDeparture(previousDir, channelId);
+		if (this.boundChannelsOf(previous).length === 0 && !(await hasRetainedBackgroundWork(previousDir))) {
+			await this.deactivate(previous);
+			return {
+				kind: "bound",
+				desk,
+				...(unarchived ? { unarchived: true } : {}),
+				previousDesk: previous,
+				previousDeskDormant: true,
+			};
+		}
 		return {
 			kind: "bound",
 			desk,
+			...(unarchived ? { unarchived: true } : {}),
 			previousDesk: previous,
-			suspendedTasks: suspended.tasks,
-			suspendedEvents: suspended.events,
+			...(departure.backgroundTasks > 0 ? { backgroundTasks: departure.backgroundTasks } : {}),
+			...(departure.suspendedEvents > 0 ? { suspendedEvents: departure.suspendedEvents } : {}),
 		};
 	}
 
 	/**
 	 * The channel is gone for good (a Web API conversation was deleted): drop its binding, its
-	 * runner, and — when it was the desk's last channel — the desk's activity. Its conversation
-	 * directory stays in the desk as history. Whether there was a binding to drop.
+	 * runner, and — when it was the desk's last channel and no background work remains — the desk's
+	 * activity. Its conversation directory stays in the desk as history. Whether there was a binding to drop.
 	 */
 	unbind(channelId: string): Promise<boolean> {
 		return this.bindingWrites.run("bindings", async () => {
@@ -415,7 +655,12 @@ export class DeskRuntime {
 					fields: { desk: previous },
 				});
 			}
-			if (this.boundChannelsOf(previous).length === 0) await this.deactivate(previous);
+			if (
+				this.boundChannelsOf(previous).length === 0 &&
+				!(await hasRetainedBackgroundWork(getDeskDir(this.options.workspaceDir, previous)))
+			) {
+				await this.deactivate(previous);
+			}
 			return true;
 		});
 	}
@@ -452,34 +697,70 @@ export class DeskRuntime {
 	}
 }
 
-/**
- * Open tasks and events in a desk whose delivery channel is `channelId` — what a rebind away from
- * the desk suspends (D8). Read-only, and best effort: an unreadable file is simply not counted.
- */
-async function countDeliveringTo(deskDir: string, channelId: string): Promise<{ tasks: number; events: number }> {
-	let tasks = 0;
+function deskRecordStamp(deskDir: string): string {
+	return fileStamp(join(deskDir, DESK_RECORD_FILENAME)) ?? "missing";
+}
+
+/** Whether `deskDir` still owns work that can execute without any bound chat channel. */
+async function hasRetainedBackgroundWork(deskDir: string): Promise<boolean> {
 	try {
-		tasks = (await readActiveTasks(join(deskDir, "tasks"))).filter(
-			(entry) => entry.fields.channel === channelId,
-		).length;
+		const closing = await readdir(join(deskDir, "tasks", ".closing"));
+		if (closing.some((name) => name.endsWith(".json"))) return true;
 	} catch {
-		// No readable tasks directory: nothing suspended there.
+		// No `.closing` directory.
 	}
-	let events = 0;
+	try {
+		const open = await readActiveTasks(join(deskDir, "tasks"));
+		if (open.some((entry) => !entry.fields.outcome && entry.fields.state !== "paused")) return true;
+	} catch {
+		// No readable tasks directory.
+	}
+	for (const event of await readValidScheduledEvents(deskDir)) {
+		if (event.task) return true;
+	}
+	return false;
+}
+
+async function readValidScheduledEvents(deskDir: string) {
 	const eventsDir = join(deskDir, "events");
 	let filenames: string[] = [];
 	try {
 		filenames = (await readdir(eventsDir)).filter((filename) => filename.endsWith(".json"));
 	} catch {
-		// No events directory.
+		return [];
 	}
+	const events: ReturnType<typeof parseScheduledEventContent>[] = [];
 	for (const filename of filenames) {
 		try {
-			const event = parseScheduledEventContent(await readFile(join(eventsDir, filename), "utf8"), filename);
-			if (event.channelId === channelId) events++;
+			events.push(parseScheduledEventContent(await readFile(join(eventsDir, filename), "utf8"), filename));
 		} catch {
 			// An invalid definition never fires anyway.
 		}
 	}
-	return { tasks, events };
+	return events;
+}
+
+async function countScheduledEvents(deskDir: string): Promise<number> {
+	return (await readValidScheduledEvents(deskDir)).length;
+}
+
+/**
+ * Open tasks in `deskDir` that keep running in the background while `channelId` is away, plus
+ * chat-wake events delivering to `channelId` that pause until `channelId` binds back.
+ */
+async function inspectChannelDeparture(
+	deskDir: string,
+	channelId: string,
+): Promise<{ backgroundTasks: number; suspendedEvents: number }> {
+	let backgroundTasks = 0;
+	try {
+		backgroundTasks = (await readActiveTasks(join(deskDir, "tasks"))).filter(
+			(entry) => !entry.fields.outcome && entry.fields.state !== "paused" && entry.fields.channel === channelId,
+		).length;
+	} catch {
+		// No readable tasks directory.
+	}
+	const events = await readValidScheduledEvents(deskDir);
+	const suspendedEvents = events.filter((event) => event.channelId === channelId && !event.task).length;
+	return { backgroundTasks, suspendedEvents };
 }

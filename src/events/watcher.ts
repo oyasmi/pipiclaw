@@ -592,10 +592,10 @@ export class EventsWatcher {
 		}
 	}
 
-	/** Whether the watcher may still act on an occurrence (desk active, channel bound); records a skip. */
+	/** Whether the watcher may still act on an occurrence (desk active; task templates need reachable transport, chat wakes also need channel bound); records a skip. */
 	private admits(filename: string, event: ScheduledEvent, deleteAfter: boolean): boolean {
 		if (this.stopped) return false; // a load `stop()` could not cancel: the desk went dormant meanwhile
-		const bound = this.options.isBound(event.channelId);
+		const bound = event.task ? true : this.options.isBound(event.channelId);
 		if (bound && this.options.isReachable(event.channelId)) return true;
 		this.appendEventHistory(filename, event, "skipped", "skipped", {
 			reason: bound ? "channel_unavailable" : "channel_not_bound",

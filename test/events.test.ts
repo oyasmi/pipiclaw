@@ -386,17 +386,26 @@ describe("EventsWatcher", () => {
 			);
 			expect(spawnTask).not.toHaveBeenCalled();
 
-			// The gate passes, but while it ran the desk went dormant or the channel was rebound away.
-			// Failure caught: a stopped watcher persisted a task instance for a desk nobody is driving.
-			// Mutation check (run: goes red): drop the post-gate `admits` check in `execute`.
-			for (const lose of ["stop", "unbind"] as const) {
-				let bound = true;
+			// The gate passes, but while it ran the desk went dormant or the transport became unreachable:
+			// do not spawn. By contrast, if only the chat channel rebound away (Direction 1.2), a task
+			// template STILL spawns in the background while a plain text event is skipped (INV-5).
+			for (const lose of ["stop", "unreachable"] as const) {
+				let reachable = true;
 				const gate = createMockExecutor(async () => {
 					if (lose === "stop") dormant.stop();
-					else bound = false;
+					else reachable = false;
 					return { stdout: "", stderr: "", code: 0 };
 				});
-				const dormant = createWatcher(dir, new FakeBot(), gate, undefined, undefined, spawnTask, () => bound);
+				const dormant = createWatcher(
+					dir,
+					new FakeBot(),
+					gate,
+					undefined,
+					undefined,
+					spawnTask,
+					() => true,
+					() => reachable,
+				);
 				await getEventsWatcherPrivateApi(dormant).execute(
 					"gated.json",
 					{ ...templateEvent, preAction: { type: "bash", command: "check-feed" } },
@@ -404,6 +413,25 @@ describe("EventsWatcher", () => {
 				);
 			}
 			expect(spawnTask).not.toHaveBeenCalled();
+
+			const reboundBot = new FakeBot();
+			const reboundWatcher = createWatcher(
+				dir,
+				reboundBot,
+				createMockExecutor(),
+				undefined,
+				undefined,
+				spawnTask,
+				() => false,
+			);
+			await getEventsWatcherPrivateApi(reboundWatcher).execute("gated.json", templateEvent, false);
+			expect(spawnTask).toHaveBeenCalledTimes(1);
+			await getEventsWatcherPrivateApi(reboundWatcher).execute(
+				"chat.json",
+				{ type: "periodic", channelId: "dingtalk:dm:1", schedule: "0 9 * * *", text: "hello" },
+				false,
+			);
+			expect(reboundBot.events).toHaveLength(0);
 		});
 	});
 

@@ -87,18 +87,19 @@ describe("E2E deterministic: desks and bindings", () => {
 		expect(existsSync(defaultDir)).toBe(false);
 	});
 
-	it("DESK-3: rebinding a channel suspends its old desk's work there and drops that desk's in-flight wake", async () => {
-		// Catches a rebind that lets the old desk keep talking into the channel: a queued wake of the
-		// old desk answered in the new desk's conversation, or the old desk's task still stepping.
-		// Mutation checks (2026-10-18): removing the admission check in `runEventTurn` lets the stale
-		// wake reach the provider; removing the lane's freeze check lets the task step run while the
-		// channel is bound to `lab` (the step's request reaches the provider). Either turns the case red.
-		// R3 extension (2026-10-29): rebind while step 1 is held, then release it; step 2 must
-		// not reach the provider until rebound. Mutation: remove the drive and beginStep binding
-		// checks; step 2 reaches the provider while frozen and this case fails (verified).
-		// A second channel keeps `e2e` active after the rebind, so the lane still scans it and the
-		// per-task freeze (not the desk's dormancy) is what holds the task back.
-		harness = await createDeterministicHarness({ extraChannels: [{ channelId: "dingtalk:group:cidKEEP+e2e==" }] });
+	it("DESK-3: rebinding keeps old desk tasks progressing in background, holds outbound deliveries/drops stale wakes (INV-5), and flushes on rebind", async () => {
+		// Catches:
+		// 1) INV-5 cross-desk leaks: a stale wake of the old desk answered in the new desk's session, or
+		//    the old desk's `task_report` / receipt pushed into a channel currently bound to `lab`;
+		// 2) Single-DM background starvation (Direction 1.2): rebinding the sole DingTalk channel away
+		//    from `e2e` deactivating `e2e` and freezing `weekly-digest` mid-flight instead of finishing
+		//    its background work and holding `.delivery/` until rebound.
+		// Mutation checks (2026-11-17):
+		// - Removing `isBoundTo` from `canDeliverToChannel`/`sendFromDesk` leaks `DIGEST_READY` into
+		//   `harness.channelId` while bound to `lab` -> RED.
+		// - Deactivating `previous` unconditionally in `DeskRuntime.bindNow` stops step 2 from running
+		//   while bound to `lab` -> RED.
+		harness = await createDeterministicHarness();
 		const taskId = "weekly-digest";
 		await createTaskDocument({
 			deskDir: harness.deskDir,
@@ -115,13 +116,14 @@ describe("E2E deterministic: desks and bindings", () => {
 			name: "step",
 			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #2]`),
 			respond: [
-				reply.toolCall("task_report", { text: "digest sent" }),
-				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "digest sent" }),
+				reply.toolCall("task_report", { text: "DIGEST_READY" }),
+				reply.toolCall("task_close", { id: taskId, outcome: "complete", note: "DIGEST_READY" }),
+				reply.text("done"),
 			],
 		});
 
 		harness.model.script.route({
-			name: "before-freeze",
+			name: "before-rebind",
 			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId} #1]`),
 			respond: [
 				reply.toolCall("read", { path: join(harness.deskDir, "tasks", `${taskId}.md`) }),
@@ -138,8 +140,14 @@ describe("E2E deterministic: desks and bindings", () => {
 		});
 
 		running.release();
+		await waitFor(
+			"step 2 to finish in background while unbound",
+			() => harness.mainTurnRequests().some((r) => r.matchedRoute === "step"),
+			{ intervalMs: 25 },
+		);
 		await harness.runtime.taskLane.drained();
-		// A completion wake the old desk produced before the rebind, still on the durable outbox.
+
+		// A completion wake the old desk produced before the rebind, still on the durable outbox: dropped (INV-5).
 		const dispatchId = `subagent:${harness.desk}:run_stale:done`;
 		const dispatchDir = join(harness.homeDir, "state", "dispatch");
 		mkdirSync(dispatchDir, { recursive: true });
@@ -170,8 +178,10 @@ describe("E2E deterministic: desks and bindings", () => {
 		await harness.waitForIdle();
 		expect(harness.modelRequestCount()).toBe(before);
 		expect(existsSync(recordPath)).toBe(false);
-		// Frozen, not dropped: no step ran, and the task is exactly where it was.
-		expect(harness.mainTurnRequests().some((r) => r.matchedRoute === "step")).toBe(false);
+
+		// INV-5: while bound to `lab`, `DIGEST_READY` stays held in `e2e/tasks/.delivery/` and never leaks into `lab`.
+		expect(harness.deliveries.some((d) => d.text?.includes("DIGEST_READY") === true)).toBe(false);
+		expect(existsSync(join(harness.deskDir, "tasks", `${taskId}.md`))).toBe(true);
 
 		// The channel's next turn runs in its conversation in `lab`, not in the old desk.
 		await harness.sendUserMessage("IN_LAB 你在哪个 desk");
@@ -180,12 +190,20 @@ describe("E2E deterministic: desks and bindings", () => {
 		expect(labSession && readFileSync(join(labConversation, labSession), "utf8")).toContain("IN_LAB");
 		expect(readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")).not.toContain("IN_LAB");
 
-		// Bound back, the old desk's task resumes on the lane's next pass.
+		// Bound back to `e2e`, the held report and completion receipt flush immediately and the task archives.
 		await harness.sendUserMessage("/desk bind e2e");
 		await harness.runtime.taskLane.runOnce();
-		await waitFor("the frozen task to run", () => harness.mainTurnRequests().some((r) => r.matchedRoute === "step"), {
-			intervalMs: 25,
-		});
+		await waitFor(
+			"held report and archive after rebinding",
+			() =>
+				harness.deliveries.some((d) => d.text?.includes("DIGEST_READY") === true) &&
+				existsSync(join(harness.deskDir, "tasks", "archive", `${taskId}.md`)),
+		);
 		expect(JSON.stringify(harness.mainTurnRequests().map((r) => r.lastUserText))).not.toContain("STALE_RESULT");
+
+		// Idle `lab` desk can now be archived cleanly via `/desk archive lab`.
+		await harness.sendUserMessage("/desk archive lab");
+		const labRecord = JSON.parse(readFileSync(join(getDeskDir(harness.workspaceDir, "lab"), "desk.json"), "utf8"));
+		expect(typeof labRecord.archivedAt).toBe("string");
 	});
 });

@@ -61,6 +61,12 @@ function invalidRecordReason(value: unknown, dirName: string): string | undefine
 	if (value.cwd !== undefined && (typeof value.cwd !== "string" || !isAbsolute(value.cwd))) {
 		return "desk.json cwd must be an absolute path";
 	}
+	if (
+		value.archivedAt !== undefined &&
+		(typeof value.archivedAt !== "string" || !Number.isFinite(Date.parse(value.archivedAt)))
+	) {
+		return "desk.json archivedAt must be an ISO timestamp string";
+	}
 	const dirs = new Set<string>();
 	for (const [channelId, entry] of Object.entries(value.conversations)) {
 		if (!isPlainObject(entry) || typeof entry.dir !== "string" || !isConversationName(entry.dir)) {
@@ -70,6 +76,18 @@ function invalidRecordReason(value: unknown, dirName: string): string | undefine
 		dirs.add(entry.dir);
 	}
 	return undefined;
+}
+
+function parseDeskRecordText(name: string, deskDir: string, text: string): DeskSummary {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return { name, deskDir, availability: "invalid", reason: `${recordPath(deskDir)} is not valid JSON` };
+	}
+	const reason = invalidRecordReason(parsed, name);
+	if (reason) return { name, deskDir, availability: "invalid", reason };
+	return { name, deskDir, availability: "available", record: parsed as DeskRecord };
 }
 
 /** Read one desk's record, classifying it the way `/desk` and binding resolution need. */
@@ -90,15 +108,28 @@ export async function readDeskRecord(workspaceDir: string, name: string): Promis
 			reason: code === "ENOENT" ? `${recordPath(deskDir)} does not exist` : `cannot read ${recordPath(deskDir)}`,
 		};
 	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(text);
-	} catch {
-		return { name, deskDir, availability: "invalid", reason: `${recordPath(deskDir)} is not valid JSON` };
+	return parseDeskRecordText(name, deskDir, text);
+}
+
+/** Synchronous counterpart of {@link readDeskRecord} for mtime-triggered cache refreshes. */
+export function readDeskRecordSync(workspaceDir: string, name: string): DeskSummary {
+	if (!isDeskName(name)) {
+		return { name, deskDir: "", availability: "invalid", reason: `invalid desk name ${JSON.stringify(name)}` };
 	}
-	const reason = invalidRecordReason(parsed, name);
-	if (reason) return { name, deskDir, availability: "invalid", reason };
-	return { name, deskDir, availability: "available", record: parsed as DeskRecord };
+	const deskDir = getDeskDir(workspaceDir, name);
+	let text: string;
+	try {
+		text = readFileSync(recordPath(deskDir), "utf-8");
+	} catch (error) {
+		const code = errorCode(error);
+		return {
+			name,
+			deskDir,
+			availability: code === "ENOENT" ? "missing" : "invalid",
+			reason: code === "ENOENT" ? `${recordPath(deskDir)} does not exist` : `cannot read ${recordPath(deskDir)}`,
+		};
+	}
+	return parseDeskRecordText(name, deskDir, text);
 }
 
 /** Every directory under `desk-`, each classified. A directory with an illegal name is reported invalid. */
@@ -116,7 +147,7 @@ export async function listDesks(workspaceDir: string): Promise<DeskSummary[]> {
 	return summaries;
 }
 
-function validateCustomCwd(rawCwd: string): { ok: true; cwd: string } | { ok: false; reason: string } {
+export function validateCustomCwd(rawCwd: string): { ok: true; cwd: string } | { ok: false; reason: string } {
 	const trimmed = rawCwd.trim();
 	if (!trimmed || !isAbsolute(trimmed)) {
 		return { ok: false, reason: "目录路径必须是绝对路径（例如 `/srv/repo`）" };
@@ -196,6 +227,31 @@ export async function setDeskCwd(workspaceDir: string, desk: string, cwd: string
 				const updated: DeskRecord = effective ? { ...rest, cwd: effective } : rest;
 				await writeJson(recordPath(deskDir), updated);
 				return { kind: "ok", desk, cwd: effective ?? deskDir, isDefault: effective === undefined };
+			}),
+		{ timeoutMs: DESK_RECORD_LOCK_TIMEOUT_MS },
+	);
+}
+
+/** Set (`archivedAt` string) or clear (`null`) a desk's archive timestamp under `desk-json.lock`. */
+export async function setDeskArchived(
+	workspaceDir: string,
+	desk: string,
+	archivedAt: string | null,
+): Promise<DeskSummary> {
+	if (!isDeskName(desk)) {
+		return { name: desk, deskDir: "", availability: "invalid", reason: `invalid desk name ${JSON.stringify(desk)}` };
+	}
+	const deskDir = getDeskDir(workspaceDir, desk);
+	return withFileLock(
+		getDeskLockPath(deskDir, "desk-json.lock"),
+		() =>
+			writeQueue.run(recordPath(deskDir), async () => {
+				const summary = await readDeskRecord(workspaceDir, desk);
+				if (!summary.record) return summary;
+				const { archivedAt: _prev, ...rest } = summary.record;
+				const updated: DeskRecord = archivedAt ? { ...rest, archivedAt } : rest;
+				await writeJson(recordPath(deskDir), updated);
+				return { name: desk, deskDir, availability: "available", record: updated };
 			}),
 		{ timeoutMs: DESK_RECORD_LOCK_TIMEOUT_MS },
 	);

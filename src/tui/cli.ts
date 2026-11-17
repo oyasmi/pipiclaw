@@ -17,7 +17,7 @@ import {
 	readCliVersion,
 } from "../app/home.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
-import { DEFAULT_DESK, getDeskDir, normalizeDeskName } from "../desk/paths.js";
+import { getDeskDir } from "../desk/paths.js";
 import { resolveDeskCwdSync } from "../desk/registry.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -32,6 +32,7 @@ export type ParsedTui =
 			kind: "run";
 			desk?: string;
 			cwd?: string;
+			here: boolean;
 			create: boolean;
 			fresh: boolean;
 			print: boolean;
@@ -47,6 +48,7 @@ export type ParsedTui =
 export function parseTuiArgs(args: string[]): ParsedTui {
 	let desk: string | undefined;
 	let cwd: string | undefined;
+	let here = false;
 	let create = false;
 	let fresh = false;
 	let print = false;
@@ -69,6 +71,8 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 			index += 1;
 		} else if (arg.startsWith("--cwd=")) {
 			cwd = arg.slice("--cwd=".length);
+		} else if (arg === "--here") {
+			here = true;
 		} else if (arg === "--create") {
 			create = true;
 		} else if (arg === "--new") {
@@ -92,10 +96,18 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 		}
 	}
 
+	if (here && (desk !== undefined || cwd !== undefined)) {
+		return {
+			kind: "error",
+			message: "--here 会自动打开或创建当前目录对应的工位，不能与 --desk 或 --cwd 同时指定。",
+		};
+	}
+
 	return {
 		kind: "run",
 		desk,
 		...(cwd !== undefined ? { cwd } : {}),
+		here,
 		create,
 		fresh,
 		print,
@@ -115,6 +127,7 @@ function printTuiHelp(io: BootstrapIO): void {
 	io.log("默认打开 default 工位并续接该工位上次的终端会话。");
 	io.log("");
 	io.log("选项：");
+	io.log("  --here                    打开或自动创建当前目录对应的专属工位（自动绑定工作目录）");
 	io.log("  --desk <名称>             打开指定工位（默认：default）");
 	io.log("  --cwd <目录>              设置该工位的工作目录（如 `--cwd .` 绑定当前仓库）");
 	io.log("  --create                  先新建该工位（等价于 `/desk new`）");
@@ -239,10 +252,20 @@ async function runClient(
 ): Promise<void> {
 	const client = createSocketClient(paths);
 	const resolvedCwdArg = parsed.cwd ? resolve(parsed.cwd) : undefined;
-	const { id, replies } = await openConversation(
+	const {
+		id,
+		desk: deskName,
+		replies,
+	} = await openConversation(
 		client,
 		paths,
-		{ desk: parsed.desk, cwd: resolvedCwdArg, create: parsed.create, fresh: parsed.fresh },
+		{
+			desk: parsed.desk,
+			cwd: resolvedCwdArg,
+			here: parsed.here,
+			create: parsed.create,
+			fresh: parsed.fresh,
+		},
 		io,
 	);
 
@@ -254,7 +277,6 @@ async function runClient(
 		return;
 	}
 
-	const deskName = normalizeDeskName(parsed.desk ?? DEFAULT_DESK);
 	const deskCwd = resolveDeskCwdSync(paths.workspaceDir, deskName);
 	const defaultDeskDir = getDeskDir(paths.workspaceDir, deskName);
 	const notices = [...replies];
@@ -271,13 +293,14 @@ async function runClient(
 	const launchCwd = process.cwd();
 	if (
 		!parsed.cwd &&
+		!parsed.here &&
 		deskCwd === defaultDeskDir &&
 		launchCwd !== deskCwd &&
 		launchCwd !== homedir() &&
 		!launchCwd.startsWith(paths.appHomeDir)
 	) {
 		notices.push(
-			`💡 当前工位工作目录为默认目录；如需操作当前终端所在目录，可发送 \`/desk cwd ${launchCwd}\`（或下次启动加 \`--cwd .\`）。`,
+			`💡 当前工位工作目录为默认目录；如需操作当前终端所在目录，可发送 \`/desk cwd ${launchCwd}\`（或下次用 \`pipiclaw tui --here\` 打开当前目录专属工位）。`,
 		);
 	}
 

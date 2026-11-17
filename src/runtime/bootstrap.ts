@@ -28,10 +28,8 @@ import { ChannelStore } from "../channel/store.js";
 import type { OutboundMedia, PushMessage, Transport } from "../channel/transport.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
-import { buildDeskList } from "../desk/commands.js";
 import { initializeDefaultDesk } from "../desk/default.js";
 import { getDeskDir } from "../desk/paths.js";
-import { listDesks } from "../desk/registry.js";
 import { StartupRefusal } from "../desk/startup-error.js";
 import type { DeskConversation } from "../desk/types.js";
 import { createEventsWatcher } from "../events/watcher.js";
@@ -49,6 +47,7 @@ import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
+import { findConflictingWorkspaceLease } from "../subagents/workspace-lease.js";
 import type { TaskControl } from "../tasks/control.js";
 import { taskSessionPath } from "../tasks/session-path.js";
 import { getUsageLedger } from "../usage/ledger.js";
@@ -293,8 +292,20 @@ async function buildRuntimeContext(
 		},
 		send: (channelId, text) => pushTo(channelId, { text }),
 		isChannelBusy: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
+		isDeskBusy: (desk, currentCwd) => {
+			const runningTask = taskLane?.runningTaskInDesk(desk);
+			if (runningTask) return `后台任务 \`${runningTask}\` 正在执行当前步骤`;
+			const lease = findConflictingWorkspaceLease(currentCwd, {
+				mode: "write",
+				deskDir: getDeskDir(workspaceDir, desk),
+			});
+			if (lease) return `委派 \`${lease.runId}\` 正在占用当前工作目录`;
+			return undefined;
+		},
+		describeChannel: (channelId) => labelOf(channelId),
 		releaseRunner: (channelId) => releaseCachedRunner(channelRunners, channelId),
 		onBindingChanged: () => channelIndex.noteBindingChanged(),
+		onActivated: () => taskLane?.notify(),
 	});
 	await deskRuntime.load();
 	const isBoundTo = (channelId: string, desk: string) => deskRuntime.isBoundTo(channelId, desk);
@@ -317,6 +328,7 @@ async function buildRuntimeContext(
 	const describeChannel = (desk: string, channelId: string) => ({
 		label: labelOf(channelId),
 		boundHere: deskRuntime.isBoundTo(channelId, desk),
+		reachable: transports.isReachable(channelId),
 	});
 
 	const archiveIncomingMessage = async (
@@ -435,17 +447,13 @@ async function buildRuntimeContext(
 		ensureBinding: (channelId, desk) => deskRuntime.ensureDefaultBinding(channelId, desk),
 		unbind: (channelId) => deskRuntime.unbind(channelId),
 		deskPort: (channelId) => ({
-			list: async () =>
-				buildDeskList(
-					await listDesks(workspaceDir),
-					deskRuntime.bindingTable(),
-					deskRuntime.boundDesk(channelId),
-					labelOf,
-				),
+			list: () => deskRuntime.listDeskItems(channelId, labelOf),
 			channelIndexPath: join(workspaceDir, CHANNELS_INDEX_FILENAME),
 			create: (name, cwd) => deskRuntime.create(name, cwd),
 			bind: (name) => deskRuntime.bind(channelId, name),
 			cwd: (input) => deskRuntime.cwd(channelId, input),
+			archive: (name) => deskRuntime.archive(channelId, name),
+			unarchive: (name) => deskRuntime.unarchive(name),
 		}),
 		describeChannel,
 		cliVersion,
@@ -527,24 +535,21 @@ async function buildRuntimeContext(
 	const taskLane = new TaskLane({
 		getActiveDesks: () => deskRuntime.activeDesks(),
 		getDeskDir: (desk) => getDeskDir(workspaceDir, desk),
-		getDeskCwd: (desk, channelId) => {
-			const resolution = deskRuntime.resolve(channelId);
-			return resolution.kind === "bound" && resolution.conversation.desk === desk
-				? resolution.conversation.cwd
-				: undefined;
-		},
+		getDeskCwd: (desk) => deskRuntime.deskCwd(desk),
 		isBoundTo,
+		onDeskIdle: (desk) => void deskRuntime.reconcileActivity(desk),
 		isReachable: (channelId) => transports.isReachable(channelId),
-		// One runner per executing task, built from the task's own report channel (spec 064, D13).
+		// One runner per executing task, built from its desk's conversation record even when the
+		// report channel is currently bound to another desk (Direction 1.2).
 		createTaskRunner: (target) => {
-			const resolution = deskRuntime.resolve(target.channelId);
-			if (resolution.kind !== "bound" || resolution.conversation.desk !== target.desk) {
+			const conversation = deskRuntime.taskConversation(target.desk, target.channelId);
+			if (!conversation) {
 				throw new Error(
-					`Task ${target.taskId}: report channel ${target.channelId} is not bound to desk ${target.desk}`,
+					`Task ${target.taskId}: desk ${target.desk} is unavailable for channel ${target.channelId}`,
 				);
 			}
-			return createRunner(resolution.conversation, {
-				...runnerPaths(resolution.conversation, target.channelId),
+			return createRunner(conversation, {
+				...runnerPaths(conversation, target.channelId),
 				profile: {
 					kind: "task",
 					sessionPath: taskSessionPath(target.deskDir, target.taskId),

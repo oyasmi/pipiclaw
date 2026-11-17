@@ -26,9 +26,11 @@ export interface DeskRecord {
 	/**
 	 * Optional absolute working directory for the agent (shell cwd, relative-path base, default
 	 * delegation directory). Absent means the desk directory itself. Memory, tasks, events and
-	 * every other piece of desk state stay in the desk directory regardless. Edited by hand (D9).
+	 * every other piece of desk state stay in the desk directory regardless.
 	 */
 	cwd?: string;
+	/** Set when the desk is archived (`/desk archive`): dormant until rebound or unarchived. */
+	archivedAt?: string;
 }
 
 export interface DeskBinding {
@@ -75,5 +77,27 @@ export type CreateDeskOutcome =
 
 export type DeskCwdOutcome =
 	| { kind: "ok"; desk: string; cwd: string; isDefault: boolean }
+	| { kind: "busy"; desk: string; reason: string }
 	| { kind: "invalid_cwd"; cwd: string; reason: string }
 	| { kind: "unavailable"; desk: string };
+
+export type ArchiveDeskOutcome =
+	| { kind: "archived"; desk: string; unboundTerminals: number; stoppedEvents: number }
+	| { kind: "already_archived"; desk: string }
+	| { kind: "default" }
+	| { kind: "current_channel"; desk: string }
+	| { kind: "bound_channels"; desk: string; channels: string[] }
+	| { kind: "open_tasks"; desk: string; count: number; sampleId: string }
+	| { kind: "busy"; desk: string; reason: string }
+	| { kind: "unknown"; desk: string }
+	| { kind: "unavailable"; desk: string }
+	| { kind: "invalid"; desk: string }
+	| { kind: "forbidden"; desk: string };
+
+export type UnarchiveDeskOutcome =
+	| { kind: "unarchived"; desk: string; activated: boolean }
+	| { kind: "not_archived"; desk: string }
+	| { kind: "unknown"; desk: string }
+	| { kind: "unavailable"; desk: string }
+	| { kind: "invalid"; desk: string }
+	| { kind: "forbidden"; desk: string };

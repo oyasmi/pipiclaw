@@ -7,12 +7,14 @@ import { describe, expect, it } from "vitest";
 import { initializeBindings, loadBindings, writeBindings } from "../src/desk/bindings.js";
 import { buildDeskList } from "../src/desk/commands.js";
 import { initializeDefaultDesk } from "../src/desk/default.js";
-import { getBindingsPath, getDeskDir, getDeskLockPath, isDeskName } from "../src/desk/paths.js";
+import { deriveDeskNameFromPath, getBindingsPath, getDeskDir, getDeskLockPath, isDeskName } from "../src/desk/paths.js";
 import {
 	allocateConversation,
 	createDeskRecord,
 	listDesks,
+	readDeskRecordSync,
 	resolveDeskCwdSync,
+	setDeskArchived,
 	setDeskCwd,
 } from "../src/desk/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -41,6 +43,9 @@ describe("desk registry", () => {
 			["新闻", false],
 		];
 		for (const [name, valid] of cases) expect(isDeskName(name), name).toBe(valid);
+		expect(deriveDeskNameFromPath("/srv/My_Project.v2")).toBe("my-project-v2");
+		expect(deriveDeskNameFromPath("/srv/default")).toBe("dir-default");
+		expect(isDeskName(deriveDeskNameFromPath("/srv/中文仓库"))).toBe(true);
 	});
 
 	it("refuses to create a desk that already exists", async () => {
@@ -123,6 +128,10 @@ describe("desk registry", () => {
 		expect((await setDeskCwd(workspace, "desk-news", null)).kind).toBe("ok");
 		expect(resolveDeskCwdSync(workspace, "desk-news")).toBe(dm.deskDir);
 		expect((await setDeskCwd(workspace, "desk-news", join(workspace, "missing-dir"))).kind).toBe("invalid_cwd");
+		await setDeskArchived(workspace, "desk-news", NOW.toISOString());
+		expect(readDeskRecordSync(workspace, "desk-news").record?.archivedAt).toBe(NOW.toISOString());
+		await setDeskArchived(workspace, "desk-news", null);
+		expect(readDeskRecordSync(workspace, "desk-news").record?.archivedAt).toBeUndefined();
 		// Failure caught: a relative cwd would resolve against the daemon's own directory.
 		const recordPath = join(dm.deskDir, "desk.json");
 		const record = JSON.parse(readFileSync(recordPath, "utf8"));

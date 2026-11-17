@@ -2,7 +2,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BootstrapExitError } from "../src/app/home.js";
-import { runTui } from "../src/tui/cli.js";
+import { initializeBindings } from "../src/desk/bindings.js";
+import { createDeskRecord } from "../src/desk/registry.js";
+import { parseTuiArgs, runTui } from "../src/tui/cli.js";
+import { openConversation } from "../src/tui/client.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 import { bootstrapPathsIn } from "./support/fake-runner.js";
 
@@ -27,6 +30,62 @@ describe("pipiclaw tui startup", () => {
 		).rejects.toBeInstanceOf(BootstrapExitError);
 		expect(errors.join("\n")).toMatch(/webapi/);
 		expect(errors.join("\n")).toContain("PID 4242");
+
+		// `--here` parsing, conflict rejection, and deterministic repository desk resolution.
+		expect(parseTuiArgs(["--here"])).toMatchObject({ kind: "run", here: true });
+		expect(parseTuiArgs(["--here", "--desk", "x"]).kind).toBe("error");
+		expect(parseTuiArgs(["--here", "--cwd", "."]).kind).toBe("error");
+
+		const herePaths = bootstrapPathsIn(tempDir());
+		initializeBindings(herePaths.workspaceDir);
+		const repoA = join(tempDir(), "My-Service");
+		const repoCollide = join(tempDir(), "other", "My-Service");
+		mkdirSync(repoA, { recursive: true });
+		mkdirSync(repoCollide, { recursive: true });
+		const sentCommands: string[] = [];
+		const fakeClient = {
+			conversations: {
+				create: async () => ({ id: "conv_here_1" }),
+				retrieve: async () => ({ id: "conv_here_1" }),
+			},
+			responses: {
+				create: async ({ input }: { input: string }) => {
+					sentCommands.push(input);
+					if (input.startsWith("/desk new ")) {
+						const [, , name, cwd] = input.split(" ");
+						createDeskRecord(herePaths.workspaceDir, name!, new Date(), cwd);
+					}
+					if (input.startsWith("/desk bind ")) {
+						const name = input.slice("/desk bind ".length).trim();
+						writeFileSync(
+							join(herePaths.workspaceDir, "desk-bindings.json"),
+							JSON.stringify({
+								version: 1,
+								bindings: { "webapi:conv_here_1": { desk: name, boundAt: new Date().toISOString() } },
+							}),
+						);
+					}
+					return { status: "completed", output_text: "ok" };
+				},
+			},
+		} as never;
+		const opened = await openConversation(
+			fakeClient,
+			herePaths,
+			{ here: true, hereDir: repoA, create: false, fresh: false },
+			{ log: () => undefined, error: () => undefined },
+		);
+		expect(opened.desk).toBe("my-service");
+		expect(sentCommands).toEqual([`/desk new my-service ${repoA}`, "/desk bind my-service"]);
+		// A second directory with the same basename (`My-Service`) refuses to silently clobber `my-service`.
+		await expect(
+			openConversation(
+				fakeClient,
+				herePaths,
+				{ here: true, hereDir: repoCollide, create: false, fresh: false },
+				{ log: () => undefined, error: () => undefined },
+			),
+		).rejects.toBeInstanceOf(BootstrapExitError);
 	});
 
 	it("stops the runtime it started even when the client fails, and offers interactive login when no model credentials exist", async () => {

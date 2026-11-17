@@ -47,6 +47,7 @@ interface Harness {
 	runners: Record<string, ReturnType<typeof createFakeRunner>>;
 	disposed: string[];
 	bound: { value: (channelId: string, desk: string) => boolean };
+	reachable: { value: (channelId: string) => boolean };
 	pending: Array<{ taskId: string; runId: string; startedAt?: number }>;
 	cancelledRuns: string[];
 	enabled: { value: boolean };
@@ -71,6 +72,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 	const runners: Harness["runners"] = {};
 	const disposed: string[] = [];
 	const bound = { value: (_channelId: string, _desk: string) => true };
+	const reachable = { value: (_channelId: string) => true };
 	const enabled = { value: true };
 	const deliveryOk = { value: true };
 	const deskCwd: { value?: string } = {};
@@ -90,7 +92,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 		getDeskDir: (desk) => deskDirs.get(desk),
 		getDeskCwd: resolveCwd,
 		isBoundTo: (channelId, desk) => bound.value(channelId, desk),
-		isReachable: () => true,
+		isReachable: (channelId) => reachable.value(channelId),
 		createTaskRunner: (target) => {
 			const queued: string[] = [];
 			const persist = (text: string) => {
@@ -163,7 +165,8 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 			}) as never,
 		getJobs: () => ({ list: async () => [], cancel: async () => [] }) as never,
 		store: {} as never,
-		deliver: async (_desk, channelId, text) => {
+		deliver: async (desk, channelId, text) => {
+			if (!bound.value(channelId, desk) || !reachable.value(channelId)) return false;
 			deliveries.push({ channelId, text });
 			return deliveryOk.value;
 		},
@@ -190,6 +193,7 @@ function makeHarness(overrides: { stepTimeLimitMs?: number; stopGraceMs?: number
 		disposed,
 		activeTasks,
 		bound,
+		reachable,
 		pending,
 		cancelledRuns,
 		enabled,
@@ -732,31 +736,46 @@ describe("control from the chat (D24)", () => {
 	});
 });
 
-describe("a task whose report channel cannot be reached (INV-7)", () => {
-	it("is frozen: no step, no slot, no runner — and carries on from where it was when the channel returns", async () => {
-		await harness.task("frozen");
-		harness.script("frozen", () => {
-			harness.bound.value = () => false;
-			return { text: "finished current step", tools: ["read"] };
+describe("a task whose report channel is unbound vs unreachable (Direction 1.2 & INV-5/INV-8)", () => {
+	it("continues stepping in the background while unbound (holding deliveries), and freezes only when unreachable", async () => {
+		// 1. Rebound channel (`bound = false`, `reachable = true`): steps keep running in background,
+		// reports stay parked in `.delivery/` (INV-5), and flush in FIFO order once bound back.
+		harness.bound.value = () => false;
+		await harness.task("bg-work");
+		harness.script("bg-work", async ({ target }) => {
+			const res = await target.session.report("progress while unbound");
+			expect(res.delivered).toBe(false);
+			target.session.intent().reports++;
+			target.session.intent().close = { outcome: "complete", note: "done", reportId: res.id };
+			return { text: "finished in background", tools: ["task_report", "task_close"] };
 		});
 		await harness.settle();
-		expect(harness.briefs.frozen).toHaveLength(1);
-		await harness.task("free");
-		harness.bound.value = (channelId) => channelId !== "dingtalk:dm:gone";
+		expect(harness.briefs["bg-work"]).toHaveLength(1);
+		expect(harness.deliveries).toEqual([]);
+		expect((await readStoredTask(harness.deskDir, "bg-work", true))?.fields.outcome).toBeUndefined();
+
+		harness.bound.value = () => true;
+		await harness.settle();
+		expect(harness.deliveries).toHaveLength(2);
+		expect(harness.deliveries[0]?.text).toContain("progress while unbound");
+		expect(harness.deliveries[1]?.text).toContain("已完成");
+		expect((await readStoredTask(harness.deskDir, "bg-work", true))?.fields.outcome).toBe("completed");
+
+		// 2. Unreachable transport (`reachable = false`): execution is frozen until the transport returns.
+		harness.reachable.value = (channelId) => channelId !== "dingtalk:dm:gone";
 		await harness.task("orphan", { channel: "dingtalk:dm:gone", state: "running" });
 		await appendTaskLog(harness.deskDir, "orphan", { kind: "step", seq: 1, reason: "start", brief: "full" });
 		await harness.settle();
 		expect(harness.briefs.orphan).toBeUndefined();
 		expect((await state("orphan"))?.state).toBe("running");
 		expect((await readTaskLog(harness.deskDir, "orphan")).some((record) => record.kind === "step_end")).toBe(false);
-		// Inputs still land in the log while it is frozen.
 		const snapshot = await harness.lane.snapshot("main", "orphan");
 		expect(snapshot[0]).toMatchObject({ frozen: true });
 		expect(await harness.lane.message("main", "orphan", { from: "A", channel: CHANNEL, text: "hi" })).toEqual({
 			kind: "held_frozen",
 		});
 
-		harness.bound.value = () => true;
+		harness.reachable.value = () => true;
 		await harness.settle();
 		expect(harness.briefs.orphan?.[0]).toContain("hi");
 	});

@@ -20,11 +20,14 @@ function runtimeFor(workspaceDir: string) {
 	const recover = vi.fn(async () => {});
 	const send = vi.fn(async () => true);
 	const busy = new Set<string>();
+	let deskBusyReason: string | undefined;
 	const releaseRunner = vi.fn(async (_channelId: string) => {});
 	const onBindingChanged = vi.fn();
+	const onActivated = vi.fn();
 	const runtime = new DeskRuntime({
 		workspaceDir,
-		conversationKindOf: (channelId) => (channelId.startsWith("dingtalk:group:") ? "group" : "dm"),
+		conversationKindOf: (channelId) =>
+			channelId.startsWith("webapi:") ? "webapi" : channelId.startsWith("dingtalk:group:") ? "group" : "dm",
 		recover,
 		createWatcher: ({ desk }) => {
 			const watcher: (typeof watchers)[number] = {
@@ -41,10 +44,24 @@ function runtimeFor(workspaceDir: string) {
 		},
 		send,
 		isChannelBusy: (channelId) => busy.has(channelId),
+		isDeskBusy: () => deskBusyReason,
 		releaseRunner,
 		onBindingChanged,
+		onActivated,
 	});
-	return { runtime, watchers, recover, send, busy, releaseRunner, onBindingChanged };
+	return {
+		runtime,
+		watchers,
+		recover,
+		send,
+		busy,
+		setDeskBusy: (reason: string | undefined) => {
+			deskBusyReason = reason;
+		},
+		releaseRunner,
+		onBindingChanged,
+		onActivated,
+	};
 }
 
 describe("DeskRuntime (spec 058, D6/D7)", () => {
@@ -68,6 +85,19 @@ describe("DeskRuntime (spec 058, D6/D7)", () => {
 		await Promise.all([runtime.deactivate("news"), runtime.activate("news"), runtime.deactivate("news")]);
 		expect(runtime.activeDesks()).toEqual([]);
 		expect(watchers.every((watcher) => watcher.stop.mock.calls.length === 1)).toBe(true);
+
+		// Hand-editing `desk.json` `cwd` on disk refreshes `resolve()` / `deskCwd()` on the next lookup,
+		// and `/desk cwd` refuses to switch directories mid-flight while allowing idempotent same-cwd calls.
+		const customRepo = join(workspaceDir, "repo-a");
+		const altRepo = join(workspaceDir, "repo-b");
+		mkdirSync(customRepo, { recursive: true });
+		mkdirSync(altRepo, { recursive: true });
+		const newsDir = getDeskDir(workspaceDir, "news");
+		const rawRecord = JSON.parse(readFileSync(join(newsDir, "desk.json"), "utf8"));
+		writeFileSync(join(newsDir, "desk.json"), `${JSON.stringify({ ...rawRecord, cwd: customRepo }, null, "\t")}\n`);
+		expect(runtime.deskCwd("news")).toBe(customRepo);
+		const resolved = runtime.resolve("dingtalk:dm:1");
+		expect(resolved.kind === "bound" && resolved.conversation.cwd).toBe(customRepo);
 	});
 
 	it("sends a background notice only to a channel still bound to the notice's desk", async () => {
@@ -108,11 +138,20 @@ describe("DeskRuntime.bind (spec 058, D5)", () => {
 			join(newsDir, "events", "digest.json"),
 			JSON.stringify({ type: "periodic", channelId: "dingtalk:dm:1", schedule: "0 9 * * *", text: "digest" }),
 		);
-		const { runtime, watchers, busy, releaseRunner, onBindingChanged } = runtimeFor(workspaceDir);
+		const { runtime, watchers, busy, setDeskBusy, releaseRunner, onBindingChanged, onActivated } =
+			runtimeFor(workspaceDir);
 		await runtime.load();
 		await runtime.activateBound();
 		runtime.startServices();
 		const bindingsBefore = readFileSync(getBindingsPath(workspaceDir), "utf8");
+
+		// `/desk cwd` refuses switching while a task step / lease is running, unless target matches current cwd.
+		const nextRepo = join(workspaceDir, "next-repo");
+		mkdirSync(nextRepo, { recursive: true });
+		setDeskBusy("后台任务 `weekly` 正在执行当前步骤");
+		await expect(runtime.cwd("dingtalk:dm:1", { cwd: newsDir })).resolves.toMatchObject({ kind: "ok" });
+		await expect(runtime.cwd("dingtalk:dm:1", { cwd: nextRepo })).resolves.toMatchObject({ kind: "busy" });
+		setDeskBusy(undefined);
 
 		busy.add("dingtalk:dm:1");
 		await expect(runtime.bind("dingtalk:dm:1", "lab")).resolves.toMatchObject({ kind: "busy" });
@@ -128,21 +167,61 @@ describe("DeskRuntime.bind (spec 058, D5)", () => {
 			kind: "bound",
 			desk: "lab",
 			previousDesk: "news",
-			suspendedTasks: 1,
+			backgroundTasks: 1,
 			suspendedEvents: 1,
 		});
 		expect(runtime.isBoundTo("dingtalk:dm:1", "lab")).toBe(true);
 		expect(releaseRunner).toHaveBeenCalledWith("dingtalk:dm:1");
 		expect(onBindingChanged).toHaveBeenCalledWith("dingtalk:dm:1");
+		expect(onActivated).toHaveBeenCalledWith("lab");
 		expect(runtime.activeDesks().map((target) => target.desk)).toEqual(["lab", "news"]);
 		expect(watchers.find((watcher) => watcher.desk === "lab")?.bindingsAtStart?.["dingtalk:dm:1"]).toBe("lab");
 
-		await expect(runtime.bind("dingtalk:dm:2", "lab")).resolves.toMatchObject({ previousDeskDormant: true });
+		// Even when the last channel leaves `news`, `news` stays active while `weekly` is open,
+		// and goes dormant once `weekly` finishes (`reconcileActivity`).
+		await expect(runtime.bind("dingtalk:dm:2", "lab")).resolves.toEqual({
+			kind: "bound",
+			desk: "lab",
+			previousDesk: "news",
+		});
+		expect(runtime.activeDesks().map((target) => target.desk)).toEqual(["lab", "news"]);
+
+		// `/desk archive` refuses while open tasks or DingTalk bindings exist, then unbinds leaked TUI
+		// conversations, stops events, and `/desk bind` (or `unarchive`) restores it.
+		await expect(runtime.archive("dingtalk:dm:1", "default")).resolves.toEqual({ kind: "default" });
+		await expect(runtime.archive("dingtalk:dm:1", "lab")).resolves.toEqual({ kind: "current_channel", desk: "lab" });
+		await expect(runtime.archive("dingtalk:dm:1", "news")).resolves.toMatchObject({
+			kind: "open_tasks",
+			desk: "news",
+			sampleId: "weekly",
+		});
+		rmSync(join(newsDir, "tasks", "weekly.md"));
+		await runtime.reconcileActivity("news");
 		expect(runtime.activeDesks().map((target) => target.desk)).toEqual(["lab"]);
-		// What is on disk is what the next process starts from.
+
+		await runtime.bind("webapi:conv_leaked", "news");
+		expect(runtime.isBoundTo("webapi:conv_leaked", "news")).toBe(true);
+		await expect(runtime.archive("dingtalk:dm:1", "news")).resolves.toEqual({
+			kind: "archived",
+			desk: "news",
+			unboundTerminals: 1,
+			stoppedEvents: 1,
+		});
+		expect(runtime.boundDesk("webapi:conv_leaked")).toBeUndefined();
+		expect(runtime.activeDesks().map((target) => target.desk)).toEqual(["lab"]);
+
+		// What is on disk is what the next process starts from (archived `news` stays dormant on boot).
 		const restarted = runtimeFor(workspaceDir).runtime;
 		await restarted.load();
+		await restarted.activateBound();
+		expect(restarted.activeDesks().map((target) => target.desk)).toEqual(["lab"]);
 		expect(restarted.isBoundTo("dingtalk:dm:1", "lab") && restarted.isBoundTo("dingtalk:dm:2", "lab")).toBe(true);
+
+		await expect(restarted.bind("dingtalk:dm:1", "news")).resolves.toMatchObject({
+			kind: "bound",
+			desk: "news",
+			unarchived: true,
+		});
 	});
 
 	it("leaves the binding, the runner and the target's dormancy alone when the bindings write fails", async () => {

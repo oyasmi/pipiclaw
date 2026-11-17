@@ -14,7 +14,7 @@ order: 10
 
 多数部署只有默认工位 `default`：获准的私聊、群和终端默认都在这里，各自保留独立对话。工位里的记忆、任务、事件、作业和委派由这些频道共同使用、共同管理，不按频道隔离；你知道的事可能来自别的频道和别的人。别的频道发起的工作完成时唤醒那个频道，不会唤醒你。
 
-正常对话不提工位，也不要求用户先创建或绑定。用户想把某个项目或某些群的记忆、文件分开时，告诉他们用户命令：`/desk` 查看，`/desk new <名字>` 创建，`/desk bind <名字>` 把本频道切过去；这些不是你的工具，不能用写文件模拟。切换只改变本频道此后的归属：记忆和文件不搬，旧工位投递到本频道的任务和事件暂停，切回后恢复，原会话也接着用。改 cwd、换仓库或指定委派目录都不是切换工位。
+正常对话不提工位，也不要求用户先创建或绑定。用户想把某个项目或某些群的记忆、文件分开时，告诉他们用户命令：`/desk` 查看，`/desk new <名字> [目录]` 创建，`/desk cwd <目录>` 设工作目录，`/desk bind <名字>` 切频道，`/desk archive <名字>` 归档闲置工位；这些不是你的工具，不能用写文件模拟。切换只改变本频道此后的归属：记忆和文件不搬，原工位后台任务继续运行但汇报暂存（文本事件暂停），切回后自动送达并沿用原会话。改 cwd、换仓库或指定委派目录都不是切换工位。
 
 其他工位的目录在 workspace 下，但不会进入你的上下文。用户明确要求时可只读查阅；不要用文件工具改写别的工位的记忆、任务或事件，需要时请用户到绑定该工位的频道里，或用 `pipiclaw tui --desk <名字>` 操作。
 
@@ -53,7 +53,7 @@ daemon 是长期宿主，负责任务车道、job/委派的结果回流和外部
 |---|---|---|
 | App home（默认 `~/.pipiclaw/`，可用 `PIPICLAW_HOME` 覆盖） | `channel.json` / `settings.json` / `tools.json` / `security.json`；`auth.json` / `models.json`；`state/` | 运维配置与运行状态；凭据配置按敏感信息处理 |
 | workspace `SOUL.md` / `AGENTS.md` | 共同身份与工作原则 | 注入 system prompt，工位同名文件不替代它们 |
-| workspace `MEMORY.md` | 所有工位共享的背景 | 用户维护，首轮按预算注入；`memory_search` 可查 |
+| workspace `MEMORY.md` | 所有工位共享的背景 | 用户维护（或应用户明确要求用 `read`/`edit` 维护），首轮按预算注入；`memory_search` 可查 |
 | workspace `desk-bindings.json` | 频道 → 工位，唯一绑定记录 | 运行时管理；不直接改写模拟创建或切换 |
 | workspace `skills/` 与服务器用户 `~/.agents/skills/` | 可复用程序性知识，两来源供所有工位使用，有效 workspace 同名版本优先 | `skill` 列出/加载；默认在 workspace 创建，维护规则见 `memory-and-learning.md` |
 | workspace `sub-agents/` | 委派角色 | 目录在 system prompt；由部署者修改，模型不能 write/edit 角色文件 |

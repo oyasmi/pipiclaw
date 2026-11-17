@@ -32,6 +32,8 @@ const EXPECTED_EXAMPLES: Record<string, unknown> = {
 	"/desk new research": { action: "new", name: "research" },
 	"/desk bind research": { action: "bind", name: "research" },
 	"/desk cwd /srv/repo": { action: "cwd", cwd: "/srv/repo" },
+	"/desk archive research": { action: "archive", name: "research" },
+	"/desk unarchive research": { action: "unarchive", name: "research" },
 	"/events list": { action: "list" },
 	"/events show weekly-review": { action: "show", name: "weekly-review" },
 	"/events delete weekly-review": { action: "delete", name: "weekly-review" },

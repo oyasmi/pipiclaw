@@ -20,7 +20,13 @@ import { readTaskLog, type TaskStepResult } from "../tasks/loop-log.js";
 import { reportReceipt } from "../tasks/receipts.js";
 import type { StepDerivation } from "../tasks/state.js";
 import { beginStep, type EndedStep, endStep, pauseTask, readStoredTask } from "../tasks/store.js";
-import type { LaneContext, LiveTask, StepAbort, TaskStepEvent } from "./task-lane-types.js";
+import {
+	canDeliverToChannel,
+	type LaneContext,
+	type LiveTask,
+	type StepAbort,
+	type TaskStepEvent,
+} from "./task-lane-types.js";
 import { listPendingWork } from "./task-pending.js";
 
 /** A task step speaks to nobody: only `task_report`, `task_ask` and the lane's receipts reach a channel (INV-1). */
@@ -57,7 +63,7 @@ function sessionContextOf(ctx: LaneContext, live: LiveTask): TaskSessionContext 
 			await drainTaskDeliveries(
 				live.deskDir,
 				(channel, text) => ctx.options.deliver(live.desk, channel, text),
-				(channel) => ctx.options.isBoundTo(channel, live.desk) && ctx.options.isReachable(channel),
+				(channel) => canDeliverToChannel(ctx, live.desk, channel),
 				ctx.now(),
 			);
 			ctx.notify();
@@ -177,11 +183,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	const begun = await beginStep(live.deskDir, live.taskId, {
 		brief: full ? "full" : "delta",
 		allowed: (fields) =>
-			!ctx.isStopped() &&
-			options.isEnabled?.() !== false &&
-			!!fields.channel &&
-			options.isBoundTo(fields.channel, live.desk) &&
-			options.isReachable(fields.channel),
+			!ctx.isStopped() && options.isEnabled?.() !== false && !!fields.channel && options.isReachable(fields.channel),
 	});
 	if (!begun) return { kind: "skipped" };
 

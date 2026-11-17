@@ -32,8 +32,10 @@ import { archivedTaskPath, readStoredTask, taskPath } from "./store.js";
 /** What `/tasks` needs to say about a delivery channel (structurally `channel/channel-id.ts`'s `ChannelDescription`). */
 interface TaskChannelDescription {
 	label: string;
-	/** Still bound to this desk; false means the task is frozen (spec 058, D8). */
+	/** Still bound to this desk; false means outbound deliveries are held until rebound or adopted. */
 	boundHere: boolean;
+	/** Whether the channel's transport is active in this process; false freezes execution (spec 061, INV-8). */
+	reachable?: boolean;
 }
 
 export interface HandleTasksCommandOptions {
@@ -136,8 +138,10 @@ function usageSummary(entry: TaskLedgerEntry): string | undefined {
 function deliveryNote(channel: string | undefined, options: HandleTasksCommandOptions): string | undefined {
 	if (!channel) return "已冻结：未指定汇报频道";
 	const described = options.describeChannel(channel);
+	if (described.reachable === false)
+		return `已冻结：汇报频道当前不可达（${described.label}；可用 \`/tasks adopt\` 接管到当前频道）`;
 	if (!described.boundHere)
-		return `已冻结：汇报频道未绑定到本工位（${described.label}；可用 \`/tasks adopt\` 接管到当前频道）`;
+		return `汇报暂存：原汇报频道未绑定到本工位（${described.label}；切回后自动送达，或用 \`/tasks adopt\` 接管到当前频道）`;
 	return channel === options.currentChannelId ? undefined : `汇报到${described.label}`;
 }
 
@@ -247,9 +251,10 @@ async function showTask(options: HandleTasksCommandOptions, idInput: string): Pr
 	const channel = document.fields.channel;
 	if (!document.fields.outcome) {
 		const note = deliveryNote(channel, options);
+		const noteSuffix = note?.startsWith("已冻结") || note?.startsWith("汇报暂存") ? `（${note}）` : "";
 		head.push(
 			channel
-				? `- 汇报频道（channel）：${options.describeChannel(channel).label}${note?.startsWith("已冻结") ? `（${note}）` : ""}`
+				? `- 汇报频道（channel）：${options.describeChannel(channel).label}${noteSuffix}`
 				: `- 汇报频道：未指定（${note}）`,
 		);
 	}
@@ -426,7 +431,7 @@ async function messageTask(options: HandleTasksCommandOptions, idInput: string, 
 		case "held_paused":
 			return `任务 \`${id}\` 已暂停：消息已记下，恢复（\`/tasks resume ${id}\`）后下一步会看到。`;
 		case "held_frozen":
-			return `任务 \`${id}\` 的汇报频道未绑定到本工位，任务已冻结：消息已记下，频道绑定回来后下一步会看到。`;
+			return `任务 \`${id}\` 的汇报频道当前不可达，任务已冻结：消息已记下，渠道恢复或用 \`/tasks adopt ${id}\` 接管后下一步会看到。`;
 	}
 }
 
@@ -470,13 +475,23 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					`在 \`${taskPath(options.deskDir, entry.id)}\` 的文件头加一行 \`channel: <频道 ID>\``,
 				),
 			);
-		} else if (!options.describeChannel(entry.fields.channel).boundHere) {
-			problems.push(
-				issue(
-					`\`${entry.id}\` 的汇报频道没有绑定到本工位，已冻结`,
-					"在那个频道里把它绑定回本工位，或把文件头的 `channel:` 改成本工位已绑定的频道",
-				),
-			);
+		} else {
+			const described = options.describeChannel(entry.fields.channel);
+			if (described.reachable === false) {
+				problems.push(
+					issue(
+						`\`${entry.id}\` 的汇报频道当前不可达，已冻结`,
+						`开启对应渠道配置，或在本工位当前频道执行 \`/tasks adopt ${entry.id}\``,
+					),
+				);
+			} else if (!described.boundHere) {
+				problems.push(
+					issue(
+						`\`${entry.id}\` 的汇报频道当前未绑定到本工位，汇报与提问暂存待送达`,
+						`在那个频道里切回本工位，或在本工位当前频道执行 \`/tasks adopt ${entry.id}\``,
+					),
+				);
+			}
 		}
 		const waiting = entry.fields.waiting;
 		const since = waiting?.kind === "work" ? parseLocalTime(waiting.since) : undefined;

@@ -128,12 +128,16 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "desk",
-		argumentHint: "[list|new <名字> [目录]|bind <名字>|cwd [目录|--reset]]",
-		description: "进阶：创建工位、配置工位仓库目录，或把本频道切换到另一个工位",
-		// list/new/cwd answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
+		argumentHint: "[list|new <名字> [目录]|bind <名字>|cwd [目录|--reset]|archive <名字>|unarchive <名字>]",
+		description: "进阶：创建工位、配置仓库目录、切换绑定，或归档闲置工位",
+		// list/new/cwd/archive/unarchive answer mid-turn; bind refuses by itself while this channel is busy (spec 058, D5).
 		availableWhileBusy: true,
 		subcommands: [
-			{ name: "list", description: "列出所有工位、工作目录和各自绑定的频道（默认动作，可省略）", example: "/desk" },
+			{
+				name: "list",
+				description: "列出所有工位、工作目录、后台状态和绑定的频道（默认动作，可省略）",
+				example: "/desk",
+			},
 			{
 				name: "new",
 				args: "<名字> [目录绝对路径]",
@@ -143,7 +147,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			{
 				name: "bind",
 				args: "<名字>",
-				description: "把本频道绑定到这个工位，同时解除原来的绑定；回合进行中不能执行",
+				description: "把本频道绑定到这个工位（已归档工位会自动恢复）；回合进行中不能执行",
 				example: "/desk bind research",
 			},
 			{
@@ -151,6 +155,18 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 				args: "[目录绝对路径|--reset]",
 				description: "查看或设置当前工位的工作目录（状态仍保存在工位目录中）",
 				example: "/desk cwd /srv/repo",
+			},
+			{
+				name: "archive",
+				args: "<名字>",
+				description: "归档闲置工位：停止定时事件并清理残留终端绑定（默认工位不可归档）",
+				example: "/desk archive research",
+			},
+			{
+				name: "unarchive",
+				args: "<名字>",
+				description: "恢复已归档的工位，不改变当前频道绑定",
+				example: "/desk unarchive research",
 			},
 		],
 	},
@@ -205,7 +221,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			{
 				name: "adopt",
 				args: "<id>",
-				description: "把任务的汇报频道改到当前频道，解冻因原频道切走而暂停的任务",
+				description: "把任务的汇报频道改到当前频道，立即接收暂存汇报并继续交互",
 				example: "/tasks adopt weekly-report",
 			},
 			{

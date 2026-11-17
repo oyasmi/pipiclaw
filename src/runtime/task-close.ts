@@ -8,7 +8,7 @@ import { drainTaskDeliveries } from "../tasks/delivery.js";
 import { appendTaskLog, readTaskLog } from "../tasks/loop-log.js";
 import { cancelledByLeaderReceipt, completedReceipt } from "../tasks/receipts.js";
 import { closeTask, pauseTask } from "../tasks/store.js";
-import type { LaneContext, LiveTask } from "./task-lane-types.js";
+import { canDeliverToChannel, type LaneContext, type LiveTask } from "./task-lane-types.js";
 import { listPendingWork } from "./task-pending.js";
 
 /** Commit the leader's durable close without another model turn. Delivery failures retain that intent. */
@@ -30,7 +30,7 @@ export async function finishTaskClose(
 				await drainTaskDeliveries(
 					deskDir,
 					(channel, text) => ctx.options.deliver(desk, channel, text),
-					(channel) => ctx.options.isBoundTo(channel, desk) && ctx.options.isReachable(channel),
+					(channel) => canDeliverToChannel(ctx, desk, channel),
 					ctx.now(),
 				),
 			);
