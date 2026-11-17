@@ -232,6 +232,8 @@ export class LaneControl implements TaskControl {
 			}
 		}
 		const cancelled = await this.cancelBoundWork(desk, id);
+		const runMgr = ctx.options.getRuns(desk);
+		const retainedWorktrees = await Promise.resolve(runMgr.reclaimTaskWorktrees?.(id) ?? []).catch(() => []);
 		const reportChannel = document.fields.channel;
 		await closeStoredTask(deskDir, id, {
 			outcome: "cancel",
@@ -239,7 +241,7 @@ export class LaneControl implements TaskControl {
 			note: input.note,
 			receipt:
 				reportChannel && reportChannel !== input.channel
-					? () => cancelledByUserReceipt(id, extractTaskTitle(document.body, id))
+					? () => cancelledByUserReceipt(id, extractTaskTitle(document.body, id), retainedWorktrees)
 					: undefined,
 		});
 		if (live) await ctx.release(live);
@@ -259,7 +261,11 @@ export class LaneControl implements TaskControl {
 				}),
 			);
 		}
-		return { kind: "cancelled", cancelled };
+		return {
+			kind: "cancelled",
+			cancelled,
+			...(retainedWorktrees.length > 0 ? { retainedWorktrees } : {}),
+		};
 	}
 
 	/** Cancel every delegation and job bound to the task; the refs that were still running. */

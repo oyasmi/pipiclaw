@@ -72,6 +72,8 @@ export interface ToolBuildContext {
 	 * output spill) fall back to a neutral location for it.
 	 */
 	forSubagent?: boolean;
+	/** Internal sub-agent run id that owns this worker's checkout lease, so it does not block itself. */
+	leaseOwnerRunId?: string;
 	/**
 	 * Present only on the main path. Enables bash `async` and the `job` tool.
 	 * The sub-agent set never supplies it, so sub-agents get neither.
@@ -190,7 +192,12 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "edit",
-		create: (ctx) => createEditTool(ctx.fileStore, { ...fileToolOptions(ctx), deskDir: ctx.deskDir }),
+		create: (ctx) =>
+			createEditTool(ctx.fileStore, {
+				...fileToolOptions(ctx),
+				deskDir: ctx.deskDir,
+				leaseOwnerRunId: ctx.leaseOwnerRunId,
+			}),
 	},
 	{
 		name: "grep",
@@ -202,7 +209,12 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "write",
-		create: (ctx) => createWriteTool(ctx.fileStore, { ...fileToolOptions(ctx), deskDir: ctx.deskDir }),
+		create: (ctx) =>
+			createWriteTool(ctx.fileStore, {
+				...fileToolOptions(ctx),
+				deskDir: ctx.deskDir,
+				leaseOwnerRunId: ctx.leaseOwnerRunId,
+			}),
 	},
 	{
 		name: "web_search",

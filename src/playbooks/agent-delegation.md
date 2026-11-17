@@ -13,7 +13,7 @@ order: 60
 
 按可用状态、输入与执行边界筛选，再按不确定性、错误代价和成本选条目。做法明确、易检查且易恢复的工作用低成本档，常规实施用主力档，关键取舍或难验证时考虑高档。名字与档位不证明能力；缺输入、权限或环境不靠升级模型解决。无合适条目先判断能否自己做，确缺能力才请部署者补齐。
 
-优先 `subagent {agent, task}`，可选 workingDirectory、purpose、item；工具、模型和预算由角色文件决定。没有合适条目才用 `subagent_inline`，自行提供完整 systemPrompt 和需要的工具、effort 等字段。外部角色只能由部署者配置，不能内联命令或改写 `sub-agents/` 来创建；也不要换 bash 绕过。
+优先 `subagent {agent, task}`，可选 workingDirectory、worktree、purpose、item；工具、模型和预算由角色文件决定。没有合适条目才用 `subagent_inline`，自行提供完整 systemPrompt 和需要的工具、effort 等字段。外部角色只能由部署者配置，不能内联命令或改写 `sub-agents/` 来创建；也不要换 bash 绕过。
 
 独立检查用 `purpose:"verify"`，普通工作用 `purpose:"work"`。verify 不要求 task；最后写 `VERDICT: PASS|FAIL`，只是判断材料。给检查者原始要求或权威验收文件、待检版本与入口，明确“只检查，不修实现，不把实现者总结当预期行为”。优先独立取证，关键风险换检查方法，再考虑不同模型。`exec` 不能 verify；裁决见 `task-lead.md` 的“检查与返工”。
 
@@ -34,8 +34,8 @@ order: 60
 
 省略 workingDirectory 使用主代理的实际 cwd；默认是工位目录，但可自定义。委派仓库工作时显式传仓库绝对路径。默认目录不会隔离文件。
 
-- 并行写分片各建独立 worktree，分别传 workingDirectory，用完清理自己创建的 worktree。
-- `mutates: write` 对同一及父子目录取得排他 lease；冲突时按错误中的持有者 runId 等待或换目录。主代理的 write/edit/bash 不受保护，不同时修改活跃写委派的工作树。
+- 在 Git 仓库内做并行或隔离写委派时，优先传 `worktree: true`（仅对 `mutates: write` 且 `purpose: work` 生效）：运行时自动在 `.git/pipiclaw-worktrees/<runId>` 创建分支 `pipiclaw/<runId>` 的独立工作树，结算结果结构化返回 `branch`、`headSha`、`changedFiles`；无改动的工作树立即回收，已合并的干净工作树在父任务关闭或到期时自动回收（未合并改动保留并提示）。手工 `git worktree add` 传入 `workingDirectory` 时由你自己清理。
+- `mutates: write` 对同一及父子目录持独占写租约，`purpose: verify`（`mutates: read`）持共享读租约（允许并行检查、阻止并发写入）；主会话与任务步骤的 `write`/`edit` 同样检查活跃写租约与验收读租约，冲突时按报错中的 `runId` 等待或换 `worktree: true`。`bash` 无逐文件租约拦截，不要用 `bash` 改写活跃委派锁定的工作树。
 - 内置 mutates 只从 write/edit 推断，不识别 bash 写入；inline 可能写入时显式声明 write。外部 mutates 只是声明，其权限边界是 CLI sandbox、宿主账号与环境，任务文字不能代替强制隔离。
 - 内置 verifier 移除 write/edit，但带 bash 仍可写；只有不带 bash 的内置 read 角色或 CLI 强制只读的外部条目提供只读执行边界。可写 verifier 同样取得写 lease，PASS 后仍须核对产物与 diff。
 

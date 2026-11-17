@@ -25,7 +25,7 @@ const workingDirectoryField = Type.Optional(
 const worktreeField = Type.Optional(
 	Type.Boolean({
 		description:
-			"Optional: set true on a write delegation inside a Git repository to run it in a fresh detached Git worktree under its artifact directory, avoiding workspace lease conflicts with concurrent runs. Clean unchanged worktrees are removed automatically when the run settles.",
+			"Optional: set true on a write delegation in a Git repo to run in `.git/pipiclaw-worktrees/<runId>` (`pipiclaw/<runId>`) and return `branch`/`headSha`/`changedFiles`.",
 	}),
 );
 const purposeField = Type.Optional(

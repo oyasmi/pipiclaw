@@ -191,7 +191,13 @@ export async function dispatchInternalRun(input: InternalRunInput): Promise<Dele
 				type: "text",
 				text:
 					mutatesNote +
-					buildDispatchedText(runContext.runId, config.name, "internal, async", runContext.workingDirectory),
+					buildDispatchedText(
+						runContext.runId,
+						config.name,
+						"internal, async",
+						runContext.workingDirectory,
+						runContext.managedWorktree,
+					),
 			},
 		],
 		details: createDetails({

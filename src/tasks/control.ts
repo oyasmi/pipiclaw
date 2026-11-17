@@ -57,7 +57,18 @@ export type TaskMessageOutcome =
 
 export type TaskControlOutcome = { kind: "ok" } | { kind: "not_found" } | { kind: "unchanged" } | { kind: "stopping" };
 
-export type TaskCancelOutcome = { kind: "cancelled"; cancelled: string[] } | { kind: "not_found" };
+/** A runtime-managed Git worktree preserved on task close because it still carries uncommitted or unmerged changes. */
+export interface RetainedWorktreeInfo {
+	runId: string;
+	path: string;
+	branch: string | null;
+	headSha: string;
+	reason: "dirty" | "unmerged";
+}
+
+export type TaskCancelOutcome =
+	| { kind: "cancelled"; cancelled: string[]; retainedWorktrees?: RetainedWorktreeInfo[] }
+	| { kind: "not_found" };
 
 export interface TaskControl {
 	/** Synchronous check, safe while holding the task mutation lock. */

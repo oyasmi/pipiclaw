@@ -532,10 +532,41 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 						body: "## Work Items\n- [x] W1 已检查\n- [~] W2 范围外\n",
 					},
 					"2026-10-01T10:39:28+08:00",
+					[
+						{
+							runId: "run_wt1",
+							path: "/tmp/repo/.git/pipiclaw-worktrees/run_wt1",
+							branch: "pipiclaw/run_wt1",
+							headSha: "abcdef1234567890",
+							reason: "unmerged",
+						},
+					],
 				),
 			],
-			["cancelled by leader", cancelledByLeaderReceipt("weekly", "周报", "目标已不可行\n换方案")],
-			["cancelled by user", cancelledByUserReceipt("weekly", "周报")],
+			[
+				"cancelled by leader",
+				cancelledByLeaderReceipt("weekly", "周报", "目标已不可行\n换方案", [
+					{
+						runId: "run_wt2",
+						path: "/tmp/repo/.git/pipiclaw-worktrees/run_wt2",
+						branch: null,
+						headSha: "1234567890abcdef",
+						reason: "dirty",
+					},
+				]),
+			],
+			[
+				"cancelled by user",
+				cancelledByUserReceipt("weekly", "周报", [
+					{
+						runId: "run_wt3",
+						path: "/tmp/repo/.git/pipiclaw-worktrees/run_wt3",
+						branch: "pipiclaw/run_wt3",
+						headSha: "1234567890abcdef",
+						reason: "unmerged",
+					},
+				]),
+			],
 		] as const) {
 			expectUserCopyShape(`task receipt ${label}`, text);
 		}

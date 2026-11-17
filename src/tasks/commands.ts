@@ -26,6 +26,7 @@ import {
 	taskLogIssues,
 	taskLogPath,
 } from "./loop-log.js";
+import { formatRetainedWorktreeLines } from "./receipts.js";
 import { archivedTaskPath, readStoredTask, taskPath } from "./store.js";
 
 /** What `/tasks` needs to say about a delivery channel (structurally `channel/channel-id.ts`'s `ChannelDescription`). */
@@ -397,7 +398,11 @@ async function cancelTask(options: HandleTasksCommandOptions, idInput: string): 
 		outcome.cancelled.length > 0
 			? `，并取消了在途工作 ${outcome.cancelled.map((ref) => `\`${ref}\``).join("、")}`
 			: "";
-	return `已取消任务 \`${id}\`${stopped}。任务记录已归档，可用 \`/tasks log ${id}\` 查看。`;
+	const retained = formatRetainedWorktreeLines(outcome.retainedWorktrees);
+	return capReply(
+		[`已取消任务 \`${id}\`${stopped}。任务记录已归档，可用 \`/tasks log ${id}\` 查看。`, ...retained].join("\n"),
+		{ nextStepHint: `用 \`/tasks log ${id}\` 查看记录` },
+	).text;
 }
 
 async function messageTask(options: HandleTasksCommandOptions, idInput: string, text: string): Promise<string> {

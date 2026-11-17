@@ -11,6 +11,7 @@ import type { SettleInput } from "../run-record.js";
 import type { DelegationResult, ResolvedInternalSubAgentConfig, SubAgentRunContext, SubAgentWorker } from "../types.js";
 import { resolveVerificationVerdict } from "../verification-outcome.js";
 import { changedPathsSummary, type WorkspaceBaseline } from "../workspace-summary.js";
+import { settleManagedWorktree } from "../worktree.js";
 import type { InternalRunState } from "./state.js";
 import { getLastAssistantMessage } from "./worker.js";
 
@@ -58,6 +59,21 @@ export async function buildInternalOutcome(input: {
 	// free/local model produces (tokens spent, nothing billed) — external harnesses
 	// override both explicitly once they land (D4/D9).
 	const costKnown = usage.cost.total > 0 || usage.total === 0;
+	if (effectiveFailureReason && !finalText.trim()) {
+		emitUpdate(formatStatus(config.name, "failed"));
+		// Settlement records the reason itself, not the next-step advice wrapped around it below.
+		state.failureReason = effectiveFailureReason;
+		// The delegating model can act on this alone — re-dispatch, narrow the task, or do the
+		// work itself — so it is not a user-facing error bubble.
+		throw new RecoverableToolError(
+			`${fallbackLine}${buildFailureText(config, effectiveFailureReason, finalText)}\n` +
+				`Retry the delegation (narrower if it hit a budget), or do the work directly; subagent_run op=show runId=${runContext.runId} has the details.`,
+		);
+	}
+
+	const worktree = runContext.managedWorktree
+		? await settleManagedWorktree(runContext.artifactDir).catch(() => undefined)
+		: undefined;
 	const baseSettleInput = {
 		usage,
 		usageKnown: true,
@@ -67,22 +83,12 @@ export async function buildInternalOutcome(input: {
 		durationMs,
 		verificationVerdict,
 		model: modelRef,
+		...(worktree ? { worktree } : {}),
 	};
 
 	if (effectiveFailureReason) {
-		if (!finalText.trim()) {
-			emitUpdate(formatStatus(config.name, "failed"));
-			// Settlement records the reason itself, not the next-step advice wrapped around it below.
-			state.failureReason = effectiveFailureReason;
-			// The delegating model can act on this alone — re-dispatch, narrow the task, or do the
-			// work itself — so it is not a user-facing error bubble.
-			throw new RecoverableToolError(
-				`${fallbackLine}${buildFailureText(config, effectiveFailureReason, finalText)}\n` +
-					`Retry the delegation (narrower if it hit a budget), or do the work directly; subagent_run op=show runId=${runContext.runId} has the details.`,
-			);
-		}
 		emitUpdate(formatStatus(config.name, "stopped"));
-		const finalized = finalizeSubAgentOutput(runContext, finalText);
+		const finalized = finalizeSubAgentOutput(runContext, finalText, worktree);
 		return {
 			toolResult: {
 				content: [
@@ -104,6 +110,7 @@ export async function buildInternalOutcome(input: {
 					verificationVerdict,
 					resultTruncated: finalized.truncated,
 					modelOverride: modelRef,
+					worktree,
 				}),
 			},
 			settleInput: {
@@ -120,13 +127,13 @@ export async function buildInternalOutcome(input: {
 	// P2-2, same as an external write run: what this run changed, so the reader does not spend
 	// its first tool call finding out. Only a cleanly completed write run pays for it.
 	const workspaceSummary =
-		config.mutates === "write"
+		config.mutates === "write" && !worktree?.cleaned
 			? await changedPathsSummary(runContext.workingDirectory, input.workspaceBaseline).catch(() => undefined)
 			: undefined;
 	const workspaceLine = workspaceSummary
 		? `\n\nWorkspace after the run (git status --porcelain): ${workspaceSummary}`
 		: "";
-	const finalized = finalizeSubAgentOutput(runContext, finalText);
+	const finalized = finalizeSubAgentOutput(runContext, finalText, worktree);
 	return {
 		toolResult: {
 			content: [
@@ -149,6 +156,7 @@ export async function buildInternalOutcome(input: {
 				verificationVerdict,
 				resultTruncated: finalized.truncated,
 				modelOverride: modelRef,
+				worktree,
 			}),
 		},
 		settleInput: { ...baseSettleInput, status: "completed", outputText: finalText, workspaceSummary },

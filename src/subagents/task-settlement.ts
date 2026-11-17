@@ -24,6 +24,7 @@ export async function creditTaskForRun(
 			output: outputSaved ? join(record.artifactDir, "output.md") : undefined,
 			tail: input.outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim() || undefined,
 			changed: record.workspaceSummary,
+			...(record.worktree ? { worktree: record.worktree } : {}),
 			durationMs: input.durationMs,
 			...(inline ? { inline: true } : {}),
 		},

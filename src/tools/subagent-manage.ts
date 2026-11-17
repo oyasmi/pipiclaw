@@ -60,7 +60,7 @@ const STDERR_TAIL_CHARS = 2_000;
 function formatRunLine(record: RunRecord, here: string): string {
 	const task = record.taskId ? `, task ${record.taskId}` : "";
 	const origin = record.channelId !== here ? `, started in ${record.channelId}` : "";
-	const lease = record.leaseKey ? ", lease held" : "";
+	const lease = record.leaseKey ? (record.mutates === "read" ? ", read lease held" : ", write lease held") : "";
 	const cost = formatCost(record);
 	const costPart = cost ? `, ${cost}` : "";
 	const header = `- [${record.runId}] ${record.agent} (${harnessLabel(record)}) — "${record.label}" — ${record.status} (${formatRunDuration(record)}${task}${lease}${costPart}${origin})`;
@@ -86,7 +86,17 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 		lines.push(`verification: ${record.verificationVerdict.toUpperCase()}`);
 	}
 	if (record.taskId) lines.push(`taskId: ${record.taskId}${record.item ? ` item: ${record.item}` : ""}`);
-	if (record.leaseKey) lines.push("holds write lease: yes");
+	if (record.leaseKey) {
+		lines.push(record.mutates === "read" ? "holds read lease: yes" : "holds write lease: yes");
+	}
+	if (record.worktree) {
+		const w = record.worktree;
+		lines.push(
+			w.cleaned
+				? `worktree: ${w.path} (cleaned up, headSha=${w.headSha})`
+				: `worktree: ${w.path} (branch=${w.branch ?? "detached"}, headSha=${w.headSha}${w.dirty ? ", dirty" : ""}, changedFiles=${w.changedFiles.join(", ") || "(none)"})`,
+		);
+	}
 	if (record.model) lines.push(`model: ${record.model}`);
 	const cost = formatCost(record);
 	lines.push(`usage: input=${record.usage.input} output=${record.usage.output}${cost ? ` cost=${cost}` : ""}`);

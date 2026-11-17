@@ -7,9 +7,16 @@ import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all
 import { describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
-import { MAX_RUNNING_SUBAGENT_RUNS_PER_DESK, MAX_RUNNING_SUBAGENT_RUNS_PER_HOST } from "../src/subagents/run-record.js";
+import {
+	MAX_RUNNING_SUBAGENT_RUNS_PER_DESK,
+	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
+	WORKTREE_RETENTION_MS,
+} from "../src/subagents/run-record.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
+import { renderTaskInputs } from "../src/tasks/brief.js";
+import { newInputs, readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
+import { completedReceipt } from "../src/tasks/receipts.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../src/tools/subagent.js";
 import {
 	configureSubAgentRuntime,
@@ -370,69 +377,172 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		expect(nextLease.ok).toBe(true);
 		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next-verify");
 
-		// Managed worktree (P1-5): a write delegation with worktree=true runs inside <artifactDir>/worktree
-		// concurrently with an active lease on workspaceDir, auto-cleans clean worktrees, and preserves dirty ones.
-		execFileSync("git", ["init"], { cwd: workspaceDir });
-		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: workspaceDir });
-		execFileSync("git", ["config", "user.name", "Test"], { cwd: workspaceDir });
-		writeFileSync(join(workspaceDir, "README.md"), "base\n", "utf-8");
-		execFileSync("git", ["add", "README.md"], { cwd: workspaceDir });
-		execFileSync("git", ["commit", "-m", "init"], { cwd: workspaceDir });
+		// Direction 1.3: runtime-managed Git worktree (`worktree: true`) creates `.git/pipiclaw-worktrees/<runId>`
+		// on branch `pipiclaw/<runId>`, returns structured `branch` / `headSha` / `changedFiles`, auto-cleans
+		// unchanged worktrees immediately, retains dirty/unmerged worktrees with explicit warnings on parent task
+		// close or 24h timeout GC, and auto-removes clean merged worktrees once merged into the main checkout.
+		const repoDir = createTempWorkspace();
+		execFileSync("git", ["init"], { cwd: repoDir });
+		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoDir });
+		execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir });
+		writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+		execFileSync("git", ["add", "README.md"], { cwd: repoDir });
+		execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir });
+		const baseHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir, encoding: "utf-8" }).trim();
 
-		const mainLock = acquireWorkspaceLease({ runId: "main-writer", channelId, workingDirectory: workspaceDir });
+		writeFileSync(
+			join(deskDir, "tasks", "ship.md"),
+			'---\nstate: running\nchannel: "dingtalk:dm:verify_write_lease"\n---\n# Ship\n\n## DoD\n- [x] checks pass\n',
+		);
+		const wtManager = new SubAgentRunManager({ desk: testDesk(channelId), deskDir }, {});
+		const mainLock = acquireWorkspaceLease({ runId: "main-writer", channelId, workingDirectory: repoDir });
 		expect(mainLock.ok).toBe(true);
 		try {
-			let worktreeDirty = false;
-			const wtTool = createSubAgentInlineTool({
-				...testManagers(channelId),
-				executor: fakeExecutor,
-				fileStore: createFileStore(),
-				getCurrentModel: () => model,
-				getAvailableModels: () => [model],
-				resolveApiKey: async () => "test-key",
-				workspaceDir,
-				workingDirectory: workspaceDir,
-				deskDir,
-				runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
-				getRunManager: () => manager,
-				createWorker: () =>
-					new FakeWorker((input, worker) => {
-						const match = input.match(/- Working directory: (.+)/);
-						if (worktreeDirty && match?.[1]) {
-							writeFileSync(join(match[1].trim(), "feature.txt"), "edited\n", "utf-8");
-						}
-						const message = createAssistantMessage("Worktree run complete.");
-						worker.state.messages = [message];
-						worker.emit({ type: "message_end", message });
-					}),
-			});
+			let mode: "clean" | "dirty" | "commit" = "clean";
+			const makeWtTool = (boundTaskId?: string) =>
+				createSubAgentInlineTool({
+					...testManagers(channelId),
+					boundTaskId,
+					executor: fakeExecutor,
+					fileStore: createFileStore(),
+					getCurrentModel: () => model,
+					getAvailableModels: () => [model],
+					resolveApiKey: async () => "test-key",
+					workspaceDir,
+					workingDirectory: repoDir,
+					deskDir,
+					runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
+					getRunManager: () => wtManager,
+					createWorker: () =>
+						new FakeWorker((input, worker) => {
+							const match = input.match(/- Working directory: (.+)/);
+							const cwd = match?.[1]?.trim();
+							if (cwd && mode === "dirty") {
+								writeFileSync(join(cwd, "feature.txt"), "edited\n", "utf-8");
+							} else if (cwd && mode === "commit") {
+								writeFileSync(join(cwd, "committed.ts"), "export const v = 2;\n", "utf-8");
+								execFileSync("git", ["add", "committed.ts"], { cwd });
+								execFileSync("git", ["commit", "-m", "feat: add committed.ts"], { cwd });
+							}
+							const message = createAssistantMessage("Worktree run complete.");
+							worker.state.messages = [message];
+							worker.emit({ type: "message_end", message });
+						}),
+				});
 
-			const cleanRes = await wtTool.execute("wt-clean", {
+			// 1. Clean unchanged run: auto-removed at settlement, unused branch deleted.
+			const chatWtTool = makeWtTool();
+			const cleanRes = await chatWtTool.execute("wt-clean", {
 				systemPrompt: "Edit in worktree.",
 				tools: ["read", "edit"],
 				mutates: "write",
 				worktree: true,
 				task: "Inspect without modifying.",
 			});
-			await vi.waitFor(() => expect(manager.get(cleanRes.details.runId)?.settledAt).toBeDefined());
-			expect(existsSync(join(cleanRes.details.artifactDir, "worktree"))).toBe(false);
+			await vi.waitFor(() => expect(wtManager.get(cleanRes.details.runId)?.settledAt).toBeDefined());
+			const cleanWtDir = join(repoDir, ".git", "pipiclaw-worktrees", cleanRes.details.runId);
+			expect(existsSync(cleanWtDir)).toBe(false);
+			expect(cleanRes.details.worktree).toMatchObject({
+				baseHead,
+				headSha: baseHead,
+				changedFiles: [],
+				dirty: false,
+				cleaned: true,
+			});
+			expect(
+				execFileSync("git", ["branch", "--list", `pipiclaw/${cleanRes.details.runId}`], {
+					cwd: repoDir,
+					encoding: "utf-8",
+				}).trim(),
+			).toBe("");
 
-			worktreeDirty = true;
-			const dirtyRes = await wtTool.execute("wt-dirty", {
+			// 2. Dirty uncommitted standalone run: retained at `.git/pipiclaw-worktrees/<runId>`, structured
+			//    changedFiles returned, and 24h timeout GC preserves dirty changes instead of deleting them.
+			mode = "dirty";
+			const dirtyRes = await chatWtTool.execute("wt-dirty", {
 				systemPrompt: "Edit in worktree.",
 				tools: ["read", "edit"],
 				mutates: "write",
 				worktree: true,
 				task: "Write feature.txt.",
 			});
-			await vi.waitFor(() => expect(manager.get(dirtyRes.details.runId)?.settledAt).toBeDefined());
-			expect(existsSync(join(dirtyRes.details.artifactDir, "worktree", "feature.txt"))).toBe(true);
+			await vi.waitFor(() => expect(wtManager.get(dirtyRes.details.runId)?.settledAt).toBeDefined());
+			const dirtyWtDir = join(repoDir, ".git", "pipiclaw-worktrees", dirtyRes.details.runId);
+			expect(existsSync(join(dirtyWtDir, "feature.txt"))).toBe(true);
+			expect(dirtyRes.details.worktree).toMatchObject({
+				branch: `pipiclaw/${dirtyRes.details.runId}`,
+				headSha: baseHead,
+				changedFiles: ["feature.txt"],
+				dirty: true,
+				cleaned: false,
+			});
 			expect(dirtyRes.content[0]).toMatchObject({
 				type: "text",
-				text: expect.stringContaining("Managed git worktree:"),
+				text: expect.stringContaining(`branch=pipiclaw/${dirtyRes.details.runId}`),
 			});
+			await wtManager.collectGarbage(Date.now() + WORKTREE_RETENTION_MS + 1_000);
+			expect(existsSync(join(dirtyWtDir, "feature.txt"))).toBe(true);
+			expect(wtManager.get(dirtyRes.details.runId)?.worktreeRetainWarned).toBe(true);
+
+			// 3. Task-bound committed run: settles into task log with branch/headSha/changedFiles; unmerged
+			//    worktree is retained with receipt warning before merge, then reclaimed once merged.
+			mode = "commit";
+			const taskWtTool = makeWtTool("ship");
+			const commitDispatched = await taskWtTool.execute("wt-commit", {
+				systemPrompt: "Commit in worktree.",
+				tools: ["read", "edit"],
+				mutates: "write",
+				worktree: true,
+				task: "Commit committed.ts.",
+			});
+			const commitRunId = commitDispatched.details.runId;
+			await vi.waitFor(() => expect(wtManager.get(commitRunId)?.taskAccounted).toBe(true));
+			const settledCommit = wtManager.get(commitRunId)!;
+			const commitWtDir = join(repoDir, ".git", "pipiclaw-worktrees", commitRunId);
+			expect(existsSync(join(commitWtDir, "committed.ts"))).toBe(true);
+			expect(settledCommit.worktree?.branch).toBe(`pipiclaw/${commitRunId}`);
+			expect(settledCommit.worktree?.headSha).not.toBe(baseHead);
+			expect(settledCommit.worktree?.changedFiles).toEqual(["committed.ts"]);
+
+			const taskRecords = await readTaskLog(deskDir, "ship");
+			const briefText = renderTaskInputs(taskRecords, newInputs(taskRecords)) ?? "";
+			expect(briefText).toContain(`branch=pipiclaw/${commitRunId}`);
+			expect(briefText).toContain("changedFiles=committed.ts");
+
+			const unmergedRetained = await wtManager.reclaimTaskWorktrees("ship");
+			expect(unmergedRetained).toMatchObject([
+				{
+					runId: commitRunId,
+					branch: `pipiclaw/${commitRunId}`,
+					reason: "unmerged",
+				},
+			]);
+			expect(existsSync(commitWtDir)).toBe(true);
+			const receiptWithWarning = completedReceipt(
+				"ship",
+				"Ship",
+				{ fields: { state: "queued" }, body: "# Ship\n" },
+				"2026-11-17T03:50:00+08:00",
+				unmergedRetained,
+			);
+			expect(receiptWithWarning).toContain("保留未合并工作树");
+			expect(receiptWithWarning).toContain(`pipiclaw/${commitRunId}`);
+
+			// Merge branch into main checkout, then task close reclaims worktree and deletes merged branch.
+			execFileSync("git", ["merge", "--no-edit", `pipiclaw/${commitRunId}`], { cwd: repoDir });
+			const afterMergeRetained = await wtManager.reclaimTaskWorktrees("ship");
+			expect(afterMergeRetained).toEqual([]);
+			expect(existsSync(commitWtDir)).toBe(false);
+			expect(wtManager.get(commitRunId)?.worktree?.cleaned).toBe(true);
+			expect(
+				execFileSync("git", ["branch", "--list", `pipiclaw/${commitRunId}`], {
+					cwd: repoDir,
+					encoding: "utf-8",
+				}).trim(),
+			).toBe("");
 		} finally {
 			if (mainLock.ok) releaseWorkspaceLease(mainLock.leaseKey, "main-writer");
+			await resetTaskLogAppenders();
 		}
 	});
 });

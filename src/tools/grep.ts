@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, isAbsolute, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { Executor } from "../executor.js";
@@ -130,8 +130,13 @@ function truncateLine(text: string): string {
 	return text.length > LINE_MAX_CHARS ? `${text.slice(0, LINE_MAX_CHARS)}…` : text;
 }
 
-function isIgnoredPath(relPath: string): boolean {
-	return relPath.split("/").some((segment) => IGNORED_DIR_SEGMENTS.has(segment));
+function isIgnoredPath(filePath: string, searchTarget: string): boolean {
+	const checkPath = isAbsolute(filePath) && isAbsolute(searchTarget) ? relative(searchTarget, filePath) : filePath;
+	if (!checkPath || checkPath.startsWith("..")) return false;
+	return checkPath
+		.split("/")
+		.slice(0, -1)
+		.some((segment) => IGNORED_DIR_SEGMENTS.has(segment));
 }
 
 /**
@@ -343,7 +348,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			const globRegExp = glob ? globToRegExp(glob) : undefined;
 			const keepFile = (file: string): boolean => {
 				const normalized = file.replace(/^\.\//, "");
-				if (isIgnoredPath(normalized)) return false;
+				if (isIgnoredPath(normalized, target)) return false;
 				if (globRegExp) {
 					const base = normalized.split("/").pop() ?? normalized;
 					if (!globRegExp.test(base)) return false;
@@ -408,7 +413,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			const files: Array<[string, MatchEntry[]]> = [];
 			for (const [file, entries] of parsed) {
 				const normalized = file.replace(/^\.\//, "");
-				if (isIgnoredPath(normalized)) {
+				if (isIgnoredPath(normalized, target)) {
 					continue;
 				}
 				if (globRegExp) {

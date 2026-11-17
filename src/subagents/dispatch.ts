@@ -151,8 +151,18 @@ export async function dispatchSubAgentRun(
 				'worktree=true is only valid for write delegations (mutates="write" and purpose="work"); omit worktree for read-only or verification runs.',
 			);
 		}
-		runContext.workingDirectory = await prepareManagedWorktree(runContext.workingDirectory, runContext.artifactDir);
-		runContext.managedWorktree = true;
+		const prepared = await prepareManagedWorktree(
+			runContext.workingDirectory,
+			runContext.artifactDir,
+			runContext.runId,
+		);
+		runContext.workingDirectory = prepared.workingDirectory;
+		runContext.managedWorktree = {
+			path: prepared.worktreeRoot,
+			baseDir: prepared.baseDir,
+			branch: prepared.branch,
+			baseHead: prepared.baseHead,
+		};
 	}
 
 	// D9: an independent verifier checks against a target that isn't moving under it — shared

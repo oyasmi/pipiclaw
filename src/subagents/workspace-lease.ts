@@ -1,14 +1,15 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, normalize, resolve } from "node:path";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { withTrailingSlash } from "../shared/text-utils.js";
 
 /**
- * Process-wide checkout leases for delegations (spec 040 D10.1, extended with shared verify read leases):
- * - `mode: "write"` (default): exclusive — conflicts with any overlapping write OR read lease.
- * - `mode: "read"` (used by `purpose: "verify"` runs with `mutates: "read"`): shared — coexists with
- *   other read leases on overlapping paths while blocking write delegations until verification settles.
- *
- * Global across channels and desks; the main agent's own write/edit/bash calls deliberately do not
- * participate so a parent turn cannot deadlock against a run it dispatched.
+ * Process-wide checkout RW leases for delegations (spec 040 D10.1, Direction 1.3):
+ * - `mode: "write"` (default): exclusive — conflicts with any overlapping write OR read lease, and
+ *   blocks main/task-session `write`/`edit` calls targeting the leased checkout.
+ * - `mode: "read"` (`purpose: "verify"` runs with `mutates: "read"`): shared — coexists with other
+ *   read leases on overlapping paths while blocking write delegations and main/task `write`/`edit`
+ *   calls so files cannot move mid-verification.
  */
 
 export type WorkspaceLeaseMode = "write" | "read";
@@ -22,37 +23,95 @@ export interface WorkspaceLeaseHolder {
 
 const leases = new Map<string, Map<string, WorkspaceLeaseHolder>>();
 
+const DESK_CONTROL_SUBDIRS = [
+	"tasks",
+	"subagent-artifacts",
+	"memory",
+	"journal",
+	"events",
+	"conversations",
+	"inbox",
+	"logs",
+	".memory-work",
+	".locks",
+] as const;
+
+const DESK_CONTROL_FILES = ["desk.json", "MEMORY.md"] as const;
+
 function holderMode(holder: WorkspaceLeaseHolder): WorkspaceLeaseMode {
 	return holder.mode === "read" ? "read" : "write";
 }
 
-function crossesArtifactBoundary(parent: string, child: string): boolean {
+function crossesIsolatedBoundary(parent: string, child: string): boolean {
 	const rel = child.slice(withTrailingSlash(parent).length);
-	return rel.startsWith("subagent-artifacts/") || rel.includes("/subagent-artifacts/");
+	return (
+		rel.startsWith("subagent-artifacts/") ||
+		rel.includes("/subagent-artifacts/") ||
+		rel.startsWith(".git/pipiclaw-worktrees/") ||
+		rel.includes("/.git/pipiclaw-worktrees/") ||
+		rel.startsWith("pipiclaw-worktrees/") ||
+		rel.includes("/pipiclaw-worktrees/")
+	);
 }
 
 function pathsConflict(a: string, b: string): boolean {
 	if (a === b) return true;
 	const aSlash = withTrailingSlash(a);
 	const bSlash = withTrailingSlash(b);
-	if (b.startsWith(aSlash)) return !crossesArtifactBoundary(a, b);
-	if (a.startsWith(bSlash)) return !crossesArtifactBoundary(b, a);
+	if (b.startsWith(aSlash)) return !crossesIsolatedBoundary(a, b);
+	if (a.startsWith(bSlash)) return !crossesIsolatedBoundary(b, a);
 	return false;
 }
 
-/** The stable lease key for a working directory: its realpath, so a symlink or `..` cannot dodge a conflict. */
-export function workspaceLeaseKey(workingDirectory: string): string {
+/**
+ * Resolve a directory or file path (including not-yet-created files for `write`) through symlinks
+ * so an alias or `..` segment cannot bypass an active checkout lease.
+ */
+export function workspaceLeaseKey(targetPath: string): string {
+	const normalized = normalize(targetPath);
 	try {
-		return realpathSync(workingDirectory);
+		return realpathSync(normalized);
 	} catch {
-		return workingDirectory;
+		const missingSegments: string[] = [];
+		let current = normalized;
+		while (!existsSync(current)) {
+			missingSegments.unshift(basename(current));
+			const parent = dirname(current);
+			if (parent === current) return normalized;
+			current = parent;
+		}
+		try {
+			return resolve(realpathSync(current), ...missingSegments);
+		} catch {
+			return normalized;
+		}
 	}
 }
 
-function findConflict(leaseKey: string, requestedMode: WorkspaceLeaseMode): WorkspaceLeaseHolder | undefined {
+function isDeskControlPlanePath(resolvedTarget: string, deskDir: string | undefined): boolean {
+	if (!deskDir) return false;
+	const canonicalDesk = workspaceLeaseKey(deskDir);
+	for (const file of DESK_CONTROL_FILES) {
+		if (resolvedTarget === resolve(canonicalDesk, file)) return true;
+	}
+	for (const sub of DESK_CONTROL_SUBDIRS) {
+		const subRoot = resolve(canonicalDesk, sub);
+		if (resolvedTarget === subRoot || resolvedTarget.startsWith(withTrailingSlash(subRoot))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function findConflict(
+	leaseKey: string,
+	requestedMode: WorkspaceLeaseMode,
+	excludeRunId?: string,
+): WorkspaceLeaseHolder | undefined {
 	for (const [key, holders] of leases) {
 		if (!pathsConflict(key, leaseKey)) continue;
 		for (const holder of holders.values()) {
+			if (excludeRunId && holder.runId === excludeRunId) continue;
 			if (requestedMode === "write" || holderMode(holder) === "write") {
 				return holder;
 			}
@@ -68,7 +127,7 @@ export type AcquireWorkspaceLeaseResult =
 export function acquireWorkspaceLease(holder: WorkspaceLeaseHolder): AcquireWorkspaceLeaseResult {
 	const leaseKey = workspaceLeaseKey(holder.workingDirectory);
 	const mode = holderMode(holder);
-	const conflict = findConflict(leaseKey, mode);
+	const conflict = findConflict(leaseKey, mode, holder.runId);
 	if (conflict) {
 		return { ok: false, leaseKey, heldBy: conflict };
 	}
@@ -98,6 +157,43 @@ export function releaseWorkspaceLease(leaseKey: string | undefined, runId: strin
 /** Read-only check for pre-flight gates (`purpose=verify`, D9): returns any overlapping *write* holder. */
 export function findWorkspaceLeaseHolder(workingDirectory: string): WorkspaceLeaseHolder | undefined {
 	return findConflict(workspaceLeaseKey(workingDirectory), "read");
+}
+
+/**
+ * Check whether mutating (or reading) `targetPath` conflicts with an active delegation lease,
+ * ignoring `excludeRunId` (the worker's own run) and Pipiclaw's desk control-plane files (`tasks/`, etc.).
+ */
+export function findConflictingWorkspaceLease(
+	targetPath: string,
+	options?: { mode?: WorkspaceLeaseMode; excludeRunId?: string; deskDir?: string },
+): WorkspaceLeaseHolder | undefined {
+	const resolved = workspaceLeaseKey(targetPath);
+	if (isDeskControlPlanePath(resolved, options?.deskDir)) return undefined;
+	return findConflict(resolved, options?.mode ?? "write", options?.excludeRunId);
+}
+
+/**
+ * Guard for main-session and task-session `write`/`edit` tools (Direction 1.3): rejects mutations
+ * to a checkout currently locked by a write delegation or being inspected by a verification read lease.
+ */
+export function assertPathWritableUnderLease(
+	targetPath: string,
+	options?: { excludeRunId?: string; deskDir?: string },
+): void {
+	const heldBy = findConflictingWorkspaceLease(targetPath, { mode: "write", ...options });
+	if (!heldBy) return;
+	if (holderMode(heldBy) === "read") {
+		throw new RecoverableToolError(
+			`Cannot modify "${targetPath}" while verification delegation ${heldBy.runId} holds a shared read lease on ` +
+				`"${heldBy.workingDirectory}" (channel ${heldBy.channelId}). Wait for verification to finish, cancel it ` +
+				"with subagent_run op=cancel, or delegate isolated edits with subagent worktree=true (or a separate `git worktree add` checkout).",
+		);
+	}
+	throw new RecoverableToolError(
+		`Cannot modify "${targetPath}" while write delegation ${heldBy.runId} holds an exclusive write lease on ` +
+			`"${heldBy.workingDirectory}" (channel ${heldBy.channelId}). Wait for the delegation to finish, cancel it ` +
+			"with subagent_run op=cancel, or delegate isolated edits with subagent worktree=true (or a separate `git worktree add` checkout).",
+	);
 }
 
 export function formatWorkspaceLeaseConflict(heldBy: WorkspaceLeaseHolder): string {

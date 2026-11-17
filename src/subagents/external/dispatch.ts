@@ -2,6 +2,7 @@
  * The `runtime: external` half of delegation dispatch and `follow_up` continuation: launches the
  * harness process through `external/run.ts` and converts pre-spawn launch failures into tool errors.
  */
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_SECURITY_CONFIG } from "../../security/config.js";
@@ -28,6 +29,7 @@ import type {
 } from "../types.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "../workspace-lease.js";
 import { snapshotWorkspace, type WorkspaceBaseline } from "../workspace-summary.js";
+import { copyManagedWorktreeMeta } from "../worktree.js";
 import { getExternalHarness } from "./registry.js";
 import { type ExternalLaunchResult, launchExternalRun } from "./run.js";
 
@@ -129,6 +131,7 @@ export async function dispatchExternalRun(input: {
 					config.name,
 					`external, ${config.harness}`,
 					runContext.workingDirectory,
+					runContext.managedWorktree,
 				),
 			},
 		],
@@ -210,6 +213,11 @@ export async function dispatchExternalFollowUp(input: {
 			`Role "${record.agent}" runs its command through a shell, which has no way to carry a resume session id. Delegate a new run instead, carrying forward whatever context it needs.`,
 		);
 	}
+	if (!existsSync(record.workingDirectory)) {
+		throw new RecoverableToolError(
+			`Run "${resolvedRunId}"'s working directory "${record.workingDirectory}" no longer exists (for example, an unchanged managed worktree was cleaned up on settlement). Delegate a new run instead.`,
+		);
+	}
 
 	assertVerifyAdmissible(role, record.purpose, record.workingDirectory);
 
@@ -251,6 +259,7 @@ export async function dispatchExternalFollowUp(input: {
 
 	let launchResult: ExternalLaunchResult;
 	try {
+		await copyManagedWorktreeMeta(record.artifactDir, artifactDir).catch(() => false);
 		const envelopedTask = buildFollowUpTask(
 			task,
 			{

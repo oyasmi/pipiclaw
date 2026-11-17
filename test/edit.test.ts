@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
+import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { createEditTool } from "../src/tools/edit.js";
 
 const fileStore = createFileStore();
@@ -46,6 +47,45 @@ describe("edit tool", () => {
 		expect(text).toContain("+2 delta");
 		expect(result.details).toMatchObject({ diff: expect.stringContaining("-2 beta") });
 		expect(result.details).toMatchObject({ diff: expect.stringContaining("+2 delta") });
+
+		// Direction 1.3: an active delegation write or verify-read lease on the parent checkout blocks
+		// main/task `edit` with RecoverableToolError, while allowing the owning worker (`leaseOwnerRunId`).
+		const dir = join(path, "..");
+		const verifyLease = acquireWorkspaceLease({
+			runId: "run_verify1",
+			channelId: "dingtalk:dm:1",
+			workingDirectory: dir,
+			mode: "read",
+		});
+		expect(verifyLease.ok).toBe(true);
+		try {
+			await expect(tool.execute("call-blocked", { path, oldText: "delta", newText: "epsilon" })).rejects.toThrow(
+				/verification delegation run_verify1/,
+			);
+			expect(readFileSync(path, "utf-8")).toBe("alpha\ndelta\ngamma\n");
+		} finally {
+			if (verifyLease.ok) releaseWorkspaceLease(verifyLease.leaseKey, "run_verify1");
+		}
+
+		const writeLease = acquireWorkspaceLease({
+			runId: "run_write1",
+			channelId: "dingtalk:dm:1",
+			workingDirectory: dir,
+		});
+		expect(writeLease.ok).toBe(true);
+		try {
+			await expect(tool.execute("call-blocked-w", { path, oldText: "delta", newText: "epsilon" })).rejects.toThrow(
+				/write delegation run_write1/,
+			);
+			const workerTool = createEditTool(fileStore, {
+				securityConfig: disabledSecurity,
+				leaseOwnerRunId: "run_write1",
+			});
+			await workerTool.execute("call-worker", { path, oldText: "delta", newText: "epsilon" });
+			expect(readFileSync(path, "utf-8")).toBe("alpha\nepsilon\ngamma\n");
+		} finally {
+			if (writeLease.ok) releaseWorkspaceLease(writeLease.leaseKey, "run_write1");
+		}
 	});
 
 	it("replaces every occurrence when replaceAll is set", async () => {

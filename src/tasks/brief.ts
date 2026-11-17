@@ -110,6 +110,19 @@ function renderSettleInput(settle: TaskSettleRecord): string {
 	const head = [settle.ref, settle.item, describeSettlement(settle)].filter(Boolean).join(" · ");
 	const lines = [`[结果 ${head}]`];
 	if (settle.output) lines.push(`完整输出：${settle.output}`);
+	if (settle.worktree) {
+		if (settle.worktree.cleaned) {
+			lines.push(`Worktree：无改动，已自动回收（headSha=${settle.worktree.headSha.slice(0, 12)}）`);
+		} else {
+			const files =
+				settle.worktree.changedFiles.length > 0 ? settle.worktree.changedFiles.slice(0, 20).join(", ") : "无";
+			const more = settle.worktree.changedFiles.length > 20 ? ` (+${settle.worktree.changedFiles.length - 20})` : "";
+			const dirty = settle.worktree.dirty ? "，含未提交改动" : "";
+			lines.push(
+				`Worktree：${settle.worktree.path}（branch=${settle.worktree.branch ?? "detached"}，headSha=${settle.worktree.headSha}${dirty}，changedFiles=${files}${more}）`,
+			);
+		}
+	}
 	if (settle.changed) lines.push(`改动（git status）：${settle.changed}`);
 	lines.push(`<untrusted_agent_output>\n${settle.tail ?? "（无输出）"}\n</untrusted_agent_output>`);
 	return lines.join("\n");

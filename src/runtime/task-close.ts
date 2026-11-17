@@ -70,6 +70,8 @@ export async function finishTaskClose(
 				throw new RecoverableToolError("Task still has work in flight; stop that work before retrying completion.");
 		}
 		if (close.outcome === "cancel") await cancelWork(live.desk, live.taskId);
+		const runMgr = ctx.options.getRuns(live.desk);
+		const retainedWorktrees = await Promise.resolve(runMgr.reclaimTaskWorktrees?.(live.taskId) ?? []).catch(() => []);
 		const closed = await closeTask(live.deskDir, live.taskId, {
 			outcome: close.outcome,
 			by: "leader",
@@ -77,8 +79,8 @@ export async function finishTaskClose(
 			reportId: close.reportId,
 			receipt: (document, closedAt) =>
 				close.outcome === "complete"
-					? completedReceipt(live.taskId, title, document, closedAt)
-					: cancelledByLeaderReceipt(live.taskId, title, close.note),
+					? completedReceipt(live.taskId, title, document, closedAt, retainedWorktrees)
+					: cancelledByLeaderReceipt(live.taskId, title, close.note, retainedWorktrees),
 		});
 		if (!closed) {
 			await dispose(live);

@@ -288,10 +288,10 @@ flowchart LR
 - **解耦“活跃后台工作”与“当前聊天通道绑定”**：工位只要仍有 `running/waiting` 的 Task 或启用的定时 Event，即保持后台激活推进（结果投递至任务记录的归属通道）；用户在唯一钉钉 DM 中临时 `/desk bind repo-b` 聊天不再冻结 `repo-a` 的后台长任务！同时提供 `/desk archive <name>` 干净回收不再使用的临时项目工位。
 - **“用户全局层 + 工位项目层”记忆清晰分工**：允许 `memory_save`（及 `reflect` 中高置信度的跨项目个人习惯）指定 `scope: "user" | "desk"`（底层对应已有的 `workspace/MEMORY.md` 或 `workspace/memory/` 与 `desk-<name>/memory/`），彻底打通多仓库间的个人工程偏好复用。
 
-#### 方向 1.3：运行时辅助的轻量 Git Worktree 隔离与读写租约
+#### 方向 1.3：运行时辅助的轻量 Git Worktree 隔离与读写租约（✅ 已完成）
 - **薄封装而非重沙盒**：
-  - 在 `workspace-lease.ts` 中引入读写锁语义：`purpose: "verify"` 持共享读租约（防止核验中途被写操作污染），主会话/任务会话的 `write`/`edit` 检查目标路径是否存在活跃的子代理独占写租约（冲突时抛 `RecoverableToolError` 引导模型等待或改用 worktree）；
-  - 为 `subagent` 增加可选 `worktree: true`（仅当目标目录为 Git 仓库且 `mutates: "write"` 时生效）：由运行时在 `.git/pipiclaw-worktrees/<runId>` 自动创建独立分支/分离头工作树，执行完毕后在结算结果中结构化返回 `branch`、`headSha`、`changedFiles` 摘要，并在父任务关闭或超时后自动 `git worktree remove` 回收干净工作树（有未合并改动时保留并提示）。
+  - 在 [workspace-lease.ts](../../src/subagents/workspace-lease.ts)、[write-content.ts](../../src/tools/write-content.ts) 与 [edit.ts](../../src/tools/edit.ts) 中引入完整读写锁语义：`purpose: "verify"`（`mutates: "read"`）持共享读租约（允许并行核验、阻止并发写入污染），主会话/任务会话的 `write`/`edit` 检查目标路径是否存在活跃子代理写租约或核验读租约（冲突时抛 `RecoverableToolError` 引导模型等待或改用 `worktree: true`，内置子代理通过 `leaseOwnerRunId` 放行自身持锁目录且豁免工位控制面文件）；
+  - 为 `subagent` / `subagent_inline` 落地运行时托管 `worktree: true`（[worktree.ts](../../src/subagents/worktree.ts)、[dispatch.ts](../../src/subagents/dispatch.ts)）：在 `<gitCommonDir>/pipiclaw-worktrees/<runId>`（`.git/pipiclaw-worktrees/<runId>`）自动创建 `pipiclaw/<runId>` 分支工作树，结算时在 `details.worktree`、`RunRecord`、唤醒通知与任务结算输入中结构化返回 `branch`、`headSha`、`changedFiles`；无改动工作树于结算时即刻回收，已合并的干净工作树在父任务关闭（[task-close.ts](../../src/runtime/task-close.ts)、[task-control.ts](../../src/runtime/task-control.ts)、[lifecycle.ts](../../src/tools/task-manage/lifecycle.ts)）或 24h 超时巡检（[runs.ts](../../src/subagents/runs.ts)）时自动 `git worktree remove` 回收，含未提交或未合并提交的工作树自动保留并在回执/日志中明确提示。
 
 #### 方向 1.4：打通“已完成任务归档（Task Archive）”检索与 Shell 守卫降噪（✅ 已完成）
 - **统一历史工作召回**：为 `task_list` 增加 `includeArchived` / 关键词过滤，或提供轻量 `work_search`（同时覆盖 `tasks/archive/*.md` 的目标/最终交付摘要与全量 `conversations/*/log.jsonl`），让模型在接新需求时能秒查“上次这个模块是怎么改的”（已在 [session-corpus.ts](../../src/memory/session-corpus.ts) 打通 `tasks/archive/<id>.md` 与 `<id>.jsonl` 的 `report`/`ask`/`message`/`close` 归档索引）。

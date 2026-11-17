@@ -5,7 +5,7 @@ import { extractTaskTitle, normalizeTaskId, readActiveTasks } from "../../tasks/
 import type { TaskLiveSnapshot } from "../../tasks/control.js";
 import { readTaskLog } from "../../tasks/loop-log.js";
 import { withTaskMutation } from "../../tasks/mutation-lock.js";
-import { completedReceipt } from "../../tasks/receipts.js";
+import { completedReceipt, formatRetainedWorktreeLines } from "../../tasks/receipts.js";
 import { closeTask as closeStoredTask, readStoredTask } from "../../tasks/store.js";
 import { RecoverableToolError } from "../contract/details.js";
 import { assertCompletable, requiredField, tasksDir } from "./shared.js";
@@ -146,12 +146,14 @@ export async function closeTaskFromChat(
 		if (outcome.kind === "not_found") throw new RecoverableToolError(`Task "${id}" no longer exists.`);
 		const stopped =
 			outcome.cancelled.length > 0 ? ` 同时取消了在途的委派/作业：${outcome.cancelled.join(", ")}。` : "";
+		const retained = formatRetainedWorktreeLines(outcome.retainedWorktrees);
+		const retainedNote = retained.length > 0 ? `\n${retained.join("\n")}` : "";
 		return {
 			action: "close",
 			id,
 			archived: true,
 			cancelled: outcome.cancelled,
-			notice: `任务 \`${id}\` 已取消并归档。${stopped}`,
+			notice: `任务 \`${id}\` 已取消并归档。${stopped}${retainedNote}`,
 		};
 	}
 
@@ -176,6 +178,9 @@ export async function closeTaskFromChat(
 			);
 		}
 		const finalReport = finalTaskReport(await readTaskLog(options.deskDir, id, { strict: true }), { fromChat: true });
+		const retainedWorktrees = await Promise.resolve(options.runManager.reclaimTaskWorktrees?.(id) ?? []).catch(
+			() => [],
+		);
 		const closed = await closeStoredTask(options.deskDir, id, {
 			outcome: "complete",
 			by: "user",
@@ -183,7 +188,8 @@ export async function closeTaskFromChat(
 			reportId: finalReport.id,
 			receipt:
 				current.fields.channel !== options.channelId
-					? (document, closedAt) => completedReceipt(id, extractTaskTitle(document.body, id), document, closedAt)
+					? (document, closedAt) =>
+							completedReceipt(id, extractTaskTitle(document.body, id), document, closedAt, retainedWorktrees)
 					: undefined,
 		});
 		options.control?.created(options.desk, id);
@@ -193,7 +199,13 @@ export async function closeTaskFromChat(
 			action: "close",
 			id,
 			archived: true,
-			notice: completedReceipt(id, extractTaskTitle(closed.body, id), closed, closed.fields.closedAt),
+			notice: completedReceipt(
+				id,
+				extractTaskTitle(closed.body, id),
+				closed,
+				closed.fields.closedAt,
+				retainedWorktrees,
+			),
 		};
 	});
 }

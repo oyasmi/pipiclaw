@@ -2,6 +2,7 @@ import type { FileStore } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { assertPathWritableUnderLease } from "../subagents/workspace-lease.js";
 import { preserveTaskFields, withTaskFileMutation } from "../tasks/file-mutation.js";
 
 export async function writeContent(
@@ -16,6 +17,7 @@ export async function writeContent(
 		securityContext?: SecurityRuntimeContext;
 		channelId?: string;
 		toolName?: string;
+		leaseOwnerRunId?: string;
 	},
 ): Promise<string> {
 	const createParentDir = options?.createParentDir ?? false;
@@ -28,6 +30,10 @@ export async function writeContent(
 	const target = await checkPathGuard(path, "write", securityConfig, securityContext, {
 		tool: options?.toolName ?? "write",
 		channelId: options?.channelId,
+	});
+	assertPathWritableUnderLease(target, {
+		deskDir: options?.deskDir,
+		excludeRunId: options?.leaseOwnerRunId,
 	});
 
 	// Atomic write via a same-directory temp file + rename, with fsync (spec 044, D3): `writeAtomic`

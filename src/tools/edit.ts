@@ -6,6 +6,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { assertPathWritableUnderLease } from "../subagents/workspace-lease.js";
 import { withTaskFileMutation } from "../tasks/file-mutation.js";
 
 /**
@@ -116,6 +117,7 @@ export interface EditToolOptions {
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
+	leaseOwnerRunId?: string;
 }
 
 /** Max diff lines echoed back to the model in the success result before eliding the rest. */
@@ -370,6 +372,10 @@ export function createEditTool(fileStore: FileStore, options: EditToolOptions = 
 			await checkPathGuard(path, "write", securityConfig, securityContext, {
 				tool: "edit",
 				channelId: options.channelId,
+			});
+			assertPathWritableUnderLease(target, {
+				deskDir: options.deskDir,
+				excludeRunId: options.leaseOwnerRunId,
 			});
 
 			return withTaskFileMutation(options.deskDir, target, async () => {

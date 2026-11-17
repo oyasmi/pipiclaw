@@ -14,6 +14,7 @@ export interface WriteToolOptions {
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
+	leaseOwnerRunId?: string;
 }
 
 export function createWriteTool(fileStore: FileStore, options: WriteToolOptions = {}): AgentTool<typeof writeSchema> {
@@ -38,6 +39,7 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 				securityContext: options.securityContext,
 				channelId: options.channelId,
 				toolName: "write",
+				leaseOwnerRunId: options.leaseOwnerRunId,
 			});
 			const bytesWritten = Buffer.byteLength(content, "utf-8");
 			return {

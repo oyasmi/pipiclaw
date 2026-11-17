@@ -103,6 +103,16 @@ export interface TaskSettleRecord {
 	tail?: string;
 	/** A run's working directory afterwards (`git status --porcelain`), as the completion wake shows it. */
 	changed?: string;
+	/** Structured summary when a bound write delegation executed in a runtime-managed Git worktree. */
+	worktree?: {
+		path: string;
+		baseHead?: string;
+		branch: string | null;
+		headSha: string;
+		changedFiles: string[];
+		dirty?: boolean;
+		cleaned?: boolean;
+	};
 	exitCode?: number;
 	durationMs?: number;
 	/**
@@ -479,7 +489,7 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 		case "dispatch":
 			return `- ${at} 派发 ${record.ref}${record.item ? ` → ${record.item}` : ""}${record.agent ? ` (${record.agent}${record.purpose === "verify" ? ", verify" : ""})` : ""}`;
 		case "settle":
-			return `- ${at} 结算 ${record.ref}: ${record.status}${record.verdict ? ` VERDICT ${record.verdict.toUpperCase()}` : ""}${record.exitCode !== undefined ? ` exit ${record.exitCode}` : ""}${record.output ? ` · ${record.output}` : ""}`;
+			return `- ${at} 结算 ${record.ref}: ${record.status}${record.verdict ? ` VERDICT ${record.verdict.toUpperCase()}` : ""}${record.exitCode !== undefined ? ` exit ${record.exitCode}` : ""}${record.worktree && !record.worktree.cleaned ? ` · worktree ${record.worktree.branch ?? record.worktree.headSha.slice(0, 8)} (${record.worktree.changedFiles.length} files)` : ""}${record.output ? ` · ${record.output}` : ""}`;
 		case "stall":
 			return `- ${at} 卡顿 ${record.ref}: 已 ${record.silentMinutes} 分钟没有输出`;
 		case "message":

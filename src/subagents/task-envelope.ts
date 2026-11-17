@@ -112,6 +112,11 @@ export function buildSubAgentTask(
 		`- Desk directory: ${runtimeContext.deskDir}`,
 		`- Channel id: ${runtimeContext.channelId}`,
 		`- Working directory: ${runContext.workingDirectory}`,
+		...(runContext.managedWorktree
+			? [
+					`- Isolated git worktree: ${runContext.managedWorktree.path} (branch: ${runContext.managedWorktree.branch ?? "detached"}, base: ${runContext.managedWorktree.baseHead.slice(0, 12)}; make all edits inside Working directory — do not modify ${runContext.managedWorktree.baseDir})`,
+				]
+			: []),
 		`- Artifact directory: ${runContext.artifactDir}`,
 		`- Your configured role: ${config.name}`,
 	];

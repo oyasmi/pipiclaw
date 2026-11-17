@@ -12,7 +12,7 @@ import type { FileStore } from "../file-store.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { SubAgentToolName } from "../tools/contract/names.js";
 import type { UsageTotals } from "../usage/totals.js";
-import type { RunHarness, SubAgentThinkingLevel } from "./run-record.js";
+import type { ManagedWorktreeSummary, RunHarness, SubAgentThinkingLevel } from "./run-record.js";
 import type { SubAgentRunManager } from "./runs.js";
 
 export const DEFAULT_SUB_AGENT_TOOLS = ["read", "bash"] as const;
@@ -137,6 +137,8 @@ export interface SubAgentToolFields {
 	 * not as another tool result.
 	 */
 	dispatched?: boolean;
+	/** Structured worktree details when `worktree: true` was requested. */
+	worktree?: ManagedWorktreeSummary;
 }
 
 /** Exported for `subagent_run op=follow_up` (spec 042 D7), which constructs one of these for
@@ -148,7 +150,12 @@ export interface SubAgentRunContext {
 	item?: string;
 	workingDirectory: string;
 	artifactDir: string;
-	managedWorktree?: boolean;
+	managedWorktree?: {
+		path: string;
+		baseDir: string;
+		branch: string | null;
+		baseHead: string;
+	};
 }
 
 /** The delegation parameters both invocation surfaces share (`task` plus routing). */
@@ -192,6 +199,7 @@ export interface WorkerToolRequest {
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
 	bashDefaultTimeoutSeconds: number;
+	leaseOwnerRunId?: string;
 }
 
 /** Builds a sub-agent's scoped tool set from the shared registry; injected by `tools/index.ts`. */

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { RunHarness, RunMutates, SettleInput } from "../run-record.js";
 import { resolveVerificationVerdict } from "../verification-outcome.js";
 import { changedPathsSummary, type WorkspaceBaseline } from "../workspace-summary.js";
+import { settleManagedWorktree } from "../worktree.js";
 import { classifyExternalOutcome, type ExternalOutcome } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
 
@@ -127,9 +128,12 @@ export async function finalizeExternalRun(
 		maxWallTimeSec: input.maxWallTimeSec,
 	});
 
+	const worktree = await settleManagedWorktree(input.artifactDir).catch(() => undefined);
+	if (worktree) settleInput = { ...settleInput, worktree };
+
 	// P2-2: only for a run that actually could have changed the working directory, and only once it
 	// is known to have finished cleanly — best-effort, never blocks or fails settlement.
-	if (input.mutates === "write" && settleInput.status === "completed") {
+	if (input.mutates === "write" && settleInput.status === "completed" && !worktree?.cleaned) {
 		const workspaceSummary = await changedPathsSummary(input.workingDirectory, input.workspaceBaseline).catch(
 			() => undefined,
 		);

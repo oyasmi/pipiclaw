@@ -20,6 +20,17 @@ export type RunResolution =
 	| { kind: "ambiguous"; candidates: RunRecord[] }
 	| { kind: "not_found" };
 
+/** Structured Git worktree outcome persisted on settlement when `worktree: true` was used (Direction 1.3). */
+export interface ManagedWorktreeSummary {
+	path: string;
+	baseHead: string;
+	branch: string | null;
+	headSha: string;
+	changedFiles: string[];
+	dirty: boolean;
+	cleaned: boolean;
+}
+
 /** The settlement intent persisted before a run's terminal record is published. */
 export interface PendingSettlement {
 	status: SettleInput["status"];
@@ -33,6 +44,7 @@ export interface PendingSettlement {
 	durationEstimated?: boolean;
 	verificationVerdict?: "pass" | "fail";
 	workspaceSummary?: string;
+	worktree?: ManagedWorktreeSummary;
 	sessionId?: string;
 	model?: string;
 	finishedAt: number;
@@ -75,6 +87,10 @@ export interface RunRecord extends RunUsage {
 	/** P2-2: `git status --porcelain` taken right after a `mutates: "write"` run finished, so the
 	 *  wake's reader does not have to spend its own first tool call finding out what changed. */
 	workspaceSummary?: string;
+	/** Structured summary for runtime-managed `worktree: true` runs (`branch`, `headSha`, `changedFiles`). */
+	worktree?: ManagedWorktreeSummary;
+	/** Set once a dirty/unmerged worktree retention warning has been emitted on timeout sweep. */
+	worktreeRetainWarned?: boolean;
 	/** A write run's dirty-path snapshot at dispatch, so the post-run summary reports only what this
 	 *  run changed (see `workspace-summary.ts`). Persisted so restart reconciliation can use it too. */
 	workspaceBaseline?: WorkspaceBaseline;
@@ -208,6 +224,8 @@ export interface SettleInput {
 	verificationVerdict?: "pass" | "fail";
 	/** P2-2: see `RunRecord.workspaceSummary`. */
 	workspaceSummary?: string;
+	/** Structured worktree summary when `worktree: true` was used. */
+	worktree?: ManagedWorktreeSummary;
 	/** The harness's own session/thread id, captured even on failure so a later resume can still use it. */
 	sessionId?: string;
 	/** The model that actually produced the result, when it differs from the one registered (an
@@ -274,6 +292,8 @@ export function normalizeRunIdQuery(query: string): string {
 /** Settled runs and every runtime-managed artifact are retained together for 30 days. GC runs
  *  daily, so an item can remain for up to one additional sweep interval after this age. */
 export const RUN_RETENTION_MS = 30 * 24 * 60 * 60_000;
+/** Clean/merged runtime-managed worktrees of standalone runs are reclaimed after 24 hours; unmerged worktrees stay on disk. */
+export const WORKTREE_RETENTION_MS = 24 * 60 * 60_000;
 export const RUN_ARTIFACT_FILENAMES = [
 	"prompt.txt",
 	"system-prompt.txt",
@@ -299,6 +319,7 @@ export function createPendingSettlement(input: SettleInput, finishedAt: number, 
 		durationEstimated: input.durationEstimated,
 		verificationVerdict: input.verificationVerdict,
 		workspaceSummary: input.workspaceSummary,
+		worktree: input.worktree,
 		sessionId: input.sessionId,
 		model: input.model,
 		finishedAt,
@@ -318,6 +339,7 @@ export function applyPendingSettlement(record: RunRecord, pending: PendingSettle
 	record.durationEstimated = pending.durationEstimated;
 	record.verificationVerdict = pending.verificationVerdict;
 	record.workspaceSummary = pending.workspaceSummary;
+	if (pending.worktree) record.worktree = pending.worktree;
 	if (pending.sessionId) record.sessionId = pending.sessionId;
 	if (pending.model) record.model = pending.model;
 	record.finishedAt = pending.finishedAt;

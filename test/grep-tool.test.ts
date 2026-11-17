@@ -347,5 +347,14 @@ describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
 		expect(text).toContain("== b.tsx ==");
 		expect(text).toContain("== sub/d.ts ==");
 		expect(text).not.toContain("c.js");
+
+		// Search root inside `.git/pipiclaw-worktrees/<runId>` must not drop matches because of the
+		// ancestor `.git` segment, while still filtering `node_modules` beneath that search root.
+		const wtRoot = "/tmp/repo/.git/pipiclaw-worktrees/run_abc";
+		const wtOut = [`${wtRoot}/src/app.ts:3:hit`, `${wtRoot}/node_modules/pkg/index.ts:1:hit`].join("\n");
+		const { tool: wtTool } = makeTool(wtOut);
+		const wtText = await run(wtTool, { pattern: "hit", path: wtRoot });
+		expect(wtText).toContain("src/app.ts");
+		expect(wtText).not.toContain("node_modules");
 	});
 });

@@ -119,6 +119,7 @@ export function buildSubagentTools(
 			webConfig: options.webConfig,
 			rtkEnabled: options.rtkEnabled,
 			bashDefaultTimeoutSeconds: bashTimeoutSec,
+			leaseOwnerRunId: runContext.runId,
 		})
 		.filter((tool) => runContext.purpose !== "verify" || (tool.name !== "write" && tool.name !== "edit"));
 }

@@ -100,7 +100,7 @@ function runDuration(record: RunRecord): string {
 function formatRunLine(record: RunRecord): string {
 	const bits = [harnessLabel(record), runDuration(record)];
 	if (record.taskId) bits.push(`任务 ${record.taskId}`);
-	if (record.leaseKey) bits.push("持有写锁");
+	if (record.leaseKey) bits.push(record.mutates === "read" ? "持有读锁" : "持有写锁");
 	const cost = formatCost(record);
 	if (cost) bits.push(cost);
 	const header = `- \`${record.runId}\` ${record.agent}（${bits.join("，")}）· ${statusLabel(record.status)} · “${truncate(record.label, 60)}”`;
@@ -245,7 +245,15 @@ async function showRun(manager: SubAgentRunManager, ref: string): Promise<string
 		`- 产物目录：\`${record.artifactDir}\``,
 	);
 	if (record.taskId) lines.push(`- 所属任务：\`${record.taskId}\``);
-	if (record.leaseKey) lines.push("- 持有写锁：是");
+	if (record.leaseKey) lines.push(record.mutates === "read" ? "- 持有读锁：是" : "- 持有写锁：是");
+	if (record.worktree) {
+		const w = record.worktree;
+		lines.push(
+			w.cleaned
+				? `- 隔离工作树：已自动回收（提交 \`${w.headSha.slice(0, 12)}\`）`
+				: `- 隔离工作树：\`${w.path}\`（分支 \`${w.branch ?? "detached"}\`，提交 \`${w.headSha.slice(0, 12)}\`，变更 ${w.changedFiles.length} 个文件${w.dirty ? "，含未提交改动" : ""}）`,
+		);
+	}
 	if (record.model) lines.push(`- 模型：${record.model}`);
 	const cost = formatCost(record);
 	const costText = cost ? `，花费 ${cost}` : record.costKnown ? "" : "，花费未知";

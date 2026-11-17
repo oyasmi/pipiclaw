@@ -4,6 +4,7 @@ import { parseLocalTime } from "../shared/local-time.js";
 import { truncate } from "../shared/text-utils.js";
 import { taskCostSummary } from "./budget.js";
 import { parseTaskItems } from "./contract.js";
+import type { RetainedWorktreeInfo } from "./control.js";
 import type { TaskFrontmatter } from "./frontmatter.js";
 import type { GuardBreach } from "./state.js";
 
@@ -35,11 +36,25 @@ export function pausedReceipt(id: string, title: string, reason: string, breach?
 	);
 }
 
+export function formatRetainedWorktreeLines(retained?: readonly RetainedWorktreeInfo[]): string[] {
+	if (!retained || retained.length === 0) return [];
+	const lines = retained.slice(0, 3).map((item) => {
+		const ref = item.branch ? `分支 \`${item.branch}\`` : `提交 \`${item.headSha.slice(0, 12)}\``;
+		const why = item.reason === "dirty" ? "含未提交改动" : "含未合并提交";
+		return `- ⚠️ 保留未合并工作树：\`${item.path}\`（委派 \`${item.runId}\`，${ref}，${why}）`;
+	});
+	if (retained.length > 3) {
+		lines.push(`- ⚠️ 另有 ${retained.length - 3} 个未合并工作树已保留在本地仓库`);
+	}
+	return lines;
+}
+
 export function completedReceipt(
 	id: string,
 	title: string,
 	document: { fields: TaskFrontmatter; body: string },
 	closedAt: string,
+	retainedWorktrees?: readonly RetainedWorktreeInfo[],
 ): string {
 	const usage = document.fields.usage;
 	const since = usage ? parseLocalTime(usage.startedAt) : undefined;
@@ -56,17 +71,34 @@ export function completedReceipt(
 			...(items
 				? [`- 工作项：${items.done}/${items.total}${dropped.length > 0 ? `；已放弃：${dropped.join("、")}` : ""}`]
 				: []),
+			...formatRetainedWorktreeLines(retainedWorktrees),
 		].join("\n"),
 		{ nextStepHint: `用 \`/tasks show ${id}\` 查看详情` },
 	).text;
 }
 
 /** The leader cancelled its own task. */
-export function cancelledByLeaderReceipt(id: string, title: string, note: string): string {
-	return `🛑 任务 \`${id}\`（${title}）已取消：${truncate(note.replace(/\s+/g, " "), 160)}`;
+export function cancelledByLeaderReceipt(
+	id: string,
+	title: string,
+	note: string,
+	retainedWorktrees?: readonly RetainedWorktreeInfo[],
+): string {
+	const retained = formatRetainedWorktreeLines(retainedWorktrees);
+	return capReply(
+		[`🛑 任务 \`${id}\`（${title}）已取消：${truncate(note.replace(/\s+/g, " "), 160)}`, ...retained].join("\n"),
+		{ nextStepHint: `用 \`/tasks log ${id}\` 查看记录` },
+	).text;
 }
 
 /** The user cancelled from another channel of the desk; the report channel should not be left wondering. */
-export function cancelledByUserReceipt(id: string, title: string): string {
-	return `🛑 任务 \`${id}\`（${title}）已被取消。`;
+export function cancelledByUserReceipt(
+	id: string,
+	title: string,
+	retainedWorktrees?: readonly RetainedWorktreeInfo[],
+): string {
+	const retained = formatRetainedWorktreeLines(retainedWorktrees);
+	return capReply([`🛑 任务 \`${id}\`（${title}）已被取消。`, ...retained].join("\n"), {
+		nextStepHint: `用 \`/tasks log ${id}\` 查看记录`,
+	}).text;
 }

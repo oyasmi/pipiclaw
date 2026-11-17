@@ -49,6 +49,11 @@ export function buildRunCompletionWake(input: {
 		truncatedChars > 0
 			? `(truncated: ${truncatedChars} earlier chars omitted; read output.md for the full text)\n`
 			: "";
+	const worktreeLine = record.worktree
+		? record.worktree.cleaned
+			? `Worktree: unchanged at ${record.worktree.headSha.slice(0, 12)} (cleaned up automatically)\n`
+			: `Worktree: ${record.worktree.path} (branch=${record.worktree.branch ?? "detached"}, headSha=${record.worktree.headSha}${record.worktree.dirty ? ", uncommitted changes" : ""}, changedFiles=${record.worktree.changedFiles.length > 0 ? record.worktree.changedFiles.slice(0, 20).join(", ") : "(none)"}${record.worktree.changedFiles.length > 20 ? ` (+${record.worktree.changedFiles.length - 20} more)` : ""})\n`
+		: "";
 	const workspaceLine = record.workspaceSummary
 		? `Workspace after the run (git status --porcelain): ${record.workspaceSummary}\n`
 		: "";
@@ -84,6 +89,7 @@ export function buildRunCompletionWake(input: {
 			(outputSaved
 				? `Full output: ${join(record.artifactDir, "output.md")}\n`
 				: `No text output was produced. Run artifacts: ${record.artifactDir}\n`) +
+			worktreeLine +
 			workspaceLine +
 			"Continue whatever was waiting on this delegation. If it needs no follow-up, respond with exactly [SILENT].",
 		ts: String(Date.now()),

@@ -1,8 +1,10 @@
-import { mkdirSync, realpathSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import {
 	acquireWorkspaceLease,
+	assertPathWritableUnderLease,
 	findWorkspaceLeaseHolder,
 	formatWorkspaceLeaseConflict,
 	releaseWorkspaceLease,
@@ -69,10 +71,23 @@ describe("workspace lease (spec 040, D10.1)", () => {
 
 	it("resolves symlinked working directories to the same realpath, so a symlink cannot dodge a conflict", () => {
 		const dir = createTempDir();
+		const linkParent = createTempDir();
+		const link = join(linkParent, "alias-checkout");
+		symlinkSync(dir, link);
 		const resolved = realpathSync(dir);
 		const first = acquireWorkspaceLease({ runId: "run-1", channelId: "dingtalk:dm:1", workingDirectory: dir });
 		expect(first.ok).toBe(true);
 		if (first.ok) expect(first.leaseKey).toBe(resolved);
+		// Even a not-yet-created nested file addressed through a symlink must conflict with the active lease,
+		// while the owning worker itself (`excludeRunId`) and isolated `.git/pipiclaw-worktrees/` paths do not.
+		expect(() => assertPathWritableUnderLease(join(link, "new-dir", "new-file.ts"))).toThrow(RecoverableToolError);
+		expect(() =>
+			assertPathWritableUnderLease(join(link, "new-dir", "new-file.ts"), { excludeRunId: "run-1" }),
+		).not.toThrow();
+		expect(() =>
+			assertPathWritableUnderLease(join(dir, ".git", "pipiclaw-worktrees", "run-2", "file.ts")),
+		).not.toThrow();
+		expect(() => assertPathWritableUnderLease(join(dir, "tasks", "t1.md"), { deskDir: dir })).not.toThrow();
 		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined, "run-1");
 	});
 
@@ -121,6 +136,10 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		if (!writerWhileVerifying.ok) {
 			expect(formatWorkspaceLeaseConflict(writerWhileVerifying.heldBy)).toContain("read lease");
 		}
+		// Main/task write/edit check also rejects writes into a checkout held by a verification read lease.
+		expect(() => assertPathWritableUnderLease(join(dir, "src", "app.ts"))).toThrow(
+			/verification delegation verify-1/,
+		);
 
 		releaseWorkspaceLease(verify1.ok ? verify1.leaseKey : undefined, "verify-1");
 		expect(

@@ -9,6 +9,7 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { logTaskDispatch, logTaskStall } from "../tasks/bound-work.js";
+import type { RetainedWorktreeInfo } from "../tasks/control.js";
 import { readStoredTask } from "../tasks/store.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
@@ -40,7 +41,12 @@ import {
 } from "./run-record.js";
 import { creditTaskForRun } from "./task-settlement.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
-import { cleanupManagedWorktreeIfUnchanged } from "./worktree.js";
+import {
+	reclaimManagedWorktree,
+	reclaimTaskManagedWorktrees,
+	settleManagedWorktree,
+	sweepExpiredRunWorktree,
+} from "./worktree.js";
 
 /**
  * The run: one abstraction level for delegation, whether it executes as an in-process sub-agent
@@ -295,6 +301,7 @@ export class SubAgentRunManager {
 	private async forget(record: RunRecord): Promise<void> {
 		// Delete artifacts before the durable record. If a real filesystem error occurs, retaining
 		// the record keeps the run eligible for a later daily retry instead of orphaning its files.
+		await reclaimManagedWorktree(record.artifactDir).catch(() => undefined);
 		await Promise.all(RUN_ARTIFACT_FILENAMES.map((name) => unlinkIfPresent(join(record.artifactDir, name))));
 		// Only removes the directory when it is now actually empty — a run that left extra files
 		// behind (e.g. `returns: "artifact"`) keeps its directory, matching the "not recursively
@@ -514,8 +521,14 @@ export class SubAgentRunManager {
 			// Keep the externally visible record `running` while the settlement intent is made durable.
 			// This preserves restart recovery without publishing a terminal status before its lease is
 			// released: the caller reaches settle() only after its worker/process has finished.
+			const worktree = await settleManagedWorktree(
+				record.artifactDir,
+				record.settlementPending?.worktree ?? input.worktree,
+			).catch(() => undefined);
+			const effectiveInput = worktree ? { ...input, worktree } : input;
 			const snapshot = { ...record };
-			const pending = record.settlementPending ?? createPendingSettlement(input, Date.now(), options.announce);
+			const pending =
+				record.settlementPending ?? createPendingSettlement(effectiveInput, Date.now(), options.announce);
 			if (!record.settlementPending) {
 				record.settlementPending = pending;
 				try {
@@ -526,7 +539,7 @@ export class SubAgentRunManager {
 				}
 			}
 
-			const outputSaved = await this.writeOutputFile(record, input.outputText);
+			const outputSaved = await this.writeOutputFile(record, effectiveInput.outputText);
 			// This is the commit point for the observable state transition. Both operations are
 			// synchronous and adjacent: no observer can see a terminal record while this run still
 			// owns the lease. The durable intent above covers a crash before this point.
@@ -542,7 +555,6 @@ export class SubAgentRunManager {
 			this.recovery.remove(runId);
 			this.stopExternalProgressTail(runId);
 			this.internalProgressPacers.delete(runId);
-			await cleanupManagedWorktreeIfUnchanged(record.artifactDir).catch(() => undefined);
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
@@ -718,8 +730,9 @@ export class SubAgentRunManager {
 				record.wakeEnqueued = true;
 				releaseWorkspaceLease(record.leaseKey, record.runId);
 				record.leaseKey = undefined;
+				const worktree = await settleManagedWorktree(record.artifactDir).catch(() => undefined);
+				if (worktree) record.worktree = worktree;
 				await this.persist(record);
-				await cleanupManagedWorktreeIfUnchanged(record.artifactDir).catch(() => undefined);
 				return record.status;
 			}
 			return "running"; // A live handle or the adopted-run reconciliation below drives settlement.
@@ -796,30 +809,14 @@ export class SubAgentRunManager {
 				const pending = record.settlementPending;
 				record.leaseKey = undefined;
 				const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => "");
-				await this.settle(
-					record.runId,
-					{
-						status: pending.status,
-						failureReason: pending.failureReason,
-						usage: pending.usage,
-						usageKnown: pending.usageKnown,
-						costKnown: pending.costKnown,
-						turns: pending.turns,
-						toolCalls: pending.toolCalls,
-						durationMs: pending.durationMs,
-						durationEstimated: pending.durationEstimated,
-						outputText,
-						verificationVerdict: pending.verificationVerdict,
-						workspaceSummary: pending.workspaceSummary,
-						sessionId: pending.sessionId,
+				await this.settle(record.runId, { ...pending, outputText }, { announce: pending.announce }).catch(
+					(error) => {
+						log.logWarn("subagent.settle.failed", "Pending settlement could not be finished", {
+							reason: errorMessage(error),
+							fields: { runId: record?.runId },
+						});
 					},
-					{ announce: pending.announce },
-				).catch((error) => {
-					log.logWarn("subagent.settle.failed", "Pending settlement could not be finished", {
-						reason: errorMessage(error),
-						fields: { runId: record?.runId },
-					});
-				});
+				);
 				if (record.status === "running" && record.runtime === "external") this.recovery.add(record.runId);
 				continue;
 			}
@@ -997,16 +994,22 @@ export class SubAgentRunManager {
 		});
 	}
 
+	async reclaimTaskWorktrees(taskId: string): Promise<RetainedWorktreeInfo[]> {
+		return reclaimTaskManagedWorktrees(this.runs.values(), taskId, (record) => this.persist(record));
+	}
+
 	/**
 	 * Daily retention GC. A settled run and all runtime-managed artifacts are deleted together once
-	 * they are at least 30 days old. Other files deliberately created by the delegated task are
-	 * not recursively removed from the artifact directory.
+	 * they are at least 30 days old. Clean/merged managed worktrees are reclaimed after 24 hours;
+	 * dirty or unmerged worktrees stay on disk and emit a one-time warning.
 	 */
 	private async collectGarbageIfExpired(record: RunRecord, now = Date.now()): Promise<void> {
 		if (!record.settledAt || (record.taskId && !record.taskAccounted)) return;
 		if (now - record.settledAt >= RUN_RETENTION_MS) {
 			await this.forget(record);
+			return;
 		}
+		await sweepExpiredRunWorktree(record, now, (updated) => this.persist(updated));
 	}
 
 	async collectGarbage(now = Date.now()): Promise<void> {
@@ -1021,9 +1024,3 @@ export class SubAgentRunManager {
 		}
 	}
 }
-
-/**
- * The channel each record directory belongs to. The id is read out of a record itself — the one
- * lossless source, since a directory name is the *escaped* id and `__` cannot be turned back
- * into `/` — with the directory name as the fallback for a directory without a readable record.
- */

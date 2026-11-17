@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { formatModelReference } from "../models/reference.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import type { UsageTotals } from "../usage/totals.js";
+import type { ManagedWorktreeSummary } from "./run-record.js";
 import type { ResolvedSubAgentConfig, SubAgentConfig, SubAgentRunContext, SubAgentToolFields } from "./types.js";
 
 /**
@@ -38,9 +39,13 @@ export function buildDispatchedText(
 	agentName: string,
 	runtimeLabel: string,
 	workingDirectory: string,
+	managedWorktree?: SubAgentRunContext["managedWorktree"],
 ): string {
+	const worktreeNote = managedWorktree
+		? ` (isolated git worktree${managedWorktree.branch ? `, branch ${managedWorktree.branch}` : ""})`
+		: "";
 	return (
-		`[Dispatched] runId=${runId}, agent ${agentName} (${runtimeLabel}), working directory ${workingDirectory}.\n` +
+		`[Dispatched] runId=${runId}, agent ${agentName} (${runtimeLabel}), working directory ${workingDirectory}${worktreeNote}.\n` +
 		"Status: running. Whoever dispatched it (this chat, or the task whose step did) will be woken with the result and artifact path once it finishes.\n" +
 		"Finish independent work and dispatches, then end the turn when only waiting remains; do not re-dispatch or poll to wait."
 	);
@@ -81,11 +86,30 @@ export interface FinalizedSubAgentOutput {
  * needs a specific output file states the path in the task text instead, the path external roles
  * already had to follow.
  */
-export function finalizeSubAgentOutput(runContext: SubAgentRunContext, finalText: string): FinalizedSubAgentOutput {
+export function formatManagedWorktreeHeader(runContext: SubAgentRunContext, worktree?: ManagedWorktreeSummary): string {
+	if (!worktree && !runContext.managedWorktree) return "";
+	if (!worktree) {
+		return `[Managed git worktree: ${runContext.workingDirectory}]\n\n`;
+	}
+	if (worktree.cleaned) {
+		return `[Managed git worktree: unchanged at ${worktree.headSha.slice(0, 12)} (cleaned up automatically)]\n\n`;
+	}
+	const files = worktree.changedFiles.length > 0 ? worktree.changedFiles.slice(0, 20).join(", ") : "(none)";
+	const more = worktree.changedFiles.length > 20 ? ` (+${worktree.changedFiles.length - 20} more)` : "";
+	const dirty = worktree.dirty ? ", uncommitted changes" : "";
+	return (
+		`[Managed git worktree: ${worktree.path} | branch=${worktree.branch ?? "detached"} | ` +
+		`headSha=${worktree.headSha}${dirty} | changedFiles=${files}${more}]\n\n`
+	);
+}
+
+export function finalizeSubAgentOutput(
+	runContext: SubAgentRunContext,
+	finalText: string,
+	worktree?: ManagedWorktreeSummary,
+): FinalizedSubAgentOutput {
 	const outputPath = join(runContext.artifactDir, "output.md");
-	const worktreeHeader = runContext.managedWorktree
-		? `[Managed git worktree: ${runContext.workingDirectory}]\n\n`
-		: "";
+	const worktreeHeader = formatManagedWorktreeHeader(runContext, worktree);
 	const decorated = `${worktreeHeader}${finalText}`;
 
 	if (countPromptUnits(decorated) <= MAX_SUBAGENT_RESULT_UNITS && decorated.length <= MAX_SUBAGENT_RESULT_CHARS) {
@@ -116,7 +140,21 @@ export function createDetails(input: {
 	/** External roles report their harness's own model string, never `formatModelReference`. */
 	modelOverride?: string;
 	toolsOverride?: string[];
+	worktree?: ManagedWorktreeSummary;
 }): SubAgentToolFields {
+	const worktree =
+		input.worktree ??
+		(input.runContext.managedWorktree
+			? {
+					path: input.runContext.managedWorktree.path,
+					baseHead: input.runContext.managedWorktree.baseHead,
+					branch: input.runContext.managedWorktree.branch,
+					headSha: input.runContext.managedWorktree.baseHead,
+					changedFiles: [],
+					dirty: false,
+					cleaned: false,
+				}
+			: undefined);
 	return {
 		agent: input.config.name,
 		source: input.config.source,
@@ -142,5 +180,6 @@ export function createDetails(input: {
 		artifactDir: input.runContext.artifactDir,
 		resultTruncated: input.resultTruncated ?? false,
 		dispatched: input.dispatched,
+		...(worktree ? { worktree } : {}),
 	};
 }
