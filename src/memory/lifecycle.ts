@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
+import type { ModelRequests } from "../models/requests.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import {
@@ -41,7 +42,7 @@ export interface MemoryLifecycleOptions {
 	getMessages: () => AgentMessage[];
 	getSessionEntries: () => SessionEntry[];
 	getModel: () => Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	recordMemoryActivity?: (event: MemoryActivityEvent) => Promise<void> | void;
 	memoryQueue?: DeskMemoryQueue;
 }
@@ -186,7 +187,7 @@ export class MemoryLifecycle {
 				deskDir: this.options.conversation.deskDir,
 				workspaceDir: this.options.workspaceDir,
 				model: this.options.getModel(),
-				resolveApiKey: this.options.resolveApiKey,
+				modelRequests: this.options.modelRequests,
 				messages: sourceWindow.messages,
 				sourceClosed: true,
 				usageContext: {
@@ -249,7 +250,7 @@ export class MemoryLifecycle {
 			workspaceDir: this.options.workspaceDir,
 			appHomeDir: this.options.appHomeDir,
 			model: this.options.getModel(),
-			resolveApiKey: this.options.resolveApiKey,
+			modelRequests: this.options.modelRequests,
 			queue: this.memoryQueue,
 		});
 	}

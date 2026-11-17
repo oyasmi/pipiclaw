@@ -1,5 +1,5 @@
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as apiKeys from "../../../src/models/api-keys.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 describe("E2E deterministic: cancellation during internal backup-model resolution", () => {
@@ -26,14 +26,18 @@ describe("E2E deterministic: cancellation during internal backup-model resolutio
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		const getKey = apiKeys.getApiKeyForModel;
+		const getAuth = ModelRuntime.prototype.getAuth;
 		let backupLookups = 0;
-		vi.spyOn(apiKeys, "getApiKeyForModel").mockImplementation(async (registry, model) => {
+		vi.spyOn(ModelRuntime.prototype, "getAuth").mockImplementation(async function (
+			this: ModelRuntime,
+			model,
+			options,
+		) {
 			if (model.id === "mock-fallback" && ++backupLookups === lookup) {
 				entered();
 				await gate;
 			}
-			return getKey(registry, model);
+			return getAuth.call(this, model, options);
 		});
 		let parentCalls = 0;
 		current.model.script.route({

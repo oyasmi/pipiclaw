@@ -14,6 +14,7 @@ import {
 	testManagers,
 } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 /**
  * Spec 040, D2: a run that outlives the sync grace window degrades to a "still running"
@@ -55,7 +56,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },

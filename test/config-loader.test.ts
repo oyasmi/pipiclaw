@@ -1,16 +1,10 @@
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { getApiKeyForModel } from "../src/models/api-keys.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { loadPipiclawSkills } from "../src/skills/loader.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
-const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
-if (!anthropicModel) throw new Error("Expected anthropic test model");
 const createTempDir = useTempDirs("pipiclaw-config-");
 
 function writeSkill(root: string, path: string, name = path, body = "Follow this workflow.", extra = ""): string {
@@ -110,22 +104,6 @@ describe("config-loader", () => {
 		expect(unavailable.skills.map((skill) => skill.name)).toEqual(["linked", "same"]);
 		expect(unavailable.diagnostics).toContainEqual(
 			expect.objectContaining({ path: notADirectory, rejected: true, message: expect.stringContaining("Check") }),
-		);
-	});
-
-	it("resolves API keys from the registry first and falls back to ANTHROPIC_API_KEY", async () => {
-		const registryWithKey = {
-			getApiKeyForProvider: vi.fn().mockResolvedValue("registry-key"),
-		} as unknown as ModelRegistry;
-		await expect(getApiKeyForModel(registryWithKey, anthropicModel as Model<Api>)).resolves.toBe("registry-key");
-		const registryWithoutKey = {
-			getApiKeyForProvider: vi.fn().mockResolvedValue(undefined),
-		} as unknown as ModelRegistry;
-		process.env.ANTHROPIC_API_KEY = "env-key";
-		await expect(getApiKeyForModel(registryWithoutKey, anthropicModel as Model<Api>)).resolves.toBe("env-key");
-		delete process.env.ANTHROPIC_API_KEY;
-		await expect(getApiKeyForModel(registryWithoutKey, anthropicModel as Model<Api>)).rejects.toThrow(
-			"No API key found for provider: anthropic.",
 		);
 	});
 });

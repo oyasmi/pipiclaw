@@ -18,7 +18,7 @@ it("bounds hung aborts and all shutdown phases, retaining the lock while noncanc
 	vi.useFakeTimers();
 	const warn = vi.spyOn(log, "logWarn").mockImplementation(() => {});
 	vi.spyOn(log, "flushLogging").mockResolvedValue();
-	for (const mode of ["turn", "storage", "late-disposal", "clean"]) {
+	for (const mode of ["turn", "storage", "credentials", "late-disposal", "clean"]) {
 		let end!: () => void;
 		const pending = new Promise<void>((resolve) => {
 			end = resolve;
@@ -53,6 +53,7 @@ it("bounds hung aborts and all shutdown phases, retaining the lock while noncanc
 			channelIndex: { close: async () => {} } as unknown as ChannelIndex,
 			channelRunners: new Map([["channel", runner]]),
 			activeTasks,
+			flushCredentials: () => (mode === "credentials" ? pending : Promise.resolve()),
 			markShuttingDown: stop,
 			releaseDaemonLock: release,
 		});

@@ -9,14 +9,15 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
 	AgentSession,
 	ModelRegistry,
+	ModelRuntime,
 	SettingsManager as SDKSettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { PipiclawSettingsManager } from "../../config/settings.js";
 import * as log from "../../log.js";
-import { getApiKeyForModel } from "../../models/api-keys.js";
 import { PRIMARY_COOLDOWN_MS, shouldRestorePrimary } from "../../models/fallback.js";
 import { findExactModelReferenceMatch, formatModelReference } from "../../models/reference.js";
-import { defaultModel } from "../../models/runtime.js";
+import { createModelRequests } from "../../models/requests.js";
+import { defaultModel, refreshModelRegistry } from "../../models/runtime.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import {
 	cycleThinkingLevelWithConditionalPersist,
@@ -30,6 +31,7 @@ export interface ModelSelectionDeps {
 	getSession: () => AgentSession;
 	getSessionSettingsManager: () => SDKSettingsManager;
 	getModelRegistry: () => ModelRegistry;
+	getModelRuntime: () => ModelRuntime;
 }
 
 export class ModelSelection {
@@ -106,7 +108,7 @@ export class ModelSelection {
 			return null;
 		}
 		const modelRegistry = this.deps.getModelRegistry();
-		await modelRegistry.refresh();
+		await refreshModelRegistry(this.deps.getModelRuntime());
 		const available = modelRegistry.getAvailable();
 		const { match, ambiguous } = findExactModelReferenceMatch(reference, available);
 		if (!match) {
@@ -117,11 +119,11 @@ export class ModelSelection {
 			return null;
 		}
 		try {
-			await getApiKeyForModel(modelRegistry, match);
+			await createModelRequests(this.deps.getModelRuntime()).ensureAuth(match);
 		} catch {
 			log.logWarn("agent.model.fallback_unresolved", "Fallback model skipped", {
 				channelId: this.deps.channelId,
-				fields: { reference, problem: "no API key" },
+				fields: { reference, problem: "authentication unavailable" },
 			});
 			return null;
 		}

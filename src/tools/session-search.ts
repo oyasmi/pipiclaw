@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { PipiclawSessionSearchSettings } from "../config/settings.js";
 import { searchDeskSessions } from "../memory/session-search.js";
+import type { ModelRequests } from "../models/requests.js";
 
 const sessionSearchSchema = Type.Object({
 	query: Type.Optional(
@@ -31,7 +32,7 @@ export interface SessionSearchToolOptions {
 	deskDir: string;
 	describeConversation?: (conversation: string) => string | undefined;
 	getCurrentModel: () => Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	getSessionSearchSettings: () => PipiclawSessionSearchSettings;
 }
 
@@ -69,7 +70,7 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 				summarizeWithModel: settings.summarizeWithModel,
 				timeoutMs: settings.timeoutMs,
 				model,
-				resolveApiKey: options.resolveApiKey,
+				modelRequests: options.modelRequests,
 			});
 
 			const partialNote =

@@ -38,6 +38,7 @@ import { createFileStore, type FileStore } from "../file-store.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/runtime.js";
 import * as log from "../log.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
+import { flushModelCredentials } from "../models/credential-work.js";
 import { defaultModel } from "../models/runtime.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
@@ -623,6 +624,7 @@ async function buildRuntimeContext(
 		channelIndex,
 		channelRunners,
 		activeTasks,
+		flushCredentials: () => flushModelCredentials(options.paths.authConfigPath),
 		markShuttingDown: () => {
 			shuttingDown = true;
 		},

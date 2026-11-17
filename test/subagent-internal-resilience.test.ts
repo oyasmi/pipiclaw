@@ -10,6 +10,7 @@ import type { SubAgentToolOptions } from "../src/subagents/types.js";
 import { createSubAgentInlineTool } from "../src/tools/subagent.js";
 import { getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 /**
  * The internal run's tool-call side: how long one turn can be held by delegations (the grace
@@ -89,7 +90,7 @@ function makeTool(overrides: Partial<SubAgentToolOptions> & Pick<SubAgentToolOpt
 		fileStore: createFileStore(),
 		getCurrentModel: () => model,
 		getAvailableModels: () => [model, backupModel],
-		resolveApiKey: async () => "test-key",
+		modelRequests: testModelRequests(),
 		workspaceDir,
 		deskDir,
 		runtimeContext: { workspaceDir, desk: "news", deskDir, channelId: "dingtalk:dm:123" },
@@ -118,14 +119,14 @@ describe("internal sub-agent: provider error recovery", () => {
 					}
 					return backupModel;
 				},
-				resolveApiKey: async (requested) => {
+				modelRequests: testModelRequests(async (requested) => {
 					keysFor.push(requested.id);
 					if (requested.id === backupModel.id && waitingFor === "credentials") {
 						entered.resolve();
 						await release.promise;
 					}
 					return "test-key";
-				},
+				}),
 				createWorker: () =>
 					scriptedWorker([assistant("", { error: "400 unsupported parameter" }), assistant("Done.")], seen),
 			});
@@ -169,10 +170,10 @@ describe("internal sub-agent: provider error recovery", () => {
 		const seen = { continues: 0, models: [] as string[] };
 		const keysFor: string[] = [];
 		const tool = makeTool({
-			resolveApiKey: async (requested) => {
+			modelRequests: testModelRequests(async (requested) => {
 				keysFor.push(requested.id);
 				return "test-key";
-			},
+			}),
 			resolveFallbackModel: async () => backupModel,
 			createWorker: () =>
 				scriptedWorker(

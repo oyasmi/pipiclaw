@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 let promptImpl = vi.fn<(input: string) => Promise<void>>(async () => {});
 let waitForIdleImpl = vi.fn<() => Promise<void>>(async () => {});
@@ -58,7 +59,7 @@ describe("sidecar-worker", () => {
 			runSidecarTask({
 				name: "slow-task",
 				model: { provider: "test", id: "noop" } as never,
-				resolveApiKey: async () => "",
+				modelRequests: testModelRequests(),
 				systemPrompt: "System",
 				prompt: "Prompt",
 				parse: (text) => text,
@@ -78,7 +79,7 @@ describe("sidecar-worker", () => {
 			runSidecarTask({
 				name: "stuck-auth",
 				model: { provider: "test", id: "noop" } as never,
-				resolveApiKey: () => auth,
+				modelRequests: testModelRequests(() => auth),
 				systemPrompt: "",
 				prompt: "",
 				parse: String,
@@ -103,7 +104,7 @@ describe("sidecar-worker", () => {
 			runSidecarTask({
 				name: "bad-parse",
 				model: { provider: "test", id: "noop" } as never,
-				resolveApiKey: async () => "",
+				modelRequests: testModelRequests(),
 				systemPrompt: "System",
 				prompt: "Prompt",
 				parse: () => {
@@ -134,7 +135,7 @@ describe("sidecar-worker", () => {
 		await runSidecarTask({
 			name: "memory-inline-consolidation",
 			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: (text) => text,
@@ -171,7 +172,7 @@ describe("sidecar-worker", () => {
 			runSidecarTask({
 				name: "memory-recall-rerank",
 				model: { provider: "test", id: "noop" } as never,
-				resolveApiKey: async () => "",
+				modelRequests: testModelRequests(),
 				systemPrompt: "System",
 				prompt: "Prompt",
 				parse: (text) => text,
@@ -206,7 +207,7 @@ describe("sidecar-worker", () => {
 		const taskPromise = runRetriedSidecarTask({
 			name: "retry-task",
 			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: (text) => text,
@@ -234,7 +235,7 @@ describe("sidecar-worker", () => {
 			runRetriedSidecarTask({
 				name: "no-retry-parse",
 				model: { provider: "test", id: "noop" } as never,
-				resolveApiKey: async () => "",
+				modelRequests: testModelRequests(),
 				systemPrompt: "System",
 				prompt: "Prompt",
 				parse: () => {
@@ -254,7 +255,7 @@ describe("sidecar-worker", () => {
 		const taskPromise = runRetriedSidecarTask({
 			name: "abort-retry-task",
 			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: (text) => text,
@@ -288,7 +289,7 @@ describe("sidecar-worker", () => {
 		const taskPromise = runRetriedSidecarTask({
 			name: "repair-task",
 			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: (text) => {
@@ -324,7 +325,7 @@ describe("sidecar-worker", () => {
 		const stubbornPromise = runRetriedSidecarTask({
 			name: "repair-once-task",
 			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: () => {

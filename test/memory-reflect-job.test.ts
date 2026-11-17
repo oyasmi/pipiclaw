@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 vi.mock("../src/memory/reflect.js", () => ({ runReflect: vi.fn() }));
 
@@ -70,7 +71,7 @@ describe("runReflectJob", () => {
 			channelActive: false,
 			settings: { memoryMaintenance: maintenanceSettings() },
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			messages: () => messages,
 			sessionEntries: () => sessionEntries,
 		});
@@ -99,7 +100,7 @@ describe("runReflectJob", () => {
 			now: new Date("2026-04-19T12:00:00.000Z"),
 			settings: { memoryMaintenance: maintenanceSettings() },
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			messages: () => messages,
 			sessionEntries: () => sessionEntries,
 		};
@@ -157,7 +158,7 @@ describe("runReflectJob", () => {
 			channelActive: false,
 			settings: { memoryMaintenance: maintenanceSettings() },
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			messages: () => [],
 			sessionEntries: () => entries as never[],
 		};
@@ -197,7 +198,7 @@ describe("runReflectJob", () => {
 			now: new Date("2026-04-19T12:00:00.000Z"),
 			settings: { memoryMaintenance: maintenanceSettings() },
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 			messages: () => messages,
 			sessionEntries: () => sessionEntries,
 		});

@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
+import type { ModelRequests } from "../models/requests.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { hasBoundaryReflectWork } from "./boundary-work.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
@@ -21,7 +22,7 @@ export interface MemoryMaintenanceRuntimeContext {
 	messages: () => AgentMessage[];
 	sessionEntries: () => SessionEntry[];
 	model: Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	settings: { memoryMaintenance: MemoryMaintenanceInput };
 }
 
@@ -151,7 +152,7 @@ export class MemoryMaintenanceScheduler {
 			now,
 			settings: context.settings,
 			model: context.model,
-			resolveApiKey: context.resolveApiKey,
+			modelRequests: context.modelRequests,
 			messages: context.messages,
 			sessionEntries: context.sessionEntries,
 		});

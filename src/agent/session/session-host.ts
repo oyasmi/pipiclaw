@@ -7,7 +7,6 @@
  */
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
 import {
 	AgentSession,
 	AgentSessionRuntime,
@@ -33,9 +32,15 @@ import * as log from "../../log.js";
 import { handleMemoryCommand } from "../../memory/commands.js";
 import type { MemoryLifecycle } from "../../memory/lifecycle.js";
 import { hasMemoryBootstrapBlock } from "../../memory/render.js";
-import { getApiKeyForModel } from "../../models/api-keys.js";
+import { trackModelWork } from "../../models/credential-work.js";
 import { findExactModelReferenceMatch, hasKnownModelPricing } from "../../models/reference.js";
-import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../../models/runtime.js";
+import { createModelRequests, type ModelRequests } from "../../models/requests.js";
+import {
+	createModelRuntime,
+	refreshModelRegistry,
+	resolveInitialModel,
+	wrapModelRegistry,
+} from "../../models/runtime.js";
 import type { LoadedSecurityConfig } from "../../security/config.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { isRecord } from "../../shared/type-guards.js";
@@ -151,8 +156,9 @@ export class SessionHost {
 	// modelRuntime is the canonical async model/auth facade (pi 0.80.8+); modelRegistry
 	// is the synchronous read shell wrapped over it. Both are assigned in initializeSession
 	// because ModelRuntime.create is async, so a placeholder model is used until then.
-	private modelRuntime!: ModelRuntime;
+	modelRuntime!: ModelRuntime;
 	modelRegistry!: ModelRegistry;
+	modelRequests!: ModelRequests;
 	/** Mutual exclusion between prompt submission and session-resource reloads. */
 	private readonly sessionResourceGate: SessionResourceGate;
 	sessionReady!: Promise<void>;
@@ -318,6 +324,7 @@ export class SessionHost {
 			modelsConfigPath: this.modelsConfigPath,
 		});
 		this.modelRegistry = wrapModelRegistry(this.modelRuntime);
+		this.modelRequests = createModelRequests(this.modelRuntime);
 
 		// Resolve model: prefer saved global default, fall back to first available model.
 		this.models.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
@@ -393,7 +400,7 @@ export class SessionHost {
 		this.rebuildSessionTools();
 		try {
 			await withTimeout(`[${this.channelId}] session reload`, SESSION_RELOAD_TIMEOUT_MS, () =>
-				this.session.reload(),
+				trackModelWork(this.modelRuntime, () => this.session.reload()),
 			);
 		} catch (error) {
 			log.logWarn("agent.session.reload_unsettled", "Session reload did not settle", {
@@ -416,7 +423,9 @@ export class SessionHost {
 					return { cancelled: result.cancelled };
 				},
 				navigateTree: async (targetId, options) => {
-					const result = await this.session.navigateTree(targetId, options);
+					const result = await trackModelWork(this.modelRuntime, () =>
+						this.session.navigateTree(targetId, options),
+					);
 					this.syncMemoryBootstrapPendingFromSession();
 					return { cancelled: result.cancelled };
 				},
@@ -443,7 +452,7 @@ export class SessionHost {
 		// (and, through it, a `/new` turn) that never returns.
 		try {
 			await withTimeout(`[${this.channelId}] model registry refresh`, MODEL_REGISTRY_REFRESH_TIMEOUT_MS, () =>
-				this.modelRegistry.refresh(),
+				refreshModelRegistry(this.modelRuntime),
 			);
 		} catch (error) {
 			log.logWarn(
@@ -521,7 +530,7 @@ export class SessionHost {
 				createCommandExtension({
 					getCurrentModel: () => this.session.model ?? this.models.activeModel,
 					getAvailableModels: async () => {
-						await this.modelRegistry.refresh();
+						await refreshModelRegistry(this.modelRuntime);
 						return this.modelRegistry.getAvailable();
 					},
 					getSessionStats: () => this.session.getSessionStats(),
@@ -625,10 +634,9 @@ export class SessionHost {
 				messages: sessionManager.buildSessionContext().messages,
 			},
 			convertToLlm: (messages) => this.contextInput.convert(messages),
-			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.models.activeModel),
 			streamFn: (model, context, options) => {
 				this.trace.startRequest();
-				return streamSimple(model, context, options);
+				return this.modelRequests.stream(model, context, options);
 			},
 		});
 		this.initializeThinkingLevel(agent, this.models.activeModel, sessionManager);
@@ -683,7 +691,7 @@ export class SessionHost {
 			fileStore: this.fileStore,
 			getCurrentModel: () => this.models.activeModel,
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
-			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+			modelRequests: this.modelRequests,
 			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
 			cwd: this.cwd,

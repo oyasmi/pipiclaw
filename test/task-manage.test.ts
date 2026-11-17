@@ -25,6 +25,7 @@ import {
 import { closeTaskFromChat } from "../src/tools/task-manage/lifecycle.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
 import { testManagers } from "./helpers/background-runtime.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 const CHANNEL_ID = "dingtalk:dm:1";
 const SATISFIED_BODY = renderStandardTaskBody({
@@ -330,7 +331,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 					runManager: options.runManager,
 					getCurrentModel: () => ({}) as never,
 					getAvailableModels: () => [],
-					resolveApiKey: async () => "key",
+					modelRequests: testModelRequests(),
 					getSessionSearchSettings: () => ({}) as never,
 					...extra,
 				}).map((tool) => tool.name);

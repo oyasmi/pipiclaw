@@ -9,6 +9,7 @@ import type { SubAgentConfig } from "../src/subagents/types.js";
 import { createSubAgentTool } from "../src/tools/subagent.js";
 import { configureSubAgentRuntime, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 /**
  * P0-3: external roles must get the same task envelope internal workers do (runtime paths,
@@ -67,7 +68,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({
@@ -147,7 +148,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
@@ -183,7 +184,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
@@ -223,7 +224,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
@@ -259,7 +260,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [checkerRole], warnings: [] }),

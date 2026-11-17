@@ -34,7 +34,7 @@ import { finalizeExternalRun } from "./settlement.js";
  * `GITHUB_TOKEN`/`NPM_TOKEN` with zero explanation) and under-blocks (`AWS_SECRET_ACCESS_KEY`,
  * `GOOGLE_APPLICATION_CREDENTIALS`, `SSH_AUTH_SOCK` do not match the suffix at all). This list is
  * therefore deliberately narrow: only the env vars pipiclaw's own LLM calls and DingTalk transport
- * read (`src/models/api-keys.ts`, the `pi-ai` provider registry). It is a courtesy against
+ * read (`src/models/requests.ts`, the `pi-ai` provider registry). It is a courtesy against
  * accidental inheritance, not a security boundary — the real boundary is the role's own command,
  * CLI sandbox, and host account (AGENTS.md).
  */

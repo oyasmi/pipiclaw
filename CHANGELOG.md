@@ -4,6 +4,14 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade the four direct Pi SDK dependencies together from 1.5.0 to 1.5.2, including tool-argument validation, provider compatibility, session-boundary and terminal-input fixes. Historical sessions need no migration. Check removed model references and the empty-tool-list compatibility setting for older gateways in the [upgrade notes](docs/migrations/sdk-upgrades.md#pi-sdk-152-升级注意事项).
+
+### Fixed
+
+- **Preserve complete model request authentication.** Chat, task sessions, internal agents, memory helpers and compaction now use the SDK model runtime for request-time API keys, headers, endpoint overrides and provider environment. Backup models resolve their own credentials. Shutdown waits within its existing deadline for OAuth refresh writes, including work left behind by a cancelled request, before releasing the daemon lock. Authentication CLI commands and the optional evaluation judge also drain pending credential work before returning.
+
 ## [0.9.6-beta.2] - 2026-11-17
 
 ### Breaking

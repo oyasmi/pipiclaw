@@ -10,6 +10,7 @@ import type { Api, AuthType, Model } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import * as log from "../log.js";
+import { flushModelCredentials } from "../models/credential-work.js";
 import { ReadlineLoginUi } from "../models/login-ui.js";
 import {
 	LoginCancelledError,
@@ -23,6 +24,7 @@ import {
 import { formatModelReference } from "../models/reference.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 import { docsUrl } from "../paths.js";
+import { withTimeout } from "../shared/with-timeout.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -539,6 +541,7 @@ export async function ensureModelOnboarding(options: EnsureModelOnboardingOption
 		throw error;
 	} finally {
 		process.removeListener("SIGINT", onSigint);
+		await withTimeout("credential writes", 15_000, () => flushModelCredentials(paths.authConfigPath));
 	}
 }
 
@@ -591,5 +594,6 @@ export async function runAuth(
 		}
 	} finally {
 		process.removeListener("SIGINT", onSigint);
+		await withTimeout("credential writes", 15_000, () => flushModelCredentials(paths.authConfigPath));
 	}
 }

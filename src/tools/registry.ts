@@ -6,6 +6,7 @@ import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "../config/tool
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import type { DeskJobManager } from "../jobs/manager.js";
+import type { ModelRequests } from "../models/requests.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import type { TaskControl, TaskSessionContext } from "../tasks/control.js";
@@ -82,7 +83,7 @@ export interface ToolBuildContext {
 	runManager?: SubAgentRunManager;
 	getCurrentModel?: () => Model<Api>;
 	getAvailableModels?: () => Model<Api>[];
-	resolveApiKey?: (model: Model<Api>) => Promise<string>;
+	modelRequests?: ModelRequests;
 	getSessionSearchSettings?: () => PipiclawSessionSearchSettings;
 	/** Names a conversation directory of this desk after its channel, for `session_search` results. */
 	describeConversation?: (conversation: string) => string | undefined;
@@ -261,7 +262,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				deskDir: ctx.deskDir,
 				describeConversation: ctx.describeConversation,
 				getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
-				resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
+				modelRequests: req(ctx.modelRequests, "modelRequests"),
 				getSessionSearchSettings: req(ctx.getSessionSearchSettings, "getSessionSearchSettings"),
 			}),
 	},

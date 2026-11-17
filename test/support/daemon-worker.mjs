@@ -1,8 +1,9 @@
 // A separate process is essential here: SIGKILL must remove all old callbacks and caches.
-// Only DingTalk delivery/socket I/O is replaced; bootstrap, queues, runs and storage are real.
+// DingTalk I/O and the optional held OAuth endpoint are replaced; bootstrap, queues and storage are real.
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { ChannelRunner } from "../../dist/agent/channel-runner.js";
 import { DingTalkBot } from "../../dist/dingtalk/bot.js";
 import { DingTalkTransport } from "../../dist/dingtalk/transport.js";
@@ -12,6 +13,47 @@ import { readTaskDeliveries } from "../../dist/tasks/delivery.js";
 
 const homeDir = process.argv[2];
 const hungShutdown = process.argv[3] === "hung-shutdown";
+const authShutdown = process.argv[3] === "auth-shutdown";
+let refreshArrived, releaseRefresh, turnStopped, credentialPhase;
+let shutdownRequested = false;
+const refreshing = new Promise(resolve => { refreshArrived = resolve; });
+const refreshGate = new Promise(resolve => { releaseRefresh = resolve; });
+const stopped = new Promise(resolve => { turnStopped = resolve; });
+const draining = new Promise(resolve => { credentialPhase = resolve; });
+if (authShutdown) {
+	// A synthetic OAuth endpoint with a test-owned gate; the real SDK owns rotation and auth.json.
+	const create = ModelRuntime.create;
+	ModelRuntime.create = async function (options) {
+		const models = await create.call(this, options);
+		const catalog = models.getModels("e2e-mock");
+		models.registerNativeProvider({
+			id: "e2e-mock", name: "Offline OAuth", getModels: () => catalog,
+			auth: { oauth: {
+				name: "Offline OAuth", login: async () => { throw new Error("Unexpected login"); },
+				refresh: async () => {
+					refreshArrived();
+					await refreshGate;
+					return { type: "oauth", access: "new-access", refresh: "new-refresh", expires: Date.now() + 3_600_000 };
+				},
+				toAuth: async credential => ({ apiKey: credential.access }),
+			} },
+			stream: () => { throw new Error("Cancelled auth reached inference"); },
+			streamSimple: () => { throw new Error("Cancelled auth reached inference"); },
+		});
+		await models.refresh({ allowNetwork: false });
+		const settle = models.settleCredentialWrites.bind(models);
+		models.settleCredentialWrites = () => {
+			if (shutdownRequested) credentialPhase();
+			return settle();
+		};
+		return models;
+	};
+	const run = ChannelRunner.prototype.run;
+	ChannelRunner.prototype.run = async function (...args) {
+		try { return await run.apply(this, args); }
+		finally { turnStopped(); }
+	};
+}
 if (hungShutdown) {
     ChannelRunner.prototype.abort = () => new Promise(() => {});
     const run = ChannelRunner.prototype.run;
@@ -124,6 +166,18 @@ process.on("message", async ({ action, text, channelId, runId, taskId, mode, kin
 				user: "e2e",
 				userName: "E2E",
 			});
+		} else if (action === "auth-start") {
+			await runtime.ingress.routeEvent({ source: "human", channelId, text, ts: String(Date.now()), user: "e2e" });
+			await refreshing;
+		} else if (action === "auth-stop") {
+			await runtime.ingress.routeEvent({ source: "human", channelId, text: "/stop", ts: String(Date.now()), user: "e2e" });
+			await stopped;
+		} else if (action === "auth-shutdown") {
+			shutdownRequested = true;
+			void runtime.shutdown().then(() => process.exit(0));
+			await draining;
+		} else if (action === "auth-release") {
+			releaseRefresh();
 		} else if (action === "turn") {
 			await runtime.ingress.handleEvent({
 				source: "human", channelId, text, ts: String(Date.now()), user: "e2e", userName: "E2E",

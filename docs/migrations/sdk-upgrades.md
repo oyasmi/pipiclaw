@@ -1,6 +1,20 @@
 # SDK 与模型供应商升级说明
 
-> **适合谁**：升级现有 Pipiclaw 部署，且使用了内置 Azure、OpenAI ChatGPT OAuth、`kimi-coding` 或 OpenRouter 旧模型引用的维护者。新安装用户通常无需关注。
+> **适合谁**：升级现有 Pipiclaw 部署，且使用了自定义网关或内置模型、供应商认证的维护者。新安装用户通常无需关注。
+
+---
+
+## Pi SDK 1.5.2 升级注意事项
+
+四个直接 `@earendil-works/pi-*` 依赖统一锁定 `1.5.2`，无需迁移历史会话文件：
+
+- **旧网关的空工具列表**：OpenAI Chat Completions 请求没有当前工具、但历史中含工具调用时，新版默认省略 `tools` 字段。若旧版 LiteLLM 等网关要求 `tools: []`，在 `models.json` 中为对应模型设置 `compat.requiresToolsWithToolHistory: true`。有当前工具的正常回合不受这个变化影响。
+- **核对内置模型引用**：检查默认、备用、内部代理及角色配置。目录移除了部分旧模型，例如 `openrouter/inception/mercury-2`、`openrouter/inception/mercury-3`、`openrouter/minimax/minimax-m2` 和部分 Fireworks 条目。外部 Coding CLI 的模型名仍由对应 CLI 决定。
+- **极长输出的预算**：共享 SDK 算法为输入计数误差预留更多空间，部分长上下文请求的单次输出上限会降低；影响范围不限 OpenRouter。经常生成极长代码时，用实际模型定向验证。
+- **完整认证**：聊天、内部代理、记忆和摘要现已统一通过 SDK 解析请求认证，`models.json` 配置的额外请求头会实际传到网关。关闭时等待已开始的 OAuth 凭据写入；超时则记录错误并保留进程锁，直到进程退出。无需改写认证文件。实现与验证见[接入验收](../reviews/2026-11-17-model-request-auth.md)。
+- **消息线程与缓存保温**：没有接入这两项功能，不会自动启动空闲保温请求或更换已配置的模型。
+
+上游详情见 [Pi 1.5.1 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.1)、[Pi 1.5.2 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.2) 与[升级评估](../reviews/2026-11-17-pi-1.5.2-upgrade-assessment.md)。
 
 ---
 

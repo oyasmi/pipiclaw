@@ -27,7 +27,6 @@ import {
 } from "../memory/maintenance-state.js";
 import { getMemoryMaintenanceTuning } from "../memory/maintenance-tuning.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
-import { getApiKeyForModel } from "../models/api-keys.js";
 import { runPromptWithFallback } from "../models/fallback.js";
 import { formatModelReference } from "../models/reference.js";
 import { defaultModel } from "../models/runtime.js";
@@ -176,6 +175,7 @@ export class ChannelRunner implements AgentRunner {
 			getSession: () => this.session,
 			getSessionSettingsManager: () => this.host.sessionSettingsManager,
 			getModelRegistry: () => this.host.modelRegistry,
+			getModelRuntime: () => this.host.modelRuntime,
 		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
@@ -186,7 +186,10 @@ export class ChannelRunner implements AgentRunner {
 			getMessages: () => this.session.messages,
 			getSessionEntries: () => this.sessionManager.getBranch(),
 			getModel: () => this.session.model ?? this.models.activeModel,
-			resolveApiKey: async (model) => getApiKeyForModel(this.host.modelRegistry, model),
+			modelRequests: {
+				ensureAuth: (model, signal) => this.host.modelRequests.ensureAuth(model, signal),
+				stream: (model, context, options) => this.host.modelRequests.stream(model, context, options),
+			},
 			recordMemoryActivity: (event) => this.recordMemoryActivity(event),
 		});
 
@@ -489,7 +492,7 @@ export class ChannelRunner implements AgentRunner {
 			messages: () => [...this.session.messages],
 			sessionEntries: () => [...this.sessionManager.getBranch()],
 			model: this.session.model ?? this.models.activeModel,
-			resolveApiKey: async (model) => getApiKeyForModel(this.host.modelRegistry, model),
+			modelRequests: this.host.modelRequests,
 			settings: { memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings() },
 		};
 	}

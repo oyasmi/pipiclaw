@@ -6,6 +6,7 @@ import type { PipiclawToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import type { DeskJobManager } from "../jobs/manager.js";
+import type { ModelRequests } from "../models/requests.js";
 import type { SecurityConfig } from "../security/types.js";
 import { withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
@@ -24,7 +25,7 @@ export interface CreatePipiclawToolsOptions {
 	fileStore: FileStore;
 	getCurrentModel: () => Model<Api>;
 	getAvailableModels: () => Model<Api>[];
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	workspaceDir: string;
 	appHomeDir?: string;
 	/** Base for relative paths in the generic file tools, the shell's cwd and the default delegation `workingDirectory`. */
@@ -85,7 +86,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		runManager: options.runManager,
 		getCurrentModel: options.getCurrentModel,
 		getAvailableModels: options.getAvailableModels,
-		resolveApiKey: options.resolveApiKey,
+		modelRequests: options.modelRequests,
 		getSessionSearchSettings: options.getSessionSearchSettings,
 		sendMedia: options.sendMedia,
 		taskSession: options.taskSession,
@@ -98,7 +99,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		fileStore: options.fileStore,
 		getCurrentModel: options.getCurrentModel,
 		getAvailableModels: options.getAvailableModels,
-		resolveApiKey: options.resolveApiKey,
+		modelRequests: options.modelRequests,
 		workspaceDir: options.workspaceDir,
 		appHomeDir: options.appHomeDir,
 		// A delegation runs in the parent's cwd unless the model passes an explicit workingDirectory.

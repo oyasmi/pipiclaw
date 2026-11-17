@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionCorpus } from "../src/memory/session-corpus.js";
 import { searchDeskSessions } from "../src/memory/session-search.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 const { runSidecarTaskMock } = vi.hoisted(() => ({
 	runSidecarTaskMock: vi.fn(),
@@ -103,7 +104,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 		const english = await searchDeskSessions({
 			deskDir,
@@ -115,7 +116,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 
 		expect(chinese.results).toHaveLength(1);
@@ -142,7 +143,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 
 		expect(result.results).toHaveLength(1);
@@ -170,7 +171,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		};
 
 		await searchDeskSessions({ ...request, deskDir: firstDir });
@@ -204,7 +205,7 @@ describe("session search", () => {
 			summarizeWithModel: true,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 
 		expect(runSidecarTaskMock).toHaveBeenCalledTimes(1);
@@ -264,7 +265,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 		expect(browse.searchedDocuments).toBe(1);
 
@@ -279,7 +280,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 		expect(result.searchedDocuments).toBe(3);
 		expect(result.results.map((entry) => entry.source)).toEqual(["task", "context"]);
@@ -333,7 +334,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 
 		expect(result.results).toHaveLength(1);
@@ -359,7 +360,7 @@ describe("session search", () => {
 			summarizeWithModel: false,
 			timeoutMs: 1000,
 			model: TEST_MODEL,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 
 		expect(result.results).toEqual([]);

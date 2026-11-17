@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainBoundaryReflectWork, hasBoundaryReflectWork } from "../src/memory/boundary-work.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 vi.mock("../src/memory/reflect.js", () => ({ runReflect: vi.fn() }));
 vi.mock("../src/memory/review-log.js", async (original) => ({
@@ -73,7 +74,7 @@ function createLifecycle(
 		getMessages: () => [{ role: "assistant", content: "live state" }] as never[],
 		getSessionEntries: () => [],
 		getModel: () => ({ provider: "test", id: "noop" }) as never,
-		resolveApiKey: async () => "",
+		modelRequests: testModelRequests(),
 		recordMemoryActivity,
 	});
 }
@@ -91,7 +92,7 @@ describe("MemoryLifecycle", () => {
 				workspaceDir: root,
 				appHomeDir,
 				model: { provider: "test", id: "noop" } as never,
-				resolveApiKey: async () => "",
+				modelRequests: testModelRequests(),
 			}),
 		).resolves.toBeUndefined();
 		expect(runReflect).not.toHaveBeenCalled();
@@ -173,7 +174,7 @@ describe("MemoryLifecycle", () => {
 			getMessages: () => [],
 			getSessionEntries: () => entries,
 			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		};
 		await mkdir(join(root, "memory-review.jsonl")); // Audit I/O must not make committed work fail.
 		const lifecycle = new MemoryLifecycle(options);
@@ -260,7 +261,7 @@ describe("MemoryLifecycle", () => {
 			getMessages: () => [],
 			getSessionEntries: () => entries,
 			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
+			modelRequests: testModelRequests(),
 		});
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);

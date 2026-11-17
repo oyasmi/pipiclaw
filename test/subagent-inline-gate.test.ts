@@ -5,6 +5,7 @@ import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createPipiclawTools } from "../src/tools/index.js";
 import { testManagers } from "./helpers/background-runtime.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 /**
  * Spec 046, D2.3: `tools.subagentInline.enabled` gates `subagent_inline` the same way
@@ -23,7 +24,7 @@ function makeOptions(subagentInlineEnabled: boolean) {
 		fileStore: createFileStore(),
 		getCurrentModel: () => model,
 		getAvailableModels: () => [model],
-		resolveApiKey: async () => "test-key",
+		modelRequests: testModelRequests(),
 		workspaceDir: "/repo",
 		cwd: process.cwd(),
 		desk: "news",

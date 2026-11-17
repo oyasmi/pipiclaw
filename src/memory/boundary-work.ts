@@ -8,6 +8,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { getMemoryWorkDir } from "../desk/paths.js";
 import type { DeskConversation } from "../desk/types.js";
 import * as log from "../log.js";
+import type { ModelRequests } from "../models/requests.js";
 import { createAtomicTempPath, syncDirectoryBestEffort, writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { isNodeError } from "../shared/os.js";
@@ -114,7 +115,7 @@ export interface BoundaryReflectOptions {
 	workspaceDir: string;
 	appHomeDir: string;
 	model: Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	queue?: DeskMemoryQueue;
 }
 
@@ -173,7 +174,7 @@ export async function drainBoundaryReflectWork(options: BoundaryReflectOptions):
 							deskDir: conversation.deskDir,
 							workspaceDir: options.workspaceDir,
 							model: options.model,
-							resolveApiKey: options.resolveApiKey,
+							modelRequests: options.modelRequests,
 							messages: batch.messages,
 							sourceClosed: true,
 							usageContext: {

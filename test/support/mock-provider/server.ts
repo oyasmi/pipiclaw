@@ -38,7 +38,10 @@ function writeError(res: ServerResponse, status: number, body: unknown): void {
 	res.end(JSON.stringify(body));
 }
 
-export async function startMockProvider(options?: { registerDefaults?: boolean }): Promise<MockProvider> {
+export async function startMockProvider(options?: {
+	registerDefaults?: boolean;
+	requiredHeaders?: Record<string, string>;
+}): Promise<MockProvider> {
 	const script = new Script();
 	if (options?.registerDefaults !== false) {
 		registerSidecarDefaults(script);
@@ -64,6 +67,15 @@ export async function startMockProvider(options?: { registerDefaults?: boolean }
 		// (matchedRoute is filled in once it resolves).
 		const record: CapturedRequest = { ...view, matchedRoute: null, at: Date.now() };
 		requests.push(record);
+		if (
+			Object.entries(options?.requiredHeaders ?? {}).some(
+				([name, value]) => req.headers[name.toLowerCase()] !== value,
+			)
+		) {
+			record.matchedRoute = "__auth_rejected";
+			writeError(res, 401, { error: { message: "mock provider: required configured auth header missing" } });
+			return;
+		}
 
 		const failure = script.takeFailure();
 		if (failure) {

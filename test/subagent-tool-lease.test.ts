@@ -21,6 +21,7 @@ import {
 	testManagers,
 } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 /** Spec 040, D10.1: internal write runs now take the same workspace lease external runs will. */
 
@@ -77,7 +78,7 @@ function makeTool(workspaceDir: string, deskDir: string, channelId = "dingtalk:d
 		fileStore: createFileStore(),
 		getCurrentModel: () => model,
 		getAvailableModels: () => [model],
-		resolveApiKey: async () => "test-key",
+		modelRequests: testModelRequests(),
 		workspaceDir,
 		workingDirectory: workspaceDir,
 		deskDir,
@@ -118,9 +119,9 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => {
+			modelRequests: testModelRequests(async () => {
 				throw new Error("api key lookup rejected");
-			},
+			}),
 			workspaceDir,
 			deskDir,
 			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
@@ -158,7 +159,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
@@ -221,7 +222,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
@@ -330,7 +331,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			workingDirectory: workspaceDir,
 			deskDir,
@@ -404,7 +405,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			workingDirectory: repoDir,
 			deskDir,
@@ -500,7 +501,7 @@ describe("subagent tool: purpose=verify admission (D9)", () => {
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
+			modelRequests: testModelRequests(),
 			workspaceDir,
 			deskDir,
 			getSubAgentDiscovery: () => discoverSubAgents(workspaceDir, [model]),

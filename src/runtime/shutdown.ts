@@ -1,7 +1,7 @@
 /**
  * Ordered daemon shutdown: stop the schedulers, stop admission (the transports still deliver), wait
  * for active turns (aborting them past a grace window), dispose idle runners, close the transports,
- * then flush storage and logs. Idempotent: every
+ * then drain credential writes and flush storage and logs. Idempotent: every
  * call after the first returns the first call's promise.
  */
 import type { AgentRunner } from "../agent/types.js";
@@ -47,6 +47,8 @@ export interface ShutdownDeps {
 	channelIndex: ChannelIndex;
 	channelRunners: Map<string, AgentRunner>;
 	activeTasks: Set<Promise<void>>;
+	/** Includes auth still finishing after a cancelled request, evicted runner or detached sidecar. */
+	flushCredentials: () => Promise<void>;
 	/** Flips the runtime's `isShuttingDown()` the moment shutdown begins. */
 	markShuttingDown: () => void;
 	/** Frees `state/daemon.lock`, last of all: until then no other runtime may open this app home. */
@@ -195,6 +197,7 @@ export function createShutdown(deps: ShutdownDeps): (reason?: NodeJS.Signals | "
 			channelRunners.clear();
 			// Only now do connections close: what is still unfinished ends as interrupted.
 			await phase("stop-transports", () => transports.stopAll(), SHUTDOWN_ABORT_WAIT_MS);
+			await phase("credentials", deps.flushCredentials, SHUTDOWN_FLUSH_WAIT_MS);
 
 			await phase(
 				"storage",

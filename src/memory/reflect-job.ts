@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { DeskConversation } from "../desk/types.js";
+import type { ModelRequests } from "../models/requests.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { drainBoundaryReflectWork, hasBoundaryReflectWork } from "./boundary-work.js";
@@ -33,7 +34,7 @@ export interface ReflectJobInput {
 	now?: Date;
 	settings: { memoryMaintenance: MemoryMaintenanceInput };
 	model: Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	/** Transcript accessors: only called once the gate has decided the job may actually run. */
 	messages: () => AgentMessage[];
 	sessionEntries: () => SessionEntry[];
@@ -99,7 +100,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 				deskDir: deskDir,
 				workspaceDir: input.workspaceDir,
 				model: input.model,
-				resolveApiKey: input.resolveApiKey,
+				modelRequests: input.modelRequests,
 				messages: sourceWindow.messages,
 				usageContext: { channelId, desk: conversation.desk, correlationId: sourceWindow.windowId },
 			});

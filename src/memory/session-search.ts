@@ -1,5 +1,6 @@
 import { relative } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelRequests } from "../models/requests.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { recencyBoostByAge, tokenizeRecallText } from "./search.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
@@ -22,7 +23,7 @@ export interface SearchDeskSessionsRequest {
 	summarizeWithModel: boolean;
 	timeoutMs: number;
 	model: Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 }
 
 export interface SessionSearchResult {
@@ -186,7 +187,7 @@ async function summarizeHit(
 		const result = await runSidecarTask({
 			name: "session-search-summary",
 			model: request.model,
-			resolveApiKey: request.resolveApiKey,
+			modelRequests: request.modelRequests,
 			systemPrompt: SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT,
 			prompt: `Query:
 ${query}

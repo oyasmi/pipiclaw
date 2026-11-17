@@ -12,7 +12,10 @@
 export type TurnErrorKind = "missing_credentials" | "auth" | "rate_limit" | "context_overflow" | "network" | "other";
 
 const PATTERNS: ReadonlyArray<[Exclude<TurnErrorKind, "other">, RegExp]> = [
-	["missing_credentials", /\bno api[ _-]?key found\b|missing[ _-]?api[ _-]?key|尚未配置.*模型凭据/i],
+	[
+		"missing_credentials",
+		/\bno api[ _-]?key found\b|missing[ _-]?api[ _-]?key|no credentials found for provider|provider is not configured:|尚未配置.*模型凭据/i,
+	],
 	[
 		"auth",
 		/\b40[13]\b|unauthori[sz]ed|forbidden|invalid[ _-]?(?:x-)?api[ _-]?key|incorrect api key|authentication[ _-]?(?:error|failed)|(?:token|credential)s? (?:has |have )?expired/i,

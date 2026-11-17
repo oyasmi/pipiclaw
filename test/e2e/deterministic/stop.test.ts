@@ -1,6 +1,6 @@
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChannelRunner } from "../../../src/agent/channel-runner.js";
-import * as apiKeys from "../../../src/models/api-keys.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 describe("E2E deterministic: /stop", () => {
@@ -45,13 +45,17 @@ describe("E2E deterministic: /stop", () => {
 		const keyGate = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		const getKey = apiKeys.getApiKeyForModel;
-		vi.spyOn(apiKeys, "getApiKeyForModel").mockImplementation(async (registry, model) => {
+		const getAuth = ModelRuntime.prototype.getAuth;
+		vi.spyOn(ModelRuntime.prototype, "getAuth").mockImplementation(async function (
+			this: ModelRuntime,
+			model,
+			options,
+		) {
 			if (model.id === "mock-fallback") {
 				entered();
 				await keyGate;
 			}
-			return getKey(registry, model);
+			return getAuth.call(this, model, options);
 		});
 		harness.model.script.failNext({ status: 429 });
 		await harness.sendUserMessageNoWait("FAIL_THEN_STOP");

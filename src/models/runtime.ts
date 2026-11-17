@@ -7,6 +7,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { PipiclawSettingsManager } from "../config/settings.js";
+import { registerModelRuntime, trackModelWork } from "./credential-work.js";
 
 // Default model - will be overridden by ModelRegistry if custom models are configured
 export const defaultModel = getModel("anthropic", "claude-sonnet-4-5");
@@ -31,15 +32,22 @@ export async function createModelRuntime(options: {
 			`createModelRuntime: authConfigPath must be a non-empty absolute path, got ${JSON.stringify(options.authConfigPath)}`,
 		);
 	}
-	return ModelRuntime.create({
+	const runtime = await ModelRuntime.create({
 		authPath: options.authConfigPath,
 		modelsPath: options.modelsConfigPath,
 	});
+	registerModelRuntime(runtime, options.authConfigPath);
+	return runtime;
+}
+
+/** Includes refreshes whose caller timed out before the SDK's auth work finished. */
+export async function refreshModelRegistry(runtime: ModelRuntime): Promise<void> {
+	await trackModelWork(runtime, () => runtime.refresh());
 }
 
 /**
  * Wrap a ModelRuntime in the synchronous extension-facing ModelRegistry shell so
- * existing `getAvailable`/`find`/`getApiKeyForProvider` call sites stay unchanged.
+ * synchronous catalog readers (`getAvailable`/`find`) share the canonical runtime.
  */
 export function wrapModelRegistry(modelRuntime: ModelRuntime): ModelRegistry {
 	return new ModelRegistry(modelRuntime);

@@ -1,8 +1,8 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { formatModelReference } from "../models/reference.js";
+import type { ModelRequests } from "../models/requests.js";
 import { extractAssistantText } from "../shared/text-utils.js";
 import { withAbortSignal } from "../shared/with-timeout.js";
 import { getUsageLedger } from "../usage/ledger.js";
@@ -10,7 +10,7 @@ import { getUsageLedger } from "../usage/ledger.js";
 export interface SidecarTask<T> {
 	name: string;
 	model: Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	systemPrompt: string;
 	prompt: string;
 	parse: (text: string) => T;
@@ -158,13 +158,12 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 	try {
 		return await withAbortSignal(signal, async () => {
 			// Auth is part of the same deadline as inference. A late credential cannot start a request.
-			const apiKey = await task.resolveApiKey(task.model);
+			await task.modelRequests.ensureAuth(task.model, signal);
 			signal.throwIfAborted();
 			worker = new Agent({
 				initialState: { systemPrompt: task.systemPrompt, model: task.model, thinkingLevel: "off", tools: [] },
 				convertToLlm,
-				getApiKey: async () => apiKey,
-				streamFn: streamSimple,
+				streamFn: (model, context, options) => task.modelRequests.stream(model, context, { ...options, signal }),
 			});
 			await worker.prompt(task.prompt);
 			await worker.waitForIdle();

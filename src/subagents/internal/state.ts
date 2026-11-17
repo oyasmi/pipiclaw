@@ -26,11 +26,9 @@ export interface InternalRunState {
 	activeModel: Model<Api>;
 	/** Set when the run switched to the backup model, for the reply and the record. */
 	fallbackNote: string | undefined;
-	/** Read on every provider request, so a backup-model switch only has to replace the key. */
-	apiKey: string;
 }
 
-export function createInternalRunState(model: Model<Api>, apiKey: string): InternalRunState {
+export function createInternalRunState(model: Model<Api>): InternalRunState {
 	return {
 		startedAt: Date.now(),
 		usage: createEmptyUsageTotals(),
@@ -43,7 +41,6 @@ export function createInternalRunState(model: Model<Api>, apiKey: string): Inter
 		lastUpdateText: "",
 		activeModel: model,
 		fallbackNote: undefined,
-		apiKey,
 	};
 }
 

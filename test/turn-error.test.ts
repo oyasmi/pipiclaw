@@ -5,8 +5,16 @@ import { classifyTurnError, renderTurnErrorReply } from "../src/agent/turn/turn-
 // no hint that `/compact`, `/model` or a server-side login would fix it. The class decides the next
 // step, so the table pins classes against real provider wording — never the reply text.
 describe("classifyTurnError", () => {
+	it("recognizes missing credentials from preflight and SDK streaming so the user gets login guidance", () => {
+		for (const message of [
+			"No API key found for provider: anthropic.",
+			"No credentials found for provider: anthropic.",
+			"Provider is not configured: anthropic",
+		]) {
+			expect(classifyTurnError(message)).toBe("missing_credentials");
+		}
+	});
 	it.each([
-		["No API key found for provider: anthropic.", "missing_credentials"],
 		['401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}', "auth"],
 		["403 Forbidden", "auth"],
 		["Incorrect API key provided: sk-proj-****", "auth"],

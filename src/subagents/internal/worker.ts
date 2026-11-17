@@ -4,7 +4,7 @@
  */
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { ExecOptions, ExecResult, Executor } from "../../executor.js";
 import * as log from "../../log.js";
@@ -174,7 +174,6 @@ export function startWorker(input: {
 	handle.worker =
 		options.createWorker?.({
 			subAgent: config,
-			apiKey: state.apiKey,
 			tools: filterToolsByName(availableTools, config.tools),
 		}) ??
 		new Agent({
@@ -190,14 +189,12 @@ export function startWorker(input: {
 				tools: filterToolsByName(availableTools, config.tools),
 			},
 			convertToLlm,
-			// Read on every request, so a backup-model switch only has to replace the key.
-			getApiKey: async () => state.apiKey,
 			streamFn: (model, context, streamOptions) => {
 				request++;
 				requestStartedAt = Date.now();
 				firstOutput = false;
 				log.logEvent("debug", "agent.provider.started", "Provider request started", { fields: traceFields() });
-				return streamSimple(model, context, streamOptions);
+				return options.modelRequests.stream(model, context, streamOptions);
 			},
 		});
 

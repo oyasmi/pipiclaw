@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 vi.mock("../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
@@ -36,7 +37,7 @@ async function run(deskDir: string, workspaceDir = deskDir, today = "2026-09-04"
 		deskDir,
 		workspaceDir,
 		model: fakeModel,
-		resolveApiKey,
+		modelRequests: testModelRequests(resolveApiKey),
 		messages: meaningfulMessages,
 		today,
 	});
@@ -55,7 +56,7 @@ describe("reflect — skip conditions", () => {
 			deskDir,
 			workspaceDir: deskDir,
 			model: fakeModel,
-			resolveApiKey,
+			modelRequests: testModelRequests(resolveApiKey),
 			messages: [{ role: "user", content: "" }] as never[],
 		});
 		expect(result.skipped).toBe(true);
@@ -65,7 +66,7 @@ describe("reflect — skip conditions", () => {
 			deskDir,
 			workspaceDir: deskDir,
 			model: fakeModel,
-			resolveApiKey,
+			modelRequests: testModelRequests(resolveApiKey),
 			messages: [{ role: "user", content: "Remember the release window", timestamp: 1 }] as never[],
 			sourceClosed: true,
 		});

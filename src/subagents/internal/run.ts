@@ -60,14 +60,13 @@ interface InternalRunInput {
 export async function dispatchInternalRun(input: InternalRunInput): Promise<DelegationResult> {
 	const { options, config, runLabel, mutatesNote, runContext, leaseKey, params, signal, onUpdate, runManager } = input;
 	const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
-	let apiKey: string;
 	try {
-		apiKey = await options.resolveApiKey(config.model);
+		await options.modelRequests.ensureAuth(config.model, signal);
 	} catch (error) {
 		releaseWorkspaceLease(leaseKey, runContext.runId);
 		throw error;
 	}
-	const state = createInternalRunState(config.model, apiKey);
+	const state = createInternalRunState(config.model);
 	/** Wakes a retry backoff early when the run is cancelled or out of wall time. */
 	const retryBackoff = new AbortController();
 	const handle: WorkerHandle = {};

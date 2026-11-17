@@ -13,6 +13,7 @@ import {
 	ModelsError,
 } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { trackModelWork } from "./credential-work.js";
 import { getLoginInstallationId } from "./login-identity.js";
 
 export class LoginCancelledError extends Error {
@@ -132,15 +133,17 @@ export async function loginProvider(
 
 	let credential: Awaited<ReturnType<ModelRuntime["login"]>>;
 	try {
-		credential = await runtime.login(
-			providerId,
-			authType,
-			{
-				signal: ui.signal,
-				prompt: (prompt) => ui.ask(prompt),
-				notify: (event) => ui.notify(event),
-			},
-			installationId ? { getDeviceId: () => installationId, agentName: "pipiclaw" } : undefined,
+		credential = await trackModelWork(runtime, () =>
+			runtime.login(
+				providerId,
+				authType,
+				{
+					signal: ui.signal,
+					prompt: (prompt) => ui.ask(prompt),
+					notify: (event) => ui.notify(event),
+				},
+				installationId ? { getDeviceId: () => installationId, agentName: "pipiclaw" } : undefined,
+			),
 		);
 	} catch (error) {
 		throw humanizeLoginError(providerId, error);
@@ -154,7 +157,7 @@ export async function loginProvider(
 }
 
 export async function logoutProvider(runtime: ModelRuntime, providerId: string): Promise<void> {
-	await runtime.logout(providerId);
+	await trackModelWork(runtime, () => runtime.logout(providerId));
 }
 
 /** Render the `pipiclaw auth status` report: one row per provider, plus the auth.json path and any models.json error. */

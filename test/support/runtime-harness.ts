@@ -222,7 +222,13 @@ export async function createDeterministicHarness(options?: {
 	/** More channels bound before boot, each to `E2E_DESK` unless it names another desk. */
 	extraChannels?: Array<{ channelId: string; desk?: string }>;
 }): Promise<DeterministicHarness> {
-	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
+	const model = await startMockProvider({
+		registerDefaults: options?.registerSidecarDefaults,
+		// Auth regression: exercise the real bootstrap → main/child/sidecar/summary producers.
+		// An API-key-only stream cannot pass this gateway, even when its model wording looks correct.
+		// Mutation 2026-11-17: use compat streamSimple + key; A22 fails with __auth_rejected. Restored green.
+		requiredHeaders: { "x-pipiclaw-auth": "fixture" },
+	});
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
 	let securityJson: Record<string, unknown> | undefined;
 	let toolsJson: unknown;

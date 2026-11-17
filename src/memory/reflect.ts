@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { serializeConversation } from "@earendil-works/pi-coding-agent";
+import type { ModelRequests } from "../models/requests.js";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { localDayKey } from "../shared/local-time.js";
 import { readOptionalTextFile } from "../shared/os.js";
@@ -89,7 +90,7 @@ export interface ReflectRunOptions {
 	deskDir: string;
 	workspaceDir: string;
 	model: Model<Api>;
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	/** The conversation window to reflect on (already extracted by the caller's source window). */
 	messages: AgentMessage[];
 	timeoutMs?: number;
@@ -252,7 +253,7 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	const response = await runRetriedSidecarTask({
 		name: "memory-reflect",
 		model: options.model,
-		resolveApiKey: options.resolveApiKey,
+		modelRequests: options.modelRequests,
 		systemPrompt: REFLECT_SYSTEM_PROMPT,
 		prompt,
 		timeoutMs: options.timeoutMs ?? REFLECT_DEFAULT_TIMEOUT_MS,

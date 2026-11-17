@@ -9,6 +9,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { PipiclawWebToolsConfig } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
+import type { ModelRequests } from "../models/requests.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { SubAgentToolName } from "../tools/contract/names.js";
 import type { UsageTotals } from "../usage/totals.js";
@@ -214,7 +215,7 @@ export interface SubAgentToolOptions {
 	workingDirectory?: string;
 	getCurrentModel: () => Model<Api>;
 	getAvailableModels: () => Model<Api>[];
-	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	modelRequests: ModelRequests;
 	workspaceDir: string;
 	appHomeDir?: string;
 	deskDir: string;
@@ -231,11 +232,7 @@ export interface SubAgentToolOptions {
 		deskDir: string;
 		channelId: string;
 	};
-	createWorker?: (config: {
-		subAgent: ResolvedInternalSubAgentConfig;
-		apiKey: string;
-		tools: AgentTool<any>[];
-	}) => SubAgentWorker;
+	createWorker?: (config: { subAgent: ResolvedInternalSubAgentConfig; tools: AgentTool<any>[] }) => SubAgentWorker;
 	/** Test seam for failures while constructing the scoped tool set after durable registration. */
 	buildTools?: BuildSubagentTools;
 	/** Test-only override for the D6 convergence-turn wall clock; defaults to CONVERGENCE_WALL_CLOCK_MS. */

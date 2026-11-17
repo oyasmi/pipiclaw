@@ -204,6 +204,7 @@ export function createDeterministicHome(opts: {
 				baseUrl: opts.mockBaseUrl,
 				api: "openai-completions",
 				apiKey: "e2e-mock-key",
+				headers: { "x-pipiclaw-auth": "fixture" },
 				compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
 				models: defaultModels,
 			},

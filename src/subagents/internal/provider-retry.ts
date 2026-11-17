@@ -64,9 +64,8 @@ export async function recoverFromProviderErrors(input: {
 			const candidate = await options.resolveFallbackModel().catch(() => null);
 			if (state.budgetExceeded || state.externallyCancelled) return;
 			if (!candidate || formatModelReference(candidate) === formatModelReference(state.activeModel)) return;
-			let candidateKey: string;
 			try {
-				candidateKey = await options.resolveApiKey(candidate);
+				await options.modelRequests.ensureAuth(candidate, retryBackoff.signal);
 			} catch {
 				return;
 			}
@@ -75,7 +74,6 @@ export async function recoverFromProviderErrors(input: {
 			retries = 0;
 			const fromRef = formatModelReference(state.activeModel);
 			state.activeModel = candidate;
-			state.apiKey = candidateKey;
 			worker.state.model = candidate;
 			worker.state.thinkingLevel = clampThinkingLevel(candidate, config.thinkingLevel ?? DEFAULT_THINKING_LEVEL);
 			state.fallbackNote = `switched from ${fromRef} to backup model ${formatModelReference(candidate)} after: ${

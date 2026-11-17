@@ -1,7 +1,6 @@
 /** Bounded, side-effect-free summary inference shared by foreground recovery and background preparation. */
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import {
 	type AgentSession,
 	compact,
@@ -11,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { DeskConversation } from "../../desk/types.js";
 import * as log from "../../log.js";
+import { createModelRequests } from "../../models/requests.js";
 import { estimateTokens } from "../../shared/format.js";
 import { isRecord } from "../../shared/type-guards.js";
 import { OperationTimeoutError, withAbortSignal } from "../../shared/with-timeout.js";
@@ -79,10 +79,8 @@ export class CompactionSummary {
 							signal,
 						})
 					).model;
-				const auth = await runtime.getAuth(model, { signal });
+				await createModelRequests(runtime).ensureAuth(model, signal);
 				signal.throwIfAborted();
-				if (!auth) throw new Error(`No credentials for ${model.provider}; configure credentials on the server.`);
-				const requestModel: Model<Api> = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
 				const reserveTokens = Math.min(SUMMARY_RESERVE_TOKENS, Math.floor(model.contextWindow / 4));
 				const previousTokens = estimateTokens(event.preparation.previousSummary ?? "");
 				if (model.contextWindow - previousTokens <= reserveTokens + 2048) {
@@ -134,11 +132,6 @@ export class CompactionSummary {
 						.catch(() => undefined);
 					return response;
 				};
-				const headers = Object.fromEntries(
-					Object.entries(auth.auth.headers ?? {}).filter(
-						(entry): entry is [string, string] => typeof entry[1] === "string",
-					),
-				);
 				// SDK treats custom summaries as opaque; restore our cumulative file metadata explicitly.
 				const previous = [...event.branchEntries].reverse().find((entry) => entry.type === "compaction");
 				if (
@@ -166,14 +159,14 @@ export class CompactionSummary {
 							isSplitTurn: false,
 							settings: { ...event.preparation.settings, reserveTokens },
 						},
-						requestModel,
-						auth.auth.apiKey,
-						headers,
+						model,
+						undefined,
+						undefined,
 						`${SUMMARY_INSTRUCTIONS}\nTranscript part ${index + 1}/${chunks.length}; incorporate this part into the checkpoint, retaining earlier constraints and recovery references.\n${event.customInstructions ?? ""}`,
 						signal,
 						"off",
 						stream,
-						auth.env,
+						undefined,
 						{ ...session.settingsManager.getRetrySettings(), maxRetries: 1 },
 					);
 					signal.throwIfAborted();

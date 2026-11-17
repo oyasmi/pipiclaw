@@ -19,6 +19,7 @@ import { buildToolSet, TOOL_REGISTRY, type ToolBuildContext } from "../src/tools
 import { createSubAgentTool } from "../src/tools/subagent.js";
 import { createWriteTool } from "../src/tools/write.js";
 import { testManagers } from "./helpers/background-runtime.js";
+import { testModelRequests } from "./helpers/model-requests.js";
 
 function registryContext(): ToolBuildContext {
 	return {
@@ -34,7 +35,7 @@ function registryContext(): ToolBuildContext {
 		toolsConfig: DEFAULT_TOOLS_CONFIG,
 		getCurrentModel: () => ({}) as never,
 		getAvailableModels: () => [],
-		resolveApiKey: async () => "key",
+		modelRequests: testModelRequests(),
 		getSessionSearchSettings: () => ({}) as never,
 	};
 }
@@ -254,7 +255,7 @@ describe("registry wiring", () => {
 				fileStore: createFileStore(),
 				getCurrentModel: () => ({}) as never,
 				getAvailableModels: () => [],
-				resolveApiKey: async () => "key",
+				modelRequests: testModelRequests(),
 				workspaceDir: "/tmp/ws",
 				deskDir: "/tmp/ws/dingtalk:dm:1",
 				runtimeContext: {

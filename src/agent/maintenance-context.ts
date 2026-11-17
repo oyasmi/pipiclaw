@@ -7,7 +7,7 @@ import type { PipiclawSettingsManager } from "../config/settings.js";
 import type { DeskConversation } from "../desk/types.js";
 import { enqueueBoundaryReflectEntries } from "../memory/boundary-work.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
-import { getApiKeyForModel } from "../models/api-keys.js";
+import { createModelRequests } from "../models/requests.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 
 /** /new's local persistence path: no runner, credentials, inference, or memory queue. */
@@ -101,7 +101,7 @@ export async function loadDetachedMaintenanceContext(
 		messages: () => [...cachedTranscript.messages],
 		sessionEntries: () => [...cachedTranscript.sessionEntries],
 		model,
-		resolveApiKey: async (candidate) => getApiKeyForModel(modelRegistry, candidate),
+		modelRequests: createModelRequests(modelRuntime),
 		settings: { memoryMaintenance: options.settingsManager.getMemoryMaintenanceSettings() },
 	};
 }
