@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import * as log from "../log.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { errorMessage } from "../shared/text-utils.js";
 import type { RetainedWorktreeInfo } from "../tasks/control.js";
 import { isTerminal, type ManagedWorktreeSummary, type RunRecord, WORKTREE_RETENTION_MS } from "./run-record.js";
+import { withWorkspaceCleanupLease } from "./workspace-lease.js";
 
 const execFileAsync = promisify(execFile);
 const GIT_WORKTREE_TIMEOUT_MS = 15_000;
@@ -38,7 +40,7 @@ export type ReclaimWorktreeOutcome =
 			path: string;
 			branch: string | null;
 			headSha: string;
-			reason: "dirty" | "unmerged";
+			reason: RetainedWorktreeInfo["reason"];
 	  };
 
 function safeRunSegment(value: string): string {
@@ -66,10 +68,9 @@ async function readWorktreeMeta(artifactDir: string): Promise<ManagedWorktreeMet
 }
 
 async function removeWorktreeDirectory(meta: ManagedWorktreeMeta): Promise<void> {
-	await runGit(meta.repoRoot, ["worktree", "remove", "--force", meta.worktreeRoot]).catch(async () => {
-		await rm(meta.worktreeRoot, { recursive: true, force: true }).catch(() => undefined);
-		await runGit(meta.repoRoot, ["worktree", "prune"]).catch(() => undefined);
-	});
+	// Git must get the final veto if files changed after inspection or the worktree is locked.
+	// Never bypass that refusal with --force or a recursive filesystem delete.
+	await runGit(meta.repoRoot, ["worktree", "remove", meta.worktreeRoot]);
 }
 
 async function deleteBranchIfAtBase(meta: ManagedWorktreeMeta): Promise<void> {
@@ -209,16 +210,12 @@ export async function inspectManagedWorktree(artifactDir: string): Promise<Manag
 			dirty: statusText.length > 0,
 			cleaned: false,
 		};
-	} catch {
-		return {
-			path: meta.worktreeRoot,
-			baseHead: meta.baseHead,
-			branch: meta.createdBranch,
-			headSha: meta.baseHead,
-			changedFiles: [],
-			dirty: false,
-			cleaned: false,
-		};
+	} catch (error) {
+		log.logWarn("subagent.worktree.inspect_failed", "Managed worktree inspection failed", {
+			reason: errorMessage(error),
+			fields: { path: meta.worktreeRoot },
+		});
+		return undefined;
 	}
 }
 
@@ -230,6 +227,7 @@ export async function inspectManagedWorktree(artifactDir: string): Promise<Manag
 export async function settleManagedWorktree(
 	artifactDir: string,
 	precomputed?: ManagedWorktreeSummary,
+	ownerRunId?: string,
 ): Promise<ManagedWorktreeSummary | undefined> {
 	const metaPath = join(artifactDir, WORKTREE_META_FILENAME);
 	if (precomputed) {
@@ -238,15 +236,21 @@ export async function settleManagedWorktree(
 	}
 	const meta = await readWorktreeMeta(artifactDir);
 	if (!meta) return undefined;
-	const summary = await inspectManagedWorktree(artifactDir);
-	if (!summary) return undefined;
-	if (!summary.dirty && summary.headSha === meta.baseHead) {
-		await removeWorktreeDirectory(meta);
-		await deleteBranchIfAtBase(meta);
-		await unlink(metaPath).catch(() => undefined);
-		return { ...summary, cleaned: true };
-	}
-	return summary;
+	return withWorkspaceCleanupLease(meta.worktreeRoot, ownerRunId, async () => {
+		const summary = await inspectManagedWorktree(artifactDir);
+		if (!summary) return undefined;
+		if (!summary.dirty && summary.headSha === meta.baseHead) {
+			try {
+				if (!summary.cleaned) await removeWorktreeDirectory(meta);
+			} catch {
+				return summary;
+			}
+			await deleteBranchIfAtBase(meta);
+			await unlink(metaPath).catch(() => undefined);
+			return { ...summary, cleaned: true };
+		}
+		return summary;
+	});
 }
 
 export async function cleanupManagedWorktreeIfUnchanged(artifactDir: string): Promise<void> {
@@ -259,9 +263,24 @@ export async function cleanupManagedWorktreeIfUnchanged(artifactDir: string): Pr
  * - Dirty working tree or unmerged commits -> preserved on disk and reported back to the caller.
  */
 export async function reclaimManagedWorktree(artifactDir: string): Promise<ReclaimWorktreeOutcome> {
-	const metaPath = join(artifactDir, WORKTREE_META_FILENAME);
 	const meta = await readWorktreeMeta(artifactDir);
 	if (!meta) return { status: "none" };
+	const outcome = await withWorkspaceCleanupLease(meta.worktreeRoot, undefined, () =>
+		reclaimWorktree(meta, artifactDir),
+	);
+	return (
+		outcome ?? {
+			status: "retained",
+			path: meta.worktreeRoot,
+			branch: meta.createdBranch,
+			headSha: meta.baseHead,
+			reason: "busy",
+		}
+	);
+}
+
+async function reclaimWorktree(meta: ManagedWorktreeMeta, artifactDir: string): Promise<ReclaimWorktreeOutcome> {
+	const metaPath = join(artifactDir, WORKTREE_META_FILENAME);
 
 	if (!existsSync(meta.worktreeRoot)) {
 		await runGit(meta.repoRoot, ["worktree", "prune"]).catch(() => undefined);
@@ -288,7 +307,7 @@ export async function reclaimManagedWorktree(artifactDir: string): Promise<Recla
 			path: meta.worktreeRoot,
 			branch: meta.createdBranch,
 			headSha: meta.baseHead,
-			reason: "dirty",
+			reason: "unavailable",
 		};
 	}
 
@@ -318,7 +337,11 @@ export async function reclaimManagedWorktree(artifactDir: string): Promise<Recla
 		}
 	}
 
-	await removeWorktreeDirectory(meta);
+	try {
+		await removeWorktreeDirectory(meta);
+	} catch {
+		return { status: "retained", path: meta.worktreeRoot, branch, headSha, reason: "unavailable" };
+	}
 	await deleteBranchIfMerged(meta);
 	await unlink(metaPath).catch(() => undefined);
 	return { status: "removed", path: meta.worktreeRoot, branch };
@@ -388,7 +411,7 @@ export async function sweepExpiredRunWorktree(
 	if (outcome.status === "removed" && record.worktree) {
 		record.worktree = { ...record.worktree, cleaned: true };
 		await persist(record);
-	} else if (outcome.status === "retained" && !record.worktreeRetainWarned) {
+	} else if (outcome.status === "retained" && outcome.reason !== "busy" && !record.worktreeRetainWarned) {
 		record.worktreeRetainWarned = true;
 		await persist(record);
 		log.logWarn("subagent.worktree.retained", "Managed worktree retained on expiry", {

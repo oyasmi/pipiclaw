@@ -170,24 +170,20 @@ export async function dispatchSubAgentRun(
 	// cannot drift between the two dispatch paths.
 	assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
 
-	// Admission: write delegations take an exclusive write lease; read-only verification runs take a
-	// shared read lease so parallel verifiers coexist while excluding writers until verification settles.
-	let leaseKey: string | undefined;
-	if (config.mutates === "write" || runContext.purpose === "verify") {
-		const lease = acquireWorkspaceLease({
-			runId: runContext.runId,
-			channelId: options.runtimeContext.channelId,
-			workingDirectory: runContext.workingDirectory,
-			mode: config.mutates === "write" ? "write" : "read",
-		});
-		if (!lease.ok) {
-			if (runContext.managedWorktree) {
-				await cleanupManagedWorktreeIfUnchanged(runContext.artifactDir).catch(() => undefined);
-			}
-			throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
+	// Every run pins its directory against cleanup; only writers and verifiers exclude mutations.
+	const lease = acquireWorkspaceLease({
+		runId: runContext.runId,
+		channelId: options.runtimeContext.channelId,
+		workingDirectory: runContext.workingDirectory,
+		mode: config.mutates === "write" ? "write" : runContext.purpose === "verify" ? "read" : "use",
+	});
+	if (!lease.ok) {
+		if (runContext.managedWorktree) {
+			await cleanupManagedWorktreeIfUnchanged(runContext.artifactDir).catch(() => undefined);
 		}
-		leaseKey = lease.leaseKey;
+		throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
 	}
+	const leaseKey = lease.leaseKey;
 	// Taken under the lease, before the run can write: what "already dirty" means for this run.
 	const workspaceBaseline =
 		config.mutates === "write" ? await snapshotWorkspace(runContext.workingDirectory) : undefined;

@@ -40,11 +40,16 @@ export function formatRetainedWorktreeLines(retained?: readonly RetainedWorktree
 	if (!retained || retained.length === 0) return [];
 	const lines = retained.slice(0, 3).map((item) => {
 		const ref = item.branch ? `分支 \`${item.branch}\`` : `提交 \`${item.headSha.slice(0, 12)}\``;
-		const why = item.reason === "dirty" ? "含未提交改动" : "含未合并提交";
-		return `- ⚠️ 保留未合并工作树：\`${item.path}\`（委派 \`${item.runId}\`，${ref}，${why}）`;
+		const why = {
+			dirty: "含未提交改动",
+			unmerged: "含未合并提交",
+			busy: "仍有委派正在使用",
+			unavailable: "暂时无法确认状态",
+		}[item.reason];
+		return `- ⚠️ 保留工作树：\`${item.path}\`（委派 \`${item.runId}\`，${ref}，${why}）`;
 	});
 	if (retained.length > 3) {
-		lines.push(`- ⚠️ 另有 ${retained.length - 3} 个未合并工作树已保留在本地仓库`);
+		lines.push(`- ⚠️ 另有 ${retained.length - 3} 个工作树已保留在本地仓库`);
 	}
 	return lines;
 }

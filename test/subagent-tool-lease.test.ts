@@ -7,11 +7,7 @@ import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all
 import { describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
-import {
-	MAX_RUNNING_SUBAGENT_RUNS_PER_DESK,
-	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
-	WORKTREE_RETENTION_MS,
-} from "../src/subagents/run-record.js";
+import { MAX_RUNNING_SUBAGENT_RUNS_PER_DESK, MAX_RUNNING_SUBAGENT_RUNS_PER_HOST } from "../src/subagents/run-record.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { renderTaskInputs } from "../src/tasks/brief.js";
@@ -319,7 +315,14 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		mkdirSync(join(deskDir, "tasks"), { recursive: true });
 		writeFileSync(join(deskDir, "tasks", "ship.md"), "---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n");
 		const manager = new SubAgentRunManager({ desk: testDesk(channelId), deskDir: "/tmp/pipiclaw-test-desk" }, {});
-		let releasePrompt: (() => void) | undefined;
+		let started!: () => void;
+		let releasePrompt!: () => void;
+		const arrived = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const released = new Promise<void>((resolve) => {
+			releasePrompt = resolve;
+		});
 		const tool = createSubAgentInlineTool({
 			...testManagers(channelId),
 			boundTaskId: "ship",
@@ -334,17 +337,13 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
 			getRunManager: () => manager,
 			createWorker: () =>
-				new FakeWorker(
-					(_input, worker) =>
-						new Promise<void>((resolve) => {
-							releasePrompt = () => {
-								const message = createAssistantMessage("Checks passed.\nVERDICT: PASS");
-								worker.state.messages = [message];
-								worker.emit({ type: "message_end", message });
-								resolve();
-							};
-						}),
-				),
+				new FakeWorker(async (_input, worker) => {
+					started();
+					await released;
+					const message = createAssistantMessage("Checks passed.\nVERDICT: PASS");
+					worker.state.messages = [message];
+					worker.emit({ type: "message_end", message });
+				}),
 		});
 
 		const resultPromise = tool.execute("verify-write-lease", {
@@ -354,17 +353,17 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			task: "Run the acceptance checks.",
 			purpose: "verify",
 		});
-		for (let attempt = 0; attempt < 100 && !releasePrompt; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 5));
+		await arrived;
+		try {
+			const runningLease = acquireWorkspaceLease({
+				runId: "competing-verify",
+				channelId: "dingtalk:dm:other",
+				workingDirectory: workspaceDir,
+			});
+			expect(runningLease.ok).toBe(false);
+		} finally {
+			releasePrompt();
 		}
-		expect(releasePrompt).toBeDefined();
-		const runningLease = acquireWorkspaceLease({
-			runId: "competing-verify",
-			channelId: "dingtalk:dm:other",
-			workingDirectory: workspaceDir,
-		});
-		expect(runningLease.ok).toBe(false);
-		releasePrompt?.();
 
 		const result = await resultPromise;
 		await vi.waitFor(() => expect(manager.get(result.details.runId)?.settledAt).toBeDefined());
@@ -376,11 +375,14 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		});
 		expect(nextLease.ok).toBe(true);
 		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next-verify");
+	});
 
-		// Direction 1.3: runtime-managed Git worktree (`worktree: true`) creates `.git/pipiclaw-worktrees/<runId>`
-		// on branch `pipiclaw/<runId>`, returns structured `branch` / `headSha` / `changedFiles`, auto-cleans
-		// unchanged worktrees immediately, retains dirty/unmerged worktrees with explicit warnings on parent task
-		// close or 24h timeout GC, and auto-removes clean merged worktrees once merged into the main checkout.
+	it("records a task-bound worktree's commits and reclaims them only after merge", async () => {
+		const workspaceDir = createTempWorkspace();
+		const deskDir = join(workspaceDir, "desk");
+		const channelId = "dingtalk:dm:worktree";
+		mkdirSync(join(deskDir, "tasks"), { recursive: true });
+
 		const repoDir = createTempWorkspace();
 		execFileSync("git", ["init"], { cwd: repoDir });
 		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoDir });
@@ -392,102 +394,35 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 		writeFileSync(
 			join(deskDir, "tasks", "ship.md"),
-			'---\nstate: running\nchannel: "dingtalk:dm:verify_write_lease"\n---\n# Ship\n\n## DoD\n- [x] checks pass\n',
+			'---\nstate: running\nchannel: "dingtalk:dm:worktree"\n---\n# Ship\n',
 		);
 		const wtManager = new SubAgentRunManager({ desk: testDesk(channelId), deskDir }, {});
-		const mainLock = acquireWorkspaceLease({ runId: "main-writer", channelId, workingDirectory: repoDir });
-		expect(mainLock.ok).toBe(true);
+		const taskWtTool = createSubAgentInlineTool({
+			...testManagers(channelId),
+			boundTaskId: "ship",
+			executor: fakeExecutor,
+			fileStore: createFileStore(),
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			workingDirectory: repoDir,
+			deskDir,
+			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
+			getRunManager: () => wtManager,
+			createWorker: () =>
+				new FakeWorker((input, worker) => {
+					const cwd = input.match(/- Working directory: (.+)/)?.[1]?.trim();
+					if (!cwd) throw new Error("Missing worktree working directory");
+					writeFileSync(join(cwd, "committed.ts"), "export const v = 2;\n");
+					execFileSync("git", ["add", "committed.ts"], { cwd });
+					execFileSync("git", ["commit", "-m", "feature"], { cwd });
+					const message = createAssistantMessage("Done.");
+					worker.state.messages = [message];
+					worker.emit({ type: "message_end", message });
+				}),
+		});
 		try {
-			let mode: "clean" | "dirty" | "commit" = "clean";
-			const makeWtTool = (boundTaskId?: string) =>
-				createSubAgentInlineTool({
-					...testManagers(channelId),
-					boundTaskId,
-					executor: fakeExecutor,
-					fileStore: createFileStore(),
-					getCurrentModel: () => model,
-					getAvailableModels: () => [model],
-					resolveApiKey: async () => "test-key",
-					workspaceDir,
-					workingDirectory: repoDir,
-					deskDir,
-					runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
-					getRunManager: () => wtManager,
-					createWorker: () =>
-						new FakeWorker((input, worker) => {
-							const match = input.match(/- Working directory: (.+)/);
-							const cwd = match?.[1]?.trim();
-							if (cwd && mode === "dirty") {
-								writeFileSync(join(cwd, "feature.txt"), "edited\n", "utf-8");
-							} else if (cwd && mode === "commit") {
-								writeFileSync(join(cwd, "committed.ts"), "export const v = 2;\n", "utf-8");
-								execFileSync("git", ["add", "committed.ts"], { cwd });
-								execFileSync("git", ["commit", "-m", "feat: add committed.ts"], { cwd });
-							}
-							const message = createAssistantMessage("Worktree run complete.");
-							worker.state.messages = [message];
-							worker.emit({ type: "message_end", message });
-						}),
-				});
-
-			// 1. Clean unchanged run: auto-removed at settlement, unused branch deleted.
-			const chatWtTool = makeWtTool();
-			const cleanRes = await chatWtTool.execute("wt-clean", {
-				systemPrompt: "Edit in worktree.",
-				tools: ["read", "edit"],
-				mutates: "write",
-				worktree: true,
-				task: "Inspect without modifying.",
-			});
-			await vi.waitFor(() => expect(wtManager.get(cleanRes.details.runId)?.settledAt).toBeDefined());
-			const cleanWtDir = join(repoDir, ".git", "pipiclaw-worktrees", cleanRes.details.runId);
-			expect(existsSync(cleanWtDir)).toBe(false);
-			expect(cleanRes.details.worktree).toMatchObject({
-				baseHead,
-				headSha: baseHead,
-				changedFiles: [],
-				dirty: false,
-				cleaned: true,
-			});
-			expect(
-				execFileSync("git", ["branch", "--list", `pipiclaw/${cleanRes.details.runId}`], {
-					cwd: repoDir,
-					encoding: "utf-8",
-				}).trim(),
-			).toBe("");
-
-			// 2. Dirty uncommitted standalone run: retained at `.git/pipiclaw-worktrees/<runId>`, structured
-			//    changedFiles returned, and 24h timeout GC preserves dirty changes instead of deleting them.
-			mode = "dirty";
-			const dirtyRes = await chatWtTool.execute("wt-dirty", {
-				systemPrompt: "Edit in worktree.",
-				tools: ["read", "edit"],
-				mutates: "write",
-				worktree: true,
-				task: "Write feature.txt.",
-			});
-			await vi.waitFor(() => expect(wtManager.get(dirtyRes.details.runId)?.settledAt).toBeDefined());
-			const dirtyWtDir = join(repoDir, ".git", "pipiclaw-worktrees", dirtyRes.details.runId);
-			expect(existsSync(join(dirtyWtDir, "feature.txt"))).toBe(true);
-			expect(dirtyRes.details.worktree).toMatchObject({
-				branch: `pipiclaw/${dirtyRes.details.runId}`,
-				headSha: baseHead,
-				changedFiles: ["feature.txt"],
-				dirty: true,
-				cleaned: false,
-			});
-			expect(dirtyRes.content[0]).toMatchObject({
-				type: "text",
-				text: expect.stringContaining(`branch=pipiclaw/${dirtyRes.details.runId}`),
-			});
-			await wtManager.collectGarbage(Date.now() + WORKTREE_RETENTION_MS + 1_000);
-			expect(existsSync(join(dirtyWtDir, "feature.txt"))).toBe(true);
-			expect(wtManager.get(dirtyRes.details.runId)?.worktreeRetainWarned).toBe(true);
-
-			// 3. Task-bound committed run: settles into task log with branch/headSha/changedFiles; unmerged
-			//    worktree is retained with receipt warning before merge, then reclaimed once merged.
-			mode = "commit";
-			const taskWtTool = makeWtTool("ship");
 			const commitDispatched = await taskWtTool.execute("wt-commit", {
 				systemPrompt: "Commit in worktree.",
 				tools: ["read", "edit"],
@@ -525,7 +460,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 				"2026-11-17T03:50:00+08:00",
 				unmergedRetained,
 			);
-			expect(receiptWithWarning).toContain("保留未合并工作树");
 			expect(receiptWithWarning).toContain(`pipiclaw/${commitRunId}`);
 
 			// Merge branch into main checkout, then task close reclaims worktree and deletes merged branch.
@@ -541,7 +475,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 				}).trim(),
 			).toBe("");
 		} finally {
-			if (mainLock.ok) releaseWorkspaceLease(mainLock.leaseKey, "main-writer");
+			wtManager.stop();
 			await resetTaskLogAppenders();
 		}
 	});

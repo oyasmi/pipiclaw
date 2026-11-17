@@ -8,6 +8,7 @@ import {
 	findWorkspaceLeaseHolder,
 	formatWorkspaceLeaseConflict,
 	releaseWorkspaceLease,
+	withWorkspaceCleanupLease,
 } from "../src/subagents/workspace-lease.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -17,6 +18,48 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempDir = useTempDirs("pipiclaw-workspace-lease-");
 
 describe("workspace lease (spec 040, D10.1)", () => {
+	it("cleanup excludes every directory user and holds admission closed until its callback settles", async () => {
+		// A check-only guard would let a new follow-up enter while asynchronous Git removal runs.
+		const dir = createTempDir();
+		const alias = join(createTempDir(), "alias");
+		symlinkSync(dir, alias);
+		for (const mode of ["write", "read", "use"] as const) {
+			const user = acquireWorkspaceLease({ runId: "user", channelId: "test", workingDirectory: alias, mode });
+			expect(user.ok).toBe(true);
+			try {
+				expect(await withWorkspaceCleanupLease(dir, undefined, async () => "removed")).toBeUndefined();
+			} finally {
+				if (user.ok) releaseWorkspaceLease(user.leaseKey, "user");
+			}
+		}
+		let enter!: () => void;
+		let release!: () => void;
+		const entered = new Promise<void>((resolve) => {
+			enter = resolve;
+		});
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const cleanup = withWorkspaceCleanupLease(dir, undefined, async () => {
+			enter();
+			await released;
+			throw new Error("removal failed");
+		});
+		const failed = expect(cleanup).rejects.toThrow("removal failed");
+		await entered;
+		try {
+			for (const mode of ["write", "read", "use"] as const) {
+				expect(acquireWorkspaceLease({ runId: "new", channelId: "test", workingDirectory: alias, mode }).ok).toBe(
+					false,
+				);
+			}
+			expect(await withWorkspaceCleanupLease(alias, undefined, async () => "removed")).toBeUndefined();
+		} finally {
+			release();
+		}
+		await failed;
+		expect(await withWorkspaceCleanupLease(dir, undefined, async () => "retry")).toBe("retry");
+	});
 	it("a second write run competing for the same directory is rejected, naming the holder", () => {
 		const dir = createTempDir();
 		const first = acquireWorkspaceLease({ runId: "run-1", channelId: "dingtalk:dm:1", workingDirectory: dir });

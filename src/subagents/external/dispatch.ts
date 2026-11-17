@@ -232,19 +232,14 @@ export async function dispatchExternalFollowUp(input: {
 
 	const newRunId = runManager.mintRunId();
 
-	let leaseKey: string | undefined;
-	if (role.mutates === "write" || record.purpose === "verify") {
-		const lease = acquireWorkspaceLease({
-			runId: newRunId,
-			channelId: input.channelId,
-			workingDirectory: record.workingDirectory,
-			mode: role.mutates === "write" ? "write" : "read",
-		});
-		if (!lease.ok) {
-			throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
-		}
-		leaseKey = lease.leaseKey;
-	}
+	const lease = acquireWorkspaceLease({
+		runId: newRunId,
+		channelId: input.channelId,
+		workingDirectory: record.workingDirectory,
+		mode: role.mutates === "write" ? "write" : record.purpose === "verify" ? "read" : "use",
+	});
+	if (!lease.ok) throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
+	const leaseKey = lease.leaseKey;
 
 	// Spec 042 D7: `<subagent-artifacts>/<runId>` computed with path join rather than regex substitution.
 	const artifactDir = join(dirname(record.artifactDir), newRunId);
@@ -259,6 +254,12 @@ export async function dispatchExternalFollowUp(input: {
 
 	let launchResult: ExternalLaunchResult;
 	try {
+		// Cleanup may have won admission since the earlier preflight. Recheck while pinned.
+		if (!existsSync(record.workingDirectory)) {
+			throw new RecoverableToolError(
+				`Run "${resolvedRunId}"'s working directory was removed; delegate a new run instead.`,
+			);
+		}
 		await copyManagedWorktreeMeta(record.artifactDir, artifactDir).catch(() => false);
 		const envelopedTask = buildFollowUpTask(
 			task,

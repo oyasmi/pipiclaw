@@ -57,13 +57,13 @@ export type TaskMessageOutcome =
 
 export type TaskControlOutcome = { kind: "ok" } | { kind: "not_found" } | { kind: "unchanged" } | { kind: "stopping" };
 
-/** A runtime-managed Git worktree preserved on task close because it still carries uncommitted or unmerged changes. */
+/** A runtime-managed Git worktree that cannot safely be removed on task close. */
 export interface RetainedWorktreeInfo {
 	runId: string;
 	path: string;
 	branch: string | null;
 	headSha: string;
-	reason: "dirty" | "unmerged";
+	reason: "dirty" | "unmerged" | "busy" | "unavailable";
 }
 
 export type TaskCancelOutcome =

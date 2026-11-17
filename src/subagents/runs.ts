@@ -518,12 +518,12 @@ export class SubAgentRunManager {
 			const record = this.runs.get(runId);
 			if (!record || record.settledAt) return; // Idempotent: already settled, never replay.
 
-			// Keep the externally visible record `running` while the settlement intent is made durable.
-			// This preserves restart recovery without publishing a terminal status before its lease is
-			// released: the caller reaches settle() only after its worker/process has finished.
+			// The worker/process has finished; keep the record `running` until settlement is durable
+			// and its lease is released, so restart recovery cannot publish an unprotected writer.
 			const worktree = await settleManagedWorktree(
 				record.artifactDir,
 				record.settlementPending?.worktree ?? input.worktree,
+				record.runId,
 			).catch(() => undefined);
 			const effectiveInput = worktree ? { ...input, worktree } : input;
 			const snapshot = { ...record };
@@ -546,7 +546,7 @@ export class SubAgentRunManager {
 			releaseWorkspaceLease(record.leaseKey, record.runId);
 			record.leaseKey = undefined;
 			applyPendingSettlement(record, pending);
-			// Terminal records never display as "lease held" (P1-4). The terminal write is best-effort:
+			// The terminal write is best-effort:
 			// the durable intent above remains available for restart recovery if this publish fails,
 			// and the lease must not be reacquired after the process has finished.
 			await this.persist(record);
@@ -851,7 +851,7 @@ export class SubAgentRunManager {
 						runId: record.runId,
 						channelId: record.channelId,
 						workingDirectory: record.workingDirectory,
-						mode: record.mutates === "read" ? "read" : "write",
+						mode: record.mutates === "read" ? (record.purpose === "verify" ? "read" : "use") : "write",
 					});
 					if (rebuilt.ok) {
 						// Spec 042 D5: persist what was *actually* acquired, not just trust the old

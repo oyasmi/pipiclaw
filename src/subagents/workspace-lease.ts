@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, normalize, resolve } from "node:path";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -10,9 +11,11 @@ import { withTrailingSlash } from "../shared/text-utils.js";
  * - `mode: "read"` (`purpose: "verify"` runs with `mutates: "read"`): shared — coexists with other
  *   read leases on overlapping paths while blocking write delegations and main/task `write`/`edit`
  *   calls so files cannot move mid-verification.
+ * - `mode: "use"`: ordinary read-only work may overlap writers, but pins its directory against
+ *   cleanup. Cleanup excludes all users and holds admission closed across asynchronous Git I/O.
  */
 
-export type WorkspaceLeaseMode = "write" | "read";
+export type WorkspaceLeaseMode = "write" | "read" | "use";
 
 export interface WorkspaceLeaseHolder {
 	runId: string;
@@ -22,6 +25,7 @@ export interface WorkspaceLeaseHolder {
 }
 
 const leases = new Map<string, Map<string, WorkspaceLeaseHolder>>();
+const cleanups = new Map<string, WorkspaceLeaseHolder>();
 
 const DESK_CONTROL_SUBDIRS = [
 	"tasks",
@@ -39,7 +43,7 @@ const DESK_CONTROL_SUBDIRS = [
 const DESK_CONTROL_FILES = ["desk.json", "MEMORY.md"] as const;
 
 function holderMode(holder: WorkspaceLeaseHolder): WorkspaceLeaseMode {
-	return holder.mode === "read" ? "read" : "write";
+	return holder.mode ?? "write";
 }
 
 function crossesIsolatedBoundary(parent: string, child: string): boolean {
@@ -105,19 +109,46 @@ function isDeskControlPlanePath(resolvedTarget: string, deskDir: string | undefi
 
 function findConflict(
 	leaseKey: string,
-	requestedMode: WorkspaceLeaseMode,
+	requestedMode: WorkspaceLeaseMode | "cleanup",
 	excludeRunId?: string,
 ): WorkspaceLeaseHolder | undefined {
+	for (const [key, holder] of cleanups) {
+		if (pathsConflict(key, leaseKey)) return holder;
+	}
 	for (const [key, holders] of leases) {
 		if (!pathsConflict(key, leaseKey)) continue;
 		for (const holder of holders.values()) {
 			if (excludeRunId && holder.runId === excludeRunId) continue;
-			if (requestedMode === "write" || holderMode(holder) === "write") {
+			const mode = holderMode(holder);
+			if (
+				requestedMode === "cleanup" ||
+				(requestedMode !== "use" && mode !== "use" && (requestedMode === "write" || mode === "write"))
+			) {
 				return holder;
 			}
 		}
 	}
 	return undefined;
+}
+
+/**
+ * Atomically exclude every other directory user, then hold that exclusion across inspection and
+ * removal. A finished worker may clean up under its own still-held lease; never release that lease
+ * here — settlement remains the run manager's responsibility.
+ */
+export async function withWorkspaceCleanupLease<T>(
+	workingDirectory: string,
+	ownerRunId: string | undefined,
+	cleanup: () => Promise<T>,
+): Promise<T | undefined> {
+	const key = workspaceLeaseKey(workingDirectory);
+	if (findConflict(key, "cleanup", ownerRunId)) return undefined;
+	cleanups.set(key, { runId: `cleanup-${randomUUID()}`, channelId: "runtime", workingDirectory, mode: "write" });
+	try {
+		return await cleanup();
+	} finally {
+		cleanups.delete(key);
+	}
 }
 
 export type AcquireWorkspaceLeaseResult =

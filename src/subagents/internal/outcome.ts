@@ -72,7 +72,7 @@ export async function buildInternalOutcome(input: {
 	}
 
 	const worktree = runContext.managedWorktree
-		? await settleManagedWorktree(runContext.artifactDir).catch(() => undefined)
+		? await settleManagedWorktree(runContext.artifactDir, undefined, runContext.runId).catch(() => undefined)
 		: undefined;
 	const baseSettleInput = {
 		usage,
