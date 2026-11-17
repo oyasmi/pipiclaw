@@ -17,7 +17,7 @@
 
 `src/index.ts` 导出名称保持不变。公开事件类型中的 `dot` 所有权字段改为 `desk`，属于调用者需要同步的结构变更；不提供旧类型别名、命令或参数别名。评测上下文使用 `deskDir`、`{{DESK_DIR}}`，artifact scope 使用 `desk`，封存索引版本为 2；旧证据不原地改写，新 harness 不静默重放旧 shape。
 
-真实部署升级需在首次启动新版本前，由 AI agent 按[一次性迁移说明](../../desk-migration.md)离线整理具体数据。本次未读取或搬移真实 workspace，未部署、未启动正式服务、未向钉钉发送消息。
+真实部署升级需在首次启动新版本前，由 AI agent 按[一次性迁移说明](../../migrations/desk-migration.md)离线整理具体数据。本次未读取或搬移真实 workspace，未部署、未启动正式服务、未向钉钉发送消息。
 
 ## 自动验证
 

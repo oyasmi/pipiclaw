@@ -1,106 +1,102 @@
-# 智能体委派（Sub-Agents）
+# 智能体委派指南（Sub-Agents）
 
-> **读者**：想把 reviewer / researcher 这类轻量角色，或 Claude Code / Codex CLI / Cursor CLI / Antigravity CLI 这类外部智能体，接入同一套工作流的使用者与管理员。
-> **前置**：已完成 [README](../README.md) 的安装与配置。
-> **读完你能**：启用一个现成角色，理解内置与外部委派的差异，查看和控制异步 run，并按真实权限边界编写自己的角色。
+> **适合谁**：想让 Pipiclaw 调用本机的 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI 或轻量内置子智能体协同完成编码、调研与独立审查的用户与管理员。
+> **读完你会得到**：5 分钟启用现成外部 Coding Agent 角色的方法、`/subagents` 控制命令、后台异步唤醒与多轮续接（`follow_up`）机制，以及自定义角色文件的完整字段与安全边界参考。
 
-智能体委派让主智能体把某一步工作交给更合适的执行者：轻量检索可以交给进程内的隔离角色，跨文件实现和独立评审可以交给真实的外部 coding agent。主智能体仍然负责选择角色、提供完整任务、接收结果并向用户交付。
+智能体委派让主智能体把某一步具体工作交给最擅长它的执行者：**进程内轻量角色**适合快速只读检索与筛查，**外部 Coding Agent** 适合跨多文件实现、自测迭代与异构模型交叉审查。它与 [事件与任务](./events-and-tasks.md) 正交——单次聊天回合里即可直接发起委派，无需先建长程任务；在任务步骤内发起委派则会自动归入[团队看板与工作项](./events-and-tasks.md#3-团队看板与工作项)。
 
-它和[事件与任务](./events-and-tasks.md)是正交能力：事件与任务解决“什么时候继续、在途状态保存在哪里”，委派解决“这一步由谁来做”。当前回合中的一次临时委派不需要创建 task；需要跨时间恢复、记录目标和验收时，再用 task 承载长期状态。
+### 两种执行方式（`runtime`）对比
 
-子代理有两种执行方式（`runtime`）：
+| 维度 | 内置子代理（`internal`，默认） | 外部智能体（`external`） |
+|---|---|---|
+| **运行位置** | Pipiclaw 进程内隔离上下文 | 独立宿主机子进程（`claude`、`codex`、Cursor `agent`、Antigravity `agy` 或自定义脚本） |
+| **模型与凭据** | 复用 Pipiclaw 的 `auth.json` / `models.json` | 使用目标 CLI 自身的登录态、模型目录与配置文件 |
+| **权限与安全边界** | 受 Pipiclaw 工具白名单与 `security.json` 守卫约束 | **不经过 Pipiclaw 守卫**；真实边界为目标 CLI 自身的 sandbox 参数与系统运行账号 |
+| **典型场景** | 快速代码检索、局部审查、固定格式摘要 | 跨模块编码实现、跑测试自修复、几十分钟重型重构、异构模型独立复核 |
 
-- **`internal`**（默认）：在 Pipiclaw 进程内运行的隔离上下文子智能体。它使用 Pipiclaw 的模型、工具和安全守卫，启动快，适合检索、筛查和窄范围分析。
-- **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI 或脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
+---
 
-两者共用一个角色目录（`workspace/sub-agents/`）、一套 run 生命周期和控制面（`subagent_list` / `subagent_run` 工具 / `/subagents` 命令）。调用面按形状分两个工具：`subagent` 选一个已配置角色（内置或外部都走它），`subagent_inline` 是没有合适角色时的一次性内置执行者。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
+## 1. 五分钟启用外部 Coding Agent
 
-任务步骤中的委派自动归入该任务，可用 `item` 对应工作项；结果进入任务记录和看板。聊天中的委派独立运行，无需先建任务。独立检查使用 `purpose: verify`，任务中的用法见[团队看板与工作项](./events-and-tasks.md#团队看板与工作项)。
+前提：目标 CLI（`claude`、`codex`、`agent` 或 `agy`）已在**运行 Pipiclaw 的同一系统账号**下安装、加入 `PATH` 并完成登录验证。
 
-## 五分钟启用一个外部角色
+Pipiclaw 安装包内置了按能力分档的现成角色模板（位于包内或源码仓库的 [`examples/sub-agents/agents/`](../examples/sub-agents/README.md)）：
+- **`*-flash`**：做法明确、易检查的轻量快速修改；
+- **`*-main`**：日常功能开发、问题排查与文档编写主力档；
+- **`*-high`**：复杂架构取舍、疑难诊断与高风险变更；
+- **`codex-review`**：通过 `--sandbox read-only` 强制只读的独立代码审查角色。
 
-外部角色的前提是：目标 CLI 已经安装在**运行 Pipiclaw 的同一账号**下，能从该进程的 `PATH` 找到，并已完成登录。先在 shell 中验证所选的 `claude`、`codex`、Cursor 的 `agent` 或 Antigravity 的 `agy` 命令能运行。
-
-全局 npm 安装会把推荐配置一起安装。以下示例复制两个 Claude Code 条目：
+> ⚠️ 除只读的 `codex-review` 外，其余示例模板均放开了 CLI 自动写入权限并声明 `mutates: write`，复制前请确认符合你的本机账号权限预期。目录加载为**平铺扫描**（仅读取 `workspace/sub-agents/*.md`，不递归子目录）。
 
 ```bash
 mkdir -p ~/.pipiclaw/workspace/sub-agents
-PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.md \
+PIPICLAW_PKG="$(npm root -g)/@oyasmi/pipiclaw"
+
+# 按需复制你本机已安装 CLI 对应的角色文件（无需重启 daemon）
+cp "$PIPICLAW_PKG"/examples/sub-agents/agents/{claude-main,claude-high,codex-review}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 
-如果你正在源码 checkout 中开发，也可以从仓库的 `examples/sub-agents/agents/` 复制。设置了 `PIPICLAW_HOME` 时，把目标目录改成 `$PIPICLAW_HOME/workspace/sub-agents/`。注意加载是**平铺**的：只读 `sub-agents/*.md`，不递归子目录，所以要复制文件而不是目录。
-
-不必重启 daemon；角色目录会在资源刷新时重新发现。先发送：
+复制完成后，直接在聊天或终端验证并交办任务：
 
 ```text
 /subagents roles
 /subagents roles claude-main
 ```
 
-确认条目显示为可用后，直接给主智能体目标、范围和验收方法：
+确认状态可用后，直接用自然语言交代目标与工作目录（主智能体会按角色描述自动挑选合适的执行器，也可直接点名）：
 
 ```text
-请把这次跨模块实现交给一个合适的执行器，工作目录是 /srv/project；完成后独立检查当前 diff，并把结论和剩余风险交付给我。
+请把这次导出模块改造委派给合适的执行器，工作目录是 /srv/order-service；实现并跑通测试后，再用只读角色独立审查当前 diff，把结论和剩余风险告诉我。
 ```
 
-由主智能体按 description 里的能力与成本挑执行器，通常不需要你点名条目；要指定时直接说条目名即可。
+---
 
-外部委派会立刻返回 `runId`，完成时自动唤醒发起委派的频道（它已换绑到别的工位时不唤醒，结果仍保存在 run 记录里）。过程中可用 `/subagents` 查看，用 `/subagents cancel <runId>` 终止。不要为了等结果反复轮询或重复派发。
+## 2. 查看与控制委派（`/subagents` 命令）
 
-> 长时间委派请使用常驻 daemon。它为钉钉和 Web API 跟踪运行状态、投递结果，并在重启后恢复外部运行记录。没有 daemon 时，终端内嵌运行时只在终端打开期间提供这些能力。
+所有 `/subagents` 命令由运行时直接处理（零模型消耗），即使当前回合卡住或忙碌也可随时执行。`runId` 形如 `run_a1b2c3`，命令支持省略 `run_` 前缀的唯一简写：
 
-## 它是什么
+| 命令 | 说明 |
+|---|---|
+| `/subagents` | 查看当前运行中的委派、最近结束的记录与角色目录概览 |
+| `/subagents list [running\|failed\|all]` | 按状态筛选本工位的委派运行记录 |
+| `/subagents show <runId>` | 查看完整诊断详情：实际拼装的 `argv`、工作目录、PID、耗时与 `stderr` 尾部 |
+| `/subagents output <runId>` | 查看该次委派产出的正文尾部（完整文件位于工位 `subagent-artifacts/<runId>/output.md`） |
+| `/subagents cancel <runId\|all>` | **立即强杀外部进程组或中止内置子代理**（`all` 终止本工位全部在途委派） |
+| `/subagents roles [name]` | 列出全部已加载角色（格式：`runtime, mutates, model, thinking`）；带 `name` 查看完整配置与告警 |
 
-工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
+> **切记**：聊天里的 `/stop` **只停止当前聊天回合**，已派发的后台委派会继续运行；需要终止委派请用 `/subagents cancel <runId>`。长期运行外部委派请保持常驻 `pipiclaw` daemon 在线（重启后会自动按 PID 接管对账；已结算记录与产物保留 30 天）。
 
-仓库及 npm 包提供可复制的[能力条目](../examples/sub-agents/agents/)：按 Claude、Codex、Cursor、Antigravity、GLM 的执行器和能力档位组织，并提供 CLI 强制只读的 `codex-review`。文件正文只有跨任务交付约定；调查、实施或检查等本轮职责由 task 指定。
+---
 
-```bash
-cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
-```
+## 3. 异步返回、进度通知与多轮续接
 
-`agents/` 的三档分工是：**flash** 用于做法明确、易检查且易恢复的工作，**main** 承担常规实施，**high** 用于关键取舍、疑难诊断或难验证的工作。逐条目取舍与 GLM 包装脚本见[示例说明](../examples/sub-agents/README.md)。除只读的 `codex-review` 外，条目均放开 CLI 权限并声明 `mutates: write`，部署前按本机账号与权限边界审阅。删除包内模板不会改变已安装的工作区配置。
+- **同步宽限与自动唤醒**：
+  - 聊天中调用**内置角色**共享 **10 秒**快速窗口：10 秒内完成直接内联返回，超时自动转为后台运行并返回 `runId`；
+  - **外部角色**及**任务步骤内的所有委派**在启动确认后立即异步返回 `runId`；
+  - 后台委派结束时自动唤醒原发起频道（多个结果在频道忙碌期间陆续完成会自动合并进同一唤醒回合，单回合最多合并 6 条；若频道已换绑到其他工位则抑制唤醒，结果仍保留在记录中）。收到“仍在运行”提示后**切勿轮询或重复派发**。
+- **旁路进度播报（`delegation.notices`）**：默认 `"live"` 模式下，长耗时委派会在聊天旁路稀疏推送当前命令/步骤与完成回执；外部进程连续 **10 分钟无输出**会推送一次“可能卡住了”提醒（不占模型上下文，也不自动强杀）。`mutates: write` 的委派结算时还会对比派发前快照，附带本次实际修改的文件摘要。
+- **内置瞬时容错**：内置子代理遇到供应商 429 / 5xx / 网络闪断会自动原地退避重试（最多 3 次：2s / 4s / 8s），仍失败且配了 `fallbackModel` 时自动切换备用模型重试。
+- **外部会话多轮续接（`subagent_run op=follow_up`）**：
+  - `claude-code`、`codex-cli`、`cursor-cli` 与 `antigravity-cli` 支持在已结束的外部 run 基础上追加新一轮指令（生成新 `runId`，仅发送增量指令与新产物目录，避免重复计费）；
+  - **指纹一致性保护**：若中途修改了角色文件的 `command`、`model` 或 `shell`，续接会被拒绝并提示重新派发；仅润色 Markdown 正文提示词不影响续接。
 
-不复制模板也完全可以使用 inline `systemPrompt` 委派——但 inline 委派永远是 `runtime: internal`，外部角色必须以配置文件的形式存在（需要 `harness`/`command`，无法通过调用参数临时拼出）。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
+---
 
-适合内置角色的场景：
+## 4. 编写自定义角色文件
 
-- 代码审查
-- 信息收集
-- 风险检查
-- 某类固定格式的总结
-- 把工作区改动整理成提交（须明确提交授权，并配置适当的写权限）
+每个角色是 `~/.pipiclaw/workspace/sub-agents/<name>.md` 下的一个 Markdown 文件：**YAML Frontmatter** 定义运行方式与边界，**Markdown 正文**作为子代理的系统提示词（`description` 字段是主智能体挑选角色时唯一先看到的路由依据，建议写清“何时用、何时不用、需要什么输入”）。
 
-适合外部角色的场景：
+**工作目录从不写死在角色文件里**——每次委派由主智能体通过调用参数 `workingDirectory` 指定（缺省为当前工位工作目录）。
 
-- 跨多文件的实现，需要自己写测试、自己跑测试、自己迭代
-- 单次可能运行几十分钟的重型工作
-- 需要另一家模型/CLI 的独立判断（例如用 codex-cli 复核 claude 自己的实现）
+### 最小角色模板对比
 
-不适合任何一种子代理的场景：
+**外部角色示例（`claude-main.md`）**：
 
-- 只需要主代理顺手完成的一步小事
-- 需要继续递归创建下级代理的复杂代理树（子代理没有 `subagent` 工具，外部 agent 是否会自己 spawn 子代理不受 pipiclaw 控制或约束，见[安全边界](#运行时规则runtime-rules)）
-
-已结算的委派记录与运行时管理产物从结算时起保留 30 天，由每日批次清理；执行器自建文件不在此清理范围。长期交付物应写入任务指定的位置。延长保留期会增加磁盘占用。
-
-小事可直接完成；明确的代码工作可一次交付代码、测试、文档和必要检查。同一执行器可以承担不同阶段，按风险安排独立检查，无需固定岗位流水线。
-
-## 文件结构（File Structure）
-
-一个子代理文件由两部分组成：
-
-1. **YAML frontmatter**：定义名字、描述、runtime，以及内置或外部各自的字段。
-2. **Markdown 正文**：作为这个子代理的系统提示词（system prompt）。内置角色直接使用；外部角色里，claude-code 通过 `--append-system-prompt-file` 引用它，其余 harness 会把它拼进发给 CLI 的 stdin 最前面。
-
-最小外部示例（`~/.pipiclaw/workspace/sub-agents/claude-main.md`）：
-
-```md
+```markdown
 ---
 name: claude-main
-description: 主力档，成本中等；适合实现、排查和文档，按任务要求交付完整结果。
+description: 主力编码档，适合跨文件功能实现、测试编写与问题修复；任务中需给出仓库绝对路径与验收命令。
 runtime: external
 harness: claude-code
 command: claude --dangerously-skip-permissions
@@ -111,345 +107,112 @@ mutates: write
 maxWallTimeSec: 5400
 ---
 
-（正文即 system prompt，通过 `--append-system-prompt-file` 传入 claude）
+按任务要求完成代码修改并运行相关验证命令，最后清楚列出改动文件、验证输出与剩余风险。
 ```
 
-最小内置示例（`~/.pipiclaw/workspace/sub-agents/reviewer.md`）：
+**内置只读角色示例（`reviewer.md`）**：
 
-```md
+```markdown
 ---
 name: reviewer
-description: 当需要只读审查代码改动、查找正确性问题、回归风险和缺失测试时使用；不要用于实现修复或最终验收。任务中应给出改动范围和验收背景。
-tools: read,bash
+description: 轻量只读代码审查角色，用于查找逻辑缺陷、回归风险与缺失测试；不修改任何文件。
+tools: read,grep,glob
 contextMode: contextual
 memory: index
 thinkingLevel: medium
-paths:
-  - src/
-  - test/
+mutates: read
 maxTurns: 32
 maxToolCalls: 96
 maxWallTimeSec: 600
-bashTimeoutSec: 180
 ---
 
-你是专注于正确性和回归风险的代码审查子代理。
-
-只审查任务指定的改动，不修改文件。优先报告正确性缺陷、行为回归、危险假设和缺失测试，并为每条发现提供 `path:line` 证据。没有发现时明确说明已检查的范围和剩余风险。
+你是专注于正确性与回归风险的审查子代理。只检查指定改动，每条问题给出 `path:line` 证据。
 ```
 
-## Frontmatter 字段说明（Frontmatter Reference）
+---
 
-`runtime` 缺省为 `internal`。**每个字段只对一种 runtime 有意义，写在错误的一侧会被驳回（产生 discovery warning），不会被静默忽略。**
+### Frontmatter 字段字典
 
-### 内置（`runtime: internal`，或省略）
+每个字段严格归属对应 `runtime`，填错一侧会在发现阶段直接驳回告警（不会静默忽略）：
+
+#### 内置角色字段（`runtime: internal` 或省略）
 
 | 字段 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| `name` | 是 | - | 子代理名称，必须唯一 |
-| `description` | 是 | - | 给主代理看的简短用途描述 |
-| `tools` | 否 | `read,bash` | 允许的工具，支持 `read`、`grep`、`glob`、`bash`、`edit`、`write`、`web_search`、`web_fetch` |
-| `model` | 否 | `settings.subagentModel`，未设时为当前主代理模型 | 精确模型引用，建议写成 `provider/modelId`，按 `models.json` 校验 |
-| `contextMode` | 否 | `isolated` | `isolated` 或 `contextual` |
-| `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `index` | `none`、`index` |
-| `paths` | 否 | 空 | 建议优先关注的文件或目录 |
-| `thinkingLevel` | 否 | `medium`（与主代理默认推理档一致） | `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；内置路径会按模型能力 clamp 到最近的可用档 |
-| `maxTurns` | 否 | `32` | 最大 assistant 轮数 |
-| `maxToolCalls` | 否 | `96` | 最大工具调用次数。上限受子代理自身上下文约束——内置路径没有压缩机制，单次工具输出上限 50KB，调得过高会把"预算触顶仍有收敛回合"的软失败换成上下文溢出的硬失败 |
-| `maxWallTimeSec` | 否 | `600` | 最大总执行时长，秒；聊天仅共享等待 10 秒，task 立即异步派发，见下文"同步宽限窗口" |
-| `bashTimeoutSec` | 否 | `120` | 子代理内 bash 命令默认超时，秒 |
-| `workload` | 否 | `light` | `light` 或 `heavy`，只影响系统提示里的目录分组展示 |
-| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁。`purpose=verify` 允许 `write`，但这类验证会取独占写锁，也无法保证没动过被检查的产物。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent_inline` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
-| `harness` / `command` / `shell` / `env` / `cwd` | 驳回 | - | 只对外部角色有意义（`cwd` 对两种 runtime 都驳回，见下） |
+|---|---|---|---|
+| `name` / `description` | 是 | — | 唯一角色名；给主智能体看的路由说明 |
+| `tools` | 否 | `read,bash` | 允许的工具子集：`read,grep,glob,bash,edit,write,web_search,web_fetch` |
+| `model` | 否 | `settings.subagentModel` 或主模型 | 精确 `provider/modelId` 引用（须在当前模型目录可解析） |
+| `thinkingLevel` | 否 | `medium` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`（按模型能力自动夹取） |
+| `contextMode` | 否 | `isolated` | `isolated`（不带背景）或 `contextual`（允许注入 `paths` 与记忆） |
+| `memory` | 否 | `isolated` 为 `none`；`contextual` 为 `index` | `none` 或 `index`（注入工作区共享背景 + 工位记忆索引 + 当日日记尾部） |
+| `paths` | 否 | `[]` | 建议优先关注的相对路径提示列表 |
+| `mutates` | 否 | 含 `write`/`edit` 推定为 `write`，否则 `read` | 决定是否申请目录排他写锁（`bash` 不参与自动推定，建议显式声明） |
+| `workload` | 否 | `light` | `light` 或 `heavy`（用于目录分组提示） |
+| `maxTurns` / `maxToolCalls` | 否 | `32` / `96` | 最大模型轮数 / 最大工具调用次数（单次输出上限 50KB，勿盲目调大以免撑爆上下文） |
+| `maxWallTimeSec` / `bashTimeoutSec` | 否 | `600` / `120` | 单次委派总超时秒数 / 内部单条 `bash` 命令默认超时秒数 |
 
-### 外部（`runtime: external`）
+#### 外部角色字段（`runtime: external`）
 
 | 字段 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| `name` / `description` | 是 | - | 同上 |
-| `harness` | 是 | - | `claude-code`、`codex-cli`、`cursor-cli`、`antigravity-cli` 或 `exec` |
-| `command` | 是 | - | 目标 CLI 的命令行，按 shell 词法分词后直接 argv 调用，**不经过 shell** |
-| `mutates` | 是 | - | `read` 或 `write`，无默认值——这是一次显式声明，决定是否取 workspace 写锁；`purpose=verify` 允许 `write`，但这类检查者无法保证没动过被检查的产物 |
-| `model` | 否 | - | 目标 harness 自己的模型字符串（如 `sonnet`），**原样透传，不经过 `models.json` 校验** |
-| `thinkingLevel` | 否 | `purpose=verify` 为 `medium`；普通 work 委派**不兜底**，未声明就不追加任何推理参数，沿用目标 CLI 自己的配置 | 由结构化 harness 翻译成目标 CLI 的推理参数（见下） |
-| `workload` | 否 | `heavy` | 同内置 |
-| `shell` | 否 | `false` | 仅 `exec` 可设为 `true`，此时整条 `command` 交给 `/bin/sh -lc`；结构化 harness 使用时会被 discovery 驳回，因为它会绕过协议 argv 组装 |
-| `env` | 否 | 空 | 追加或覆盖继承自 pipiclaw 进程的环境变量 |
-| `maxWallTimeSec` | 否 | `3600` | 外部角色只有这一个执行预算——没有轮数/工具调用次数上限，因为那些概念对外部 CLI 不适用 |
-| `contextMode` | 否 | `isolated` | 同内置词表，见下文"`contextMode` 与 `memory`" |
-| `memory` | 否 | **`none`，不跟随 `contextMode`** | 与内置不同：内置的 `contextual` 隐含 `index`，外部永远默认 `none`，必须显式声明才会把会话/记忆内容发给外部进程 |
-| `paths` | 否 | 空 | 同内置 |
-| `tools` / `maxTurns` / `maxToolCalls` / `bashTimeoutSec` / `cwd` | 驳回 | - | 对外部进程无意义或工作目录不允许写死在角色里 |
+|---|---|---|---|
+| `name` / `description` | 是 | — | 同上（外部角色正文允许留空） |
+| `harness` | 是 | — | `claude-code` \| `codex-cli` \| `cursor-cli` \| `antigravity-cli` \| `exec` |
+| `command` | 是 | — | 目标 CLI 启动命令与权限参数（按词法切分直接 `argv` 调用，默认不经 shell） |
+| `mutates` | 是 | — | **必须显式声明** `read` 或 `write`（决定是否获取工作目录排他写锁） |
+| `model` | 否 | 由目标 CLI 自行决定 | 目标 CLI 自身的模型名（如 `sonnet`、`gpt-5.4`），原样透传 |
+| `thinkingLevel` | 否 | 普通委派不追加；`purpose=verify` 默认 `medium` | 由结构化 harness 自动翻译为目标 CLI 推理参数（不要在 `command` 里重复写） |
+| `maxWallTimeSec` | 否 | `3600` | 外部进程最大运行秒数 |
+| `contextMode` / `paths` | 否 | `isolated` / `[]` | 同内置 |
+| `memory` | 否 | **恒为 `none`（不随 `contextMode` 改变）** | 设为 `index` 会将工位记忆与当日日记通过 `stdin` 发往外部 CLI，属**显式数据外发选择** |
+| `env` | 否 | `{}` | 追加或覆盖传给外部子进程的环境变量 |
+| `shell` | 否 | `false` | 仅 `harness: exec` 允许设为 `true`（走 `/bin/sh -lc`）；结构化 harness 严禁开启 |
+| `workload` | 否 | `heavy` | `light` 或 `heavy` |
 
-**工作目录永远不写在角色文件里**，无论内置还是外部——它是每次委派时通过调用参数 `workingDirectory` 现场决定的，见下文"调用参数"。
-
-**二进制缺失时角色仍会被列出**，标记为不可用并给出安装提示；调用它会得到明确的错误，不会静默回落到内置角色。
-
-## 调用参数（Invocation Parameters）
-
-角色文件由部署者配置模型、工具或外部命令、权限声明与执行预算。助手调用时优先使用已配置角色；没有适用角色时，才使用一次性内置执行者。下表供编写流程或排查调用问题时参考，日常使用只需直接说明工作目标。
-
-**`subagent`（角色优先，常规路径）**——选一个已配置的角色，只有路由字段，没有任何覆盖字段：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `agent` | - | 必填。`workspace/sub-agents/` 里某个已配置角色的名字（内置或外部） |
-| `task` | - | 必填。完整任务描述；子代理看不到主对话，目标/范围/路径/约束/验收方法都要写进来 |
-| `workingDirectory` | 主代理的实际 cwd（默认是工位目录，可自定义） | 委派代码仓库时**必须显式传仓库路径**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
-| `purpose` | `work` | `verify` 进入独立检查协议；任务内按其 DoD 检查，不带任务时按委派要求检查 |
-| `item` | - | 仅任务步骤可用，如 `W2`；绑定对应工作项，检查范围为该项及它引用的 DoD |
-
-所属任务由执行环境决定，不接受 `taskId` 参数。工具、模型、预算、上下文策略和 `mutates` 来自角色文件，调用时不能覆盖。需要将要求交给已有任务时，在聊天中转达或使用 `/tasks msg <id> <内容>`，由任务负责人派发。
-
-**`subagent_inline`（没有合适角色时的一次性执行者）**：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `task` | - | 必填 |
-| `systemPrompt` | - | 必填。定义这个临时**内置**子代理（内联委派恒为内置，没有外部形式） |
-| `tools` | `read,bash` | 工具白名单 |
-| `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用 |
-| `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`，整组替换四个数值预算（见下） |
-| `context` | `none` | 上下文注入：`none`、`index`（`index` 追加 workspace 背景、工位记忆索引和当天日志尾部） |
-| `thinkingLevel` | `medium` | 推理强度 |
-| `mutates` | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；显式声明覆盖推定，`bash` 不参与推定 |
-| `workingDirectory` / `purpose` / `item` | 同上 | 同 `subagent` |
-
-`tools.subagentInline.enabled`（`tools.json`，默认开）整体开关这个工具；关掉后角色目录覆盖不到的工作没有委派出口，模型只能自己动手或请用户先配一个角色。
-
-### `effort` 与 frontmatter 数值的关系
-
-`effort` 只用于 `subagent_inline` 的内置执行预算，以命名档位整组选择四个数值。命名角色不接收 `effort` 覆盖，使用自己的 frontmatter 数值；外部角色只在文件中配置 `maxWallTimeSec`。
-
-内置（四个数值预算都受影响）：
-
-| `effort` | maxTurns | maxToolCalls | maxWallTimeSec | bashTimeoutSec |
-|---|---|---|---|---|
-| `quick` | 8 | 16 | 120 | 60 |
-| `standard` | 32 | 96 | 600 | 120 |
-| `deep` | 64 | 160 | 1800 | 300 |
-
-`standard` 与内置默认值完全一致，所以不传 `effort` 时行为不变。
-
-`effort` 只出现在 `subagent_inline` 上，而内联委派恒为内置——外部角色只能由角色文件配 `maxWallTimeSec`，调用侧没有覆盖它的字段。
-
-### `context` 与 frontmatter 的关系
-
-`context` 是 `contextMode` + `memory` 的调用侧写法，二选一：`none` → `isolated`/`none`，`index` → `contextual`/`index`。只出现在 `subagent_inline` 上；配置角色（内置或外部）的上下文策略一律来自角色文件的 `contextMode`/`memory`，调用侧没有覆盖字段——包括 `contextual` + `memory: none`（只注入 `paths`）这种只有 frontmatter 能表达的组合。
-
-## 同步宽限窗口：一次调用，两种返回（Sync Grace Window）
-
-无论内置还是外部，`subagent`/`subagent_inline` 的调用只是**可选地等待**结果：
-
-- 普通聊天的内置委派共享 10 秒快速返回窗口：窗口内完成则内联返回，否则返回运行 id，完成后自动通知。这个窗口按发起回合的 AbortSignal 共享，后续调用只等待剩余时间；不会改变 worker 自己的执行预算。
-- task 内的内置委派在注册、任务绑定和启动完成后立即返回，极快完成也统一把结果写入所属任务，避免同时内联返回和重复通知。
-- 外部角色确认启动后立即返回。`/stop` 结束聊天等待，已经派发的工作继续运行。
-
-内置委派遇到供应商的瞬时错误（429、overloaded、5xx、连接中断）会在原地重试，最多 3 次，退避 2/4/8 秒；仍然失败、或错误本身不可重试时，若配置了 `settings.json` 的 `fallbackModel`，会像主回合一样切到备用模型再试一次（上下文超长除外，换模型也解决不了）。切换会写进结果文本，用量记到实际回答的模型名下。墙钟预算照常约束整个过程。
-
-收到 "still running" 占位结果后：**不要轮询、不要重复派发，结束当前回合**；委派完成时 runtime 会自己唤醒本频道，带回结果与产物路径。同一工位的其他频道发起的委派各自唤醒各自的频道。想主动看进度用 `subagent_list` 或 `/subagents list`，不要用委派工具本身当轮询手段。
-
-**多个结果一起到达时合并成一个回合**。频道正忙时陆续结束的聊天级委派与后台作业，它们的完成唤醒会在下一个唤醒回合里一次性交给模型（一回合最多 6 条），而不是每条各占一个完整回合。第一个结果仍然立刻唤醒，不会为了凑批而等待。频道队列满时结果保留在磁盘，容量释放即重试，30 秒扫描继续负责漏通知恢复，真实失败的退避不变。task 内的结果先写入任务记录；步骤正在执行时按任务合并，在下一完整工具批次后进入同一步骤，空闲任务仍由任务车道唤起。只有持久化会话确实接收输入才记消费回执；暂停、中止或重启时未接收的输入留待后续步骤。
-
-在这个唤醒回合的 LLM 延迟之外，runtime 还会发一条独立的旁路播报（`settings.json` 的 `delegation.notices`，默认 `"live"`）：run 结算后几秒内一句"✅/⚠️ 完成"的确认；长时间运行的 run 中途还会有稀疏的进度提示（外部 run 显示当前在跑的命令或文件，转为异步的内置 run 显示当前工具步骤）；外部 run 超过 10 分钟没有任何输出时，会提示一次“可能卡住了”（`"settled"` 档也会发这条；只提示，不会自动终止，`/subagents show` 里也能看到最近一次输出距今多久）。这些只是给人看的文本消息，不占用模型上下文，也不改变上面这条"不要轮询"的规则。
-
-写入型委派（`mutates: write`）结束时，唤醒和结果里会附一行“改了哪些文件”（`git status` 摘要）。派发时会先给工作目录拍一份快照，所以派发前就已经改动、之后没再碰过的文件不会算到这个 run 头上；内置和外部的写入型委派都有这一行。
-
-**`/stop` 只停止聊天，已派发的委派继续运行。** 要终止委派，使用 `/subagents cancel <runId>`；这个命令不经过模型，在模型不可用或回合卡住时也能用。助手侧对应操作为 `subagent_run op=cancel`。
-
-重启接管的外部运行约每 10 秒核实一次，正常退出则主动处理。进程身份暂时无法确认时继续观察；必要的进程清理完成后才释放写锁。结果通知不会等待可选的版本诊断。
-
-## 控制面：`subagent_list` / `subagent_run` 与 `/subagents`
-
-`subagent` 只接收命名角色的路由字段；`subagent_inline` 才承载一次性内置执行者的覆盖字段。查看或控制在途与历史 run 使用下面的工具和命令：
-
-**模型侧**——`subagent_list`（零参数快照）与 `subagent_run`（`op` = show / cancel / follow_up，均按 `runId`）：
-
-| 工具 / op | 语义 |
-|---|---|
-| `subagent_list` | 本工位的 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况（零参数） |
-| `subagent_run op=show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
-| `subagent_run op=cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
-| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`/`cursor-cli`/`antigravity-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
-
-`follow_up` 只发新增的内容：被续接的会话里已经有首次派发的完整信封（运行时上下文、`paths`/记忆上下文块、角色说明），重发一遍只会重复计费并淹没新指令。续接信封只包含工作目录、这次续接新分配的产物目录、新指令，以及 `purpose=verify` 时的验收协议（结算要读它最后的 VERDICT 行）。verify 的准入检查（`exec` 不能验收）也在 `follow_up` 上重新核对一遍；当前角色若声明 `mutates: write`，续接会像首次派发一样先取得目标工作区独占 lease。
-
-**角色改过之后还能续接吗**：能否续接取决于改了什么。pipiclaw 在首次派发时会记下角色的 `command`/`model`/`shell` 指纹；`follow_up` 时如果这三者中任何一个变了（换了 CLI 参数、换了模型、切换了 shell 模式），续接会被拒绝并提示改派新任务——旧会话不应该被一套它从未写过的调用方式重新解读。**只改系统提示词正文不受影响**，续接照常进行，因为一次续接本来就带着旧会话的上下文，修一个措辞或错别字不该打断所有在途续接。
-
-**人侧**——运行时命令，不经过模型：
-
-```text
-/subagents                      # 运行中的 run + 最近完成的几条 + 角色目录摘要
-/subagents list [running|failed|all]  # 按状态筛选
-/subagents show <runId>         # 完整记录、实际 argv、stderr 尾部
-/subagents output <runId>       # 该 run 的文本产出（output.md 尾部）
-/subagents cancel <runId|all>   # 直接杀进程组 / abort，不经过模型；all 终止本工位所有在途 run
-/subagents roles [name]         # 角色目录；带 name 查看单个角色详情（runtime、mutates、model、thinking、tools、预算、system prompt……）
-```
-
-`/subagents roles` 的列表行中，括号内固定按 `runtime`、`mutates`、`model`、`thinking` 四个位置显示值，不带键名。未声明时，内置角色的 `model` 使用 `默认`、`thinking` 使用 `默认 medium`；外部角色的 `model` 使用 `CLI 决定`、`thinking` 使用 `未设置`。例如：
-
-```text
-- `codex-high` (外部/codex-cli, write, gpt-6-astra, high) — 高智能档，可读图片…
-- `explorer` (内置, read, openai-codex/gpt-5.4, 默认 medium) — 轻量只读探索
-```
-
-`/subagents roles <name>` 详情视图始终渲染 `model` 与 `thinking` 两行，内置和外部角色都遵循上述占位词。外部角色未声明 `thinkingLevel` 时，详情中的 `thinking` 行显示 `未设置（verify 派发默认 medium）`：普通 `work` 委派不由 runtime 代设推理强度，只有 `purpose=verify` 才落到 `medium`；列表视图仍只显示 `未设置`。
-
-`runId` 是 `run_` 加 6 位字符，例如 `run_a1b2c3`。命令支持不带 `run_` 前缀的简写，只要能唯一匹配即可，例如 `/subagents show a1b2c3`。
-
-## 关键字段怎么理解（How to Use the Key Fields）
-
-### `tools`（仅内置）
-
-建议尽量收窄，而不是一上来给满。常见组合：
-
-- `read,grep,glob`：不需要执行命令的只读调查。
-- `read,bash`：需要命令的分析、审查；bash 可写文件，不能据此保证只读。
-- `read,edit,write,bash`：需要实际修改文件。
-
-外部角色没有 `tools` 概念——它的能力边界由目标 CLI 自己的命令行决定（例如 `codex exec --sandbox read-only`），pipiclaw 不在配置层假装能限制它。
-
-### `contextMode` 与 `memory`
-
-这两个字段一起决定子代理"看得到多少背景"。**内外角色都可以设置**，但默认值不同——外部角色的默认更保守，见下。
-
-| `contextMode` | 含义 |
-|----|------|
-| `isolated` | 默认值，不自动带入主会话上下文 |
-| `contextual` | 允许注入 `paths` 等背景；记忆是否注入由 `memory` 单独决定，不复制主会话 transcript |
-
-| `memory` | 含义 |
-|----|------|
-| `none` | 不注入额外记忆 |
-| `index` | 注入与主 agent 首轮相同的三段（workspace 共享背景 + 工位记忆索引 + 当天 journal 尾部），预算减半 |
-
-**默认值按 runtime 不同**：内置角色里 `contextMode: contextual` 隐含 `memory: index`；**外部角色的 `memory` 默认永远是 `none`，不跟随 `contextMode`**——一个只想要 `paths` 注入（`contextMode: contextual`，未写 `memory`）的外部角色不会因此意外开始把工位的记忆状态发给第三方进程。旧角色文件里写的 `session`/`relevant` 仍会被接受，discovery 时统一映射为 `index` 并给出一条退役提示，建议尽快改成 `index`。
-
-**这是一条真实的数据外发路径，如实说明**：显式声明 `memory: index` 的外部角色，会把工位记忆索引与当天 journal 片段写进发给外部进程的 stdin，交给第三方 CLI 及其背后的 API。这是一次显式、知情的选择，声明后 discovery 会给出一条提示级 warning 提醒这件事，`/subagents roles <name>` 也会展示当前生效的 `contextMode`/`memory` 并在非 `none` 时标出这条提示。
-
-推荐搭配：
-
-- 必须继承会话决策或团队背景的审查、研究任务：`contextMode: contextual` + `memory: index`（外部角色需显式声明 `memory`，不能只靠 `contextMode`）。
-- 任务描述已经自包含、强调独立判断或无需会话背景的角色：`contextMode: isolated` + `memory: none`（外部角色的默认值本就如此）。
-
-外部角色自己也会读取目标仓库的 `CLAUDE.md` / `AGENTS.md` 建立上下文，这条路径不受 pipiclaw 的 `memory` 设置影响，见[安全边界](#运行时规则runtime-rules)。
-
-### `model`
-
-内置角色：如果要指定，建议使用精确模型引用，例如：
-
-```text
-anthropic/claude-sonnet-4-5
-my-gateway/gpt-4.1
-```
-
-如果引用不唯一或模型不存在，这个子代理定义会被忽略。
-
-外部角色：`model` 是目标 harness 自己的字符串（如 `sonnet`、`gpt-5.6-luna`），pipiclaw 原样透传、不做任何校验——它无法验证另一个 CLI 的模型名称是否有效。
-
-### `thinkingLevel`
-
-`thinkingLevel` 控制子代理的推理强度。解析规则按场景分四种，未显式指定时才落到默认值：
-
-| 场景 | 未指定时的默认值 |
-|---|---|
-| 内置（含 inline） | `medium`——与主代理自己的默认推理档对齐；不支持推理的模型会被 clamp 到 `off`，不支持该档位的模型会被 clamp 到最接近的可用档 |
-| 外部 · `purpose=work` | **不兜底**，保持未指定——runtime 无权替另一个 CLI 决定推理档位，不追加任何 effort 参数，沿用目标 CLI 自己的配置（如 `~/.claude/settings.json` / `~/.codex/config.toml`） |
-| 外部 · `purpose=verify` | `medium`——检查结论是负责人采信产物的主要依据，宁可显式要求推理 |
-| 命名角色 · frontmatter 显式指定 | 使用角色值；内置路径仍按模型能力 clamp |
-| inline · 调用时显式指定 | 使用调用值；内置路径仍按模型能力 clamp |
-
-可复用的生产配置建议显式填写，避免角色行为依赖隐藏默认值：
-
-- 机械性定位、明确范围内的信息提取：通常使用 `low`。
-- 多来源综合、代码审查、改动分组和独立验收：通常使用 `medium`。
-- 只有任务确实需要更深推理且预算允许时才使用 `high` 或 `xhigh`。
-
-外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 与 antigravity-cli 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`，cursor-cli 把档位折进模型 id 的 `effort=`（如 `gpt-5[effort=high]`）——但仅当 `thinkingLevel` 实际有值时才追加；未声明的外部 work 角色不会看到这个参数。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位；cursor-cli 与 antigravity-cli 将 `off` / `minimal` 夹取为 `low`，不把 `xhigh` / `max` 再往下夹，CLI 不接受时进程失败并在 stderr 留下原因。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果——未声明 `thinkingLevel` 的外部 work 角色，argv 里不应出现 `--effort` / `model_reasoning_effort` / `effort=`。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
-
-结构化 harness 对角色字段和协议参数的组装如下；这些都由 runtime 负责，不需要写进 `command`：
-
-| harness | `model` | `thinkingLevel` | system prompt / task | 续接与输出协议 |
-|---|---|---|---|---|
-| `claude-code` | `--model <model>` | `--effort <level>` | system prompt 使用 `--append-system-prompt-file`，task 走 stdin | `--session-id` / `--resume`，`-p --output-format stream-json --verbose` |
-| `codex-cli` | `-m <model>` | `-c model_reasoning_effort=<level>` | system prompt 与 task 合并后走 stdin | `resume <thread-id>`，`--json -` |
-| `cursor-cli` | `--model <model>`，推理档写进模型 id 的 `effort=` | 不单独追加 flag；`off` / `minimal` / `low` 写成 `low` | system prompt 与 task 合并后走 stdin | `--resume <id>`，`-p --output-format stream-json`；runtime 追加 `--trust` |
-| `antigravity-cli` | `--model <model>`（无 `-m` 短参数） | `--effort <level>`（可独立于 `--model` 传递；`off` / `minimal` 写成 `low`） | system prompt 与 task 合并后走 stdin（或 `command` 用 `--agent <name>` 且正文留空） | `--conversation <id>`，仅追加 `--output-format stream-json`（**严禁传 `-p`**） |
-| `exec` | 不自动追加 | 不自动追加 | system prompt 与 task 合并后走 stdin | 不支持续接，无结构化终态协议 |
-
-cursor-cli 的可执行文件名是 `agent`，由 `command` 指定。runtime 追加 `-p --output-format stream-json`，有模型且 command 尚未自带 `--model` / `-m` 时追加 `--model`，并在 command 没有 `--trust` 时追加 `--trust`（无人值守进程回答不了工作区信任提示）。`--force` 属于 `command`，`-f` 和 `--yolo` 与它等价；runtime 不追加 `--force`、`--mode`、sandbox、workspace 或 worktree。print 模式如果这三个权限参数一个都没有，CLI 只提议修改，不会把改动写进文件。只读推荐 `agent --mode ask`（或 `--mode plan`），写入推荐 `agent --force`。工作目录里的 `.cursor/rules` 和项目说明会被 CLI 自己读入；角色正文只是用户消息的前缀，不是 claude-code 那种 system prompt 隔离。认证沿用 CLI 自己的登录或环境变量 `CURSOR_API_KEY`，不要把密钥写进角色文件。command 使用 `--worktree` / `-w` 时，实际写入在 `~/.cursor/worktrees/`，不在这次委派的工作目录，workspace 写锁覆盖不到。
-
-antigravity-cli 的可执行文件名是 `agy`，由 `command` 指定。runtime 仅追加 `--output-format stream-json`，按需追加 `--model <id>`、`--effort <level>`，续接时追加 `--conversation <id>`：
-
-- **不要在 `command` 中写 `-p`、`--print`、`--prompt` 或 `-i` / `--prompt-interactive`，也不要写 `-c` / `--continue` / `--conversation`。** 与 `claude`、`agent` 不同，`agy` 的 `-p` / `--print` 是接收任务文本的字符串参数而非布尔开关，会吞掉后续参数或屏蔽管道 `stdin`。当管道 `stdin` 非空且带 `--output-format stream-json` 时，`agy` 自动进入无头 print 模式。
-- **默认不自动追加 `--disable-slash-commands`。** 需要禁用时由角色在 `command` 中显式指定；注意真实委派会在原始任务前拼接角色正文或 `Runtime context:` / follow-up 信封，原始任务开头的 `/...` 不会位于 `stdin` 首行。
-- **续接身份校验与失败处理。** `agy` 在 `--conversation <id>` 找不到目标会话时可能在 `stderr` 打印 warning 并静默新建 UUID 继续执行；因此 `antigravity-cli` 的 `follow_up` 会将请求会话 ID 持久化到 run 记录中，正常退出与重启恢复都会核对流内父会话 `conversation_id`（忽略 `subagent_info` 内部子会话 ID）。一旦返回不同 ID 或未确认预期 ID，该次运行直接判为 `failed` 并清空返回 `sessionId`，请查看 `events.jsonl` / `stderr.log` 后发起带完整上下文的新委派，不要继续对失效会话做 `follow_up`。
-- **权限、拒绝摘要与验证角色写法。** `agy` 的实际写权限由执行模式（`--mode`）、权限规则、`--agent` / `--settings` 与宿主边界共同决定。无头模式下若部分动作被权限规则拦截但模型仍完成本轮（`result.status: "SUCCESS"` 且 `denied_actions` 非空），run 保持 `completed`，并在 `output.md` 正文前插入权限拒绝提示（最多列 5 项，完整列表见 `events.jsonl`），保留末行 `VERDICT`。`--mode plan` 只添加规划指令且无头计划审批可能自动通过，`--sandbox` 只限制终端命令，二者组合不保证只读。不能证明进程只读时，验证角色应声明 `mutates: write` 并通过 lease 串行化，例如：
-
-```yaml
 ---
-name: agy-verify
-description: 用 Antigravity CLI 做独立验证，运行期间独占工作目录写锁
-runtime: external
-harness: antigravity-cli
-command: agy --mode accept-edits --sandbox
-model: gemini-4-carbon
-thinkingLevel: high
-mutates: write
+
+### 五大外部 Harness 参数组装与注意事项
+
+运行时自动负责组装模型、推理档位、任务输入与会话续接参数，**请勿在 `command` 中重复硬编码这些协议标志**：
+
+| `harness` | 可执行命令 | `model` 映射 | `thinkingLevel` 映射 | 提示词与任务传递 | 续接与流式协议 |
+|---|---|---|---|---|---|
+| `claude-code` | `claude` | `--model <m>` | `--effort <lvl>` | 正文走 `--append-system-prompt-file`，任务走 `stdin` | `--session-id` / `--resume`，`-p --output-format stream-json --verbose` |
+| `codex-cli` | `codex exec` | `-m <m>` | `-c model_reasoning_effort=<lvl>` | 正文与任务合并走 `stdin` | `resume <thread-id>`，`--json -` |
+| `cursor-cli` | `agent` | `--model <m>[effort=<lvl>]` | 折入模型 ID（`off`/`minimal` 夹为 `low`） | 正文与任务合并走 `stdin` | `--resume <id>`，自动补 `-p --output-format stream-json --trust` |
+| `antigravity-cli` | `agy` | `--model <m>` | `--effort <lvl>`（`off`/`minimal` 夹为 `low`） | 正文与任务合并走 `stdin`（或 `--agent` 且正文留空） | `--conversation <id>`，仅补 `--output-format stream-json`（**严禁加 `-p`**） |
+| `exec` | 任意脚本/程序 | 不追加 | 不追加 | 正文与任务合并走 `stdin` | 无会话续接、无结构化事件（不可用于 `purpose=verify`） |
+
+**`cursor-cli`（`agent`）与 `antigravity-cli`（`agy`）特别注意**：
+- **Cursor CLI（`agent`）**：无头 print 模式下若未传 `--force`（或 `-f` / `--yolo`），CLI 只提议修改而不落盘；因此写入角色推荐 `command: agent --force`，只读角色推荐 `command: agent --mode ask`。请勿在 `command` 中加 `--worktree`（会写到 `~/.cursor/worktrees/` 绕过目录写锁）。
+- **Antigravity CLI（`agy`）**：
+  1. **严禁在 `command` 中写 `-p` / `--print` / `--prompt` / `--conversation`**：`agy` 的 `-p` 接收字符串参数而非布尔开关，会吞掉后续参数或屏蔽 `stdin`；非空管道 `stdin` 配合 `--output-format stream-json` 即自动进入无头模式。
+  2. **续接会话强校验**：`agy` 在找不到 `--conversation <id>` 时可能静默新建会话 ID；Pipiclaw 会严格核对返回的父会话 `conversation_id`，不一致时直接判为 `failed` 防止上下文错乱。
+  3. **权限与环境变量**：`--mode plan` + `--sandbox` 并不保证绝对文件只读，无法证明完全只读的验证角色应声明 `mutates: write` 以通过写锁串行化；Pipiclaw 默认从外部子进程环境剥离 `GEMINI_API_KEY` / `GOOGLE_API_KEY` 以优先使用本机 `agy` 登录态（需用 API Key 时请在角色 `env:` 中显式映射）。
+
 ---
-```
 
-  `accept-edits` 自动批准工作区文件编辑，但仍可能拒绝需要审批的终端命令；`auto` 依赖账号、平台与终端 sandbox，不满足时可能退回 default。只有通过 CLI 权限规则和宿主边界实际验证了直接文件工具、终端命令及 MCP/子智能体的写入限制后，才声明 `mutates: read`。
-- **自动加载与认证环境变量。** 工作目录与用户目录下的 `GEMINI.md`、`AGENTS.md`、`.agents/rules/`、`.agents/skills/`、MCP 与插件会被 `agy` 自动加载。使用 Google OAuth（`~/.gemini/antigravity-cli/`）或 ADC（`AGY_ADC_AUTH`）时，在运行 Pipiclaw 的同一系统账号下完成一次 `agy` 登录即可。Pipiclaw 默认从外部进程继承环境中剥离 `GEMINI_API_KEY` 与 `GOOGLE_API_KEY`；若显式采用 API Key 模式，须在角色文件 `env:` 中映射，切勿把明文密钥写进仓库文档。
+## 5. 模型调用参数与运行时安全边界
 
-### `mutates`（写权限声明）
+### 模型侧调用工具对比
 
-`mutates` 承担的是"这个角色会不会改动宿主机"这一件事，三处消费：
+主智能体平时优先使用 `subagent` 路由到已配置角色；没有合适角色时才用一次性内置工具 `subagent_inline`（可通过 `tools.json` 的 `tools.subagentInline.enabled: false` 关闭）：
 
-1. **Workspace 写锁**：只有 `mutates: write` 的 run 会在其 `workingDirectory` 上取一把排他写锁，直到结算才释放；同一目录（含父子目录）上第二个写角色会被直接拒绝，错误会点名持有者的 runId 与工作目录。`mutates: read` 的 run 不取锁，也不会被写锁阻塞。
-2. **`purpose=verify` 准入**：声明 `mutates: write` 的角色可以用作验收者，但必须像其他写 run 一样先取得目标工作区（同目录及父子目录冲突）独占 lease；`exec` harness 因为没有可验证的完成协议，一律不能用于验收，无论 `mutates` 怎么写。
-3. **审计**：外部角色每次派发都会记一条包含 `mutates` 的审计事件。
+- **`subagent`**：仅含路由参数 `agent`、`task`、`workingDirectory`（委派代码库时须传仓库绝对路径）、`worktree`（布尔值：在 Git 仓库内对 `mutates: write` + `purpose: work` 委派设为 `true` 时，运行时自动在 `.git/pipiclaw-worktrees/<runId>` 创建分支 `pipiclaw/<runId>` 的隔离工作树，并在结算时结构化返回 `branch` / `headSha` / `changedFiles`）、`purpose`（`work` 或 `verify`）、`item`（任务内关联工作项如 `"W2"`）。不允许在调用时覆盖角色的模型、工具或预算。
+- **`subagent_inline`**：恒为内置运行，接收 `task`、`systemPrompt`、`tools`、`model`、`thinkingLevel`、`mutates`、`worktree`、`context`（`none` 或 `index`）以及整组预算档位 `effort`：
+  - `quick`：8 轮 / 16 次工具 / 120s 总时长 / 60s 命令超时
+  - `standard`（默认）：32 轮 / 96 次工具 / 600s 总时长 / 120s 命令超时
+  - `deep`：64 轮 / 160 次工具 / 1800s 总时长 / 300s 命令超时
 
-内置角色不填时按 `tools` 是否含 `write`/`edit` 自动推定；外部角色必须显式声明。
+### 运行时规则（Runtime Rules）
 
-**如实说明它的可信度**：内置角色的 `mutates` 是**推定**（且只看 `write`/`edit`，不看 `bash`——`bash` 能做的事不受工具白名单约束，这是已知盲区），外部角色的 `mutates` 是角色作者的**自述**，两者 pipiclaw 都无法从 runtime 层面核实。写锁保证的是"**声明了写的委派之间**不会并发写同一棵树"，不是"这棵树上只有一个写入者"——一个含 `bash` 却未声明 `mutates: write` 的角色，或谎报 `mutates: read` 的外部角色，都不受这把锁保护。含 `bash` 且未声明 `mutates` 时，discovery 会给出提示级 warning，但不阻止角色加载，也不改变它的行为。
+1. **读写租约（Checkout RW Lease）与托管 Worktree 隔离**：声明 `mutates: write` 的委派在目标目录（含父子重叠目录）持独占写租约，`purpose: verify`（`mutates: read`）持共享读租约（允许并行检查、阻止并发写入），且**主会话与任务步骤的 `write` / `edit` 工具同样受活跃租约保护**。在 Git 仓库内并行实现时，优先传 `worktree: true` 由运行时托管独立工作树（无改动结算即删，已合并的干净工作树在父任务关闭或 24 小时巡检时自动回收，未合并改动自动保留并提示）。注意租约防的是并发覆盖，`mutates` 依赖声明且不拦截任意 `bash` 命令，**不是操作系统沙箱**。
+2. **外部智能体的真实边界在宿主与 CLI 自身**：外部进程不经过 Pipiclaw 的 `security.json`，且会自动读取目标仓库内的 `CLAUDE.md` / `AGENTS.md` / `.cursor/rules`。请将外部进程输出视为待核实产物而非系统指令，高权限外部角色务必审阅 CLI sandbox 参数与运行账号权限（详见 [安全指南](./security.md#5-外部智能体的授权边界)）。
+3. **独立验收（`purpose: verify`）**：检查者按“只判断、不修代码、末行输出 `VERDICT: PASS|FAIL`”协议执行（内置检查者自动剥离 `write`/`edit`；`exec` 不可担任验收）。`VERDICT` 会记入看板供主智能体对照真实 diff 裁决，但不会绕过主智能体核查自动关单。
 
-## 正文怎么写（System Prompt Body）
+---
 
-frontmatter 后面的正文就是子代理的系统提示词。它应该明确说明：角色职责、工作边界、判断和证据标准、停止条件、输出契约，以及不该做什么。
+## 相关阅读
 
-`description` 不是普通简介，而是主代理选择角色时直接看到的路由规则。建议使用"当……时使用；不要用于……；任务中必须提供……"的结构，并明确该角色是否会修改文件、Git 或外部状态，以及它是重量级（heavy）还是轻量级（light）。只把使用时机写在正文里是不够的，因为主代理选择角色前只看到名称、`description`，以及系统提示目录里按 `runtime · workload · mutates` 分组的信息。
-
-建议写法：
-
-- 聚焦单一职责。
-- 使用与主要用户场景一致的语言；字段名、工具名和 runtime 协议标记保持原样。
-- 避免把项目级通用规则重复写进每个子代理。
-- 把稳定的用户/团队规则留在 `AGENTS.md`；Pipiclaw 机制不要复制进去，按 runtime playbook 读取（见 [runtime-playbooks.md](./runtime-playbooks.md)）。
-
-## 运行时规则（Runtime Rules）
-
-- 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见[安全边界](#运行时规则runtime-rules)。
-- 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
-- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。
-- `purpose: verify`：执行者拿到检查者协议（只判断、不修实现、最后一行 `VERDICT: PASS|FAIL`）。内置验证器结构性移除了 write/edit，但默认工具集仍含 `bash`，所以只有声明 `mutates: read` 且 `tools` 里也不含 `bash` 的角色才是结构性只读；外部验证器只能靠目标 CLI 自己的 sandbox（如 codex `--sandbox read-only`）做到只读。带 `item` 的检查只覆盖该工作项和它引用的 DoD 条目。所有写能力的 verifier 都先持有目标工作区独占 lease。运行时只记录这个结论（run 记录与所属任务的看板），**不是**关闭任务的门禁，也不做工作区快照或 attestation；运行失败或没有 VERDICT 行一律记为 FAIL。是否采信由主代理按风险对照真实产物、diff 和检查输出判断。
-- 任务步骤内的委派（自动绑定任务，可用 `item` 对应工作项）在派发和结算时写进 `desk-<name>/tasks/<id>.jsonl`，成本计入任务预算；普通运行摘要仍写 `desk-<name>/subagent-runs.jsonl`。
-- **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
-
-独立检查不要求创建任务；任务内的看板与验收见[事件与任务](./events-and-tasks.md#团队看板与工作项)。
-
-## 常见配置错误
-- 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段，或给内置角色写 `harness`、`command`、`shell`、`env`——都会被直接驳回，不是被忽略。
-- 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
-- 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但它会取写 lease 且无法保证没动过产物；不得修改被检查的实现或为了通过测试而修代码，PASS 也不能代替你核对真实产物。
-- 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
-- 给外部角色写 `memory: index` 却没意识到这会把工位记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
-- 改了外部角色的 `command`/`model`/`shell` 之后还指望 `follow_up` 能续接旧会话——指纹不匹配会被拒绝，需要改派新任务。
-
-## 该看哪份文档
-
-- 定时事件与任务台账（含 verifier 在任务生命周期里的时机）：[events-and-tasks.md](./events-and-tasks.md)
-- Runtime playbooks 与知识分层：[runtime-playbooks.md](./runtime-playbooks.md)
-- `channel.json`、`auth.json`、`models.json`、`settings.json`：[configuration.md](./configuration.md)
-- 委派纪律（选人、工作目录、等待与验收，运行时读取的版本）：`src/playbooks/agent-delegation.md`
+- [角色模板说明（`examples/sub-agents/`）](../examples/sub-agents/README.md)：Claude / Codex / Cursor / Antigravity / GLM 现成角色取舍指南
+- [安全指南](./security.md)：外部智能体授权审查清单与安全守卫边界
+- [事件与任务](./events-and-tasks.md)：任务车道如何管理在途委派与看板

@@ -64,13 +64,13 @@
 | 停止保护 | 预算耗尽、连续两步无工具调用、连续两步超时或连续三步出错后暂停并通知；单步 20 分钟后请求中止，无法停止时需部署者处理 |
 | 恢复 | 重启后核对在途工作、补记被打断步骤，再按事实继续；漏通知由最长 15 分钟的扫描补查 |
 
-`/stop` 停聊天，`/tasks pause <id>` 暂停任务，`/tasks cancel <id>` 取消任务及其在途委派和作业。汇报频道离开工位或渠道关闭时任务冻结，恢复绑定与启用后继续。`tools.tasks.enabled: false` 关闭任务工具、新步骤执行和聊天中的任务摘要。
+`/stop` 停聊天，`/tasks pause <id>` 暂停任务，`/tasks cancel <id>` 取消任务及其在途委派和作业。汇报频道临时换绑离开工位时后台任务照常推进、汇报暂存（切回或 `/tasks adopt <id>` 后补发）；所属渠道关闭或工位归档时暂停投递/冻结，恢复启用后继续。`tools.tasks.enabled: false` 关闭任务工具、新步骤执行和聊天中的任务摘要。
 
-报告先保存再发送，未确认送达时自动重试；完成前还需确认最终报告送达并提交归档。重复收到报告不必重新交办任务，可先用 `/tasks show <id>` 查看。完整状态、交付规则和排障见[任务指南](./events-and-tasks.md#第二部分长程任务tasks)，旧数据升级见[任务迁移说明](./task-migration.md)。
+报告先保存再发送，未确认送达时自动重试；完成前还需确认最终报告送达并提交归档。重复收到报告不必重新交办任务，可先用 `/tasks show <id>` 查看。完整状态、交付规则和排障见[任务指南](./events-and-tasks.md#第一部分后台长程任务tasks)，旧数据升级见[任务迁移说明](./migrations/task-migration.md)。
 
 ## 委派怎样执行与恢复
 
-角色从 `workspace/sub-agents/*.md` 加载。内置角色使用 Pipiclaw 的模型、工具和守卫；外部角色启动 Claude Code、Codex CLI、Cursor CLI 或脚本，使用目标 CLI 的认证、权限和运行环境。角色配置与真实权限边界见[智能体委派](./sub-agents.md)。
+角色从 `workspace/sub-agents/*.md` 加载。内置角色使用 Pipiclaw 的模型、工具和守卫；外部角色启动 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI 或脚本，使用目标 CLI 的认证、权限和运行环境。角色配置与真实权限边界见[智能体委派](./sub-agents.md)。
 
 聊天里的内置委派共享一个 10 秒快速返回窗口：及时完成就直接返回结果，否则转入后台。任务里的内置委派、以及全部外部委派，确认启动后立即异步返回。完成后自动通知原频道或所属任务；频道队列满时结果保留在磁盘，容量释放后重试。
 
@@ -82,6 +82,6 @@
 
 ## 日志与费用怎样查看
 
-`/usage` 汇总对话、委派和后台整理的模型用量，账本按月写入 `state/usage/usage-YYYY-MM.jsonl`。缺少价格信息时费用显示未知；Codex CLI 不报告成本，Cursor CLI 与 `exec` 不报告 token 或成本，未知不能当作免费。
+`/usage` 汇总对话、委派和后台整理的模型用量，账本按月写入 `state/usage/usage-YYYY-MM.jsonl`。缺少价格信息时费用显示未知；Codex CLI、Cursor CLI、Antigravity CLI 与 `exec` 不报告美元成本（其中 Cursor CLI 与 `exec` 也不报告 token），未知不能当作免费。
 
-运行日志位于 `state/logs/runtime.jsonl`。定位执行延迟见[运维排障](./deployment-and-operations.md#定位一次执行慢在哪里)；检查实际提示词时，可启用 `PIPICLAW_DEBUG=1`，在频道会话区读取 `last_prompt.json`。
+运行日志位于 `state/logs/runtime.jsonl`。定位执行延迟见[运维排障](./deployment-and-operations.md#42-结构化运行日志与慢请求定位)；检查实际提示词时，可启用 `PIPICLAW_DEBUG=1`，在频道会话区读取 `last_prompt.json`。

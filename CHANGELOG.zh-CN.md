@@ -8,7 +8,7 @@
 
 ### 不兼容变更
 
-- **Pi SDK 1.5.0 模型目录与请求路由。** 移除部分旧模型、免费模型和 batch 模型条目；OpenRouter 的 `~anthropic/claude-*-latest` 别名改用 Anthropic Messages。升级前核对自建网关路由，以及默认、备用和内部子代理模型配置，见[升级说明](docs/configuration-reference.md#pi-150-升级注意事项)。
+- **Pi SDK 1.5.0 模型目录与请求路由。** 移除部分旧模型、免费模型和 batch 模型条目；OpenRouter 的 `~anthropic/claude-*-latest` 别名改用 Anthropic Messages。升级前核对自建网关路由，以及默认、备用和内部子代理模型配置，见[升级说明](docs/migrations/sdk-upgrades.md#pi-sdk-150-升级注意事项)。
 
 ### 新增
 
@@ -33,8 +33,8 @@
 
 - **工位与渠道配置取代按频道组织的布局。** 一个助手在具名工位之间共享 workspace 的身份与规则，工位位于 `workspace/desk-<名字>/`，频道通过 `desk-bindings.json` 绑定。新的获准钉钉会话使用 `default`，终端未指定 `--desk` 时也打开它。`channel.json` 改为各有 `enabled` 开关的 `dingtalk` / `webapi` 两段，频道 id 带渠道前缀，每个 app home 只由一个运行时管理。移除 `/project` 和 `security.json` 的 `projectAccess`；`desk.json` 可设置绝对路径的自定义 `cwd`。
 - **任务独立于聊天执行。** 每个执行中的任务在后台任务车道里拥有自己的 runner 和会话。运行时根据实际工作、提问与时间推导任务状态；移除旧等待票、`task_step_end`、`task_update`、`/tasks steer` 和 `/tasks reply`。改用 `/tasks msg`、`/tasks pause`、`/tasks resume` 和 `/tasks cancel`；`/stop` 只停聊天。任务中发起的委派与作业将结果直接送回该任务。
-- **既有数据需要离线升级。** 停止全部运行时并完整备份 app home，再按实际源格式阅读[工位](docs/desk-migration.md)、[渠道](docs/channel-migration.md)与[任务](docs/task-migration.md)迁移说明。运行时只读当前格式，不会自动迁移旧数据。公开导出名保持稳定，但频道类型与构造参数有变化，详见 beta.3。
-- **提供方调整。** 移除 Brave 搜索，默认改用 DuckDuckGo。四个直接 Pi SDK 依赖升级到 1.4.0；`kimi-coding` 改用 OpenAI Chat Completions，自定义地址必须包含 `/v1`。请核对[搜索迁移说明](docs/channel-migration.md#调整网页搜索配置)与 [Pi 升级说明](docs/configuration-reference.md#pi-140-升级注意事项)。
+- **既有数据需要离线升级。** 停止全部运行时并完整备份 app home，再按实际源格式阅读[工位](docs/migrations/desk-migration.md)、[渠道](docs/migrations/channel-migration.md)与[任务](docs/migrations/task-migration.md)迁移说明。运行时只读当前格式，不会自动迁移旧数据。公开导出名保持稳定，但频道类型与构造参数有变化，详见 beta.3。
+- **提供方调整。** 移除 Brave 搜索，默认改用 DuckDuckGo。四个直接 Pi SDK 依赖升级到 1.4.0；`kimi-coding` 改用 OpenAI Chat Completions，自定义地址必须包含 `/v1`。请核对[搜索迁移说明](docs/migrations/channel-migration.md#调整网页搜索配置)与 [Pi 升级说明](docs/migrations/sdk-upgrades.md#pi-sdk-140-升级注意事项)。
 
 ### 新增
 
@@ -56,11 +56,11 @@
 
 ### 不兼容变更
 
-- **Pi SDK 1.4.0。** 内置 `kimi-coding` 提供方改用 OpenAI Chat Completions，自定义地址必须包含 `/v1`。升级前按新模型目录核对配置中的模型引用，见 [Pi 升级说明](docs/configuration-reference.md#pi-140-升级注意事项)。
+- **Pi SDK 1.4.0。** 内置 `kimi-coding` 提供方改用 OpenAI Chat Completions，自定义地址必须包含 `/v1`。升级前按新模型目录核对配置中的模型引用，见 [Pi 升级说明](docs/migrations/sdk-upgrades.md#pi-sdk-140-升级注意事项)。
 - **任务在后台的任务车道里执行（spec 064）。** 任务步骤不再借用频道的回合与队列：任务干活时聊天照常回应，任务也不等聊天。每个执行中的任务有自己的 runner 和会话；每个工位最多 3 个、整个运行时最多 5 个任务同时执行，单步最长 20 分钟；外部委派卡住时会叫醒负责人，不再干等到 wall time。
 - **任务状态由运行时按事实写下。** 等待票、`task_step_end`、`task_update`、`/tasks steer` 与 `/tasks reply` 全部删除。任务文件使用 `state: queued | running | waiting | paused`，`waiting` / `paused` 说明原因；回合结束即一步结束。新增聊天工具 `task_message`、`task_pause`、`task_resume`，任务会话工具 `task_report`、`task_ask`、`task_wait`；新增命令 `/tasks msg` 与 `/tasks cancel`。等用户回答不设超时。`subagent`、`subagent_inline` 与 `bash` 的 `taskId` 参数删除：任务步骤里发起的工作自动绑定该任务，聊天里发起的不绑定任何任务。
 - **绑定任务的结果直接回到任务。** 绑定的委派与作业把结果写进任务记录并通知车道，不再唤醒频道。
-- **升级是离线的运维工作。** 任务文件、记录、`tasks/.steer/` 与相关 dispatch 记录的格式改变，运行时只读新格式；有活动任务的 home 启动前按[任务迁移说明](docs/task-migration.md)处理。
+- **升级是离线的运维工作。** 任务文件、记录、`tasks/.steer/` 与相关 dispatch 记录的格式改变，运行时只读新格式；有活动任务的 home 启动前按[任务迁移说明](docs/migrations/task-migration.md)处理。
 
 ### 新增
 
@@ -83,16 +83,16 @@
 
 ### 不兼容变更
 
-- **移除 Brave 搜索。** 默认搜索后端改为 DuckDuckGo；升级时按[迁移说明](docs/channel-migration.md#调整网页搜索配置)调整 `tools.json`。
+- **移除 Brave 搜索。** 默认搜索后端改为 DuckDuckGo；升级时按[迁移说明](docs/migrations/channel-migration.md#调整网页搜索配置)调整 `tools.json`。
 - **渠道层与 Web API（spec 061）。** `channel.json` 改为 `dingtalk` / `webapi` 两段，各有 `enabled` 开关，至少打开一个；根级的钉钉字段不再被读取。频道 id 变为 `<渠道>:<渠道内地址>`（`dingtalk:dm:<staffId>`、`dingtalk:group:<会话 id>`、`webapi:conv_<id>`）。`src/index.ts` 的导出名不变，但 `ChannelContext` 变为结构化的回合输出（`emit(TurnEvent)` / `finish(TurnOutcome)`），`DingTalkEvent` / `DingTalkHandler` 是 `ChannelEvent` / `Ingress` 的别名，`DingTalkBot` 的构造参数改变，`BootstrapOptions` 不再有 `dingtalkConfig` / `createBot`。
 - **终端成为 Web API 的客户端。** `pipiclaw tui` 通过本机 socket 连接 daemon；没有 daemon 时在本进程里启动一个只开 socket 的运行时（打开期间任务和事件也会运行，退出即关闭）。终端不再自己写工位，`tui` 频道和 `conversations/tui-N/` 取消，单工位只能开一个终端的限制随之取消；同一个 `--desk` 退出重进续上次的对话，`--new` 另开一个。终端不再拒绝 `task_create` 和 `event_manage create`。
 - **一个 app home 同时只能有一个运行时进程**（`state/daemon.lock`）。
-- **升级由运维离线完成。** 运行时不读旧格式的 `channel.json`、旧频道 id 和 `tui` 会话，旧版本也不能读转换后的数据；按[渠道层迁移说明](docs/channel-migration.md)在备份副本上演练后再升级。
+- **升级由运维离线完成。** 运行时不读旧格式的 `channel.json`、旧频道 id 和 `tui` 会话，旧版本也不能读转换后的数据；按[渠道层迁移说明](docs/migrations/channel-migration.md)在备份副本上演练后再升级。
 - **工位（desk）取代 dot（spec 059、060）。** 现在只有一个助手、一个 workspace；原来的 dot 变成*工位*：一个有名字的工作范围，拥有记忆、日记、任务、事件、委派记录和工作文件。工位位于 `workspace/desk-<名字>/`（含 `desk.json`），频道绑定在 `workspace/desk-bindings.json`。命令是 `/desk`，TUI 选项是 `--desk`；不提供 `/dot`、`--dot` 别名。
 - **只有一套人格。** 身份与规则只来自 workspace 的 `SOUL.md` / `AGENTS.md`；工位目录里的 `SOUL.md` / `AGENTS.md` 不再替换它们。
 - **一开始就有默认工位。** 启动时初始化 `default`；新的钉钉私聊和群在第一条获准消息到来时自动绑定到它（不需要 `/desk bind`）；`pipiclaw tui` 不带 `--desk` 时固定打开 `default`。已有绑定不会被覆盖，读操作和后台唤醒也不会创建绑定。因此默认情况下所有频道共享同一份记忆、任务和事件——需要分开的内容请使用另一个工位。
 - **公开的 `ChannelEvent` 类型中，`dot` 字段改为 `desk`。**
-- **升级由运维离线完成。** 迁移脚本和启动时的旧布局检查都已删除；仍有 `workspace/dots/` 的 home，请先停掉所有 Pipiclaw 进程，按[迁移说明](docs/desk-migration.md)处理后再启动。
+- **升级由运维离线完成。** 迁移脚本和启动时的旧布局检查都已删除；仍有 `workspace/dots/` 的 home，请先停掉所有 Pipiclaw 进程，按[迁移说明](docs/migrations/desk-migration.md)处理后再启动。
 
 ### 新增
 
@@ -131,7 +131,7 @@
 ### 不兼容变更
 
 - **Dot（spec 058）。** 助手现在是一个 *dot*：显式创建、有名字的个体，在 `workspace/dots/<dot>/` 下拥有自己的记忆、日记、任务、定时事件、委派记录和工作文件，也是 agent 的工作目录。钉钉私聊或群只是绑定到某个 dot 的地址（`workspace/dots/bindings.json`）；多个频道可以共用一个 dot——记忆和任务共享，对话各自独立。没有绑定的频道只能用 `/dot` 和 `/help`，不调用模型，也不写任何文件。不会有任何东西自动创建 dot。
-- **已有的 app home 必须先迁移才能启动。** daemon 和 TUI 在按频道分目录的旧布局上拒绝启动。停掉所有 Pipiclaw 进程，在仓库检出目录里运行 `node scripts/migrate-to-dots.mjs --dry-run`，再为每个旧频道目录给出 `--map <旧目录>=<dot>` 或 `--drop <旧目录>` 正式执行，最后 `--verify`；旧布局下的后台作业或委派仍在运行时脚本拒绝执行（见[部署与运维](docs/deployment-and-operations.md#迁移到-dot-布局spec-058)）。脚本先备份 `workspace/` 和 `state/`，还原真实频道 id，迁移状态，为任务写上投递频道并改写绝对路径。还停在 v3 任务格式的 home 要先用 0.9.x 版本升到 v5；运行时内的 v3→v5 任务转换和 `scripts/rehearse-task-migration.mjs` 已删除。
+- **已有的 app home 必须先迁移才能启动。** daemon 和 TUI 在按频道分目录的旧布局上拒绝启动。停掉所有 Pipiclaw 进程，在仓库检出目录里运行 `node scripts/migrate-to-dots.mjs --dry-run`，再为每个旧频道目录给出 `--map <旧目录>=<dot>` 或 `--drop <旧目录>` 正式执行，最后 `--verify`；旧布局下的后台作业或委派仍在运行时脚本拒绝执行（见[部署与运维](docs/migrations/desk-migration.md)）。脚本先备份 `workspace/` 和 `state/`，还原真实频道 id，迁移状态，为任务写上投递频道并改写绝对路径。还停在 v3 任务格式的 home 要先用 0.9.x 版本升到 v5；运行时内的 v3→v5 任务转换和 `scripts/rehearse-task-migration.mjs` 已删除。
 - **删除项目范围。** `/project` 和 `security.json` 的 `projectAccess` 已删除（该键会被忽略并给出警告）。工作目录——相对路径、shell 的 cwd、委派的默认 `workingDirectory`——就是 dot 目录；要委派到代码仓库，显式传 `workingDirectory`。
 - **TUI 打开一个 dot：** `pipiclaw tui --dot <名字>`（必填），`--create` 用于创建；`--channel` 已删除。TUI 可以打开正由 daemon 服务的 dot：记忆、任务和 `dot.json` 的写入持有跨进程短锁，TUI 有自己的会话，同一个 dot 的第二个 TUI 会拒绝启动。
 
@@ -210,8 +210,8 @@
 ### 升级
 
 - 自动迁移仅支持 v3（有 `status:` 且无 `state:`），原件存入 `tasks/.v3/`。带 `state:` 的 v4 beta 文件跳过，**须隔离后人工重建**，不代表兼容 v4。恢复前必须核对旧等待、用量/预算与真实外部动作。
-- 周期模板转换失败会暂停并留说明；转换失败会按任务回滚（不覆盖既有归档与备份）、不写标记、在 `state/task-migration-v5.failed.json` 记录阶段，并中止启动（不启动 watcher/driver/钉钉），修复后重启即重试；`npm run build` 后可用 `node scripts/rehearse-task-migration.mjs` 在只读临时副本上演练。备份整个 app home，保留未解决任务、事件与记录，遵循[升级步骤](docs/events-and-tasks.md#从更早的任务格式升级)。停用的 v3 周期任务保持暂停、不生成事件模板；其余模板迁移后即被 watcher 执行，须在停 daemon 时先处理原任务。
-- 本地检查与 CI 状态见[发布评审](docs/releases/0.9.3-review.md)。
+- 周期模板转换失败会暂停并留说明；转换失败会按任务回滚（不覆盖既有归档与备份）、不写标记、在 `state/task-migration-v5.failed.json` 记录阶段，并中止启动（不启动 watcher/driver/钉钉），修复后重启即重试；`npm run build` 后可用 `node scripts/rehearse-task-migration.mjs` 在只读临时副本上演练。备份整个 app home，保留未解决任务、事件与记录，遵循[升级步骤](docs/migrations/task-migration.md)。停用的 v3 周期任务保持暂停、不生成事件模板；其余模板迁移后即被 watcher 执行，须在停 daemon 时先处理原任务。
+- 本地检查与 CI 状态已在 0.9.3 发布评审中完成核对。
 
 ## [0.9.3-beta.5] - 2026-09-20
 

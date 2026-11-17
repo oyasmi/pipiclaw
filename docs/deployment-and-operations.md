@@ -1,64 +1,48 @@
 # 部署与运维指南（Deployment and Operations Guide）
 
-> **读者**：准备把 Pipiclaw 作为常驻服务长期运行的维护者。
-> **前置**：已完成首次接入（[README](../README.md)）与基本配置（[configuration.md](./configuration.md)）。
-> **读完你能**：用 systemd/pm2/supervisor 常驻运行它，并在出问题时知道先看哪份日志。
+> **适合谁**：准备在 Linux 服务器、Mac mini 或开发机上把 Pipiclaw 作为 7×24 小时常驻服务托管、升级、备份与排障的维护者。
+> **读完你会得到**：上线前核对清单、`systemd` / `pm2` / `supervisor` 常驻配置模板、渠道与单实例锁规则、零成本排障命令与慢请求定位方法，以及一致性备份恢复流程。
 
-## 适用范围（Scope）
+> Pipiclaw 面向 Linux 与 macOS 等 POSIX 环境（工具执行层依赖 `bash` / `sh` 语义），不支持原生 Windows（Windows 用户请使用 WSL2）。首次安装验证请先完成 [快速上手指南](./quickstart.md)。
 
-当前这份文档只覆盖主机环境中的长期运行方式。
+---
 
-## 部署前检查（Pre-Deployment Checklist）
+## 1. 上线前检查清单
 
-建议在正式部署前确认下面这些事项：
+| 检查项 | 建议标准 |
+|---|---|
+| **运行环境与账号** | Node.js `>= 22.19.0`；生产服务器建议使用独立的低权限系统账号（如 `pipiclaw`），数据盘持久化保存 `~/.pipiclaw/` |
+| **模型真实可用** | 已通过 `pipiclaw auth login` 或 `models.json` 配好模型，并用 `pipiclaw tui` 实测一轮普通问答成功（仅模型列表可见不代表密钥或代理链路畅通） |
+| **渠道与灰度范围** | 仅本机/内网调用可保持默认 `webapi` 开启；接入钉钉时已开启 Stream 模式与 AI Card，初期建议配置 `dingtalk.allowFrom` 限制测试人员 `staffId` |
+| **外部智能体环境** | 若启用了 `workspace/sub-agents/` 外部角色，须切换到**服务运行账号**实测 `command -v claude` / `codex` / `agent` / `agy` 在 `PATH` 中且已完成登录 |
 
-| 检查项 | 建议 |
-|--------|------|
-| Node.js | `>= 22.19.0` |
-| 钉钉应用 | 已开启机器人能力和 Stream Mode |
-| AI Card | 建议配置完成，便于观察执行过程 |
-| 模型 | `/model` 确认可见模型与默认值，再用普通消息验证真实调用成功；模型目录可见不证明凭据或请求链路有效 |
-| Web 工具 | 如需 `web_search` / `web_fetch`，已检查 `tools.json` 与代理设置 |
-| 外部智能体 | 目标 CLI 已安装并登录；从服务账号的 `PATH` 可找到；角色的 sandbox 与 `mutates` 已审查 |
-| 灰度范围 | 初期建议先配 `allowFrom` 控制测试人群 |
-| 工作目录 | 确认 `~/.pipiclaw/` 所在磁盘可长期持久化 |
+---
 
-## 推荐部署方式（Recommended Deployment Patterns）
+## 2. 常驻进程托管方案
 
-Pipiclaw 更像一个长期运行的服务，而不是一次性命令。推荐使用进程管理器托管，而不是手工开一个终端窗口。
+长期使用（尤其是挂载钉钉机器人、定时事件、后台任务与异步外部委派）应通过进程管理器常驻运行 `pipiclaw` 主服务。
 
-常见选择：
+### 方式一：`systemd`（Linux 服务器首选）
 
-- `systemd`：Linux 服务器首选
-- `pm2`：跨平台、上手快
-- `supervisor`：传统 Linux 进程托管方案，适合已有 Supervisor 体系的环境
-- 其他现成的进程托管方案：只要能拉起、重启、收集日志，都可以
-
-Pipiclaw 面向 Linux / macOS 等 POSIX 环境，工具执行层依赖 `sh`/`bash` 语义，不支持 Windows。
-
-## 方式一：使用 systemd（Option 1: systemd）
-
-适合 Linux 服务器。
-
-示例服务文件：
+创建 `/etc/systemd/system/pipiclaw.service`（请用 `command -v pipiclaw` 确认实际二进制路径；敏感 API Key 与 `PIPICLAW_PROXY` 放入权限 `0600` 的 `runtime.env`）：
 
 ```ini
 [Unit]
-Description=Pipiclaw
-After=network.target
+Description=Pipiclaw Daemon
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=pipiclaw
 Group=pipiclaw
+WorkingDirectory=/home/pipiclaw
 Environment=HOME=/home/pipiclaw
 Environment=PIPICLAW_HOME=/home/pipiclaw/.pipiclaw
+EnvironmentFile=-/home/pipiclaw/.config/pipiclaw/runtime.env
 ExecStart=/usr/local/bin/pipiclaw
 Restart=always
 RestartSec=5
-EnvironmentFile=-/home/pipiclaw/.config/pipiclaw/runtime.env
-Environment=PIPICLAW_DEBUG=0
-WorkingDirectory=/home/pipiclaw
 StandardOutput=journal
 StandardError=journal
 
@@ -66,54 +50,24 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-把 `ExecStart` 改成 `command -v pipiclaw` 得到的绝对路径；模型凭据和代理变量写进仅服务账号可读的 `runtime.env`，不要把真实 key 直接提交到 unit 文件。外部智能体还依赖服务进程的 `PATH`、HOME 和自身认证文件；部署前应以 `pipiclaw` 账号执行 `command -v claude` / `command -v codex` 并验证登录。
-
-常用命令：
+启用并查看实时日志：
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable pipiclaw
-sudo systemctl start pipiclaw
+sudo systemctl enable --now pipiclaw
 sudo systemctl status pipiclaw
 journalctl -u pipiclaw -f
 ```
 
-建议：
-
-- 使用专门的运行账号
-- 不要把工作目录放在临时目录
-- 如果密钥较多，优先使用 `EnvironmentFile`
-
-## 方式二：使用 pm2（Option 2: pm2）
-
-适合想快速托管进程的场景。
-
-启动示例：
+### 方式二：`pm2`（跨平台快速托管）
 
 ```bash
-pm2 start pipiclaw --name pipiclaw
-```
-
-如果需要环境变量：
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-... pm2 start pipiclaw --name pipiclaw
-```
-
-常用命令：
-
-```bash
-pm2 status
-pm2 logs pipiclaw
-pm2 restart pipiclaw
+pm2 start "$(command -v pipiclaw)" --name pipiclaw
 pm2 save
+pm2 logs pipiclaw
 ```
 
-## 方式三：使用 supervisor（Option 3: supervisor）
-
-适合已经在用 Supervisor 管理常驻进程的环境。
-
-示例配置：
+### 方式三：`supervisor`
 
 ```ini
 [program:pipiclaw]
@@ -125,363 +79,93 @@ autorestart=true
 startsecs=5
 stopasgroup=true
 killasgroup=true
-environment=ANTHROPIC_API_KEY="sk-ant-...",PIPICLAW_DEBUG="0"
 stdout_logfile=/var/log/pipiclaw.stdout.log
 stderr_logfile=/var/log/pipiclaw.stderr.log
 ```
 
-常用命令：
+---
 
-```bash
-supervisorctl reread
-supervisorctl update
-supervisorctl status pipiclaw
-supervisorctl restart pipiclaw
-supervisorctl tail -f pipiclaw
-```
+## 3. 渠道组合与单实例锁（`daemon.lock`）
 
-建议：
+- **单实例互斥锁**：同一个 `PIPICLAW_HOME` 同一时刻只允许运行**一个** daemon 进程（由 `state/daemon.lock` 保证）。重复启动第二个 `pipiclaw` 会明确提示持锁进程的 `pid` 并拒绝启动；进程异常崩溃遗留的陈旧锁会在下次同机启动时自动检测并回收。`pipiclaw tui` 检测到已有 daemon 在线时会自动复用其本机 Socket，不会冲突。
+- **按需组合 `channel.json` 的两个渠道**（至少开启一个）：
+  - **默认开箱模式（仅 Web API）**：`webapi.enabled: true`（本机 Socket + `127.0.0.1:8787`）、`dingtalk.enabled: false`，无需钉钉凭据即可供 `pipiclaw tui` 和本机 SDK 调用；
+  - **钉钉 + 本机终端协同**：同时开启 `dingtalk` 与 `webapi`（若不需要 HTTP 端口可将 `webapi.tcp` 设为 `null`，仅保留 `socket: true` 供 `pipiclaw tui` 免密连接）；
+  - **只用钉钉**：将 `webapi.enabled` 设为 `false`，完全不监听任何本地端口或 Socket；
+  - **跨机器 API 服务**：设置 `webapi.tcp` 并用 `pipiclaw webapi key add <名称> --desk <工位>` 签发密钥（**新增或吊销密钥后在线热生效，无需重启 daemon**；非回环地址请配置 `tls` 或前置 HTTPS 反向代理）。
+- 某渠道暂时关闭时，绑定在该渠道上的定时事件与后台任务汇报会自动挂起暂存，重新开启渠道后自动恢复。
 
-- `directory` 使用稳定的工作目录
-- 日志文件放到统一的日志目录中
-- 如果环境变量较多，优先通过外部环境文件或部署系统注入
+---
 
-## 日志与排障入口（Logs and Troubleshooting Entry Points）
+## 4. 日志、慢阶段定位与运维排障
 
-### 零 LLM 成本的运行时入口（Zero-Cost Runtime Commands）
+### 4.1 零成本运行时自检命令
 
-先从不调用模型的命令确认问题范围，频道忙碌时也能使用：
+遇到异常时，先发以下**不调用大模型、忙碌时也立即可用**的斜杠命令缩小范围：
 
-| 想确认什么 | 命令 |
+| 排查目标 | 命令 |
 |---|---|
-| 当前模型、上下文、执行状态与版本 | `/status` |
-| 本工位、本频道和全局的用量、费用及未知条目 | `/usage [7d\|month]` |
-| 任务状态、记录、文件或投递问题 | `/tasks show <id>`、`/tasks log <id>`、`/tasks doctor` |
-| 补充要求、暂停、恢复或取消任务 | `/tasks msg <id> <内容>`、`/tasks pause <id>`、`/tasks resume <id>`、`/tasks cancel <id>` |
-| 委派是否结束、实际命令、错误与产出 | `/subagents`、`/subagents show <runId>`、`/subagents output <runId>` |
-| 终止不再需要的委派 | `/subagents cancel <runId\|all>` |
+| 查看当前模型、备用模型状态、后台任务计数与版本 | `/status` |
+| 查看本工位/本频道/全局 Token 与已知费用汇总 | `/usage [7d\|month]` |
+| 诊断任务卡顿、状态、执行记录或文件异常 | `/tasks show <id>`、`/tasks log <id>`、`/tasks doctor` |
+| 查看在途/失败委派的实际 `argv`、PID 与 `stderr` | `/subagents`、`/subagents show <runId>`、`/subagents output <runId>` |
+| 查看定时事件定义与最近触发/跳过原因 | `/events list`、`/events history [name]` |
+| 查看记忆条目与后台整理状态 | `/memory status`（记忆机制详见 [记忆管理](./memory.md)） |
 
-任务暂停不取消在途工作；取消任务会连带取消它的委派与作业。`/stop` 只停聊天。完整命令见[交互指南](./interaction-and-commands.md)。
+### 4.2 结构化运行日志与慢请求定位
 
-### 结构化日志与成本账本（Structured Logs and Cost Ledger）
+- **运行日志**：`${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`（按大小自动轮转），每行均带结构化 `event` 字段，可用 `jq` 精确过滤：
+  ```bash
+  jq 'select(.event == "subagent.settle.failed" or .level == "error")' ~/.pipiclaw/state/logs/runtime.jsonl
+  ```
+- **月度成本账本**：`${PIPICLAW_HOME:-~/.pipiclaw}/state/usage/usage-YYYY-MM.jsonl`。
+- **定位一轮响应慢在哪里**：临时设置环境变量 `PIPICLAW_LOG_LEVEL=debug` 重启复现后，按同一 `request` / `toolCallId` 观察三段耗时（排查完毕请恢复默认 `info` 级别）：
+  - `agent.provider.started` → `agent.provider.output`：等待大模型首字响应的网络与推理耗时；
+  - `agent.tool.preparing` → `agent.tool.execute_started`：工具参数准备与同批次调度等待；
+  - `agent.tool.execute_started` → `agent.tool.execute_finished`：工具真实执行耗时（含 `elapsedMs`）。
+- **检查最终组装 Prompt**：设置 `PIPICLAW_DEBUG=1` 后，运行时会在对应频道会话区（`workspace/desk-<name>/conversations/<kind>-<n>/`）写出最近一轮的 `last_prompt.json`。
 
-运行日志默认写入 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`，按大小轮转；用量账本按月写入 `state/usage/usage-YYYY-MM.jsonl`。费用缺价格信息时显示未知，不应按零成本解释；任务费用包含绑定委派，尚未上报或无法报告的费用不能提前精确限制。
+---
 
-每条记录有可筛选的 `event`，如 `tasks.step.started`、`subagent.settle.failed`；`message` 是固定说明，频道、原因和计数放在 `channelId` 或 `fields` 中，警告原因通常在 `fields.reason`，详情可能位于 `details`。例如：
+## 5. 版本升级、一致性备份与恢复
 
-```bash
-jq 'select(.event == "subagent.settle.failed")' ~/.pipiclaw/state/logs/runtime.jsonl
-```
+### 标准升级步骤
 
-日志级别与开关见[可观测性配置](./configuration-reference.md#可观测性结构化日志与成本账本observability-structured-logging--cost-ledger)。
+1. 阅读 [中文更新日志](../CHANGELOG.zh-CN.md)（若从早期旧版本跨代升级，检查 [历史数据迁移说明](./migrations/README.md)）；
+2. 用 `/subagents list running` 确认无关键在途外部委派（或等待其完成），停止 daemon 并备份整个 `~/.pipiclaw/`；
+3. 升级包并重启服务：
+   ```bash
+   npm install -g @oyasmi/pipiclaw@latest
+   sudo systemctl restart pipiclaw   # 或 pm2 restart pipiclaw
+   ```
+4. 发送 `/status`、`/model` 及一条普通消息做冒烟验证。
 
-### 定位一次执行慢在哪里
+### 一致性备份清单
 
-先用 `/tasks` 或 `/subagents show <runId>` 判断是在执行、等结果，还是等待用户。仍无法解释时，临时设置 `PIPICLAW_LOG_LEVEL=debug` 并重启服务，复现后按同一 `generation`、`session`、`request` 和 `toolCallId` 串起日志；任务还可按 `taskId`、`seq` 筛选。
+备份整个应用根目录 `${PIPICLAW_HOME:-~/.pipiclaw}/` 即可完整保留实例状态，核心内容包括：
+- **6 个根级配置文件**：`channel.json`、`auth.json`、`models.json`、`settings.json`、`tools.json`、`security.json`
+- **`workspace/`（最核心资产）**：全局 `SOUL.md` / `AGENTS.md` / `MEMORY.md`、`skills/`、`sub-agents/`、`desk-bindings.json`，以及所有 `desk-<name>/` 工位的记忆、工作日记、任务、事件与会话历史（若使用了宿主账号共享的 `~/.agents/skills/`，需另行备份）
+- **`state/`（运行恢复状态）**：`dispatch/`、`subagent-runs/`、`jobs/`、`memory/`、`webapi/`（`api.sock` 除外）、`dingtalk/`、`usage/`
 
-| 阶段事件 | 能判断什么 |
+> **跨机器迁移注意**：外部 Coding Agent 是独立 detached 进程，其持久化的 `pid` 仅对原宿主机有效。**迁移到新服务器前，必须先等待所有在途外部委派结算完成或用 `/subagents cancel all` 终止**，停机后再打包复制 `~/.pipiclaw/`。
+
+---
+
+## 6. 常见运维故障速查
+
+| 现象 | 排查顺序 |
 |---|---|
-| `agent.provider.started` → `agent.provider.output` | 模型请求到首次有效输出的等待 |
-| `agent.tool.preparing` → `agent.tool.execute_started` | 工具准备和批次调度的等待，尚非工具实际执行时间 |
-| `agent.tool.execute_started` → `agent.tool.execute_finished` | 工具执行耗时，结束事件含 `elapsedMs` 和 `failed` |
-
-后台作业完成会主动核实，10 秒扫描补漏；聊天队列满时，结果保留在磁盘并在容量释放后重试。任务结果进入执行中步骤仍须等到完整工具批次结束，耗时也可能来自同批次尚未结束的工具。不要仅凭界面上的工具开始时间判断执行器慢。
-
-阶段事件不包含参数、结果正文或凭据，但 debug 日志的其他事件可能包含业务内容。复现后恢复原日志级别，分享日志前按敏感数据处理。`PIPICLAW_DEBUG=1` 另用于保存实际提示词，不等同于开启 debug 日志。
-
-### 进程日志（Process Logs）
-
-首先看你的进程管理器日志：
-
-- `journalctl -u pipiclaw -f`
-- `pm2 logs pipiclaw`
-
-这类日志最适合看：
-
-- 进程是否启动成功
-- 钉钉连接是否正常
-- 模型调用是否报错
-- 事件文件是否被解析失败
-
-关于钉钉 Stream 连接，当前运行时会自己管理重连，并在重连前主动清理旧 socket；如果正常关闭迟迟不完成，还会记录 forced termination 并强制回收连接后再重试。因此如果你在日志里频繁看到 reconnect 或 forced termination，通常更应该优先排查网络层或代理层，而不是把它当作单纯的业务错误。
-
-### 工作区运行文件（Workspace Runtime Files）
-
-Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认路径是 `~/.pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。运行数据按工位存放：`workspace/desk-<name>/` 是一个工位（下表记作 `<工位>/`），其中 `conversations/<kind>-<n>/` 是某个频道的会话区（下表记作 `<会话区>/`）。频道与工位的绑定记录在 `workspace/desk-bindings.json`，`workspace/CHANNELS.md` 是便于人读的索引。
-
-常见文件：
-
-| 文件 | 用途 |
-|------|------|
-| `<会话区>/log.jsonl` | 原始运行日志 |
-| `<会话区>/context.jsonl` 与 session JSONL | 聊天会话冷存储；当前文件由 `active-session.json` 指定，无指针时用 `context.jsonl` |
-| `<会话区>/active-session.json` | 当前聊天会话指针，`/new` 后更新 |
-| `<工位>/tasks/<id>.md` 与 `<id>.jsonl` | 任务契约、循环日志；关闭后移入 `tasks/archive/` |
-| `<工位>/tasks/.sessions/` | 独立任务会话（每任务一份） |
-| `<工位>/subagent-runs.jsonl` | 子代理执行摘要 |
-| `<工位>/subagent-artifacts/<runId>/` | 每次委派的完整输出；外部 run 还包含 prompt、system prompt、协议事件和 stderr |
-| `<工位>/memory/<name>.md` | 一条记忆一个文件（frontmatter 元数据） |
-| `<工位>/memory/.tombstones.jsonl` | 遗忘防复活的 name + 内容哈希，不含原文 |
-| `<工位>/MEMORY.md` | 从 `memory/*.md` 生成的索引，勿手改 |
-| `<工位>/journal/YYYY-MM-DD.md` | 按天追加的工作记录，只由后台反思 pass 写 |
-| `<工位>/memory-review.jsonl` | 反思/工具写回的动作、suggestion 和 skipped 决策审计 |
-
-委派的权威运行状态另存于 `${PIPICLAW_HOME:-~/.pipiclaw}/state/subagent-runs/<name>/<runId>.json`，记录里的 `channelId` 是发起委派的频道。工位内的 `subagent-runs.jsonl` 是便于检索的执行摘要，不能替代状态文件做取消或重启恢复。
-
-运行时记忆分层（spec 050）：
-
-- `memory/*.md` + 生成的 `MEMORY.md` 索引是工位的 durable memory（同一工位的所有频道共享）：稳定事实、决策、偏好、约束。索引在会话首轮（含 `/new`、压缩之后）整份注入，之后靠 `memory_search` 按需补查。
-- `journal/YYYY-MM-DD.md` 是按天的工作记录，只由后台反思写；一次性进度、临时计划不会被写成 durable 记忆。
-- `log.jsonl`、`log.jsonl.1`、`context.jsonl` 是冷存储，正常 turn 不会预加载，只能通过 `session_search` 显式检索（覆盖当前工位的所有会话区）。
-- `memory-review.jsonl` 是诊断与审计文件。
-- `/memory status|list|show|journal` 提供当前工位的只读管理面；`/memory forget <name>` 直接删除、不经过模型。sidecar usage 与 review outcome 通过 correlation id 关联，便于按次核算成本与有效写入。
-
-### 内置记忆维护任务（Memory Maintenance Scheduler）
-
-Pipiclaw 会启动一个内置 memory maintenance scheduler。它不使用事件目录，也不会创建用户可见的 event 文件。它只处理激活工位（至少绑定了一个频道）中已绑定频道的会话区；TUI 的会话区由 TUI 自己在退出、`/new`、压缩时整理。
-
-spec 050 把 v1 的三个 job（session refresh / checkpoint / structural maintenance）合并成一个：**反思（reflect）**。它同时产出 journal 新增行和 memory 的增/改/删/touch。内置间隔（常量，不可配）：
-
-| 任务 | 最小间隔 | LLM 调用前的本地 gate |
-|------|----------|------------------------|
-| Reflect | 20 分钟 | 会话区 dirty、频道已空闲、增量窗口有实质对话 |
-
-另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个会话区。
-
-如果 gate 不通过，任务会跳过，并且不会调用 LLM。相关 skipped/action/failure 会写到对应工位的 `memory-review.jsonl`，便于排查 token 消耗和自动写回行为。
-
-内部状态文件位于：
-
-```text
-${PIPICLAW_HOME:-~/.pipiclaw}/state/memory/<name>/<会话区>.json
-```
-
-这些文件只用于调度，记录 dirty、阈值计数、最近运行时间和失败 backoff。它们不是记忆来源，不需要用户编辑。
-
-维护节奏是内置常量，不再通过 `settings.json` 调节（spec 035）。降低 token 消耗可用的选项只有两个：
-
-```json
-{
-  "sessionSearch": { "summarizeWithModel": false },
-  "memoryMaintenance": { "enabled": false }
-}
-```
-
-`sessionSearch.summarizeWithModel` 当前默认已关闭，只有曾主动开启的部署才需要改。`memoryMaintenance.enabled: false` 关闭的是空闲定时反思；压缩、`/new` 和正常退出等会话边界仍可能运行反思，显式 `memory_save` 也不受影响。旧版 `memoryRecall.*` 已退役，继续配置会在启动日志中收到警告。
-
-### 精确提示词排查（Prompt Inspection）
-
-如果要看某次请求最终拼出来的 prompt，可以设置：
-
-```bash
-export PIPICLAW_DEBUG=1
-```
-
-之后运行时会在对应频道的会话区（`desk-<name>/conversations/<kind>-<n>/`）中写出 `last_prompt.json`。
-
-## 渠道与 Web API 部署（Channels and the Web API）
-
-`channel.json` 的 `dingtalk` 和 `webapi` 两段各有一个 `enabled` 开关，至少打开一个。常见的部署方式：
-
-- **只用钉钉**：`webapi.enabled` 保持 `false`，不加载 Web API 的代码，也不监听任何端口。
-- **钉钉 + 本机 Web API**：`webapi: { "enabled": true, "socket": true }`。daemon 在 `state/webapi/api.sock` 监听（目录 `0700`、socket `0600`），本机脚本和 `pipiclaw tui` 通过它访问，不需要 key。
-- **只用 Web API**：`dingtalk.enabled` 设为 `false`。没有钉钉凭据也能运行，适合只被脚本或其他服务调用的部署。
-- **让别的机器访问**：加 `tcp` 和 `keys`（`pipiclaw webapi key add <名字> --desk <工位>`），key 只显示一次。`tcp` 绑在 loopback 以外的地址时可以不配 `tls`（明文 HTTP，适合 TLS 在前置 nginx / Caddy 终止、或可信内网）；跨不可信网络请配 `tls` 或走反向代理。改动 key 后重启 daemon 生效。
-
-一个 app home 同时只能有一个运行时进程，由 `state/daemon.lock` 保证：第二个 `pipiclaw` 会拒绝启动并说出持有者的 pid 和主机；`pipiclaw tui` 遇到 daemon 就连接它的 socket，没有 daemon 才在本进程里起运行时。进程被杀留下的锁，下次启动时（同一主机、pid 已不存在）自动回收。
-
-某个频道所属的渠道没有启用时（例如暂时关了钉钉），该频道的任务和定时事件被跳过，待投递记录保留，渠道重新启用后恢复。Web API 的说明、安全默认值与审计见 [Web API](./webapi.md)。
-
-从旧版本升级到带渠道层的版本时，`channel.json` 的结构、频道 id 和终端会话需要一次离线迁移，见[渠道层迁移说明](./channel-migration.md)。该版本还移除了 Brave 搜索，升级时按其中的[网页搜索配置步骤](./channel-migration.md#调整网页搜索配置)检查 `tools.json`。
-
-## 升级流程（Upgrade Procedure）
-
-建议用下面的顺序升级：
-
-1. 备份 app home 目录。默认是 `~/.pipiclaw/`，如果设置了 `PIPICLAW_HOME`，则备份 `${PIPICLAW_HOME}/`
-2. 阅读 [CHANGELOG](../CHANGELOG.md) / [中文更新日志](../CHANGELOG.zh-CN.md)
-3. 升级 npm 包
-4. 重启 Pipiclaw
-5. 在钉钉中发送 `/model` 和一条普通消息做冒烟验证；如需切换模型，可使用精确引用或能唯一命中的片段字符串
-
-升级命令：
-
-```bash
-npm install -g @oyasmi/pipiclaw@latest
-```
-
-如果你固定版本运行，也可以明确写版本号。
-
-### 存储布局升级
-
-一次性数据迁移由 AI agent 根据实际版本和数据执行，参见[迁移说明](./desk-migration.md)。仓库不提供通用迁移脚本；运行时只读写当前工位格式，不依赖迁移标记，也不识别、搬移或修补旧布局。
-
-迁移前停止所有写入者（包括 detached job、外部委派和自动重启），备份完整 app home，再核对目标版本实际接受的格式。首次用新版本启动旧 home 前完成离线整理；不要只搬文件夹、全局替换字符串或覆盖冲突数据。
-
-当前布局由 [Spec 060](./specs/060-desk/design.md) 定义：`workspace/desk-<name>/desk.json` 与 `workspace/desk-bindings.json`。已有绑定保留，普通新频道由运行时自动接入默认工位。
-
-## 备份与恢复（Backup and Restore）
-
-最重要的是备份 app home 目录。默认是 `~/.pipiclaw/`；如果设置了 `PIPICLAW_HOME`，则使用对应目录。至少应包含：
-
-- `channel.json`
-- `auth.json`
-- `models.json`
-- `settings.json`
-- `tools.json`
-- `security.json`
-- `workspace/`
-- `state/events/history.jsonl`（可选，事件调度审计记录）
-- `state/dispatch/`（待处理的 synthetic event / 完成唤醒；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
-- `state/subagent-runs/`（委派 run 的状态、pid、实际 argv、结算与唤醒幂等标记；外部 run 重启对账需要）
-- `state/jobs/`（后台作业的持久状态与输出；重启恢复需要）
-- `state/memory/`（反思游标与调度状态）
-- `state/webapi/`（Web API 密钥、显式对话与响应记录，包括 `standalone.jsonl`；`api.sock` 是可重建的监听 socket，无需备份）
-- `state/dingtalk/`（各频道的钉钉路由元数据，重启后主动推送需要）
-- `state/usage/`（可选，LLM 成本账本）与 `state/logs/`（可选，结构化日志）
-
-其中 `workspace/` 最关键，因为它包含：
-
-- 工作区级 `SOUL.md`、`AGENTS.md`、`MEMORY.md`
-- 工作区级 `skills/`
-- `sub-agents/`
-- `desk-bindings.json`（频道 → 工位的绑定）
-- 每个工位的记忆、任务、事件、工作文件，以及各频道会话区里的历史和日志
-- 每个工位的 `subagent-artifacts/`，其中包含委派完整产出和外部 harness 诊断文件
-
-如使用服务器账号的 `~/.agents/skills/`，需另行备份该目录；它不在 app home 内，恢复后须对活动会话发送 `/reload`。有效的工作区同名技能优先。
-
-workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `write`/`edit` 调用创建或更新（`skill` 工具本身只读），后台记忆管线不会自动写 skill。
-
-为了得到一致快照，应在 daemon 仍运行时先用 `/subagents list running` 检查外部委派，等待需要保留的 run 完成，或显式取消不再需要的 run，然后再停止 daemon 并备份。外部 run 是 detached 进程，单独停止 daemon 不会终止它。同一主机上的 daemon 重启可以按 pid 和产物重新对账；**在途外部 run 不能迁移到另一台主机**，因为持久化 pid 只对原主机有意义。跨主机迁移前必须先把所有 run 结算到终态。
-
-恢复时把文件放回相同的 app home，再启动 Pipiclaw，并依次检查 `/status`、`/model`、`/tasks doctor` 和 `/subagents`。
-
-## 灰度与正式上线建议（Rollout Recommendations）
-
-建议按下面的顺序推进：
-
-1. 自己先在私聊里跑通
-2. 配置 AI Card，确认过程展示正常
-3. 用 `allowFrom` 限制少量测试账号
-4. 观察 1 到 3 天日志和会话效果
-5. 再逐步放开使用范围
-
-## 常见运维问题（Common Operational Issues）
-
-### 首次运行
-
-第一次运行 `pipiclaw` 会在 `${PIPICLAW_HOME:-~/.pipiclaw}` 下生成配置模板，并打印接下来的三步：填 `channel.json` 的 `dingtalk.clientId`、`dingtalk.clientSecret`（钉钉开放平台 → 应用 → 凭证；`cardTemplateId` 可选，用于 AI Card 流式输出），用 `pipiclaw auth login` 或 `models.json` 配置模型，然后再次运行。这一次的退出码是 **0**——生成模板是预期结果，不是错误。之后如果 `channel.json` 仍是 `your-*` 占位值，启动会报出具体字段并以退出码 1 退出。用 systemd / pm2 托管时，不要把第一次运行放进带自动重启的服务里。
-
-启动成功后直接私聊或在群里 @机器人即可。首次运行已创建 `workspace/desk-default/`，每个新频道在第一条获准消息到来时自动绑定到它，无需逐群操作；各频道共享记忆、任务和文件，保留独立会话。`pipiclaw tui` 也默认打开它。当前格式已有其他工位时会补建缺少的 `default`，已有绑定不改动；若 `default` 已被绑定却目录缺失，或已有目录里的 `desk.json` 损坏，则保留故障，避免把原助手替换为空工位。
-
-### 进程启动后立即退出
-
-通常先检查：
-
-- `channel.json` 是否仍保留 `your-*` 占位值
-- 模型凭据是否可用
-- 默认模型是否存在
-- 是否提示 `desk-bindings.json` 无法读取：绑定表损坏时 daemon 拒绝启动，而不是把所有频道当成未绑定
-
-### 机器人能收到消息，但没有正常回复
-
-通常先检查：
-
-- `allowFrom` 是否把测试账号挡住了
-- 机器人回复"本频道目前没有可用的工位"（默认工位 `default` 不可用，或绑定的工位不可用）：在服务器上检查 `workspace/desk-default/`（或 `desk-<name>/`）和 `desk.json`，从备份恢复；运行时不会擅自把已有绑定换成空工位
-- 模型是否真的可用，而不只是配置文件存在
-- AI Card 模板是否有效
-- 钉钉应用的 Stream Mode 是否正常
-
-### 周期事件没有执行
-
-通常先检查：
-
-- 事件文件是否放在正确工位的 `events/` 下（`workspace/desk-<name>/events/`）
-- 事件的 `channelId` 是否绑定在这个工位上（`/desk` 或 `workspace/CHANNELS.md` 可查）；没有绑定时事件历史里会记 `skipped`、原因 `channel_not_bound`
-- 文件名是否为 `.json`
-- `schedule` 是否合法（cron 按主机时区解释；确认主机时区正确）
-- 进程日志里是否出现事件解析失败
-- `${PIPICLAW_HOME:-~/.pipiclaw}/state/events/history.jsonl` 中是否有 `invalid`、`skipped`、`pre_action_blocked` 或 `queue_full` 记录
-
-### 任务没有被自动推进
-
-通常先检查：
-
-- `/tasks show <id>` 看状态、当前活动和在途委派：已暂停、在等你回复、等结果（外部委派是否 ⚠️ 长时间没有输出）、排队中（执行槽满：每工位 3 个、全局 5 个），或预算已经耗尽；"等你回复"不设超时，是在等你
-- `/tasks log <id>` 是否记录了连续空转、单步超时、出错或委派失败；`/tasks doctor` 是否发现手工编辑造成的坏 frontmatter，或"等结果"却没有在途工作（车道可能没在运行）；运行日志里的 `tasks.lane.*`、`tasks.task.*`、`tasks.step.*` 事件是第二现场
-- 预算停止后按回执处理：`steps`、`usd` 可用 `/tasks resume <id> +...` 加码
-- `tools.json` 的 `tools.tasks.enabled` 是否关闭；没有 daemon 时只有 `pipiclaw tui` 打开期间任务才会推进，长期任务应交给常驻 daemon；任务的汇报频道所属渠道没有启用时任务冻结
-
-### 智能体角色没有被正常使用
-
-通常先检查：
-
-- 文件是否放在 `workspace/sub-agents/`
-- frontmatter 是否缺少 `name` 或 `description`
-- 内置角色正文是否为空；外部角色正文允许为空
-- `/subagents roles [name]` 是否显示 discovery warning 或 `unavailable`
-- 内置角色的 `model` 是否能在 Pipiclaw 模型目录中精确解析
-- 外部角色是否错误填写了 `tools`、`cwd`、`maxTurns` 等只适用于内置角色的字段
-- 外部角色的目标二进制是否在 daemon 的 `PATH` 上，而不只是你的交互 shell 中可用
-
-### 外部委派一直运行、失败或没有唤醒
-
-按下面顺序检查：
-
-1. `/subagents show <runId>`：确认状态、实际 argv、工作目录、pid、stderr 尾部和失败原因。
-2. `/subagents output <runId>`：确认是否已经产生部分文本结果。
-3. 查看 `<name>/subagent-artifacts/<runId>/events.jsonl` 与 `stderr.log`。`claude-code` / `codex-cli` / `cursor-cli` / `antigravity-cli` 这类结构化 harness 必须产生可识别的终态事件，只有退出码为 0 但没有终态事件仍会判失败；通用 `exec` 没有事件协议，正常运行时只按退出码判断，因此不能承担 `purpose=verify`。
-4. 检查角色的 `maxWallTimeSec`、目标 CLI 登录状态、模型名和 sandbox 参数。
-5. daemon 重启后，外部进程仍可能存活；runtime 会探测 pid 并在进程结束后从产物补判。内置 run 无法跨进程恢复，会标为 `lost`。
-
-如果只是当前工作已经不再需要，使用 `/subagents cancel <runId>`。`/stop` 不会终止委派。
-
-## 生产环境建议（Production Recommendations）
-
-- 为 Pipiclaw 单独准备运行账号
-- 配置 AI Card，降低观察成本
-- 初期使用 `allowFrom` 做灰度
-- 定期备份 `~/.pipiclaw/`
-- 升级前先看 `CHANGELOG.md` / `CHANGELOG.zh-CN.md`
-- 修改工位的 `events/` 或工作区的 `sub-agents/` 时保留版本管理记录
-- 高权限外部角色尽量使用独立 worktree、最小权限账号和目标 CLI 的 sandbox
-
-## 相关文档（Related Docs）
-
-- 配置项说明：[configuration.md](./configuration.md)
-- 事件、任务台账与 `/tasks` 命令：[events-and-tasks.md](./events-and-tasks.md)
-- 并发模型与容量边界：[scaling-and-concurrency.md](./scaling-and-concurrency.md)
-- 智能体委派、产物与安全边界：[sub-agents.md](./sub-agents.md)
-
-## pi 1.2.0 升级与回退（spec 055）
-
-离线合并门禁是 `npm ci`、四个 pi 包的统一版本图、`npm run check`、
-`npm run test:e2e`、`npm run eval:typecheck`、`npm run build`，并在 Node 22.19.0
-和部署 Node 上检查。真实供应商、OpenAI ChatGPT OAuth、钉钉 AI Card 与 TUI 的
-登录/流/工具/停止/最终投递验收是另外的发布门禁；未验收时不要发布。
-
-上线前暂停新入站及事件/任务驱动，等待 turn、reflect、jobs、外部委派、结算和
-投递排空并记录未完成工作。`/stop` 不取消已派发外部运行。正常关闭 daemon/TUI
-及其它写者后，保存完整一致的 app home 和受影响项目目录快照：包含配置、凭据、
-安装身份、state、workspace、聊天/任务 sessions、等待条件、运行结果、usage、
-memory 游标与投递幂等状态。核对备份权限、校验和、时间和恢复路径。
-
-备份后才做 Azure 字段迁移，再安装固定发布包和匹配 lock。单实例灰度检查首次
-工具、备用请求中输入一次、聊天/任务恢复、正常停止、重启、usage/委派幂等和
-AI Card 完成。通过后逐步恢复入口与调度，始终保持一个 app home 只有一个写者。
-不要把生产快照启动成第二个在线 daemon；旧历史验证和 smoke 使用离线消费者
-或独立测试 home/项目，隔离传输、调度、恢复、投递及项目写目标。
-
-出现首次请求无工具、重复输入/执行/投递/计费、停止后仍发备用请求、断写后故障
-实例仍请求、身份漂移或模型选择错误时立即停止灰度并保存现场：
-
-| 时点 | 回退操作 |
-|---|---|
-| 新版未产生外部副作用 | 关闭全部写者，保存失败现场，恢复升级前完整快照及匹配旧包/lock；需要时恢复项目，再离线核对旧状态后启动 |
-| 已执行工具、委派、任务或投递 | 冻结并保存最新状态，核对项目、结果、receipt、ledger 和幂等标记，选择前向修复或人工恢复方案；不能盲目覆盖旧快照 |
-
-不能只 npm 降级、删 context_edit 或批量手改 session。旧幂等标记可能让已完成的
-工作再次执行或投递；有不可回退的外部效果时优先修复新版。发布版本号及 lock
-顶层版本在发布阶段同步；实施验收与真实发布分别记录。
+| **进程启动后立即退出（Exit 1）** | 1. 检查进程日志：是否在开启 `dingtalk.enabled: true` 时仍保留了 `your-*` 占位符；<br>2. 检查是否有另一个 `pipiclaw` 进程正持有 `state/daemon.lock`，或 `127.0.0.1:8787` 端口被占用；<br>3. 检查 JSON 配置文件是否有语法错误（如多余尾逗号）或 `desk-bindings.json` 损坏。 |
+| **钉钉发消息无响应或无法流式更新** | 1. 检查 `dingtalk.allowFrom` 是否拦截了当前发送者的 `staffId`；<br>2. 检查钉钉后台是否开启了 **Stream 模式**、群聊是否 **@机器人**；<br>3. 若日志频繁出现 `reconnect` / `forced termination`，优先排查宿主机出站网络或代理闪断；<br>4. 发送 `/model` 与普通消息确认模型凭据有效。 |
+| **定时事件到点未触发** | 1. 执行 `/events list` 与 `/events history <name>` 查看是否有 `channel_not_bound`（目标频道未绑定本工位）、`pre_action_blocked`（门控脚本返回非 0）或 `invalid`；<br>2. 确认宿主机系统时区与预期一致（Cron 按主机本地时区解析）；<br>3. 若是任务模板事件，用 `/tasks` 检查是否因上一轮实例未结束而被防重入跳过。 |
+| **后台任务停滞不推进** | 1. 执行 `/tasks show <id>`：确认是否处于 `等你回复`（无超时，需 `/tasks msg <id> ...` 回答）、`已暂停`（超预算或触发守护，用 `/tasks resume <id> +steps 10` 恢复），或汇报是否因频道换绑而暂存（切回工位或 `/tasks adopt <id>` 即可接收；渠道关闭时冻结）；<br>2. 检查是否达到并发槽上限（单工位 3 / 全局 5）正在排队，或未运行常驻 daemon。 |
+| **外部子代理不可用或一直卡住** | 1. 执行 `/subagents roles <name>` 检查是否提示二进制不在服务账号 `PATH` 中或 Frontmatter 字段写错；<br>2. 执行 `/subagents show <runId>` 查看实际 `argv` 与 `stderr` 尾部（排查目标 CLI 登录过期、模型名错误或缺少 `--force` 等权限参数）；不再需要时用 `/subagents cancel <runId>` 终止。 |
+
+---
+
+## 相关阅读
+
+- [配置速查](./configuration.md) · [配置字段参考](./configuration-reference.md)
+- [安全指南](./security.md)
+- [并发与容量参考](./scaling-and-concurrency.md)
+- [历史数据迁移说明](./migrations/README.md)

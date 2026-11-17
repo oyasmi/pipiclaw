@@ -508,7 +508,7 @@ playbook 是模型执行的机制参考，与运行时同一变更落地（spec 
 
 ### D34. 一次性迁移说明 `docs/task-migration.md`
 
-运行时只读当前格式。新增 `docs/task-migration.md`，体例与 [`docs/desk-migration.md`](../../desk-migration.md) 一致：给执行 agent 的任务约定、前提（确认安装版本已实现 064）、停机与备份、按实际数据转换、核验、回退、留下的记录。必须覆盖：
+运行时只读当前格式。新增 `docs/task-migration.md`，体例与 [`docs/desk-migration.md`](../../migrations/desk-migration.md) 一致：给执行 agent 的任务约定、前提（确认安装版本已实现 064）、停机与备份、按实际数据转换、核验、回退、留下的记录。必须覆盖：
 
 | 数据 | 转换 |
 |---|---|

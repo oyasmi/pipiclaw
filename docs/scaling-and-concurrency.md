@@ -33,7 +33,7 @@ Pipiclaw 区分两样东西：**频道（channel）**是消息的地址，**工�
 /desk bind research
 ```
 
-其他私聊和群继续使用原来的工位；新加入的群仍默认使用 `default`。需要切回来时发送 `/desk bind default`，会恢复这个频道之前在默认工位里的会话。切换不会搬移记忆和文件；原工位的后台任务继续推进但汇报暂存（聊天提醒事件暂停），重新绑定后自动送达并恢复。终端可用 `pipiclaw tui --here` 一键打开当前仓库工位，或用 `pipiclaw tui --desk research`（首次加 `--create`）打开指定工位；不再使用的临时工位可用 `/desk archive <名字>` 归档回收。
+其他私聊和群继续使用原来的工位；新加入的群仍默认使用 `default`。需要切回来时发送 `/desk bind default`，会恢复这个频道之前在默认工位里的会话。切换不会搬移记忆和文件；原工位的后台任务继续推进但汇报暂存（聊天提醒事件暂停），重新绑定或 `/tasks adopt <id>` 后自动送达并恢复。终端可用 `pipiclaw tui --here` 一键打开或创建当前仓库工位，或用 `pipiclaw tui --desk research`（首次加 `--create`）打开指定工位；不再使用的临时工位可用 `/desk archive <名字>` 归档回收。
 
 同一工位的所有私聊和群共享长期记忆、任务、事件和文件，独立会话不代表资料保密；需要分开的内容放进另一个工位。把机器人加入新群，就是让该群中获准使用它的人访问同一个助手；发送者范围仍由 `channel.json` 的 `allowFrom` 控制。
 
@@ -67,11 +67,11 @@ Pipiclaw 区分两样东西：**频道（channel）**是消息的地址，**工�
 
 结果送入任务的记录保存在磁盘；步骤结束或进程重启后，尚未消费的输入仍可供后续步骤处理。相关实现见[架构](./architecture.md)。
 
-### 委派写锁
+### 委派读写租约与托管 Worktree
 
-`mutates: write` 的委派会按 `workingDirectory` 的真实路径获取排他写锁。同一目录以及互为父子的目录视为冲突，第二个写 run 会被立即拒绝并返回持锁 runId，不会排队等待。`mutates: read` 不取锁，也不会被写锁阻塞。
+`mutates: write` 的委派按 `workingDirectory` 真实路径持独占写租约，`purpose: verify`（`mutates: read`）持共享读租约；同一目录及互为父子的目录冲突时立即拒绝并返回持锁 `runId`（主会话与任务步骤的 `write` / `edit` 工具同样遵守该租约）。
 
-需要并行实现时，先为每个写 run 创建独立 `git worktree`，再分别传入不同的 `workingDirectory`。写锁只避免 Pipiclaw 自己同时派发两个声明写入的角色；外部进程、其他用户或未如实声明的角色仍可能在同一目录写入。
+在 Git 仓库内需要并行写实现时，直接为写委派传 `worktree: true`，由运行时自动在 `.git/pipiclaw-worktrees/<runId>`（分支 `pipiclaw/<runId>`）分配隔离工作树并在合并后回收。注意租约仅拦截 Pipiclaw 自身的委派与 `write`/`edit` 工具；`bash` 命令、宿主机外部进程或谎报 `mutates: read` 的角色仍可能并发写入。
 
 ### 跨通道共享代码目录
 
@@ -85,9 +85,9 @@ Pipiclaw 区分两样东西：**频道（channel）**是消息的地址，**工�
 
 ## 资源占用与已知瓶颈（Footprint and Known Bottlenecks）
 
-**通常最先遇到的约束是模型 API 和外部 CLI 配额。** 一个活跃通道的一轮对话可能产生多次模型请求；多个频道、内置子智能体和记忆 sidecar 同时活跃时容易触发 provider rate limit。外部 Claude Code / Codex CLI 使用各自账号和限额，Pipiclaw 的主模型限流不会替它们做统一配额管理。
+**通常最先遇到的约束是模型 API 和外部 CLI 配额。** 一个活跃通道的一轮对话可能产生多次模型请求；多个频道、内置子智能体和记忆 sidecar 同时活跃时容易触发 provider rate limit。外部 Claude Code / Codex CLI / Cursor CLI / Antigravity CLI 使用各自账号和限额，Pipiclaw 的主模型限流不会替它们做统一配额管理。
 
-CPU、磁盘 I/O 在个人使用规模下通常不是主瓶颈；内存上每个通道常驻约几 MB 到几十 MB，随对话长度增长。重型外部角色会额外启动完整 coding-agent 进程，其 CPU、内存、子进程和网络占用由目标 CLI 决定。成本可用 `/usage` 查看，但 Codex CLI 不报告成本、`exec` 不报告 token 或成本，报告中的 unknown 不能当成 0。
+CPU、磁盘 I/O 在个人使用规模下通常不是主瓶颈；内存上每个通道常驻约几 MB 到几十 MB，随对话长度增长。重型外部角色会额外启动完整 coding-agent 进程，其 CPU、内存、子进程和网络占用由目标 CLI 决定。成本可用 `/usage` 查看，但 Codex CLI、Cursor CLI、Antigravity CLI 与 `exec` 不报告美元成本，报告中的 unknown 不能当成 0。
 
 **通道 Runner 有空闲 LRU 驱逐。** 单个 daemon 的 Runner 缓存目标上限是 50；创建新 channel 的 Runner 并超过上限时，会优先释放最久未使用且当前空闲的 Runner，忙碌 Runner 不会被中途销毁。释放只清理内存中的 session、订阅和维护状态，持久化的会话、`memory/*.md`、`journal/` 等不受影响。若同时忙碌的通道很多，缓存可暂时超过 50；它们空闲后，会在后续创建新 channel Runner 时再次参与回收。
 

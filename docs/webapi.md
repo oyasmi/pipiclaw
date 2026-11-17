@@ -12,7 +12,7 @@ Web API 是 Pipiclaw 的第二个渠道（与钉钉并列）。它的形状是 *
 
 ## 默认配置与开关
 
-首次初始化 `~/.pipiclaw/channel.json` 时，`webapi` 段**默认已打开**（旧版本的 `channel.json` 结构见[迁移说明](./channel-migration.md)）：
+首次初始化 `~/.pipiclaw/channel.json` 时，`webapi` 段**默认已打开**（旧版本的 `channel.json` 结构见[迁移说明](./migrations/channel-migration.md)）：
 
 ```json
 {
@@ -276,7 +276,7 @@ HTTP 错误体是 `{ "error": { "message", "type", "param", "code" } }`，状态
 
 - **一把 key 的权限等于宿主机上的 shell 权限**（agent 有 `bash`，受[安全模型](./security.md)的路径和命令守卫约束）。给它的人要和给 shell 的人一样可信。本机 socket 的访问范围等于运行 daemon 的系统用户。
 - 因此 key 的 `desks` 是**作用范围，不是隔离边界**：它决定这把 key 的会话绑到哪些工位、`/desk bind` 能去哪里，但 agent 的 `bash` 和文件工具仍能读写宿主机上运行账号可达的一切，包括其他工位。需要真正隔离的调用方，应运行在单独的系统账号和 app home 下。非 loopback 地址不配 TLS 时，daemon 每次启动都会在日志里给出警告。
-- 默认只监听本机 socket；TCP 要显式打开。非 loopback 且不配 `tls` 时是明文 HTTP，key 会明文过网络——只在 TLS 由前置反向代理终止、或可信内网中这样用。
+- 首次初始化默认监听本机 socket 与回环地址 `127.0.0.1:8787`（外部机器无法直连）。非 loopback 且不配 `tls` 时是明文 HTTP，key 会明文过网络——只在 TLS 由前置反向代理终止、或可信内网中这样用。
 - 允许带 `Origin` 头的请求（包括 WebSocket 升级）；HTTP 支持任意来源的 CORS，允许浏览器前端直接调用。loopback TCP 仍校验 `Host`，防 DNS rebinding。
 - `OPTIONS` 预检无需 key，不访问业务数据；实际请求在读请求体**之前**鉴权，失败直接 401。key 只存 SHA-256，比较是常量时间的。
 - 限制：附件合计 20 MiB、请求体约 30.7 MiB、单个请求 30 秒内接收完、最多 64 个连接、TCP 上每把 key 每分钟 300 次。

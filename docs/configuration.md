@@ -1,80 +1,57 @@
-# Pipiclaw 配置速查（Configuration Quickstart）
+# 配置速查（Configuration Quickstart）
 
-这份文档只回答一个问题：**现在该改哪个配置文件**。完整字段见
-[configuration-reference.md](./configuration-reference.md)，运行机制解释见
-[runtime-mechanisms.md](./runtime-mechanisms.md)。
+> **适合谁**：已经装好 Pipiclaw，想快速查清**“我要达成某个目标，最少该改哪个配置文件”**的使用者与维护者。
+> **读完你会得到**：一张表定位 `~/.pipiclaw/` 下 6 个配置文件的分工，以及渠道、模型、联网工具与网络代理的最简配置模板。逐字段完整字典请查 [配置字段参考](./configuration-reference.md)。
 
-## 配置目录
+---
 
-Pipiclaw 默认使用：
+## 一眼看懂配置目录与分工
+
+Pipiclaw 默认将全部配置与数据存放在 `~/.pipiclaw/`（设置环境变量 `PIPICLAW_HOME=/your/path` 可迁移到任意目录）：
 
 ```text
 ~/.pipiclaw/
-├── channel.json
-├── auth.json
-├── models.json
-├── settings.json
-├── tools.json
-├── security.json
-└── workspace/
-    ├── SOUL.md
-    ├── AGENTS.md
-    ├── MEMORY.md
-    ├── ENVIRONMENT.md
-    ├── desk-bindings.json
-    ├── desk-default/       # desk.json；memory/tasks/events 等按需创建
-    ├── skills/
-    └── sub-agents/
+├── channel.json      # 渠道开关与凭据：Web API（默认已开启）与钉钉（按需开启）
+├── auth.json         # 模型凭据：通常由 pipiclaw auth login/logout 自动维护
+├── models.json       # 自定义模型供应商（OpenAI 兼容网关、DeepSeek、本地 Ollama 等）
+├── settings.json     # 产品偏好：默认模型、备用模型、压缩/记忆/日志开关
+├── tools.json        # 内建工具开关：联网搜索/抓取（默认关）、长程任务开关（默认开）
+├── security.json     # 安全策略：命令、路径与出站网络访问守卫
+└── workspace/        # 个人与团队资产：
+    ├── SOUL.md       # 助手身份、语气与回复风格（所有工位共用）
+    ├── AGENTS.md     # 通用工作规则与红线约束（所有工位共用）
+    ├── MEMORY.md     # 管理员维护的跨工位共享背景
+    ├── ENVIRONMENT.md# 本机环境事实记录
+    ├── skills/       # 可复用工作流技能（另支持读取 ~/.agents/skills/）
+    ├── sub-agents/   # 已启用的内置/外部智能体角色文件（*.md）
+    └── desk-default/ # 默认工位（含长期记忆 memory/、日记 journal/、任务 tasks/、事件 events/）
 ```
 
-设置 `PIPICLAW_HOME=/your/path` 后，以上文件都改到该目录下。Pipiclaw 面向 Linux/macOS 等
-POSIX 环境；Windows 请使用 WSL2。
+记住两条核心设计规则，就能省掉大量翻文档时间：
 
-默认目录曾是 `~/.pi/pipiclaw/`。**自动迁移已在 0.9.0 移除**：仍在用旧目录的部署，要么手动把整个目录移到 `~/.pipiclaw/`，要么设 `PIPICLAW_HOME=~/.pi/pipiclaw` 继续用原位置。
+1. **六个 JSON 文件按“谁写它、多久改一次”切分，且创建即收紧为 `0600` 权限**（仅当前系统用户可读写，切勿直接提交到公开 Git 仓库）。
+2. **`settings.json` 只放“产品意图”（模型选择、布尔开关、展示枚举）**，不放后台维护间隔、重试退避等内部算法阈值；已退役的旧键启动时会自动给出提示并忽略，不会静默失效。
 
-## 为什么是六个文件
+### 你想做什么 → 改哪个文件
 
-六个 app 级文件不是按主题切的，是按**所有权生命周期**切的——谁写它、多久变一次、改错了影响什么。
-知道这条规则，就不必记住每个字段在哪：先问"这件事属于下面哪一类"。
-
-| 文件 | 它是什么 | 谁写 / 多久变 |
+| 目标 | 所在文件 / 命令 | 最少要做什么 |
 |---|---|---|
-| `channel.json` | 开哪些渠道（`dingtalk`、`webapi`），以及各渠道自己的凭据和投递行为（钉钉的 `responseMode`、`busyMessageDefault`、`allowFrom`；Web API 的监听与 key） | 部署时填一次，之后基本不动 |
-| `auth.json` | 模型凭据 | 由 `pipiclaw auth login/logout` 写；轮换密钥时变，不建议手改 |
-| `models.json` | 模型与供应商定义（`baseUrl`、`api`、`models[]`） | 接入新网关或新模型时变 |
-| `settings.json` | **产品意图**：默认模型、fallback、模块开关、日志级别 | 调口味时变 |
-| `tools.json` | **能力**：哪些工具存在（web、tasks、rtk、bashInterceptor） | 决定"助手能做什么"时变 |
-| `security.json` | **策略**：命令/路径/网络守卫 | 收紧或放开权限时变 |
+| 登录订阅模型（Claude / Codex / Copilot 等） | 终端命令 | 执行 `pipiclaw auth login`（无头服务器加 `--device-code`），按提示选默认模型 |
+| 用环境变量快速配内置模型 | 环境变量 | 如 `export ANTHROPIC_API_KEY=sk-...` 或 `export OPENAI_API_KEY=sk-...` |
+| 接入国内大模型 / OpenAI 兼容网关 / Ollama | `models.json` + `settings.json` | 在 `models.json` 定义 provider，在 `settings.json` 填 `defaultProvider` + `defaultModel` |
+| 接入钉钉机器人 | `channel.json` 的 `dingtalk` 段 | `enabled` 设为 `true`，填 `clientId` 与 `clientSecret`（推荐补上 `cardTemplateId`） |
+| 管理本机或远程 Web API 密钥 | 终端命令 | `pipiclaw webapi key add <名称>`（在线热生效，无需重启服务） |
+| 开启联网搜索与网页读取 | `tools.json` | 将 `tools.web.enable` 设为 `true`（默认免 Key 用 DuckDuckGo） |
+| 让大模型请求走代理（不影响钉钉直连） | 环境变量 `PIPICLAW_PROXY` | `export PIPICLAW_PROXY=http://127.0.0.1:7890` |
+| 收紧或放宽文件/命令访问边界 | `security.json` | 调整 `pathGuard`、`commandGuard` 或 `networkGuard`（详见 [安全指南](./security.md)） |
+| 定制助手说话语气或通用研发规矩 | `workspace/SOUL.md` / `AGENTS.md` | 直接编辑 Markdown，新建会话或发送 `/reload` 后生效 |
+| 接入本机 Claude Code / Codex / Cursor / Antigravity | `workspace/sub-agents/*.md` | 从安装包 `examples/sub-agents/agents/` 复制所需角色文件（详见 [智能体委派](./sub-agents.md)） |
 
-两条由此推出的规则，可以省掉很多翻文档的时间：
+---
 
-- **`settings.json` 只收布尔、枚举和模型引用。** 找不到 app 级算法阈值（维护间隔、退避、置信度门槛）是正常的——它们是代码常量；单项任务的预算在任务契约中设置。已退休的键列在 `RETIRED_SETTINGS_KEYS` 里，启动时会警告，不会静默失效。
-- **六个文件创建即 `0600`**，启动时还会收紧已存在的宽权限文件。它们都可能含密钥或策略，不要进版本库。
+## 1. 渠道配置（`channel.json`）
 
-`compaction.enabled: false` 关闭后台准备及自动会话压缩，手动 `/compact` 仍可用。后台摘要期间仍可继续对话，完成后仅在请求或工具批次边界采用；接近硬预算才等待。压缩采用独立的低延迟摘要设置，不沿用主会话的 thinking 档位；总期限、无输出期限和摘要输出上限属于内部常量。`memoryMaintenance.enabled: false` 只关闭空闲定时反思；压缩前已落盘的记忆工作仍会异步完成或在重启后恢复。
-
-workspace 下的文件是另一类：它们是给模型读的**内容**（身份、规则、记忆、角色、技能），不是运行时配置，身份与规则按现有资源加载流程生效；技能的刷新方式见下表及技能配置手册。
-
-## 先改哪一个
-
-| 目标 | 文件 | 最少要改什么 |
-|---|---|---|
-| 接入钉钉 | `channel.json` 的 `dingtalk` 段 | `clientId`、`clientSecret`；`robotCode` 可留空；`cardTemplateId` 推荐配置 |
-| 配模型凭据 | `auth.json` 或环境变量 | Anthropic 默认用 `ANTHROPIC_API_KEY` 或 `auth.json.anthropic.key` |
-| 自定义模型 | `models.json` | provider 的 `baseUrl`、`api`、`apiKey`、`models[].id` |
-| 选默认模型 | `settings.json` | `defaultProvider` + `defaultModel` |
-| 开网页工具 | `tools.json` | `tools.web.enable: true`，再配置搜索 provider |
-| 关/开长程任务 | `tools.json` | `tools.tasks.enabled` |
-| 调安全策略 | `security.json` | `commandGuard`、`pathGuard`、`networkGuard`、`audit` |
-| 改助手风格 | `workspace/SOUL.md` | 身份、语气、默认语言 |
-| 改工作规则 | `workspace/AGENTS.md` | 团队规则、安全边界、项目工作流 |
-| 加可复用角色 | `workspace/sub-agents/*.md` | `runtime: internal` 或 `external`、用途描述、权限声明与 system prompt |
-| 加可复用流程 | `workspace/skills/` 或 `~/.agents/skills/` | 有效工作区同名技能优先；默认在工作区创建，外部修改后发送 `/reload` |
-| 让 LLM 请求走代理 | 环境变量 `PIPICLAW_PROXY` | 见下方「LLM 请求走代理」 |
-
-## 渠道默认与最小配置
-
-首次初始化 `~/.pipiclaw/channel.json` 时，**默认已启用 `webapi`**（同时监听本机 Socket 与 `127.0.0.1:8787`，并自动生成一把 `default` 访问密钥在终端展示一次），`dingtalk` 默认关闭：
+首次初始化时，**`webapi` 默认已开启**（本机 Unix Socket + `127.0.0.1:8787` + 自动生成一把 `default` 密钥），`dingtalk` 默认关闭：
 
 ```json
 {
@@ -102,114 +79,73 @@ workspace 下的文件是另一类：它们是给模型读的**内容**（身份
 }
 ```
 
-要点：
+- **两段至少开启一个**；`enabled: false` 的段既不校验内部字段，也不加载任何代码或监听端口。
+- **开启钉钉**：将 `dingtalk.enabled` 设为 `true`，填入真实的 `clientId` 与 `clientSecret`（保留任何 `your-*` 占位值都会拒绝启动并提示具体字段）。`robotCode` 留空自动复用 `clientId`；`cardTemplateId` 留空可先用普通消息跑通，正式使用推荐配置 AI Card 模板；`allowFrom: []` 允许应用可见范围成员对话，灰度或自用可填钉钉 `staffId`。
+- **调整 Web API**：只用终端 `pipiclaw tui`、不需要 HTTP 端口时，可将 `webapi.tcp` 设为 `null`；暴露到内网/公网及 SDK 调用方式见 [Web API 手册](./webapi.md)。
 
-- `dingtalk` 和 `webapi` 两段各有 `enabled` 开关，至少打开一个；关闭的一段不会被检查，也不加载代码。Web API 的详细字段见 [Web API](./webapi.md)。
-- 接入钉钉时，将 `dingtalk.enabled` 改为 `true`，硬性必填只有 `clientId` 和 `clientSecret`。
-- `robotCode` 留空时回退到 `clientId`。
-- `cardTemplateId` 留空也能工作，但不会使用 AI Card；正式使用建议补上。
-- `allowFrom: []` 或省略表示允许所有发送者；灰度时填 staff ID。
-- `busyMessageDefault` 默认 `"steer"`，也可设 `"followUp"` / `"followup"`。
-- `responseMode` 默认 `"full_progress_then_plain_final"`：先显示等待卡，再累积进度，较长时收短后继续；有进度时结论另发，快速答复可直接写入等待卡。另有滚动进度与只显示最终卡片的模式，见[交互指南](./interaction-and-commands.md#钉钉中的输出形态)。
+---
 
-启用 `dingtalk` 时，保留任何 `your-*` 占位值都会让启动检查失败并明确指出需替换的字段。
+## 2. 模型配置（`auth.json` / `models.json` / `settings.json`）
 
-## 模型配置
-
-### Anthropic 默认模型
-
-`models.json` 保持默认空 provider：
-
-```json
-{
-  "providers": {}
-}
-```
-
-凭据用环境变量：
+### 场景 A：订阅账号登录或官方 API Key
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+pipiclaw auth status                 # 查看所有内置供应商配置状态
+pipiclaw auth login                  # 交互式选择 OAuth 订阅或 API Key，登录后可直接设为默认模型
+pipiclaw auth login --device-code    # SSH 远程无浏览器环境：打印授权链接与验证码
+pipiclaw auth logout openai-codex    # 移除已保存凭据
 ```
 
-或写入 `auth.json`：
+内置供应商也支持直接读环境变量（如 `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`OPENROUTER_API_KEY`）。在已有会话运行时更新了凭据，发送 `/reload` 或重启服务即可生效。
 
-```json
-{
-  "anthropic": { "type": "api_key", "key": "sk-ant-..." }
-}
-```
+### 场景 B：OpenAI 兼容网关 / 国内大模型 / 本地 Ollama
 
-### OpenAI-compatible 网关
-
-`models.json`：
+1. 在 `models.json` 的 `providers` 中添加供应商（初始化文件内已自带 `_examples` 参考）：
 
 ```json
 {
   "providers": {
     "my-gateway": {
-      "baseUrl": "https://llm.example.com/v1",
+      "baseUrl": "https://api.deepseek.com/v1",
       "api": "openai-completions",
-      "apiKey": "MY_GATEWAY_API_KEY",
+      "apiKey": "DEEPSEEK_API_KEY",
       "compat": {
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false
       },
-      "models": [{ "id": "gpt-4.1" }]
+      "models": [
+        { "id": "deepseek-chat" },
+        { "id": "deepseek-reasoner", "reasoning": true }
+      ]
     }
   }
 }
 ```
 
-`apiKey` 可以是真实 key、环境变量名，或 `!command`。不想把 key 放进 `models.json` 时，在 `auth.json` 写同名 provider 凭据。
+> `apiKey` 支持三种写法：**环境变量名**（推荐，如 `"DEEPSEEK_API_KEY"`）、**字面量密钥**（如 `"sk-..."`）或 **命令输出**（如 `"!op read ..."`）。本地 Ollama 可写 `"baseUrl": "http://127.0.0.1:11434/v1"`、`"apiKey": "ollama"`。
 
-设置默认模型：
+2. 在 `settings.json` 中指定默认模型（及可选的故障自动回退备用模型）：
 
 ```json
 {
   "defaultProvider": "my-gateway",
-  "defaultModel": "gpt-4.1",
-  "defaultThinkingLevel": "medium"
+  "defaultModel": "deepseek-chat",
+  "defaultThinkingLevel": "medium",
+  "fallbackModel": null
 }
 ```
 
-### 订阅登录（OAuth provider）
+---
 
-部分 provider 用订阅账号登录而不是 API key（`openai-codex` = ChatGPT Plus/Pro、`anthropic` = Claude
-Pro/Max，以及 `github-copilot`、`kimi-coding`、`xai`、`openrouter` 等，取决于 SDK 内置的 provider
-目录）。这类登录只在独立命令 `pipiclaw auth` 里做——钉钉端不提供登录入口，TUI 也不内嵌登录流程。
+## 3. 联网搜索与内建工具（`tools.json`）
 
-```bash
-pipiclaw auth status                 # 列出每个 provider 的配置状态、凭据类型、来源
-pipiclaw auth login                  # 交互式：先选认证方式，再选 provider
-pipiclaw auth login openai-codex     # 直接指定 provider（id 或名字，大小写不敏感）
-pipiclaw auth logout openai-codex    # 删除已存凭据（会二次确认，--yes 跳过）
-```
-
-凭据落在 `auth.json`（`~/.pipiclaw/auth.json`，`PIPICLAW_HOME` 会跟随），与手填的 API key 同文件同权限
-（0600）。
-
-无头服务器（SSH 上去，没有本地浏览器）：优先 `pipiclaw auth login --device-code`，在手机或本地浏览器上
-打开打印出的 URL 输入用户码，服务器端轮询即可，不需要占用回调端口；一定要走浏览器流的话，用
-`ssh -L 1455:127.0.0.1:1455 …` 转发再打开打印出的 URL。
-
-**其它进程不会自动看到新凭据**：一次 `pipiclaw auth login` 之后，正在运行的钉钉守护进程或 TUI 会话
-仍然用登录前读到的那份 auth.json 快照，必须重启才能用上新凭据；`pipiclaw auth status` 也会复述这一点。
-
-Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 WebSocket transport，只认标准
-`HTTP_PROXY`/`HTTPS_PROXY`（不认 `PIPICLAW_PROXY`，见下方「已知不覆盖」），登录本身走 `fetch`、受
-`PIPICLAW_PROXY` 管辖，但登录成功不等于对话请求也走了代理——只设了 `PIPICLAW_PROXY` 时,
-`pipiclaw auth login` 结束时会给出告警。
-
-## 内建工具
-
-`tools.json` 的当前 bootstrap 模板等价于：
+文件读写（`read`/`write`/`edit`/`grep`/`glob`）、命令与后台作业（`bash`/`job`）、记忆、技能、定时事件与智能体委派工具均为**核心恒开能力**。`tools.json` 主要控制**联网工具**与**后台长程任务总开关**：
 
 ```json
 {
   "tools": {
     "web": {
-      "enable": false,
+      "enable": true,
       "proxy": null,
       "search": {
         "provider": "duckduckgo",
@@ -220,82 +156,41 @@ Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 Web
     "tasks": {
       "enabled": true
     }
-  },
-  "_examples": {
-    "proxy": "http://127.0.0.1:7890"
   }
 }
 ```
 
-恒开、无 `tools.json` 开关的核心工具包括：`read`、`write`、`edit`、`grep`、`glob`、`bash`、`job`、`session_search`、`memory_save`、`memory_search`、`memory_forget`、`skill`、`event_manage`。`send_media` 由传输层能力决定。
+- 将 `tools.web.enable` 改为 `true` 即可启用 `web_search` 与 `web_fetch`。
+- 搜索 `provider` 支持 `duckduckgo`（默认免 Key）、`tavily`（填 `apiKey`）、`jina`（填 `apiKey`）与 `searxng`（填 `baseUrl`）。
 
-`subagent`、`subagent_list` 和 `subagent_run` 也恒开，只提供给主智能体。角色是否存在、能否使用由 `workspace/sub-agents/*.md` 决定；外部角色还要求目标 CLI 在 daemon 的 `PATH` 中可用。角色字段、推荐模板和安全边界见 [sub-agents.md](./sub-agents.md)。
+---
 
-启用 web 工具：
+## 4. 让大模型请求走代理（`PIPICLAW_PROXY`）
 
-```json
-{
-  "tools": {
-    "web": {
-      "enable": true,
-      "search": {
-        "provider": "duckduckgo"
-      }
-    }
-  }
-}
-```
-
-SearXNG 也必须打开总开关：
-
-```json
-{
-  "tools": {
-    "web": {
-      "enable": true,
-      "search": {
-        "provider": "searxng",
-        "baseUrl": "https://searx.example"
-      }
-    }
-  }
-}
-```
-
-## LLM 请求走代理
-
-`tools.json` 里的 `tools.web.proxy` 只管 `web_search`/`web_fetch` 这两个工具的出站请求。**主智能体、内置子智能体和记忆维护 sidecar 发往模型 API 的请求（含 OAuth 刷新、模型目录拉取）默认直连，不受 `tools.web.proxy` 影响**——Node 内置的 `fetch` 不读任何 `*_PROXY` 环境变量，Anthropic/OpenAI/Mistral 等 SDK 也都基于它。要让这部分请求走代理，用环境变量：
+Node.js 内置 `fetch` 默认不读系统代理变量；而如果直接设全局 `HTTP_PROXY` / `HTTPS_PROXY`，又会把钉钉的国内 HTTP 请求一并代理。因此**推荐用专用变量 `PIPICLAW_PROXY` 只代理大模型请求**：
 
 ```bash
 export PIPICLAW_PROXY=http://127.0.0.1:7890
-# 可选：这个代理不代理的目标（逗号分隔，支持 host、host:port、*.suffix）
-export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
+# 可选：跳过内网或国内直连域名
+export PIPICLAW_NO_PROXY=localhost,127.0.0.1,internal.example.com,10.0.0.0/8
 ```
 
-只支持 `http://`/`https://` 代理 URL，**不支持 `socks5://`**：配了 SOCKS 地址会在启动日志里警告，并保持直连，不会静默失败。
-
-外部 Claude Code / Codex / exec 进程不走 Pipiclaw 的模型客户端。它们继承 daemon 环境，但是否识别 `PIPICLAW_PROXY`、标准代理变量或自己的配置文件由目标 CLI 决定；不要因为主智能体已能联网就假设外部角色也已配置完成。
-
-### 和标准 `HTTP_PROXY`/`HTTPS_PROXY` 的关系
-
-| 设置 | LLM 请求（主智能体、内置子智能体、记忆 sidecar） | 钉钉 HTTP API（发消息、卡片流式） | 钉钉 WebSocket 长连接 |
+| 环境变量组合 | 大模型 API 请求 | 钉钉 HTTP 接口 | 网页工具（`web_search`/`web_fetch`） |
 |---|---|---|---|
-| 只设 `PIPICLAW_PROXY` | 走代理 | 直连 | 直连 |
-| 只设标准 `HTTP_PROXY`/`HTTPS_PROXY` | 走代理 | 走代理（axios 自己也读这两个变量） | 直连（`ws` 不读代理变量） |
-| 两者都设 | `PIPICLAW_PROXY` 生效，标准变量被忽略 | 走代理 | 直连 |
+| 只设 `PIPICLAW_PROXY`（推荐） | 走 `PIPICLAW_PROXY` | 国内直连 | 直连（除非另设 `tools.web.proxy`） |
+| 只设 `HTTP_PROXY` / `HTTPS_PROXY` | 走该代理 | 走该代理（WebSocket 仍直连） | 走该代理 |
+| 两者都设 | `PIPICLAW_PROXY` 优先 | 走 `HTTP_PROXY`/`HTTPS_PROXY` | `tools.web.proxy` 优先，否则走标准代理 |
 
-`PIPICLAW_PROXY` 是独立变量，不是巧合：钉钉的 axios 客户端会自己读标准 `HTTP_PROXY`/`HTTPS_PROXY`，如果只想让模型请求走代理、钉钉直连，就必须用 `PIPICLAW_PROXY`，否则设标准变量会把钉钉的 HTTP 调用也捎带代理（而它的 WebSocket 连接依然直连，变成一半走一半不走）。bash 工具里的子进程（`curl`、`npm` 等）会继承进程环境，因此仍然遵循标准 `HTTP_PROXY`/`HTTPS_PROXY`。
+注意：
+- `PIPICLAW_PROXY` 仅支持 `http://` 与 `https://` 代理地址（不支持 `socks5://`，配错会在启动时给出警告）。
+- **OpenAI Codex 订阅登录与 Bedrock 例外**：Codex 对话底层使用独立 WebSocket 客户端，仅识别标准 `HTTPS_PROXY` / `HTTP_PROXY`（若只设了 `PIPICLAW_PROXY`，`pipiclaw auth login` 结束时会主动提醒）。
+- 外部 Claude Code / Codex / Cursor / Antigravity 进程作为独立 CLI 运行，是否走代理遵循各 CLI 自身的环境变量与配置。
 
-标准变量按惯例大小写皆可（`HTTPS_PROXY`/`https_proxy`），但**不识别 `ALL_PROXY`**——只认 `HTTP_PROXY`/`HTTPS_PROXY`。`PIPICLAW_NO_PROXY` 未设置时会回落到标准 `NO_PROXY`/`no_proxy`。
+---
 
-### 已知不覆盖
+## 5. 安全守卫默认策略（`security.json`）
 
-- Bedrock 和 OpenAI Codex 的 WebSocket transport 走独立的 HTTP 客户端，只认标准 `HTTP_PROXY`/`HTTPS_PROXY`（也不支持 SOCKS），不认 `PIPICLAW_PROXY`。
-- `tools.web.proxy` 反过来也不受 `PIPICLAW_PROXY` 影响，两者互不联动，按各自的意图独立配置。
-
-## 安全策略
-
-`security.json` 的首次初始化模板会开启 command/path guard，并关闭 network guard：
+首次初始化生成的 `security.json` 默认开启命令守卫（拦截破坏性命令与提权）和路径守卫（拦截 `~/.ssh`、系统敏感文件与云凭据目录），并关闭出站网络守卫（便于本地开发访问内网或本地模型）：
 
 ```json
 {
@@ -305,55 +200,13 @@ export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
 }
 ```
 
-没有配置文件时，代码默认会开启 network guard；但正常用户首次启动会生成上面的模板，所以**新初始化实例的实际 web 请求网络守卫默认关闭**。需要拦截 localhost、metadata service、私网地址和重定向目标时，显式设置：
+在多服务共用的云主机上开启联网工具时，建议将 `networkGuard.enabled` 设为 `true` 以拦截对本机回环、云厂商 Metadata 与私网地址的 SSRF 请求。完整规则与放行模板见 [安全指南](./security.md)。
 
-```json
-{
-  "networkGuard": {
-    "enabled": true,
-    "allowedHosts": [],
-    "allowedCidrs": [],
-    "maxRedirects": 5
-  }
-}
-```
-
-完整安全字段和边界见 [security.md](./security.md)。
-
-## 常见场景
-
-| 场景 | 建议路径 |
-|---|---|
-| 先跑通第一条消息 | 只补 `channel.json` 的 `dingtalk` 字段和一个可用模型凭据；AI Card 可先留空 |
-| 已有企业 LLM 网关 | 在 `models.json` 定义 provider，在 `settings.json` 固定默认模型 |
-| 本地 Ollama | `models.json` 定义本地 provider；如启用 `networkGuard`，把本地地址加入 allow |
-| 控制后台记忆成本 | 保留 `memoryMaintenance.enabled: true`，优先关闭 `sessionSearch.summarizeWithModel`；`memoryRecall.*` 已随 spec 050 退役 |
-| 多用户灰度 | `channel.json` 的 `dingtalk.allowFrom` 填 staff ID 列表 |
-| 长期 daemon | 用 systemd/pm2/supervisor；日志和账本默认落在 `state/` |
-| 部署环境无法直连模型 API | 设环境变量 `PIPICLAW_PROXY`（只代理 LLM 请求，钉钉不受影响），见「LLM 请求走代理」 |
+---
 
 ## 相关文档
 
-- 完整字段：[configuration-reference.md](./configuration-reference.md)
-- 运行机制：[runtime-mechanisms.md](./runtime-mechanisms.md)
-- 工具清单：[tools.md](./tools.md)
-- 交互入口与命令：[interaction-and-commands.md](./interaction-and-commands.md)
-- 智能体角色与外部 CLI：[sub-agents.md](./sub-agents.md)
-- Workspace skills：[skills.md](./skills.md)
-- 安全策略：[security.md](./security.md)
-- 部署运维：[deployment-and-operations.md](./deployment-and-operations.md)
-
-## pi 1.2.0 升级：安装身份与 Azure
-
-现有 API key 和其它 OAuth 不要求重新登录。选择 OpenAI 的 ChatGPT OAuth 时，
-`pipiclaw auth login openai --oauth` 在已解析的应用目录首次创建
-`state/auth/identity.json`（版本 1、安装 UUID），再启动授权。该文件不属于 settings，
-不写入 `~/.pi`；status/logout、API key 和普通启动不会创建它。
-新建目录权限为 `0700`，新建文件为 `0600`；已有文件损坏或无法访问时明确失败，
-部署者应检查存储并从备份恢复，不能删除后随意换身份。迁移同一安装时保留此文件；
-独立安装和 smoke 测试使用独立应用目录，各自生成身份。真实 OAuth 登录、重登、
-重启流式调用和取消仍须在发布前验收，离线测试不代表供应商已接受认证。
-
-仅使用旧内置 Azure 身份的部署需要迁移，先停机备份，再按
-[配置参考的字段清单](./configuration-reference.md#pi-120-azure-字段迁移)处理。
-无 Azure 配置无需改数据；不要全局替换 `azure-openai-responses`。
+- 全量配置项与默认值字典：[配置字段参考](./configuration-reference.md)
+- 新手端到端跑通教程：[快速上手指南](./quickstart.md)
+- 常驻托管、备份与排障：[部署与运维指南](./deployment-and-operations.md)
+- 旧版本存储结构或上游 SDK 升级迁移：[升级与迁移说明](./migrations/README.md)

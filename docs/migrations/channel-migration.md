@@ -51,7 +51,7 @@
 
 目标版本移除了内置 Brave 搜索。检查 app home 的 `tools.json`；如果 `tools.web.search.provider` 是 `brave`，按部署需要改为 `duckduckgo`、`tavily`、`jina` 或 `searxng`。默认的 `duckduckgo` 不需要 API key；选择 `tavily` 或 `jina` 时填入对应服务的 `apiKey`，选择 `searxng` 时填入 `baseUrl`。删除不再使用的 Brave key（包括 `_examples` 中的占位示例），保留其他配置和文件的 `0600` 权限，且不要在报告中输出凭据。`tools.web.enable` 保持原值；若搜索已启用，确认所选服务在部署网络中可访问。
 
-若未调整，旧的 `brave` 值会按未知 provider 记录配置警告，并在内存中使用默认的 `duckduckgo`；运行时不会改写旧文件。完整字段见 [配置参考](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
+若未调整，旧的 `brave` 值会按未知 provider 记录配置警告，并在内存中使用默认的 `duckduckgo`；运行时不会改写旧文件。完整字段见 [配置参考](../configuration-reference.md#6-toolsjson内建工具与任务开关)。
 
 ## 4. 校验
 
@@ -69,4 +69,4 @@
 
 ## 6. 演练记录
 
-本版本的演练过程与结果见 [acceptance.md](./specs/061-channel-plane/acceptance.md)。
+本版本的演练过程与结果见 [acceptance.md](../specs/061-channel-plane/acceptance.md)。

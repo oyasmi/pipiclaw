@@ -55,7 +55,7 @@ updated: 2026-09-04
 
 自动学到的日常知识可以先进入 30 天观察期，后续反思确认相关后转正；没有转正的条目在到期后的下一次反思前清理，不保证到日立即停止读取。用户明确保存的记忆不受观察期清理影响。
 
-后台维护先过**本地确定性闸门**（是否空闲、距上次多久、素材是否有意义）。闸门不放行就完全不调用模型，因此空闲的实例不会持续烧 token。默认间隔见 [deployment-and-operations.md](./deployment-and-operations.md#内置记忆维护任务memory-maintenance-scheduler)。
+后台维护先过**本地确定性闸门**（是否空闲、距上次多久、素材是否有意义）。闸门不放行就完全不调用模型，因此空闲的实例不会持续烧 token。默认间隔（20 分钟最小间隔、频道静默满 10 分钟）见 [运行机制详解](./runtime-mechanisms.md#记忆何时整理)。
 
 ## 共享背景：管理员的入口
 
@@ -86,6 +86,6 @@ Pipiclaw 不会自动把工位记忆升格到这里。通用文件工具能否�
 
 - 实现结构、存储格式、反思 pass、迁移细节：[architecture.md](./architecture.md) 的“记忆子系统”
 - 记忆相关的可配开关与已退役字段：[configuration.md](./configuration.md)
-- 后台维护任务与运维排障：[deployment-and-operations.md](./deployment-and-operations.md#内置记忆维护任务memory-maintenance-scheduler)
+- 后台整理机制与触发条件：[runtime-mechanisms.md](./runtime-mechanisms.md#记忆何时整理)
 - 记忆相关工具：[tools.md](./tools.md#记忆与知识类)
 - agent 侧"该写到哪一层"的纪律：[runtime-playbooks.md](./runtime-playbooks.md)

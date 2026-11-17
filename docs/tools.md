@@ -68,7 +68,7 @@
 
 ## 网页工具（`web_search` / `web_fetch`）
 
-默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（tavily / jina / searxng / duckduckgo，默认 duckduckgo）。抓取有字符数、响应体积、超时等上限。`web_fetch` 把一次抓取缓存为快照，`offset` 在同一快照内分页续读（快照过期后 `offset>0` 会要求从 0 重取而不是跨版本拼接），`refresh: true` 绕过缓存重抓；返回文本会分别标注"本页没显示完"和"源站没取全"，并给出重定向后的最终 URL。PDF 等二进制下载会被拒绝并提示先下载再 `read`。完整字段见 [configuration-reference.md](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
+默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（tavily / jina / searxng / duckduckgo，默认 duckduckgo）。抓取有字符数、响应体积、超时等上限。`web_fetch` 把一次抓取缓存为快照，`offset` 在同一快照内分页续读（快照过期后 `offset>0` 会要求从 0 重取而不是跨版本拼接），`refresh: true` 绕过缓存重抓；返回文本会分别标注"本页没显示完"和"源站没取全"，并给出重定向后的最终 URL。PDF 等二进制下载会被拒绝并提示先下载再 `read`。完整字段见 [configuration-reference.md](./configuration-reference.md#6-toolsjson内建工具与任务开关)。
 
 出站网络同样受 `security.json` 的网络守卫约束。首次初始化生成的 `security.json` 模板里 `networkGuard.enabled` 为 `false`；若删除该字段或自行从内置默认开始，则 network guard 默认开启。
 
@@ -103,14 +103,14 @@
 
 ## 智能体委派（`subagent` / `subagent_list` / `subagent_run`）
 
-`subagent` 把一项聚焦工作交给**已配置**的角色，必填 `agent`、`task`，可选 `workingDirectory`、`purpose`、`item`。工具、模型、预算和上下文策略来自角色文件，调用侧不能覆盖。`item` 仅在任务步骤中有效，所属任务自动绑定；聊天中的委派不绑定任务。`subagent_inline` 用于没有合适角色时的一次性内置执行者，携带 `systemPrompt` 和所需的工具、模型、预算档等参数；可用 `tools.subagentInline.enabled: false` 关闭（默认开）。
+`subagent` 把一项聚焦工作交给**已配置**的角色，必填 `agent`、`task`，可选 `workingDirectory`、`worktree`（Git 仓库写委派自动建 `.git/pipiclaw-worktrees/<runId>` 隔离分支）、`purpose`、`item`。工具、模型、预算和上下文策略来自角色文件，调用侧不能覆盖。`item` 仅在任务步骤中有效，所属任务自动绑定；聊天中的委派不绑定任务。`subagent_inline` 用于没有合适角色时的一次性内置执行者，携带 `systemPrompt` 和所需的工具、模型、预算档等参数；可用 `tools.subagentInline.enabled: false` 关闭（默认开）。
 
 - **内置角色**使用 Pipiclaw 的模型和工具，聊天共享 10 秒快速返回窗口，超过后转为后台运行；任务步骤内确认启动后立即异步返回。
-- **外部角色**启动 Claude Code、Codex CLI、Cursor CLI 或脚本，确认启动后立即返回 `runId`。聊天委派完成时通知发起频道，任务委派直接将结果送入任务。长期后台工作需要常驻 daemon；终端内嵌运行时只在终端打开期间跟踪与通知。
+- **外部角色**启动 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI 或脚本，确认启动后立即返回 `runId`。聊天委派完成时通知发起频道，任务委派直接将结果送入任务。长期后台工作需要常驻 daemon；终端内嵌运行时只在终端打开期间跟踪与通知。
 
 委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。
 
-`subagent_list` 给出本工位委派 run 的快照；`subagent_run` 对单个 run 执行 `show`（自诊断）/`cancel`（终止）/`follow_up`（在支持续接且有会话标识的已结束 Claude Code / Codex / Cursor run 上开启新一轮）。用户侧不必经过模型，可直接使用 `/subagents` 命令。
+`subagent_list` 给出本工位委派 run 的快照；`subagent_run` 对单个 run 执行 `show`（自诊断）/`cancel`（终止）/`follow_up`（在支持续接且有会话标识的已结束 Claude Code / Codex / Cursor / Antigravity run 上开启新一轮）。用户侧不必经过模型，可直接使用 `/subagents` 命令。
 
 完整角色格式、并发、产物、验收和安全边界见 [sub-agents.md](./sub-agents.md)。
 

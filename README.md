@@ -75,7 +75,7 @@
 
 ## 快速开始
 
-按顺序只需几分钟：**终端 60 秒跑通 → 5 分钟接入钉钉 → 按需接入外部 Coding Agent → 后台常驻运行**。
+按顺序只需几分钟：**终端 60 秒跑通 → 按需接入钉钉 → 按需挂载外部 Coding Agent → 后台常驻运行**。（需要国内模型网关直接复制模板、`curl` 接口验证与钉钉后台逐项避坑说明？可直接阅读完整 **[快速上手指南（docs/quickstart.md）](https://github.com/oyasmi/pipiclaw/blob/master/docs/quickstart.md)**。）
 
 <details>
 <summary>💡 <b>偷懒捷径：复制这段话给你本机的 Claude Code / Codex / Cursor，让它帮你装好</b></summary>
@@ -377,6 +377,7 @@ Pipiclaw 本身不收取任何中转费用，它直接调用你本机已安装�
 
 | 你想做什么 | 对应指南 |
 |---|---|
+| ⚡ 从零安装、配模型（含国内网关）、测 API 与钉钉避坑 | [快速上手指南（Quick Start）](https://github.com/oyasmi/pipiclaw/blob/master/docs/quickstart.md) |
 | 💬 玩转私聊、群聊、AI Card 输出模式与斜杠命令 | [交互与命令](https://github.com/oyasmi/pipiclaw/blob/master/docs/interaction-and-commands.md) |
 | ⚙️ 配置自定义模型、中转网关、网络代理与联网搜索 | [配置速查](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md) · [配置字段参考](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration-reference.md) |
 | 🤝 接入与定制 Claude Code / Codex / Cursor / Antigravity | [智能体委派指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/sub-agents.md) · [角色示例库](https://github.com/oyasmi/pipiclaw/blob/master/examples/sub-agents/README.md) |

@@ -1,432 +1,80 @@
-# Pipiclaw 安全文档（Security Guide）
+# 安全指南（Security Guide）
 
-> **读者**：要决定这个实例能碰哪些文件、能跑哪些命令的管理员。
-> **前置**：已完成 [README](../README.md) 的安装；配置全貌见 [configuration.md](./configuration.md)。
-> **读完你能**：说出默认拦截了什么、如何按需放行或收紧、以及这套守卫的边界在哪。
+> **适合谁**：决定 Pipiclaw 实例允许访问哪些目录、执行哪些命令、暴露哪些网络端口，以及如何审查外部 Coding Agent 权限边界的使用者与管理员。
+> **读完你会得到**：五层安全边界的清晰职责、默认拦截清单、`~/.pipiclaw/security.json` 实用配置模板，以及 Web API 与外部 CLI 的真实信任边界。
 
-这份文档讲清楚默认策略是什么、哪些地方仍然有边界，以及如何通过 `~/.pipiclaw/security.json` 调整策略。长期部署的运维配套见 [deployment-and-operations.md](./deployment-and-operations.md)。
+---
 
-## 总览（Overview）
+## 1. 五道安全防线总览
 
-Pipiclaw 的安全控制分成四个需要分别理解的部分：
+理解 Pipiclaw 安全模型最关键的一条原则是：**区分“内置工具层守卫”与“外部子进程宿主边界”**。
 
-1. 命令防护（command guard）
-   作用于 `bash` 工具，拦截明显高风险的命令
+| 防线 | 约束对象 | 配置位置 | 能力与边界 |
+|---|---|---|---|
+| **命令守卫（Command Guard）** | 主智能体与内置子代理的 `bash` 工具 | `security.json → commandGuard` | 有界 Shell 语法解析，递归检查链式命令与 `$()` 子命令，拦截破坏性操作、提权与混淆执行 |
+| **路径守卫（Path Guard）** | `read` / `write` / `edit` / `send_media` 工具 | `security.json → pathGuard` | 解析真实路径与符号链接，放行工作目录并硬性拒绝密钥、浏览器凭据与系统敏感路径 |
+| **网络守卫（Network Guard）** | `web_search` / `web_fetch` 出站请求与重定向 | `security.json → networkGuard` | 拦截 `localhost`、云元数据（`169.254.169.254`）与私网 CIDR，防 SSRF |
+| **Web API 入口鉴权** | HTTP / WebSocket 远程与本地 API 调用 | `channel.json → webapi` | 本机 Socket 凭 `0600` 文件权限限制同账号访问；TCP 强制 SHA-256 Bearer Key 鉴权与工位隔离 |
+| **外部智能体宿主边界** | `runtime: external` 角色（Claude / Codex / Cursor / Antigravity / 脚本） | `workspace/sub-agents/*.md` | **不经过前四道工具守卫**；真实边界完全取决于角色 `command` 中的 CLI sandbox 参数与系统运行账号 |
 
-2. 路径防护（path guard）
-   作用于 `read` / `write` / `edit` 等显式文件工具，统一判断路径是否允许访问
-
-3. 网络防护（network guard）
-   作用于 web 工具的出站请求与重定向，避免访问 localhost、云元数据服务和私网地址
-
-4. 外部智能体授权
-   作用于 `workspace/sub-agents/` 中声明为 `runtime: external` 的角色；角色文件决定允许启动哪个 CLI、使用什么 sandbox 和是否声明写入
-
-前三项是 Pipiclaw 自己的工具层守卫。外部智能体不使用这些工具实现，因此不会经过 command/path/network guard；它的强边界来自目标 CLI 自身的 sandbox、运行账号和宿主环境。两类边界不能混为一谈。
-
-## 配置文件位置（Security Config Path）
-
-安全配置是 **Pipiclaw 实例级** 配置，不是 workspace 内的项目文件。
-
-默认路径：
-
-```text
-~/.pipiclaw/security.json
-```
-
-如果设置了：
-
-```bash
-export PIPICLAW_HOME=/your/custom/pipiclaw-home
-```
-
-那么配置路径变为：
-
-```text
-$PIPICLAW_HOME/security.json
-```
-
-说明：
-
-- 这份配置约束的是整个 Pipiclaw 实例的工具边界
-- 首次启动会生成一份最小模板；如果文件不存在，就使用内置默认值
-- 相关代码见 `src/security/config.ts`
-
-## 当前默认安全策略（Default Security Policy）
-
-### 1. `bash` 默认会拦截什么
-
-当前默认会拦截这些高风险命令类别：
-
-- 破坏性文件操作
-  - 例如 `rm -rf /`、`find ... -delete`、`shred`、`mkfs`
-- 系统操纵
-  - 例如 `shutdown`、`reboot`、`systemctl stop`
-- 权限提升与账户篡改
-  - 例如 `sudo`、`su root`、`passwd`、`visudo`
-- 进程与历史篡改
-  - 例如 `killall`、`pkill`、`history -c`
-- 网络滥用
-  - 例如 `curl --upload-file`、监听型 `nc`、反弹 shell
-- 容器逃逸
-  - 例如 `nsenter`、`docker run --privileged`
-- 常见混淆执行
-  - 例如 `base64 -d | bash`、`eval $(...)`
-
-说明：
-
-- `scp` 默认允许
-- 普通开发命令，如 `git`、`npm`、`python3 -c "print(42)"`、普通 `rm file.txt`，默认不拦截
-
-**拦截在聊天里的样子。** 守卫拦截时，模型收到的是一段英文说明（`Path blocked [category]`、`Command blocked [category]` 加原因与目标），它据此改用别的做法，或向你解释为什么需要放行。你在进度卡片里看到的是由同一次拦截的结构化信息渲染的一行中文，例如：
+当内置守卫拦截操作时，模型会收到结构化拒绝原因以自行改用合规方案，而你的聊天进度卡会清晰显示一行中文提示（完整记录同时写入审计日志 `~/.pipiclaw/workspace/.pipiclaw/security.log`）：
 
 ```text
 ✕ 已拦截：写入允许范围以外的路径 `/etc/hosts`（如需放行，由部署者调整 security.json）
 ✕ 已拦截：命令 `rm -rf /` 属于破坏性文件操作（如需放行，由部署者调整 security.json）
 ```
 
-主机名无法解析、网址无效这类不是安全策略能放行的问题，只说明原因，不提示调整 security.json。完整的拦截记录仍写入审计日志。
+---
 
-### 2. 文件工具默认允许访问哪些地方
+## 2. 默认拦截与放行策略
 
-当前默认允许：
+安全配置文件位于 `${PIPICLAW_HOME:-~/.pipiclaw}/security.json`（权限自动收紧为 `0600`）。
 
-- Pipiclaw workspace 目录
-- 当前用户主目录中的普通工作文件
-- `/tmp`、`/var/tmp`、macOS 的 `/private/tmp`
+### 2.1 `bash` 默认拦截的高危命令类别
 
-当前默认拒绝：
+普通开发命令（`git`、`npm`、`python3`、常规单文件 `rm`、`scp`）默认正常放行；以下高危模式默认拦截：
+- **破坏性文件操作**：`rm -rf /`、`find ... -delete`、`shred`、`mkfs`
+- **系统与服务操纵**：`shutdown`、`reboot`、`systemctl stop`
+- **提权与账户篡改**：`sudo`、`su root`、`passwd`、`visudo`
+- **进程清杀与历史抹除**：`killall`、`pkill`、`history -c`
+- **网络外带与反弹**：`curl --upload-file`、监听型 `nc`、反弹 Shell
+- **容器逃逸与混淆执行**：`nsenter`、`docker run --privileged`、`base64 -d | bash`、`eval $(...)`、无法静态确认安全的动态命令或未闭合引号/heredoc
 
-- 密钥、凭据、认证配置、浏览器资料、keychain 等敏感位置
-- 高风险系统目录和系统敏感文件
+### 2.2 文件工具默认允许与硬性拒绝路径
 
-文件工具的相对路径以 agent 的工作目录为准。内置 playbook 目录另外可读、不可写：agent 要能读自己这一版的运行机制，与安装位置无关。`readDeny` / `writeDeny` 和下面的敏感路径拒绝仍然优先。
+- **默认允许访问**：`~/.pipiclaw/workspace/`、当前系统用户主目录下的普通工作文件、`/tmp`（及 `/var/tmp`、macOS `/private/tmp`），以及内置只读 Playbook 目录。
+  > 注意：同一系统账号下不同工位（`desk-<name>/`）属于应用层会话与记忆隔离，并非 OS 文件隔离；需强隔离请使用独立系统账号或容器。
+- **默认硬性拒绝位置**：
+  - 常见密钥与云凭据：`~/.ssh/`、`~/.gnupg/`、`~/.aws/`、`~/.azure/`、`~/.gcloud/`、`~/.kube/`、`~/.docker/`、`~/.netrc`、`~/.npmrc`、`~/.pypirc`
+  - Shell 历史、系统钥匙串与浏览器资料：`~/.bash_history`、`~/.zsh_history`、`~/Library/Keychains/`、`~/.local/share/keyrings/`、Chrome / Firefox 配置目录
+  - 系统敏感文件：`/etc/shadow`、`/etc/sudoers*`、`/var/run/secrets/`、`/proc/kcore`、`/proc/<pid>/mem`
+  - 启发式私钥文件名拦截：`.pem` / `.key` / `.p12` / `.pfx` 扩展名及含 `id_rsa`、`id_ed25519`、`private`、`secret`、`credentials` 的文件名（启发式规则不扫描文件内容，自定义敏感目录请显式加入 `readDeny` / `writeDeny`）。
 
-整个 workspace 都在默认允许根内，因此工位之间没有文件级隔离；正常的记忆和检索流程按工位分开（同一个工位的频道共享），但通用文件工具和 shell 仍能读到运行账号可读的其他工位目录和其他目录。相对路径和 shell 的 cwd 以实际 cwd 为准：默认是工位目录，`desk.json` 可设为其他绝对路径。需要强隔离时使用独立账号或容器。
+### 2.3 网络守卫的两个“默认”
 
-### 3. 默认拒绝的典型敏感位置
+- **首次初始化生成的 `security.json` 模板**：显式写入 `"networkGuard": { "enabled": false }`，避免个人开发机配置本地代理或内网 SearXNG 时受阻；
+- **代码内置回退值**：若删除 `security.json` 或移除 `networkGuard.enabled` 字段，默认值为 **`true`**（自动拦截回环、云元数据与私网解析，每次重定向均重新校验；可通过 `allowedHosts` 或 `allowedCidrs` 精确放行可信内网服务）。
 
-包括但不限于：
+---
 
-```text
-~/.ssh/
-~/.gnupg/
-~/.gpg/
-~/.aws/
-~/.azure/
-~/.gcloud/
-~/.config/gcloud/
-~/.kube/
-~/.docker/
-~/.netrc
-~/.npmrc
-~/.pypirc
-~/.bash_history
-~/.zsh_history
-~/Library/Keychains/
-~/.local/share/keyrings/
-~/Library/Application Support/Google/Chrome/
-~/Library/Application Support/Firefox/
-~/.config/google-chrome/
-~/.mozilla/firefox/
+## 3. `security.json` 实用配置模板
 
-/etc/shadow
-/etc/gshadow
-/etc/sudoers
-/etc/sudoers.d/
-/var/run/secrets/
-/proc/kcore
-/proc/<pid>/mem
-```
+你只需在 `~/.pipiclaw/security.json` 中填写需要覆盖的字段（完整字段表见 [配置字段参考](./configuration-reference.md#7-securityjson安全守卫策略)）。
 
-此外还有一些启发式规则，例如：
-
-- 私钥扩展名：`.pem`、`.key`、`.p12`、`.pfx`
-- 文件名关键词：`id_rsa`、`id_ed25519`、`private`、`secret`、`credentials`
-
-这些扩展名和关键词检查是**尽力而为的启发式防线**，不是内容扫描：把敏感文件改成普通名称即可绕过它。对自定义凭据目录应配置明确的 `readDeny` / `writeDeny`；高价值部署还应使用独立账号或容器做 OS 级隔离。
-
-### 4. 网络守卫默认策略
-
-需要区分两种“默认”：
-
-- **首次初始化生成的 `security.json` 模板**：显式写入 `networkGuard.enabled: false`，减少个人开发机上代理、内网 SearXNG 等场景的启动摩擦。
-- **代码内置默认值**：如果 `security.json` 不存在，或你删除了 `networkGuard.enabled` 字段，则 `networkGuard.enabled` 默认为 `true`。
-
-启用后，network guard 只允许 `http` / `https` URL，并会拦截：
-
-- `localhost`、`*.localhost`、`metadata`、`metadata.google.internal`、`169.254.169.254`
-- 解析到私网、回环、链路本地、CGNAT、benchmark 等地址段的主机
-- 解析失败的主机
-
-需要访问可信内网服务时，用 `allowedHosts` 精确放行主机名，或用 `allowedCidrs` 放行地址段。重定向目标也会重新检查，最多跟随 `maxRedirects` 次。
-
-## 配置文件示例（Example `~/.pipiclaw/security.json`）
-
-下面给出一个完整示例：
+### 模板 A：个人开发机（保护私有财务/密钥目录，保持日常开发顺畅）
 
 ```json
 {
   "enabled": true,
   "commandGuard": {
     "enabled": true,
-    "additionalDenyPatterns": [
-      "\\bterraform\\s+destroy\\b",
-      "\\bkubectl\\s+delete\\s+namespace\\b"
-    ],
-    "allowPatterns": [
-      "sudo apt install",
-      "scp "
-    ],
+    "allowPatterns": ["scp "],
     "blockObfuscation": true
   },
   "pathGuard": {
     "enabled": true,
-    "readAllow": [
-      "~/Documents/",
-      "~/work-notes/"
-    ],
-    "readDeny": [
-      "~/secrets/",
-      "~/finance/"
-    ],
-    "writeAllow": [
-      "~/Documents/",
-      "~/work-notes/"
-    ],
-    "writeDeny": [
-      "~/bin/",
-      "/etc/"
-    ],
-    "resolveSymlinks": true
-  },
-  "networkGuard": {
-    "enabled": true,
-    "allowedHosts": [
-      "searx.internal.example"
-    ],
-    "allowedCidrs": [
-      "10.20.0.0/16"
-    ],
-    "maxRedirects": 5
-  },
-  "audit": {
-    "logBlocked": true,
-    "logFile": "~/.pipiclaw/workspace/.pipiclaw/security.log"
-  }
-}
-```
-
-说明：
-
-- 这只是示例，不是推荐你照抄所有字段
-- 只写你真正要覆盖的部分即可
-- 未提供的字段会回退到默认值
-
-## 字段说明（Field Reference）
-
-### 顶层字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `enabled` | `boolean` | 是否启用整套安全层 |
-| `commandGuard` | `object` | `bash` 工具的命令防护 |
-| `pathGuard` | `object` | 文件工具的路径防护 |
-| `networkGuard` | `object` | web 工具的出站网络防护 |
-| `audit` | `object` | 阻断事件审计日志 |
-
-`projectAccess` 已退役（spec 058）：项目边界和 `/project` 命令已删除。文件里仍有这个键时，启动只报一条警告，然后忽略它。
-
-### `commandGuard`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `enabled` | `boolean` | 是否启用命令防护 |
-| `additionalDenyPatterns` | `string[]` | 额外的正则 deny 规则 |
-| `allowPatterns` | `string[]` | 对部分命令文本做放行覆盖 |
-| `blockObfuscation` | `boolean` | 是否拦截常见混淆执行手法 |
-
-说明：
-
-- `additionalDenyPatterns` 使用 JavaScript 正则表达式语法
-- 无效正则会被忽略，不会让 Pipiclaw 启动失败
-- `allowPatterns` 是简单字符串匹配，不是完整规则系统
-- `allowPatterns` 只影响 `bash`，不影响文件工具的路径守卫
-
-### `pathGuard`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `enabled` | `boolean` | 是否启用路径防护 |
-| `readAllow` | `string[]` | 额外允许读取的路径前缀 |
-| `readDeny` | `string[]` | 额外拒绝读取的路径前缀 |
-| `writeAllow` | `string[]` | 额外允许写入的路径前缀 |
-| `writeDeny` | `string[]` | 额外拒绝写入的路径前缀 |
-| `resolveSymlinks` | `boolean` | 是否在判断前解析符号链接 |
-
-说明：
-
-- 支持 `~/` 写法
-- 相对路径会相对 Pipiclaw workspace 根解析
-- 这是“前缀型路径规则”，不是任意 glob 匹配
-- 基础敏感路径 deny 仍然保留；配置不是“完全绕过所有底线”的总开关
-
-### `networkGuard`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `enabled` | `boolean` | 是否启用网络防护；首次生成模板为 `false`，内置默认值为 `true` |
-| `allowedHosts` | `string[]` | 精确放行的主机名；匹配规范化后的 hostname，不是 glob |
-| `allowedCidrs` | `string[]` | 允许访问的 CIDR 地址段，可用于可信内网服务 |
-| `maxRedirects` | `number` | web fetch 最多跟随的重定向次数；必须为正数，默认 `5` |
-
-说明：
-
-- 只支持 `http` / `https`。
-- `allowedHosts` 会直接放行对应 hostname；`allowedCidrs` 会放行解析后的 IP。
-- 未放行时，localhost、云元数据服务、私网和链路本地地址会被拦截。
-- 每次重定向后的目标 URL 都会重新执行同一套检查。
-
-### `audit`
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `logBlocked` | `boolean` | 是否记录阻断日志 |
-| `logFile` | `string` | 自定义日志文件路径 |
-
-默认日志路径目前是：
-
-```text
-~/.pipiclaw/workspace/.pipiclaw/security.log
-```
-
-如果你不设置 `logFile`，就会写到这个位置。
-
-## 常见配置场景（Common Configuration Patterns）
-
-### 1. 增加一批个人工作目录
-
-适合：
-
-- 主目录里有多份日常笔记、脚本、草稿和项目目录
-- 你希望这些目录明确被允许，而不是完全依赖默认 home 放开
-
-示例：
-
-```json
-{
-  "pathGuard": {
-    "readAllow": ["~/Documents/", "~/notes/", "~/projects/"],
-    "writeAllow": ["~/Documents/", "~/notes/", "~/projects/"]
-  }
-}
-```
-
-### 2. 额外保护某些敏感目录
-
-适合：
-
-- 你主目录里还有其他不希望 Pipiclaw 访问的私有目录
-
-示例：
-
-```json
-{
-  "pathGuard": {
-    "readDeny": ["~/secrets/", "~/archive/private/"],
-    "writeDeny": ["~/secrets/", "~/archive/private/"]
-  }
-}
-```
-
-### 3. 阻止特定高风险运维命令
-
-适合：
-
-- 某台机器上有你明确不想让代理碰的运维命令
-
-示例：
-
-```json
-{
-  "commandGuard": {
-    "additionalDenyPatterns": [
-      "\\bsystemctl\\s+restart\\b",
-      "\\bkubectl\\s+delete\\b",
-      "\\bterraform\\s+destroy\\b"
-    ]
-  }
-}
-```
-
-### 4. 放行少量你明确接受的命令文本
-
-适合：
-
-- 某个日常命令会被 guard 挡住，但你确认这个实例应该允许
-
-示例：
-
-```json
-{
-  "commandGuard": {
-    "allowPatterns": [
-      "sudo apt install",
-      "sudo systemctl status"
-    ]
-  }
-}
-```
-
-说明：
-
-- `allowPatterns` 是比较粗的放行方式
-- 不要把它写成过宽的模式，例如单独放行 `"sudo"`
-
-## 推荐模板（Recommended Templates）
-
-下面给两套可直接作为起点的模板。它们不是唯一正确答案，但适合大多数场景先落地，再逐步调整。
-
-### 模板 1：个人开发机（Personal Workstation）
-
-适合：
-
-- 你在自己的开发机上长期运行 Pipiclaw
-- 需要让它访问主目录里的多个项目、笔记和脚本
-- 但仍希望保护常见凭据和高风险命令
-
-建议特点：
-
-- 保持默认主目录可访问
-- 额外补一些你自己的私有目录 deny
-- 打开审计日志
-
-```json
-{
-  "enabled": true,
-  "commandGuard": {
-    "enabled": true,
-    "additionalDenyPatterns": [],
-    "allowPatterns": [
-      "scp "
-    ],
-    "blockObfuscation": true
-  },
-  "pathGuard": {
-    "enabled": true,
-    "readAllow": [],
-    "readDeny": [
-      "~/secrets/",
-      "~/finance/",
-      "~/archive/private/"
-    ],
-    "writeAllow": [],
-    "writeDeny": [
-      "~/secrets/",
-      "~/finance/",
-      "~/archive/private/",
-      "~/bin/"
-    ],
+    "readDeny": ["~/secrets/", "~/finance/"],
+    "writeDeny": ["~/secrets/", "~/finance/", "~/bin/"],
     "resolveSymlinks": true
   },
   "networkGuard": {
@@ -438,25 +86,7 @@ $PIPICLAW_HOME/security.json
 }
 ```
 
-说明：
-
-- `readAllow` / `writeAllow` 留空即可，默认主目录普通文件已经允许访问
-- 重点是根据你自己的机器情况补 `readDeny` / `writeDeny`
-- 如果你有更多私有资料目录，优先补 deny，而不是关闭整个安全层
-
-### 模板 2：长期部署主机（Long-Running Hosted Instance）
-
-适合：
-
-- Pipiclaw 作为长期服务运行
-- 机器上还有其他服务或运维资产
-- 你希望对命令和路径都更保守一些
-
-建议特点：
-
-- 额外禁止常见运维破坏命令
-- 收紧部分主目录写入位置
-- 强制保留审计日志
+### 模板 B：长期托管服务器（收紧运维破坏命令与系统目录，开启防 SSRF）
 
 ```json
 {
@@ -466,23 +96,13 @@ $PIPICLAW_HOME/security.json
     "additionalDenyPatterns": [
       "\\bsystemctl\\s+restart\\b",
       "\\bkubectl\\s+delete\\b",
-      "\\bterraform\\s+destroy\\b",
-      "\\buseradd\\b",
-      "\\busermod\\b"
-    ],
-    "allowPatterns": [
-      "scp "
+      "\\bterraform\\s+destroy\\b"
     ],
     "blockObfuscation": true
   },
   "pathGuard": {
     "enabled": true,
-    "readAllow": [],
-    "readDeny": [
-      "~/secrets/",
-      "~/ops-private/"
-    ],
-    "writeAllow": [],
+    "readDeny": ["~/secrets/", "~/ops-private/"],
     "writeDeny": [
       "~/secrets/",
       "~/ops-private/",
@@ -495,143 +115,44 @@ $PIPICLAW_HOME/security.json
   },
   "networkGuard": {
     "enabled": true,
-    "allowedHosts": [],
+    "allowedHosts": ["searx.internal.example"],
     "allowedCidrs": [],
     "maxRedirects": 5
   },
   "audit": {
-    "logBlocked": true,
-    "logFile": "~/.pipiclaw/workspace/.pipiclaw/security.log"
+    "logBlocked": true
   }
 }
 ```
 
-说明：
+> 💡 `allowPatterns` 是对 `bash` 命令文本的子串放行，请尽量写具体（如 `"sudo systemctl status"`），**切勿单独写 `"sudo"`**。
 
-- 这套模板更强调“长期托管时不要碰系统和运维资产”
-- 如果这台机器上还有其他高价值目录，继续补 deny
-- 如果你已经用独立账号或 Docker 跑 Pipiclaw，这套模板仍然有价值，但可以适度放宽
+---
 
-## Web API 的网络入口
+## 4. Web API 安全边界
 
-打开 `channel.json` 的 `webapi` 段会给 Pipiclaw 增加一个新的入口（[Web API](./webapi.md)）。默认值偏保守：
+首次初始化时，`channel.json` 默认启用 `webapi` 并仅绑定在**本机**：
+- **本机 Unix Socket**（`state/webapi/api.sock`，文件权限 `0600`、父目录 `0700`）：仅运行 Pipiclaw 的同一系统用户（如 `pipiclaw tui`）可连接，无需 Bearer Key。
+- **本机回环 TCP**（默认 `127.0.0.1:8787`）：外部机器无法直连，且**所有非 `OPTIONS` 的 TCP 请求在读取请求体前均强制校验 `Authorization: Bearer pk_...`**（失败直接返回 `401` 并记入审计日志），同时校验回环 `Host` 头防御浏览器 DNS Rebinding 攻击。
+- **密钥权限等同于助手工具权限**：持有有效 `pk_...` 密钥即可驱动该密钥 `desks` 白名单内的助手执行命令与读写文件。`channel.json` 只保存密钥的 SHA-256 哈希；通过 `pipiclaw webapi key add|remove` 增删密钥后运行中服务**自动热生效**，无需重启。若将 `tcp` 改为局域网/公网地址，请务必配置 `tls` 证书或置于终止 HTTPS 的反向代理之后（详见 [Web API 手册](./webapi.md)）。
 
-- **默认关闭**，关闭时不加载代码、不监听。
-- **只监听本机 unix socket**（`state/webapi/api.sock`，权限 `0600`，目录 `0700`）；socket 上不需要 key，能打开它的就是运行 daemon 的系统用户。TCP 要显式打开，每个请求都必须带 bearer key；`tls` 可选：非 loopback 且不配 `tls` 时是明文 HTTP，由部署方保证前置代理终止 TLS 或网络可信。
-- **key 的权限等于宿主机上的 shell 权限**——agent 有 `bash`，只受上面的命令、路径和网络守卫约束。key 只存 SHA-256，`desks` 限定它能使用的工位，会话和 Response 按创建它的 key 隔离。
-- 允许带 `Origin` 头的请求（包括 WebSocket 升级），HTTP 提供任意来源的 CORS，浏览器前端可直接调用。`OPTIONS` 预检无需 key、不访问业务数据，实际 TCP 请求仍必须带 bearer key；不使用 Cookie 鉴权。loopback TCP 校验 `Host` 防 DNS rebinding，实际请求在读请求体之前鉴权，失败直接 401，不进入运行时。
-- 请求体、连接数、速率、WebSocket 流数量都有上限；TCP 按 key 限流（鉴权之后），未鉴权请求的洪水由前置反向代理限制。
-- 审计：每个请求（主体、方法、路径、会话、状态码）和每次鉴权失败（来源、原因）都写进审计日志，不记录 key、请求体或输出。
+---
 
-## 外部智能体的授权边界
+## 5. 外部智能体的授权边界
 
-外部智能体没有单独的 `security.json` 配置段。把下面三项写进一个角色文件，本身就是一份持续有效、可版本管理的授权：
+将 `runtime: external` 的角色文件放入 `workspace/sub-agents/*.md`，等同于**授予主智能体随时按该 `command` 启动宿主机外部 CLI 的持续授权**（无二次弹窗确认）。管理员在放入或修改外部角色前应逐项审查：
 
-```yaml
-runtime: external
-command: codex exec --sandbox read-only --skip-git-repo-check
-mutates: read
-```
+1. **命令与沙箱参数**：`command` 启动的可执行文件是否带有目标 CLI 自身的权限限制（如只读审查角色使用 `codex exec --sandbox read-only` 或 `agent --mode ask`）。仅在提示词里写“不要改文件”不是强隔离。
+2. **如实声明 `mutates`**：会改写文件的角色必须声明 `mutates: write`，以便运行时通过工作目录排他锁防止并发写冲突（注意 `mutates` 仅作并发锁与审计，不限制进程系统调用）。
+3. **禁止滥用 `shell: true` 与多余环境变量**：结构化 harness 直接以 `argv` 启动进程并拒绝 `shell: true`；切勿在角色 `env` 中注入无关高权限密钥，也不要开启非必要的 `memory: index` 向第三方 CLI 外发工位记忆。
+4. **保护 `workspace/sub-agents/` 目录**：内置 `write` / `edit` 工具硬性禁止修改 `workspace/sub-agents/`，防止模型自建高权限外部角色；建议将该目录纳入 Git 版本管理与变更审查。
+5. **警惕目标仓库不可信提示词**：外部 CLI 会自行加载目标仓库内的 `CLAUDE.md`、`AGENTS.md`、`.cursor/rules` 等文件，其输出与自评应作为待核实数据对待。每次外部派发均遵循“先写审计日志、后启动子进程”。
 
-这份授权表示主智能体可以在角色适用时直接启动对应命令，不会再弹出第二道 Pipiclaw 确认。管理员应像审查部署脚本一样审查每个外部角色，重点检查：
+---
 
-- `command` 最终启动什么可执行文件，是否带目标 CLI 的 sandbox / approval 参数
-- `mutates` 是否如实声明 `read` 或 `write`
-- 通用 `exec` 角色的 `shell: true` 是否真的必要；它会把整条命令交给 `/bin/sh -lc`，重新引入 shell 展开风险（结构化 harness 会直接驳回该组合）
-- `env` 是否注入了不应交给该角色的凭据或配置
-- 正文是否明确允许的副作用、停止条件、验证方式和交付物
+## 6. 已知非内核沙箱边界
 
-必须了解以下事实：
-
-1. **Pipiclaw 不沙箱化外部进程。** `workingDirectory` 只决定启动目录，不是文件系统边界；`mutates` 只用于审计、验收准入和写锁，也不是权限控制。
-2. **目标 CLI 的 sandbox 才是强边界。** 例如 Codex 的 `--sandbox read-only` 能让只读声明落到执行层；只在提示词里写“不要修改”属于行为约束，不是强制隔离。
-3. **外部进程继承 Pipiclaw 环境。** 它需要用自己的认证，也可能看到 daemon 已有的环境变量。长期部署应使用最小权限账号和最小化环境。
-4. **仓库内容对外部智能体是不可信输入。** 外部 CLI 会自行读取目标仓库的 `AGENTS.md`、`CLAUDE.md` 等文件；它的最终声明和自我验收不能替代主智能体或独立 verifier 的检查。
-5. **每次派发先审计、后 spawn。** 审计包含 runId、角色、harness、完整 argv、工作目录、`mutates` 和模型；严格审计写入失败时外部进程不会启动。
-
-Pipiclaw 的 `write` / `edit` 工具禁止修改 `workspace/sub-agents/`，避免模型自行创建高权限外部角色再调用。但拥有 `bash` 的智能体仍可能通过通用 shell 改写该目录；这是工具层安全模型的已知边界。建议把角色目录纳入版本控制或至少纳入定期备份和变更审查。
-
-并发写角色还受 workspace 排他写锁约束：同一工作目录或互为父子的目录不能同时运行两个 `mutates: write` run。写锁防止意外并发覆盖，不替代权限隔离。
-
-这也适用于声明 `mutates: write` 的 `purpose=verify` verifier：它必须先取得同一把独占 lease，直到 run 结算才释放，因此不会与已有写 run 并发；但 lease 只是并发保护，不是“完全只读”证明。运行测试/构建产生的临时 untracked 文件只在 artifact subject 规定的明确范围内排除，验证开始前已存在的 untracked 文件和范围外的新源文件仍受 subject 检查保护。此类验证的 attestation 标为 `advisory`，仍需人工抽查 diff 和证据。
-
-## 已知边界（Known Limits）
-
-当前实现有几个需要明确知道的边界：
-
-### 1. 这不是 OS 级沙箱
-
-Pipiclaw 的安全层是工具层硬约束，不是内核级隔离。
-
-更强的隔离仍然依赖：
-
-- 在容器中运行整个 Pipiclaw 进程
-- 独立运行账号
-- 主机级权限管理
-- 外部智能体各自提供的 sandbox / approval 模式
-
-### 2. `bash` 防护不是完整 shell parser
-
-当前命令防护采用有界的 shell 语法解析与规则匹配：按引号、逐行注释、管道和后台分隔符定位可执行命令，递归检查子命令、字面量 `shell -c` 和已知包装器；不会把普通参数里的危险命令文字当成执行位置。
-
-它已经能覆盖：
-
-- 链式命令
-- `$()` 和反引号子命令
-- 一部分混淆与全路径二进制名绕过
-
-无法可靠解释的语法会拒绝执行，例如未闭合引号、here-document、动态可执行名、影响命令判定的动态参数、未知包装器选项，以及超过递归预算的嵌套。可改用字面量简单命令或拆分工具调用。它不是完整 shell 语义解释器，也不检查任意程序内部的行为，不应被当成完备的 shell 沙箱。
-
-### 3. 写入场景仍有 TOCTOU 边界
-
-`read` / `write` / `edit` / `send_media` 已通过 `FileStore` 直接使用 `node:fs`，不再把文件内容交给 shell 管道。path guard 返回的 `resolvedPath` 同时用于实际 I/O，已有目标是符号链接时拒绝写入。
-
-但路径检查和打开文件仍是两个步骤，父目录可能在两者之间被其他进程替换；这不是内核级、基于目录句柄的原子路径隔离。需要抵御并发恶意进程时，仍应依靠独立账号或容器。
-
-## 推荐做法（Recommendations）
-
-建议按下面的顺序使用这套安全配置：
-
-1. 先直接使用默认配置运行一段时间
-2. 根据真实工作流，再补 `readDeny` / `writeDeny`
-3. 只对必要命令增加 `allowPatterns`
-4. 长期运行环境尽量把整个进程放进容器或独立账号里跑
-5. 保持 `logBlocked: true`，便于排查策略是否误伤
-
-## 排障建议（Troubleshooting）
-
-### 1. 某条命令被挡住了
-
-先看报错里的：
-
-- 分类
-- 原因
-- 匹配文本
-
-如果你确认它应该允许：
-
-- 优先考虑调整工作方式，避免使用高风险命令
-- 其次再考虑是否通过 `allowPatterns` 放行
-
-### 2. 某个文件路径被挡住了
-
-先确认：
-
-- 它是否命中了敏感路径 deny
-- 它是否通过符号链接落到了敏感位置
-- 它是否其实不在你认为的目录下
-
-如果路径确实合理，再考虑加到：
-
-- `readAllow`
-- `writeAllow`
-
-### 3. 想看阻断历史
-
-默认去看：
-
-```text
-~/.pipiclaw/workspace/.pipiclaw/security.log
-```
-
-如果你在 `audit.logFile` 里改过路径，则看你自定义的位置。
+Pipiclaw 的内置守卫是**应用工具层硬护栏，而非操作系统内核级沙箱**：
+- **进程级隔离**：在多租户或不可信代码分析场景下，请将整个 Pipiclaw 实例放入独立低权限 Linux 账号或 Docker 容器中运行。
+- **Shell 内部程序行为**：`commandGuard` 解析并拦截危险 Shell 命令结构，但不追踪被调用的普通脚本（如 `python3 build.py`）内部自行发起的系统调用。
+- **极端并发 TOCTOU**：文件工具直接通过 `node:fs` 操作经 `guardPath` 解析后的路径并拒绝覆写符号链接，但若宿主机存在恶意并发进程在检查与打开间隙替换父目录，仍需依赖 OS 账号/容器权限兜底。

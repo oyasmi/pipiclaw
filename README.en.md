@@ -78,7 +78,7 @@ What else users build into their daily routine:
 
 ## Quick Start
 
-Go from zero to an always-on setup in minutes: **60-second terminal run → 5-minute DingTalk connection → external coding agents → 24/7 background service**.
+Go from zero to an always-on setup in minutes: **60-second terminal run → 5-minute DingTalk connection → external coding agents → 24/7 background service**. *(For a detailed step-by-step onboarding walkthrough including OpenAI-compatible gateway snippets, `curl` checks, and DingTalk setup troubleshooting, see **[docs/quickstart.md](https://github.com/oyasmi/pipiclaw/blob/master/docs/quickstart.md)**.)*
 
 <details>
 <summary>💡 <b>Shortcut: Paste this prompt into Claude Code / Codex / Cursor and let it set up Pipiclaw for you</b></summary>
@@ -380,6 +380,7 @@ Explore the full user guides in **[docs/README.md](https://github.com/oyasmi/pip
 
 | Goal | Guide |
 |---|---|
+| ⚡ Step-by-step first-run onboarding, gateway snippets & FAQ | [Quick Start Guide](https://github.com/oyasmi/pipiclaw/blob/master/docs/quickstart.md) |
 | 💬 Master DMs, groups, AI Card modes & slash commands | [Interaction & Commands](https://github.com/oyasmi/pipiclaw/blob/master/docs/interaction-and-commands.md) |
 | ⚙️ Configure custom models, gateways, proxies & web search | [Configuration Quickstart](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration.md) · [Field Reference](https://github.com/oyasmi/pipiclaw/blob/master/docs/configuration-reference.md) |
 | 🤝 Set up & customize Claude Code / Codex / Cursor / Antigravity | [Agent Delegation](https://github.com/oyasmi/pipiclaw/blob/master/docs/sub-agents.md) · [Profile Examples](https://github.com/oyasmi/pipiclaw/blob/master/examples/sub-agents/README.md) |
