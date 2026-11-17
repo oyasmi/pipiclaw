@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseScheduledEventContent } from "../src/events/parse.js";
 import { validateScheduledEvent } from "../src/events/validation.js";
@@ -31,6 +31,12 @@ const TASK_TOOLS = [
 
 const makeTempDir = useTempDirs("pipiclaw-playbooks-");
 
+function markdownFiles(directory: string): string[] {
+	return readdirSync(directory)
+		.filter((file) => file.endsWith(".md"))
+		.sort();
+}
+
 describe("runtime playbook catalog", () => {
 	it("offers a playbook only when a tool can reach the mechanism it documents", () => {
 		const catalog = loadRuntimePlaybookCatalog(TOOL_NAMES);
@@ -48,10 +54,25 @@ describe("runtime playbook catalog", () => {
 		expect(selectRuntimePlaybooks(catalog, ["subagent"]).map((item) => item.filename)).toContain(
 			"agent-delegation.md",
 		);
-		// Chat and task steps expose different halves of this any-of gate.
-		for (const taskTool of ["task_create", "task_report"]) {
-			expect(selectRuntimePlaybooks(catalog, [taskTool]).map((item) => item.name)).toContain("task-lead");
+		// A chat manager must not pay for the step protocol, or a task for chat-only controls.
+		for (const [taskTool, offered, absent] of [
+			["task_create", "task-manage", "task-lead"],
+			["task_report", "task-lead", "task-manage"],
+		] as const) {
+			const names = selectRuntimePlaybooks(catalog, [taskTool]).map((item) => item.name);
+			expect(names).toContain(offered);
+			expect(names).not.toContain(absent);
 		}
+		const documented = [
+			...readFileSync("docs/runtime-playbooks.md", "utf8").matchAll(/^\| `([^`]+\.md)` \| (\d+) \| ([^|]+) \|/gm),
+		].map(([, filename, order, tools]) => ({
+			filename,
+			order: Number(order),
+			requiresAnyTool: [...tools!.matchAll(/`([^`]+)`/g)].map((match) => match[1]),
+		}));
+		expect(documented).toEqual(
+			catalog.map(({ filename, order, requiresAnyTool }) => ({ filename, order, requiresAnyTool })),
+		);
 	});
 
 	it("renders a compact index without loading playbook bodies into the prompt", () => {
@@ -62,6 +83,15 @@ describe("runtime playbook catalog", () => {
 		expect(index).toContain("probe.md");
 		expect(index).toContain("a trigger");
 		expect(index).not.toContain(body);
+		// Splitting a guide must not leave an unreadable link to another playbook.
+		for (const file of markdownFiles(PLAYBOOKS_DIR)) {
+			const text = readFileSync(join(PLAYBOOKS_DIR, file), "utf8");
+			for (const [, target] of text.matchAll(/\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
+				const path = resolve(PLAYBOOKS_DIR, file, "..", target!);
+				expect(path.startsWith(`${PLAYBOOKS_DIR}/`), `${file}: ${target}`).toBe(true);
+				expect(existsSync(path), `${file}: ${target}`).toBe(true);
+			}
+		}
 	});
 
 	it("removes retired guides from build output while preserving compiled code", () => {
@@ -88,7 +118,10 @@ describe("runtime playbook catalog", () => {
 	});
 
 	it("validates the published event examples with the real parser and admission rules", () => {
-		const body = readFileSync(join(PLAYBOOKS_DIR, "event-scheduling.md"), "utf-8");
+		const body = markdownFiles(PLAYBOOKS_DIR)
+			.filter((file) => basename(file).startsWith("event-"))
+			.map((file) => readFileSync(join(PLAYBOOKS_DIR, file), "utf8"))
+			.join("\n");
 		const examples = [...body.matchAll(/```json\n([\s\S]*?)\n```/g)];
 		expect(examples.length).toBeGreaterThan(0);
 		for (const example of examples) {

@@ -16,12 +16,11 @@ import type { TaskCreateInput } from "../tasks/contract-input.js";
 const eventDefinitionSchema = Type.Object(
 	{
 		type: Type.Union([Type.Literal("one-shot"), Type.Literal("periodic"), Type.Literal("immediate")], {
-			description: '"one-shot" (needs `at`), "periodic" (needs cron `schedule`). "immediate" is always rejected.',
+			description: "one-shot requires at; periodic requires schedule; immediate is rejected.",
 		}),
 		text: Type.Optional(
 			Type.String({
-				description:
-					"Chat message delivered to the channel when the event fires. Give either `text` or `task`, never both.",
+				description: "Reminder message; exactly one of text or task.",
 			}),
 		),
 		task: Type.Optional(
@@ -29,48 +28,46 @@ const eventDefinitionSchema = Type.Object(
 				{
 					title: Type.String({ description: "Task title." }),
 					goal: Type.String({
-						description: "Goal of each spawned task: result, scope, allowed external actions, key constraints.",
+						description: "Result, scope, allowed external actions and constraints.",
 					}),
-					dod: Type.String({ description: 'Checklist items, e.g. "- [ ] <criterion>"; plain prose is rejected.' }),
+					dod: Type.String({ description: "Checklist string using - [ ] items." }),
 					items: Type.Optional(
-						Type.Array(Type.Object({ text: Type.String({ description: "Work item text." }) }), {
-							description: "Initial Work Items, numbered W1…Wn in order.",
+						Type.Array(Type.Object({ text: Type.String({ description: "Work item." }) }), {
+							description: "Optional initial work items, numbered W1…Wn.",
 						}),
 					),
 					budget: Type.Optional(
 						Type.Object({
 							steps: Type.Optional(Type.Integer({ minimum: 1 })),
-							usd: Type.Optional(Type.Number({ description: "Max cost for one spawned task." })),
+							usd: Type.Optional(Type.Number({ description: "Per-instance cost limit." })),
 						}),
 					),
 				},
 				{
 					description:
-						"Template for a task instance. Each time the event fires, a fresh task is created from it and the runtime drives it in its own session — use it for recurring or scheduled work that needs state, delegation or checking. If the previous instance is still running, the occurrence is skipped and the user is told.",
+						"Task template; exactly one of text or task. Each firing creates an independent task; overlapping occurrence is skipped.",
 				},
 			),
 		),
-		at: Type.Optional(
-			Type.String({ description: "one-shot local time, e.g. 2026-07-27T07:30:00+08:00 (2 min to ~24.8 days out)." }),
-		),
-		schedule: Type.Optional(Type.String({ description: "periodic 5-field cron, in the host timezone." })),
+		at: Type.Optional(Type.String({ description: "one-shot time with offset, 2 minutes to ~24.8 days ahead." })),
+		schedule: Type.Optional(Type.String({ description: "Five-field cron in host timezone." })),
 		preAction: Type.Optional(
 			Type.Object(
 				{
 					type: Type.Literal("bash"),
 					command: Type.String({
-						description: "Command run just before delivery; exit 0 = fire, non-zero = skip.",
+						description: "Exit 0 fires; nonzero skips.",
 					}),
-					timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout in milliseconds (not s)." })),
+					timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout in milliseconds." })),
 					timeout: Type.Optional(
-						Type.Integer({ minimum: 1, description: "Alias for timeoutMs (milliseconds), accepted on update." }),
+						Type.Integer({ minimum: 1, description: "Update alias for timeoutMs, milliseconds." }),
 					),
 				},
-				{ description: "Optional gate/sensor command." },
+				{ description: "Optional sensor gate." },
 			),
 		),
 	},
-	{ description: "The event to create/update. Channel is bound automatically — do not pass channelId." },
+	{ description: "Typed event object. Delivery channel is runtime-bound." },
 );
 
 const eventManageSchema = Type.Object({
@@ -83,13 +80,12 @@ const eventManageSchema = Type.Object({
 			Type.Literal("delete"),
 		],
 		{
-			description:
-				'"list" this desk\'s events, "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name. Any channel of the desk may manage any of its events.',
+			description: "list this desk’s events; show full definition; create/update/delete require name.",
 		},
 	),
 	name: Type.Optional(
 		Type.String({
-			description: "Event name (filename without .json); required for show/create/update/delete, ignored for list.",
+			description: "Event filename without .json; required except for list.",
 		}),
 	),
 	definition: Type.Optional(eventDefinitionSchema),
@@ -396,10 +392,7 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 		name: "event_manage",
 		label: "event_manage",
 		description:
-			"List, show, create, update, or delete this desk's scheduled events (one-shot check-ins and periodic " +
-			"cadences). A created event wakes this channel; an update keeps the event's original delivery channel. Use list " +
-			"to recover event names, and show to read an event's full definition before an update. immediate events are " +
-			"rejected.",
+			"Manage this desk’s scheduled events. Create delivers here; update preserves delivery and replaces the full definition: show first. Read event-scheduling.md for scheduling workflows.",
 		parameters: eventManageSchema,
 		execute: async (
 			_toolCallId: string,

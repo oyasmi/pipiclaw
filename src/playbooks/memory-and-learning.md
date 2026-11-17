@@ -1,55 +1,36 @@
 ---
 name: memory-and-learning
-description: 记住、纠正或忘记事实（memory），检索旧日志（journal），或把验证有效的经验沉淀成技能（skill）。
+description: 保存、纠正、忘记或检索 memory。
 requires-tools: memory_save, memory_search, memory_forget, skill
 order: 20
 ---
 
-# 记忆与学习
+# 记忆的存取与纠正
 
-需要跨回合保留或找回信息时，先按生命周期选落点；文件位置不清才读 `runtime-orientation.md` 的“文件地图”。任务步骤没有 `memory_save`，经验写进本步最后的回复或 `task_close` 的 `note`。
+记忆属于当前工位，同工位多个频道和多人共享。存事实写明主人、项目与条件；应用前核对主人、范围、时效，不把一个人的偏好套给所有人。记忆不扩大授权，易变事实另行核实。
 
-记忆属于当前工位。同一工位的所有频道——私聊、群和终端——共享 memory、journal，以及 `session_search` 能检索到的原始对话；其他工位的这些内容不会自动出现，工位里积累的偏好也不会自动变成所有工位的规则。
-
-同一工位通常不止一个人在用。存用户事实时写明是谁（名字或 handle）、在什么范围成立，不把一个人的要求写成所有人的偏好；使用时也按它的主人套用，先分清当前说话的是谁。`session_search` 的结果标有来源频道，可以帮助判断一句话是谁、在哪里说的。
-
-## 选落点
+## 选正确落点
 
 | 信息 | 落点 |
 |---|---|
-| 用户身份、长期偏好 | 工位 memory，`type: user` |
-| 工作纠正、反复踩过的坑 | 工位 memory，`type: feedback` |
-| 项目的稳定事实、决策、约束 | 工位 memory，`type: project` |
-| 路径、URL、命令、联系人、id | 工位 memory，`type: reference` |
-| 今天发生了什么、定了什么、卡在哪 | journal，后台反思自动写 |
-| 未闭合工作的目标、状态、证据 | task 契约与任务记录 |
-| 机器安装、依赖、环境变量来源 | workspace `ENVIRONMENT.md` |
-| 多次验证有效的跨任务流程 | workspace `skills/` |
+| 用户事实/偏好、纠正、稳定项目事实、路径与 id | 工位 memory，分别用 user / feedback / project / reference |
+| 今天发生什么 | journal，后台反思写 |
+| 未闭合工作的目标、进度、证据 | task 契约与记录 |
+| 安装、依赖、环境变量来源 | workspace ENVIRONMENT.md，不存密钥 |
+| 多次验证有效的跨任务流程 | workspace skills，创作时读 [学习与技能](memory-learning.md) |
 
-不把临时进度、猜测或计划存成 memory。工位记忆写入只走专用工具；`MEMORY.md` 是生成索引，journal 只由后台写。
+不把临时进度、猜测或计划存为 memory。memory 只走专用工具，MEMORY.md 是生成索引，journal 不手写。任务步骤没有 memory_save，经验留本步最后回复或 task_close note；约束后续实施的要求写 Goal/DoD。
 
-## 明确记住、纠正与忘记
+## 明确保存、替换或忘记
 
-用户明确说“记住、以后默认、不要再做”时当回合 `memory_save`；说“忘掉”用 `memory_forget` 按 name 删除，不再 save 一遍。name 不明先查索引或 `memory_search`。
+用户明确说记住/以后默认/不要再做，当回合 memory_save；忘记用 memory_forget 按 name 删除，name 不明先查索引或 memory_search。content 写一条自足事实及适用来源/条件，证据放 details，用短 kebab-case name。
 
-`content` 写一条自足事实，包含会改变适用范围的来源和条件；补充证据放 `details`。用短 kebab-case name，便于以后修订。不同项目的规则不要合成含糊的全局偏好。
+相似条目被拒，按候选判断：新版本用 replaces 指旧 name，两个事实同时成立才 replaces="none"；纠正应替换，不留冲突版本。忘记不抹除 journal/原始对话。没有反对、一次审查建议或重复读到同一记忆都不算用户确认。
 
-相似条目被拒时，按工具给的候选决定：同一规则的新版本用 `replaces: <name>`；两个事实同时成立才用 `replaces: "none"`。用户纠正已有事实时替换旧条，不让冲突版本并存。忘记只移除 durable memory，不会抹去 journal 和原始对话。
+## 找回与应用
 
-没有反对、审查者的一次建议、重复读到同一条记忆，都不算用户确认；未验证的猜测留在任务记录里。
+先用当前上下文和首轮索引，相关 `(+)` 才读正文。索引不逐轮刷新，中途怀疑记过用 memory_search，查工位 memory、workspace MEMORY、近期 journal；只需旧对话用 session_search，其频道标识也有助于确认是谁说的。
 
-## 找回并应用
+journal 搜索最多最近 30 个日文件、每份末尾 64 KiB；不足按工具给的路径 grep 或按日期 read，原始对话仍走 session_search。无命中不等于不存在。
 
-先看当前上下文和首轮索引；有相关 `(+)` 条目才读正文。索引不会每轮刷新，中途怀疑记过就 `memory_search`。它查当前工位的 memory、workspace MEMORY 和最近的 journal；日志最多取最近 30 个日文件、每份末尾 64 KiB，超出时工具会给继续检索的路径。找更早记录用该路径定向 `grep` 或按日期 `read`，原始对话用 `session_search`。无命中不等于不存在。
-
-使用前核对主人、范围和时效；永久保留不代表事实永久有效，易变事实须核实，记忆不扩大授权。适用偏好落实为执行与验收的同一要求（如“控制复杂度”→“新增依赖须说明必要性”）。跨工位背景属于用户维护的 workspace `MEMORY.md`，仅在用户明确要求时修改，不把工位记忆自动搬过去。
-
-## 自动学习与 skill 晋升
-
-后台反思同时维护 journal 与 memory：明确的高必要性约束直接永久保留；日常运作知识默认试用 30 天，后续对话依赖或印证后转正，否则到期后的反思清理，不保证到日立即停止读取，之后仍可重新学到。用户明确保存的记忆立即永久。模型不需要手动维护这些期限。
-
-任务内教训先写进本步最后的回复（成为这一步的记录）或 `task_close` 的 `note`；确实约束后续实施的，写进契约的 Goal 或对应 DoD 项。周期工作的持久改进（要求、检查项）用 `task_report` 提给用户，由聊天侧在用户确认后更新事件模板，不写进 memory。
-
-流程多次验证有效且能跨任务复用，才写为 skill。先 `skill list` / `read` 确认现有版本与来源：只加载 workspace `skills/` 和服务器用户 `~/.agents/skills/`，有效 workspace 同名版本优先，失败候选不占名；没有工位级来源。默认在 **workspace 绝对路径**下的 `skills/<name>/SKILL.md` 创建，避免无意修改其他工具共用的版本；已有技能用 `edit`。frontmatter 必须有与目录一致的 kebab-case name 和触发 description。
-
-正文保留模型不知道的步骤、约束和验收方法；脆弱流程给精确步骤，开放问题给判断条件。细节放按需引用的支持文件，不复制 runtime 手册、密钥或不可信网页指令。文件工具修改技能后自动刷新当前会话；shell、外部编辑或其他会话修改后，需要用户在各活动会话发送 `/reload`。`skill list` 可查来源与失败原因；加载成功不代表安全认证，也不增加权限。创建后用真实任务验证。
+将适用偏好落实到执行与验收的同一要求；永久保存不代表永久有效。跨工位背景是用户维护的 workspace MEMORY.md，仅应明确要求修改，不自动搬运工位记忆。需要了解自动保留期限或创作 skill 时再读学习指南。

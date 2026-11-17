@@ -18,26 +18,23 @@ import type { SubAgentToolFields, SubAgentToolOptions } from "../subagents/types
 /** Shared by both invocation surfaces (spec 046, D2.1). */
 const workingDirectoryField = Type.Optional(
 	Type.String({
-		description:
-			"Optional existing directory to run the sub-agent in (its shell cwd and relative-path root). Use it to work on another checkout — e.g. a `git worktree add`ed one. Defaults to this runtime's own working directory.",
+		description: "Existing absolute cwd; defaults to parent cwd. Does not isolate writes.",
 	}),
 );
 const worktreeField = Type.Optional(
 	Type.Boolean({
 		description:
-			"Optional: set true on a write delegation in a Git repo to run in `.git/pipiclaw-worktrees/<runId>` (`pipiclaw/<runId>`) and return `branch`/`headSha`/`changedFiles`.",
+			"For write/work in Git: use an isolated runtime-managed worktree; result includes branch, headSha, changedFiles.",
 	}),
 );
 const purposeField = Type.Optional(
 	Type.Union([Type.Literal("work"), Type.Literal("verify")], {
-		description:
-			'Use "verify" for an independent check: the sub-agent is given the checker protocol and ends with VERDICT: PASS|FAIL. The verdict is information for you to weigh, not a gate.',
+		description: "verify: independent check, returns advisory VERDICT: PASS|FAIL; default work.",
 	}),
 );
 const itemField = Type.Optional(
 	Type.String({
-		description:
-			'The task\'s Work Item this delegation is for, e.g. "W2". Only valid inside a task step, where the delegation is bound to the task automatically.',
+		description: "Task step only: bind to this work item, e.g. W2.",
 	}),
 );
 
@@ -48,7 +45,7 @@ const itemField = Type.Optional(
  */
 const subagentSchema = Type.Object({
 	agent: Type.String({ description: "Name of a configured sub-agent from workspaceDir/sub-agents/" }),
-	task: Type.String({ description: "Complete task description for the sub-agent" }),
+	task: Type.String({ description: "Self-contained goal, inputs, constraints and acceptance criteria." }),
 	workingDirectory: workingDirectoryField,
 	worktree: worktreeField,
 	purpose: purposeField,
@@ -60,22 +57,18 @@ const subagentSchema = Type.Object({
  * Carries every field a role file would otherwise supply.
  */
 const subagentInlineSchema = Type.Object({
-	task: Type.String({ description: "Complete task description for the sub-agent" }),
-	systemPrompt: Type.String({ description: "System prompt defining this one-off sub-agent's identity and task." }),
-	tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool whitelist for the sub-agent" })),
-	model: Type.Optional(
-		Type.String({ description: "Optional exact model reference. Defaults to the parent's current model." }),
-	),
+	task: Type.String({ description: "Self-contained goal, inputs, constraints and acceptance criteria." }),
+	systemPrompt: Type.String({ description: "Instructions for this one-off worker." }),
+	tools: Type.Optional(Type.Array(Type.String(), { description: "Tool whitelist." })),
+	model: Type.Optional(Type.String({ description: "Exact model reference; defaults to parent model." })),
 	effort: Type.Optional(
 		Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")], {
-			description:
-				'Execution budget preset (turns, tool calls, wall time). "standard" is the default; "quick" for narrow lookups, "deep" for long analyses.',
+			description: "Budget preset for turns, tool calls and wall time; default standard.",
 		}),
 	),
 	context: Type.Optional(
 		Type.Union([Type.Literal("none"), Type.Literal("index")], {
-			description:
-				'What context to inject. "none" (default) runs fully isolated; "index" adds the workspace background, the desk memory index, and today\'s journal tail.',
+			description: "none (default): isolated; index: workspace background, desk memory index and journal tail.",
 		}),
 	),
 	thinkingLevel: Type.Optional(
@@ -90,15 +83,13 @@ const subagentInlineSchema = Type.Object({
 				Type.Literal("max"),
 			],
 			{
-				description: "Optional reasoning effort for the sub-agent.",
+				description: "Reasoning effort.",
 			},
 		),
 	),
 	mutates: Type.Optional(
 		Type.Union([Type.Literal("read"), Type.Literal("write")], {
-			description:
-				'Whether this delegation will modify the working directory. Declare "write" whenever the sub-agent may write ' +
-				"files (including through bash) so it takes the exclusive workspace write lease.",
+			description: "Use write if any writes are possible, including through bash; controls workspace lease.",
 		}),
 	),
 	workingDirectory: workingDirectoryField,
@@ -115,7 +106,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate a task to a configured sub-agent (see the Sub-Agents directory in the system prompt). Prefer this over `subagent_inline` whenever a role fits — its tools, model, budget and context policy all come from the role file. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+			"Delegate to a configured role; it supplies tools, model, budget and context. Prefer this over subagent_inline when a role fits. Read agent-delegation.md for delegation workflows.",
 		parameters: subagentSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			if (signal?.aborted) {
@@ -156,7 +147,7 @@ export function createSubAgentInlineTool(
 		name: "subagent_inline",
 		label: "subagent_inline",
 		description:
-			"Advanced fallback only, not the default: use `subagent` first whenever any configured role in the workspace `sub-agents/` can do the work. `subagent` is the normal role-based path: pass its `agent` and complete `task`; the role file supplies the tools, model, budget and context policy. Use `subagent_inline` only when no configured role is suitable. It is a raw one-shot meta-executor, not a shorthand for `subagent`: there is no role file to supply those settings. Build a complete valid inline call yourself — `task` and `systemPrompt` are required; choose valid values for any needed `tools`, `model`, `effort`, `context`, `thinkingLevel`, `mutates`, `workingDirectory`, and `purpose` fields. Do not send a partial role-style payload or choose this tool just because it is available. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+			"Fallback only when no configured role fits; otherwise use subagent. Supply task and systemPrompt. Before inline setup, read delegation-inline.md under the Runtime Guides directory.",
 		parameters: subagentInlineSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			if (signal?.aborted) {

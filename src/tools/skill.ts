@@ -55,9 +55,7 @@ export function createSkillTool(options: SkillOptions): AgentTool<typeof skillSc
 		name: "skill",
 		label: "skill",
 		description:
-			"List or read Pipiclaw skills from ~/.agents/skills/ and workspace/skills/. Valid workspace skills override shared names. Read-only: " +
-			"to author or update a skill, write workspace/skills/<name>/SKILL.md directly with the write/edit tools " +
-			'(frontmatter needs "name" and "description" fields).',
+			"List/read skills from workspace/skills/ and ~/.agents/skills/; valid workspace names win. To author with write/edit, read memory-learning.md under the Runtime Guides directory.",
 		parameters: skillSchema,
 		execute: async (_toolCallId: string, args: { action: string; name?: string }) => {
 			if (args.action === "list") {

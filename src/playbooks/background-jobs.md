@@ -1,6 +1,6 @@
 ---
 name: background-jobs
-description: 长跑命令需要 bash async、设置超时（timeout），或处理后台作业（job）的结果、取消与恢复时。
+description: 启动长跑 bash/job，设置超时或处理结果。
 requires-tools: job
 order: 50
 ---

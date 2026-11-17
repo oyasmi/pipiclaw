@@ -70,11 +70,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 		name: "job",
 		label: "job",
 		description:
-			"Inspect and control this desk's background bash jobs (started with bash async:true), shared by every " +
-			"channel bound to it. op=list shows a snapshot; op=poll waits briefly for a running job to finish and " +
-			"returns its output; op=cancel stops jobs by id. A job's completion wakes the channel that started it " +
-			'(a job from another channel is marked "started in <channel>"); for your own jobs, finish independent ' +
-			"work, then end the turn when only waiting remains.",
+			"Inspect/control this desk's background bash jobs. Completion wakes the starter; other channels' jobs are marked with their origin. Finish independent work, then end the turn rather than repeatedly polling. Read background-jobs.md for job workflows.",
 		parameters: jobSchema,
 		execute: async (_toolCallId: string, { op, ids }: JobToolArgs, signal?: AbortSignal) => {
 			if (op === "cancel") {

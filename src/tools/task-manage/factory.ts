@@ -58,7 +58,7 @@ export function createTaskListTool(options: TaskManageToolOptions): AgentTool<ty
 		name: "task_list",
 		label: "task_list",
 		description:
-			"List this desk's active tasks (or include closed/archived ones with `includeArchived: true` and optional `query`), including those created from other channels (each reports to its own `channel`; `deliversHere` marks the ones that report to this chat). Shows each task's state, what a waiting one waits for, the step in progress and the delegations in flight — the live status to answer a progress question from.",
+			"Get live task progress for this desk: state, waiting source, current step and in-flight delegations. Includes other channels' tasks; deliversHere marks reports to this chat. Use task_log for history.",
 		parameters: taskListSchema,
 		execute: async (_toolCallId, args: TaskListRequest) => asResult(await listTasks(options, args)),
 	};
@@ -69,7 +69,7 @@ export function createTaskCreateTool(options: TaskManageToolOptions): AgentTool<
 		name: "task_create",
 		label: "task_create",
 		description:
-			"Create a persistent project you lead: goal, DoD checklist, optional Work Items and budget. The runtime then runs it in the background in its own session, in parallel with this chat; delegate pieces with subagent (bound to the task automatically in that session).",
+			"Create a persistent project you lead in its own background session alongside this chat. Read task-manage.md for scope, contract and management workflows.",
 		parameters: taskCreateSchema,
 		execute: async (_toolCallId, args: TaskCreateRequest) =>
 			asResult(await withLock(options, args.id, () => createTask(options, args))),
