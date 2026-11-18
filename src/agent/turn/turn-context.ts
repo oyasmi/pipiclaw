@@ -32,12 +32,10 @@ export function renderDeskTurnContext(
 ): string {
 	return [
 		"<runtime_turn_context>",
-		`Workspace: ${workspaceDir} — shared identity, rules, skills and roles. You are the same Pipiclaw assistant across desks.`,
-		conversation.cwd === conversation.deskDir
-			? `Desk: ${conversation.desk} — directory ${conversation.deskDir} (your working directory).`
-			: `Desk: ${conversation.desk} — directory ${conversation.deskDir}. Your working directory is ${conversation.cwd}.`,
-		`This conversation: ${channelLabel ? `${channelLabel} ` : ""}(channel ${conversation.channelId}).`,
-		"The desk's `MEMORY.md` index, `memory/`, `journal/`, `tasks/` and `events/` live in the desk directory. Prefer the context supplied with this turn and the desk-bound tools; read those files directly only when you need detail they did not provide.",
+		`Workspace: ${workspaceDir}`,
+		`Desk: ${conversation.desk} (${conversation.deskDir})`,
+		`Cwd: ${conversation.cwd}`,
+		`Channel: ${conversation.channelId}${channelLabel ? ` (${channelLabel})` : ""}`,
 		"</runtime_turn_context>",
 	].join("\n");
 }

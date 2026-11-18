@@ -626,6 +626,7 @@ export class SessionHost {
 		if (this.retired) throw new Error("Session generation retired");
 		const tools = this.buildRuntimeTools();
 		const agent = new Agent({
+			sessionId: sessionManager.getSessionId(),
 			initialState: {
 				systemPrompt: "",
 				model: this.models.activeModel,

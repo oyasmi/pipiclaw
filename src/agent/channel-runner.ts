@@ -36,6 +36,7 @@ import { errorMessage } from "../shared/text-utils.js";
 import { loadPipiclawSkills } from "../skills/loader.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import type { SubAgentDiscoveryResult } from "../subagents/types.js";
+import type { TaskBrief } from "../tasks/brief.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { handleBuiltinCommand, requireQueuedMessage } from "./builtin-commands.js";
 import { measureToolSchemas, type PromptTurnContextStats, renderContextReport } from "./prompt/manifest.js";
@@ -46,7 +47,6 @@ import { createRunQueue } from "./turn/run-queue.js";
 import { TurnFinisher } from "./turn/turn-finish.js";
 import { TurnOutput } from "./turn/turn-output.js";
 import { createTurnProgress, TurnPipeline } from "./turn/turn-pipeline.js";
-import { assembleTurnPrompt } from "./turn/turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn/turn-recovery.js";
 import { TurnStateMachine } from "./turn/turn-state.js";
 import type { RunnerDeps, RunnerFactoryPaths } from "./types.js";
@@ -290,7 +290,12 @@ export class ChannelRunner implements AgentRunner {
 		return this.turnState.status();
 	}
 
-	async run(info: TurnInfo, channel: ChannelContext, store: ChannelStore): ReturnType<AgentRunner["run"]> {
+	async run(
+		info: TurnInfo,
+		channel: ChannelContext,
+		store: ChannelStore,
+		taskContract?: TaskBrief["contract"],
+	): ReturnType<AgentRunner["run"]> {
 		const startedAt = Date.now();
 		const ctx = new TurnOutput(channel, this.channelId);
 		this.resetRunState(info, ctx, store);
@@ -322,31 +327,9 @@ export class ChannelRunner implements AgentRunner {
 			if (this.profile.kind === "chat") await mkdir(this.conversationDir, { recursive: true });
 
 			const channelCapsule = await this.pipeline.gatherTurnContext(input.preserveRawInput, turn);
-			const assembled = assembleTurnPrompt({
-				clippedInput: input.clippedInput,
-				userMessage: input.userMessage,
-				preserveRawInput: input.preserveRawInput,
-				channelCapsule,
-				durableMemoryBootstrap: turn.durableMemoryBootstrapText,
-				taskDigest: turn.taskDigestText,
-			});
-			turn.promptText = assembled.text;
-
-			// Resolved before the compaction estimate below (which needs the image count) and
-			// refreshed inside `setModel` further down if a fallback switches models mid-turn
-			// (spec 049 D7) — a model's image support is looked up here explicitly because the
-			// SDK's own handling of an unsupported model is to silently replace each image block
-			// with a text placeholder.
+			// Count supported images in the compaction budget. Fallback rechecks image support.
 			turn.images = await this.pipeline.prepareTurnImages(info, ctx);
-
-			// Estimated against the fully assembled prompt (recall + task digest + bootstrap all
-			// included above), not just the bare user message — those pieces can add thousands of
-			// characters and must count against the projected context usage this guard is checking.
-			// Each image adds a fixed per-image estimate on top of the text: three attached photos
-			// can by themselves push a turn over the threshold that would trigger this guard.
-			await this.pipeline.maybeRunPreventiveCompactionForIncomingText(turn.promptText, turn.images.images.length);
-
-			this.lastTurnContextStats = assembled.stats;
+			this.lastTurnContextStats = await this.pipeline.preparePrompt(input, turn, channelCapsule, taskContract);
 
 			turn.fallbackAttempted = await runPromptWithFallback(
 				turn.promptText,

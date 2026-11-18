@@ -1,9 +1,14 @@
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { CompactionSummary } from "../../../src/agent/session/compaction-summary.js";
 import { getDeskMemoryQueue } from "../../../src/memory/desk-memory-queue.js";
+import { renderMemoryBootstrap } from "../../../src/memory/render.js";
+import { contractOpenTag, contractSha } from "../../../src/tasks/brief.js";
+import { renderTaskDocument } from "../../../src/tasks/contract.js";
+import { appendTaskLog, readTaskLog } from "../../../src/tasks/loop-log.js";
+import { taskSessionPath } from "../../../src/tasks/session-path.js";
 import { crash, startDaemon } from "../../support/daemon-process.js";
 import { startMockProvider } from "../../support/mock-provider/server.js";
 import { bindChannelOnDisk, createDeterministicHarness, reply } from "../../support/runtime-harness.js";
@@ -259,6 +264,89 @@ describe("E2E deterministic: compaction", () => {
 		} finally {
 			memory.release();
 			await getDeskMemoryQueue().run({ desk: harness.desk, deskDir: harness.deskDir }, async () => {});
+			await harness.shutdown();
+		}
+	});
+
+	it("restores the task contract and desk memory on the request that adopts a checkpoint before sending", async () => {
+		// A delta assembled against the previous projection can lose its only Goal/DoD and memory before the provider sees it.
+		// Mutation checked 2026-11-18: separately skip contract restoration and memory refresh; each loses its marker in this request.
+		const taskId = "compacting-task";
+		const goal = "KEEP_DEPLOYMENT_RESTRICTION";
+		const body = `# Task\n\n## Goal\n${goal}\n\n## DoD\n- [ ] Deliver`;
+		const tag = contractOpenTag(taskId, contractSha(body));
+		const harness = await createDeterministicHarness({
+			seed: ({ deskDir, homeDir }) => {
+				writeFileSync(join(homeDir, "workspace", "MEMORY.md"), "FRESH_WORKSPACE_FACT");
+				const sessionFile = taskSessionPath(deskDir, taskId);
+				mkdirSync(dirname(sessionFile), { recursive: true });
+				const session = SessionManager.open(sessionFile, dirname(sessionFile), deskDir);
+				const assistant = (text: string, timestamp: number) =>
+					session.appendMessage({
+						role: "assistant",
+						content: [{ type: "text", text }],
+						timestamp,
+						api: "openai-completions",
+						provider: "e2e-mock",
+						model: "mock-main",
+						stopReason: "stop",
+						usage: {
+							input: 190000,
+							output: 1,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 190001,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+					});
+				session.appendMessage({
+					role: "user",
+					content: `${renderMemoryBootstrap({ workspaceMemory: "OLD_WORKSPACE_FACT" })}\n${tag}\n${body}\n</task_contract>`,
+					timestamp: 1,
+				});
+				assistant(`OLD_HISTORY ${"旧".repeat(55000)}`, 2);
+				session.appendMessage({ role: "user", content: "Recent work", timestamp: 3 });
+				assistant("近".repeat(23000), 4);
+			},
+		});
+		const lane = harness.runtime.taskLane;
+		const taskRequest = (r: { lastUserText: string }) => r.lastUserText.includes(`[TASK_STEP:${taskId} #1]`);
+		const hold = harness.model.script.hold({ when: taskRequest });
+		try {
+			writeFileSync(
+				join(harness.deskDir, "tasks", `${taskId}.md`),
+				renderTaskDocument({ state: "queued", channel: harness.channelId }, body),
+			);
+			await appendTaskLog(harness.deskDir, taskId, {
+				kind: "message",
+				from: "user",
+				channel: harness.channelId,
+				text: "PENDING_INPUT",
+			});
+			harness.model.script.route({
+				name: "checkpoint",
+				when: summaryRequest,
+				respond: [reply.text("CHECKPOINT")],
+				repeat: true,
+			});
+			harness.model.script.route({
+				name: "task",
+				when: taskRequest,
+				respond: [reply.toolCall("task_wait", { until: "+1h" }), reply.text("waiting")],
+			});
+			await lane.runOnce();
+			const request = await hold.arrived;
+			const log = await readTaskLog(harness.deskDir, taskId);
+			expect(log.find((record) => record.kind === "step")).toMatchObject({ brief: "delta" });
+			expect(request.lastUserText).toContain(`${tag}\n${body}\n</task_contract>`);
+			expect(request.lastUserText).toContain("FRESH_WORKSPACE_FACT");
+			expect(request.lastUserText).toContain("PENDING_INPUT");
+			expect(JSON.stringify(request.raw)).not.toContain("OLD_HISTORY");
+			hold.release();
+			await lane.drained();
+			expect((await readTaskLog(harness.deskDir, taskId)).some(({ kind }) => kind === "input_ack")).toBe(true);
+		} finally {
+			hold.release();
 			await harness.shutdown();
 		}
 	});

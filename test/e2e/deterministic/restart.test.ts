@@ -19,9 +19,14 @@ describe("E2E deterministic: restart & persistence", () => {
 		// Mutation check: point resolveActiveSessionFile at a fresh name instead of the
 		// existing context.jsonl and the post-restart turn branches from root — its
 		// entry's parentId no longer chains onto the pre-restart assistant message.
+		// Mutation checked 2026-11-18: omit the Agent sessionId; the provider no longer gets the stable cache key.
 		harness = await createDeterministicHarness({
-			seed: ({ deskDir, conversationDir }) => {
+			seed: ({ deskDir, conversationDir, homeDir }) => {
 				seedLegacySession("branch", join(conversationDir, "context.jsonl"), deskDir);
+				const path = join(homeDir, "models.json");
+				const models = JSON.parse(readFileSync(path, "utf8"));
+				models.providers["e2e-mock"].compat.promptCacheKeyMode = "enabled";
+				writeFileSync(path, JSON.stringify(models));
 			},
 		});
 		harness.model.script.route({ name: "t", when: (r) => r.isMainTurn, respond: [reply.text("好的")], repeat: true });
@@ -38,10 +43,12 @@ describe("E2E deterministic: restart & persistence", () => {
 		const sessionFile = join(harness.conversationDir, "context.jsonl");
 		const before = readFileSync(sessionFile, "utf-8").trim().split("\n");
 		const sessionId = JSON.parse(before[0]).id as string;
+		expect(request?.raw.prompt_cache_key).toBe(sessionId);
 		const lastPreRestartId = JSON.parse(before.at(-1)!).id as string;
 
 		await harness.restart();
 		await harness.sendUserMessage("继续");
+		expect(harness.lastMainTurnRequest()?.raw.prompt_cache_key).toBe(sessionId);
 
 		const after = readFileSync(sessionFile, "utf-8")
 			.trim()
@@ -53,6 +60,10 @@ describe("E2E deterministic: restart & persistence", () => {
 		expect(readFileSync(sessionFile, "utf-8")).toContain("MARKER_XYZ_4242");
 		// The post-restart turn branches onto the pre-restart head, not root.
 		expect(after.slice(before.length)[0].parentId).toBe(lastPreRestartId);
+		await harness.sendUserMessage("/new");
+		await harness.sendUserMessage("NEW_SESSION");
+		expect(harness.lastMainTurnRequest()?.raw.prompt_cache_key).toEqual(expect.any(String));
+		expect(harness.lastMainTurnRequest()?.raw.prompt_cache_key).not.toBe(sessionId);
 
 		// Consume old interrupted/Azure histories through the host, with explicit current configuration.
 		await harness.shutdown();

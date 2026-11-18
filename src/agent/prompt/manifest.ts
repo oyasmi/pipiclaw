@@ -74,7 +74,7 @@ export interface PromptTurnContextStats {
 
 export interface PromptContextReportInput {
 	build: PromptBuildResult;
-	/** What the provider actually received: our prompt + pi's skills/date/cwd tail + the boundary footer. */
+	/** The assembled system prompt, including pi's skills/cwd tail and the boundary footer. */
 	finalPrompt?: string;
 	skills: Array<{ name: string; description: string }>;
 	toolNames: string[];
@@ -167,10 +167,8 @@ export function renderContextReport(input: PromptContextReportInput): string {
 		`- 系统提示词（Pipiclaw 部分）：${formatNumber(build.totalUnits)} 单位，约 ${formatNumber(build.estimatedTokens)} tokens；其中运行时自带 ${formatNumber(build.runtimeAuthoredUnits)} / 目标 ${formatNumber(RUNTIME_PROMPT_TARGET_UNITS)} 单位`,
 	);
 	if (finalPrompt) {
-		// The string the provider actually caches: our sections + pi's skills/date/cwd tail +
-		// the boundary footer. It is the fingerprint that matters for cache hits — the build
-		// fingerprint only covers the part Pipiclaw owns, and stays stable across a date rollover
-		// that does invalidate the provider's cached prefix.
+		// The assembled system prompt is one part of the provider's prefix, alongside tool
+		// declarations and dialogue. The build fingerprint covers only Pipiclaw's own sections.
 		lines.push(
 			`- 实际发送（含 skills、日期、工作目录）：${formatNumber(finalPrompt.length)} 字，约 ${formatNumber(estimateTokens(finalPrompt))} tokens，指纹 \`${sha256(finalPrompt).slice(0, 16)}\``,
 		);

@@ -12,6 +12,7 @@ import * as log from "../../log.js";
 import type { FallbackRunDeps } from "../../models/fallback.js";
 import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
+import type { TaskBrief } from "../../tasks/brief.js";
 import type { ModelSelection } from "../session/model-selection.js";
 import { SessionRetryAttempt } from "../session/session-adapter.js";
 import type { SessionHost } from "../session/session-host.js";
@@ -28,6 +29,7 @@ import {
 	shouldPreserveRawInput,
 } from "./turn-input.js";
 import type { TurnOutput } from "./turn-output.js";
+import { assembleTurnPrompt } from "./turn-prompt.js";
 import type { TurnHandle, TurnStateMachine } from "./turn-state.js";
 
 /** What `run()` accumulates across its steps; the epilogue reports it as the turn was actually sent. */
@@ -40,6 +42,12 @@ export interface TurnProgress {
 	durableMemoryBootstrapText: string;
 	bootstrapPrepared: boolean;
 	images: PreparedInboundImages;
+}
+
+interface PreparedTurnInput {
+	clippedInput: string;
+	userMessage: string;
+	preserveRawInput: boolean;
 }
 
 export function createTurnProgress(): TurnProgress {
@@ -97,10 +105,7 @@ export class TurnPipeline {
 	}
 
 	/** Oversized input is spilled to disk and clipped; the user is told. Slash commands pass through raw. */
-	async prepareUserInput(
-		turn: TurnInfo,
-		ctx: TurnOutput,
-	): Promise<{ clippedInput: string; userMessage: string; preserveRawInput: boolean }> {
+	async prepareUserInput(turn: TurnInfo, ctx: TurnOutput): Promise<PreparedTurnInput> {
 		const normalizedInputLength = turn.text.replace(/\r/g, "").trim().length;
 		let oversizedInputPath: string | undefined;
 		if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
@@ -151,13 +156,7 @@ export class TurnPipeline {
 			(error: unknown) => ({ error }) as { text?: never; error: unknown },
 		);
 
-		// Spec 050, D1: the memory index is injected in full on the first turn of a session
-		// (and the first turn after compaction — see `subscribeToSessionEvents`), never per
-		// turn. Mid-session, the model uses `memory_search` to look things up.
-		if (this.host.firstTurnMemoryBootstrapPending) {
-			turn.durableMemoryBootstrapText = await buildFirstTurnMemoryBootstrap(this.deskDir, this.workspaceDir);
-			turn.bootstrapPrepared = true;
-		}
+		await this.prepareMemoryBootstrap(turn);
 
 		const taskDigestResult = await taskDigestPromise;
 		if (taskDigestResult.error !== undefined) {
@@ -165,6 +164,46 @@ export class TurnPipeline {
 		}
 		turn.taskDigestText = taskDigestResult.text ?? "";
 		return channelCapsuleText;
+	}
+
+	private async prepareMemoryBootstrap(turn: TurnProgress): Promise<boolean> {
+		if (turn.bootstrapPrepared || !this.host.firstTurnMemoryBootstrapPending) return false;
+		turn.durableMemoryBootstrapText = await buildFirstTurnMemoryBootstrap(this.deskDir, this.workspaceDir);
+		turn.bootstrapPrepared = true;
+		return Boolean(turn.durableMemoryBootstrapText);
+	}
+
+	async preparePrompt(
+		input: PreparedTurnInput,
+		turn: TurnProgress,
+		channelCapsule: string,
+		taskContract?: TaskBrief["contract"],
+	) {
+		let restoredContract: string | undefined;
+		// Check the final projection after compaction. Rebudget when we attach missing context;
+		// each source can be added at most once. Keep the task inputs and their receipts intact.
+		while (true) {
+			const assembled = assembleTurnPrompt({
+				...input,
+				channelCapsule,
+				durableMemoryBootstrap: turn.durableMemoryBootstrapText,
+				taskDigest: turn.taskDigestText,
+				taskContract: restoredContract,
+			});
+			turn.promptText = assembled.text;
+			await this.maybeRunPreventiveCompactionForIncomingText(turn.promptText, turn.images.images.length);
+			if (input.preserveRawInput) return assembled.stats;
+			const addedMemory = await this.prepareMemoryBootstrap(turn);
+			if (
+				!restoredContract &&
+				taskContract &&
+				!this.host.contextIncludes((text) => text.includes(taskContract.tag))
+			) {
+				restoredContract = clipUserInput(taskContract.text, MAX_USER_MESSAGE_CHARS, taskContract.path);
+				continue;
+			}
+			if (!addedMemory) return assembled.stats;
+		}
 	}
 
 	/** Inbound images for the current model, with a notice to the user for each one that was left out. */
@@ -348,7 +387,7 @@ export class TurnPipeline {
 		}
 	}
 
-	async maybeRunPreventiveCompactionForIncomingText(incomingText: string, imageCount: number = 0): Promise<void> {
+	async maybeRunPreventiveCompactionForIncomingText(incomingText: string, imageCount = 0): Promise<void> {
 		if (incomingText.trimStart().startsWith("/")) return;
 		if (!this.host.settingsManager.getCompactionEnabled()) {
 			this.host.compaction.cancel("disabled");

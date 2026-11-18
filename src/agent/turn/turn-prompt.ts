@@ -20,6 +20,8 @@ export interface TurnPromptParts {
 	/** `<memory_bootstrap>`: workspace memory + desk memory index + journal, first turn only (spec 050, D1). */
 	durableMemoryBootstrap: string;
 	taskDigest: string;
+	/** Restored contract for a delta brief when the canonical projection dropped its original. */
+	taskContract?: string;
 }
 
 export interface AssembledTurnPrompt {
@@ -58,7 +60,8 @@ export function assembleTurnPrompt(parts: TurnPromptParts): AssembledTurnPrompt 
 		parts.durableMemoryBootstrap,
 		parts.taskDigest,
 		parts.channelCapsule,
+		parts.taskContract,
 		`<user_message>\n${parts.userMessage}\n</user_message>`,
 	];
-	return { text: blocks.filter((block) => block !== "").join("\n\n"), stats };
+	return { text: blocks.filter(Boolean).join("\n\n"), stats };
 }

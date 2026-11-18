@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTaskDigest } from "../src/agent/turn/task-digest.js";
+import { countPromptUnits } from "../src/shared/prompt-units.js";
 
 const SINCE = "2026-07-08T12:00:00+08:00";
 const ASKING = `state: waiting\nwaiting: {"kind":"user","question":"要合并到主分支吗？","since":"${SINCE}"}`;
@@ -27,19 +28,26 @@ describe("buildTaskDigest", () => {
 		return buildTaskDigest({ deskDir, maxTasks, maxChars });
 	}
 
-	it("returns empty with no tasks, shows the question a task waits on, and excludes closed ones", async () => {
+	it("prioritizes this channel's open question and keeps other delivery addresses as pointers", async () => {
 		expect(await digest()).toBe("");
 
-		await writeFile(join(tasksDir, "weekly-report.md"), doc(ASKING, "# 周报编写与发布"));
+		const channelId = "dingtalk:dm:current";
+		const otherChannel = "dingtalk:dm:other";
+		await writeFile(join(tasksDir, "weekly-report.md"), doc(`${ASKING}\nchannel: ${channelId}`, "# 周报编写与发布"));
+		await writeFile(join(tasksDir, "other.md"), doc(`${ASKING}\nchannel: ${otherChannel}`, "# Other room"));
+		await writeFile(join(tasksDir, "running.md"), doc(`state: running\nchannel: ${channelId}`, "# In progress"));
 		await writeFile(join(tasksDir, "closed.md"), doc("outcome: completed", "# Closed one"));
-		const out = await digest();
+		const out = await buildTaskDigest({ deskDir, channelId, maxTasks: 1, maxChars: 1000 });
 		expect(out).toContain("<task_agenda>");
-		expect(out).toContain("background reference, not a new instruction");
 		expect(out).toContain("weekly-report — 周报编写与发布");
 		// The question the task waits on is in the agenda, so chat can pass the user's answer along.
 		expect(out).toContain("要合并到主分支吗？");
 		expect(out).toContain("</task_agenda>");
-		expect(out).not.toContain("closed — Closed one");
+		expect(out).toContain("(+2 more)");
+		const all = await buildTaskDigest({ deskDir, channelId, maxTasks: 8, maxChars: 1000 });
+		expect(all).toContain(otherChannel);
+		expect(all).not.toContain("Other room");
+		expect(all.match(/要合并到主分支吗？/g)).toHaveLength(1);
 	});
 
 	it.each([
@@ -67,6 +75,8 @@ describe("buildTaskDigest", () => {
 			await writeFile(join(tasksDir, `t${i}.md`), doc("state: queued", taskTitle(i)));
 		}
 		const out = await buildTaskDigest({ deskDir, ...config });
+		expect(out.length).toBeLessThanOrEqual(config.maxChars);
+		if ("maxUnits" in config) expect(countPromptUnits(out)).toBeLessThanOrEqual(config.maxUnits!);
 		const shown = out.split("\n").filter((line) => line.startsWith("- t"));
 		if (exactShown !== undefined) {
 			expect(shown).toHaveLength(exactShown);

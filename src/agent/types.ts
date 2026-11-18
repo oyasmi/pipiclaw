@@ -12,6 +12,7 @@ import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import type { SubAgentDiscoveryResult } from "../subagents/types.js";
+import type { TaskBrief } from "../tasks/brief.js";
 import type { TaskControl, TaskSessionContext } from "../tasks/control.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
 import type { TurnOutput } from "./turn/turn-output.js";
@@ -65,6 +66,7 @@ export interface AgentRunner {
 		turn: TurnInfo,
 		ctx: ChannelContext,
 		store: ChannelStore,
+		taskContract?: TaskBrief["contract"],
 	): Promise<{
 		stopReason: string;
 		errorMessage?: string;

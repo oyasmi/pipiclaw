@@ -58,7 +58,7 @@ export interface TaskBriefInput {
 
 export interface TaskBrief {
 	text: string;
-	contractSha: string;
+	contract: { tag: string; text: string; path: string };
 }
 
 interface PreviousOccurrence {
@@ -212,12 +212,13 @@ const STEP_RULES =
 export async function buildTaskStepBrief(input: TaskBriefInput): Promise<TaskBrief> {
 	const { document, records } = input;
 	const taskId = document.id;
-	const sha = contractSha(document.body);
+	const tag = contractOpenTag(taskId, contractSha(document.body));
+	const contract = { tag, text: `${tag}\n${document.body.trim()}\n</task_contract>`, path: document.path };
 	const now = input.now ?? Date.now();
 	const blocks: string[] = [`[TASK_STEP:${taskId} #${input.seq}]`];
 
 	if (input.full) {
-		blocks.push(`${contractOpenTag(taskId, sha)}\n${document.body.trim()}\n</task_contract>`);
+		blocks.push(contract.text);
 		blocks.push(
 			`Task working files: ${join(input.deskDir, "work", taskId)}. Use this desk-local directory for intermediate files and command logs; do not reuse a shared absolute logs directory.`,
 		);
@@ -252,6 +253,8 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<TaskBri
 		blocks.push(
 			`契约文件：${document.path}\n首次执行前读取 ${join(PLAYBOOKS_DIR, "task-lead.md")}；已在当前上下文中读过则复用。\n${STEP_RULES}`,
 		);
+	} else {
+		blocks.push(`契约文件：${document.path}。如果上下文中没有完整契约，先读文件确认 Goal 和 DoD。`);
 	}
-	return { text: blocks.join("\n\n"), contractSha: sha };
+	return { text: blocks.join("\n\n"), contract };
 }

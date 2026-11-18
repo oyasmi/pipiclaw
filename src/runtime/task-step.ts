@@ -247,7 +247,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 	let usdEstimated = false;
 	let usdKnown = false;
 	try {
-		const running = runner.run(info, SILENT_CONTEXT, options.store);
+		const running = runner.run(info, SILENT_CONTEXT, options.store, full ? undefined : brief.contract);
 		ctx.inputAvailable(live.desk, live.taskId);
 		const run = await running;
 		finalText = run.finalText ?? "";

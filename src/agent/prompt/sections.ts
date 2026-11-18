@@ -11,7 +11,7 @@
  *   600–699  workspace instructions (SOUL, AGENTS)
  *   700–799  skills          (rendered by pi, not by us — see resources.ts)
  *   800–899  final boundary  (appended after pi's tail — see extension.ts)
- *   900–999  environment / overlays (pi appends date + cwd)
+ *   900–999  environment / overlays (pi appends cwd)
  *
  * Content rules (spec 026 §2.1): a line stays here only if nearly every turn needs
  * it, or missing it once can break safety / durable state / an external side effect,
@@ -259,7 +259,7 @@ export const AGENTS_SECTION: PromptSectionDefinition = {
 };
 
 /**
- * Injected *after* pi's tail (skills, date, cwd) by the prompt extension, so the
+ * Injected *after* pi's tail (skills and cwd) by the prompt extension, so the
  * last thing the model reads is the runtime boundary rather than user-authored
  * content. It restates the boundary only — enforcement lives in the guards.
  */

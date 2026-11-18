@@ -420,7 +420,7 @@ system prompt 由 Pipiclaw 自己拥有：`agent/session/session-host.ts` 通过
 ```text
 runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(需 task_create/task_close)
 → playbooks(按工具过滤) → subagents(需 subagent 且有条目) → SOUL.md → AGENTS.md
-→ [pi 追加] <available_skills> + 当前日期 + cwd
+→ [pi 追加] <available_skills> + cwd
 → [before_agent_start 追加] runtime.boundary footer
 ```
 
@@ -428,12 +428,12 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 - **瘦身与内容责任（spec 026）**：Pipiclaw 只为自己写下的固定段负责，且严格克制——不再重复 tool 目录（tool schema 已是权威），identity/contract/boundary 文案压缩，playbook 目录只保留 filename + 一句 trigger 并在头部打印一次绝对 `PLAYBOOKS_DIR`，无配置 sub-agent 时整段消失。当前体量由 `/context` 和 `npm run playbooks:measure` 检查，不把旧版本一次测量的数字当作现行基线。
 - **prompt units 预算**：预算以 `countPromptUnits`（`shared/prompt-units.ts`：CJK 每字 1、非 CJK 单词 1、标点空白 0）度量。runtime-authored 段合计目标 ≤ 700 units、硬上限 1,200 units（`builder.ts`），超标分别 warning/error。已删除旧的 32k 全局字符池与「依次收缩 subagents/playbooks/AGENTS/SOUL」策略，用户文件不再因总量竞争被裁。`HARD_TOTAL_BUDGET_CHARS`/`SOFT_TOTAL_BUDGET_CHARS` 公共导出随之移除（beta API 变更）。
 - **SOUL / AGENTS 独立预算**：两者互不挤压，各有 units + chars 双上限（SOUL 3,000 units / 24,000 chars，AGENTS 6,000 units / 48,000 chars，见 `prompt/resources.ts`）。只有真正超大的文件才 head/tail 截断；正文裁剪发生在 resources 层，section 层只保证 wrapper 完整。
-- **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`agent/turn/turn-context.ts`）。
+- **缓存稳定**。工位目录、实际 cwd 和频道资料由每轮的 `<runtime_turn_context>` 提供。system prompt 中的 SDK cwd 段、技能和工具目录按实际环境生成。同一会话使用 SDK 的会话 ID，`/new` 和 fork 使用新 ID；Codex 的已解析模型、端点或请求头变化时释放旧连接（`models/requests.ts`）。
 - **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 目录由 Pipiclaw 管理，渲染与展开交给 pi（spec 063）**：`skillsOverride` 只提供两个正式来源中可解析、可读取且路径允许的技能，有效工作区版本优先；`<available_skills>` 索引与 `/skill:name` 命令同源。技能正文不做关键词准入扫描，加载不代表安全认证或额外授权。Pipiclaw 不设 skills 预算、不产生超限 warning；`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
 - **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/parse.ts`/`events/watcher.ts`），普通对话不再长期携带。TASK_STEP 的准确 task 文件与 playbook 路径由 `tasks/brief.ts` 构建的步骤 brief 给出。
-- **自动 turn context 单位上限（spec 026 §5.3）**：task agenda（600 units）、workspace 共享背景（500 units）、channel 记忆索引（1,400 units）、当天 journal 尾部（400 units）各有独立 unit 上限，与内置 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`agent/turn/task-digest.ts`、`memory/index-budget.ts`、`memory/render.ts`）。
-- **可观测**：`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地列出各 section 的 units/chars、runtime-authored 合计、SOUL/AGENTS 独立预算、skills 归属和上一轮自动上下文 units；`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录**实际发出的** system prompt 与 manifest。注意 `fingerprint` 只覆盖 Pipiclaw 自有 section（日志据此去重），provider 真正缓存的是含 pi tail 的整串，即 `finalPromptSha256`——date 每日一变会让整块 system prompt 重算。缓存效果结合用量账本里的 cacheRead/cacheWrite 观察。
+- **自动 turn context 预算（spec 026 §5.3）**。任务摘要上限 600 units，优先显示本频道待答问题，其他频道只显示任务 ID 和投递地址。完整进度、用量和历史按需取。共享背景 500 units、工位记忆索引目标 1,400 units、当天日记尾部 400 units。发送前采用压缩时，按需在本次补入记忆与缺失的任务契约，并重新检查输入预算（`agent/turn/turn-pipeline.ts`）。
+- **可观测**。`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地列出各 section 的 units/chars、runtime-authored 合计、SOUL/AGENTS 独立预算、skills 归属和上一轮自动上下文 units。`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录 system prompt 和 manifest。`fingerprint` 覆盖 Pipiclaw 自有段落，`finalPromptSha256` 还包含 SDK 尾部。缓存前缀同时受实际工具声明和历史影响，效果结合用量账本里的 cacheRead/cacheWrite 观察。
 
 playbook 正文不进提示词，agent 触发时用 `read` 按需加载。
 

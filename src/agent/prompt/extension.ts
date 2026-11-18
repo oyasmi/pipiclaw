@@ -1,7 +1,7 @@
 /**
  * Final-boundary extension (spec 025 §6.11, §10.6).
  *
- * pi always appends its own tail — skills, current date, cwd — after a custom
+ * pi appends its own tail — skills and cwd — after a custom
  * system prompt, so the last thing the model would otherwise read is
  * user-authored content. This extension runs at `before_agent_start`, the only
  * seam that sees the fully assembled prompt, and appends the runtime boundary

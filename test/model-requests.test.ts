@@ -1,8 +1,16 @@
+import { once } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Model, OAuthCredential, Provider } from "@earendil-works/pi-ai";
+import {
+	cleanupSessionResources,
+	type Message,
+	type Model,
+	type OAuthCredential,
+	type Provider,
+} from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { afterEach, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { flushModelCredentials } from "../src/models/credential-work.js";
 import { createModelRequests } from "../src/models/requests.js";
 import { createModelRuntime } from "../src/models/runtime.js";
@@ -38,6 +46,102 @@ function reply(): Response {
 		headers: { "content-type": "text/event-stream" },
 	});
 }
+
+it("reuses a Codex socket only while the resolved endpoint and auth headers match", async () => {
+	vi.stubEnv("PI_OFFLINE", "1");
+	const home = temp();
+	const runtime = await createModelRuntime({
+		authConfigPath: join(home, "auth.json"),
+		modelsConfigPath: join(home, "models.json"),
+	});
+	const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+	await once(server, "listening");
+	const address = server.address();
+	if (typeof address !== "object" || !address) throw new Error("Expected a local TCP listener");
+	const sessionId = "pipiclaw-codex-request-test";
+	try {
+		let route = "one";
+		let authHeader = "initial";
+		const selected: Model<"openai-codex-responses"> = { ...model("native-codex"), api: "openai-codex-responses" };
+		const account = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture" } }),
+		).toString("base64");
+		runtime.registerNativeProvider({
+			id: selected.provider,
+			name: "Codex fixture",
+			getModels: () => [selected],
+			auth: {
+				apiKey: {
+					name: "Fixture auth",
+					resolve: async () => ({
+						auth: {
+							apiKey: `synthetic.${account}.stub`,
+							baseUrl: `http://127.0.0.1:${address.port}/${route}`,
+							headers: { "x-gateway-auth": authHeader },
+						},
+					}),
+				},
+			},
+			stream: () => {
+				throw new Error("Expected a simple stream");
+			},
+			streamSimple,
+		});
+		const opened: Array<{ path?: string; auth: string | string[] | undefined }> = [];
+		const payloads: Array<{ previous?: string; items: number }> = [];
+		server.on("connection", (socket, request) => {
+			opened.push({ path: request.url, auth: request.headers["x-gateway-auth"] });
+			socket.on("message", (raw) => {
+				const body = JSON.parse(raw.toString()) as { previous_response_id?: string; input: unknown[] };
+				payloads.push({ previous: body.previous_response_id, items: body.input.length });
+				const item = {
+					type: "message",
+					id: `msg_${payloads.length}`,
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "ok", annotations: [] }],
+				};
+				socket.send(
+					JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } }),
+				);
+				socket.send(JSON.stringify({ type: "response.output_item.done", output_index: 0, item }));
+				socket.send(
+					JSON.stringify({
+						type: "response.completed",
+						response: { id: `resp_${payloads.length}`, status: "completed", output: [item] },
+					}),
+				);
+			});
+		});
+		const requests = createModelRequests(runtime);
+		const messages: Message[] = [];
+		const send = async () => {
+			messages.push({ role: "user", content: `check ${messages.length}`, timestamp: 0 });
+			const result = await requests
+				.stream(selected, { messages }, { sessionId, transport: "auto", timeoutMs: 1500 })
+				.result();
+			expect(result.stopReason, result.errorMessage).toBe("stop");
+			messages.push(result);
+		};
+		await send();
+		await send();
+		route = "two";
+		await send();
+		authHeader = "renewed";
+		await send();
+		expect(opened).toEqual([
+			{ path: "/one/codex/responses", auth: "initial" },
+			{ path: "/two/codex/responses", auth: "initial" },
+			{ path: "/two/codex/responses", auth: "renewed" },
+		]);
+		expect(payloads.map(({ items }) => items)).toEqual([1, 1, 5, 7]);
+		expect(payloads.map(({ previous }) => previous)).toEqual([undefined, "resp_1", undefined, undefined]);
+	} finally {
+		cleanupSessionResources(sessionId);
+		for (const socket of server.clients) socket.terminate();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	}
+});
 
 it("preserves configured headers and request-time auth endpoints without leaking another provider's key", async () => {
 	// Replaces the old API-key-only lookup scenario: that implementation loses the gateway header.
