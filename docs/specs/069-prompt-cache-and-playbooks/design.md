@@ -4,7 +4,7 @@
 | --- | --- |
 | 状态 | 已实施，验证结果见 [验收记录](./acceptance.md) |
 | 日期 | 2026-11-18 |
-| 依据 | [025 系统提示词架构](../../archive/specs/025-system-prompt-architecture/design.md)、[026 提示词瘦身](../../archive/specs/026-system-prompt-slimming/design.md)、[040 异步委派与外部智能体](../../archive/specs/040-async-delegation-and-external-agents/design.md)、[064 任务车道](../064-task-lane/design.md)、[提示词与缓存评审](../../reviews/2026-11-18-prompt-playbook-cache-review.md) |
+| 依据 | [025 系统提示词架构](../../archive/specs/025-system-prompt-architecture/design.md)、[026 提示词瘦身](../../archive/specs/026-system-prompt-slimming/design.md)、[040 异步委派与外部智能体](../../archive/specs/040-async-delegation-and-external-agents/design.md)、[064 任务车道](../064-task-lane/design.md)、[提示词与缓存复盘](../../reviews/prompt-and-cache.md) |
 | 实施计划 | [plan.md](./plan.md) |
 | 适用范围 | 主聊天会话、后台任务会话、Web API 请求会话、内置与外部子代理委派、记忆后台反思 sidecar、运行时 Playbooks 与 `examples/sub-agents` 模板 |
 

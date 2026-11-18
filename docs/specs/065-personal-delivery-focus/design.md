@@ -4,7 +4,7 @@
 | --- | --- |
 | 状态 | 已实施 |
 | 日期 | 2026-10-30 |
-| 承接 | [设计聚焦审查](../../reviews/2026-10-30-design-focus-review.md)、[060 Desk](../060-desk/design.md)、[064 任务车道](../064-task-lane/design.md) |
+| 承接 | [个人研发工作流复盘](../../reviews/personal-workflow.md)、[060 Desk](../060-desk/design.md)、[064 任务车道](../064-task-lane/design.md) |
 | 决策依据 | 用户对审查的逐项裁决；本设计取代审查报告中的实施建议，历史分析保留供追溯 |
 | 实施形态 | 两处小范围行为调整，加上默认教学、API 范围和产品介绍的收敛；不引入新机制 |
 

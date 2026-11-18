@@ -74,7 +74,7 @@
 | [开发与工程规范 (AGENTS.md)](../AGENTS.md) | 模块边界守卫、代码规范、测试分层与提交流程要求 |
 | [Runtime Playbooks](./runtime-playbooks.md) | 内置运行手册如何按需加载给模型，以及体积预算管理 |
 | [行为评测指南](./evals.md) | 真实模型行为评测（`eval`）、离线门控与诊断重放 |
-| [设计记录 (Specs)](./specs/README.md) · [历史归档](./archive/README.md) | 历次核心特性的设计方案（Spec 050–068）与早期归档记录 |
+| [设计记录 (Specs)](./specs/README.md) · [研发评审](./reviews/README.md) · [历史归档](./archive/README.md) | 核心特性的设计、验收、值得复查的取舍与历史记录 |
 | 探索性调研笔记（未实施预研） | [主动工作与实时语音调研](./refer/personal-agent-proactivity-and-voice.md) · [主动性机制与设计取舍](./refer/personal-agent-proactivity-design-notes.md) |
 
 </details>

@@ -4,7 +4,7 @@
 | --- | --- |
 | 状态 | 已完成范围内实现、离线门禁及定向真实模型验收；分段调度已移出范围；未建立发布质量基线 |
 | 日期 | 2026-11-04 |
-| 依据 | [延迟排查](../../reviews/2026-11-04-tool-and-delegation-latency.md)、[064 任务车道](../064-task-lane/design.md)、[066 外部 harness](../066-cursor-cli-harness/design.md) |
+| 依据 | [延迟排查与原记录出处](../../reviews/runtime-recovery.md#后台完成与输出)、[064 任务车道](../064-task-lane/design.md)、[066 外部 harness](../066-cursor-cli-harness/design.md) |
 | 实施计划 | [plan.md](./plan.md) |
 | 适用范围 | task、普通聊天、内部委派、外部委派和后台 shell job；DingTalk 与 Web API 共用运行时路径 |
 

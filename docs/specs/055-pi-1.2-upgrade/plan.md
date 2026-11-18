@@ -1,6 +1,6 @@
 # 055 实施计划
 
-设计见 [design.md](./design.md)，事实基线见 [升级评估](../../reviews/2026-10-13-pi-1.2.0-upgrade-assessment.md)。状态：**P0–P5 离线实施及双 Node 合并门禁完成；P6 真实发布验收待执行**。详见 [验收记录](./acceptance.md)。实施不代表已发布或验证真实认证。
+设计见 [design.md](./design.md)，事实基线及原评估出处见 [SDK 接入复盘](../../reviews/pi-sdk-integration.md#评估与实施出处)。状态：**P0–P5 离线实施及双 Node 合并门禁完成；P6 真实发布验收待执行**。详见 [验收记录](./acceptance.md)。实施不代表已发布或验证真实认证。
 
 ## 阶段和依赖
 

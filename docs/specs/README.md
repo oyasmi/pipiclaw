@@ -20,7 +20,7 @@
 | `061` | [渠道层与 Web API](./061-channel-plane/design.md)：钉钉与遵循 OpenAI Responses API 的 Web API 并列为两个渠道，`Transport` / `Ingress` 契约与结构化回合输出，`channel.json` 分段与开关，TUI 改为 Web API 客户端；已实施，真实部署上线待执行（[实施计划](./061-channel-plane/plan.md)、[验收记录](./061-channel-plane/acceptance.md)） |
 | `062` | [Responses 上下文与响应保存](./062-responses-context/design.md)：请求历史、响应链与服务端会话，响应保存独立于上下文选择 |
 | `063` | [共享技能目录](./063-shared-skills/design.md)：工作区与用户共享来源、同名优先级；已实施（[验收记录](./063-shared-skills/acceptance.md)） |
-| `064` | [任务车道](./064-task-lane/design.md)：独立任务执行、运行时推导状态与聊天控制；已实施（[计划](./064-task-lane/plan.md)、[验收](./064-task-lane/acceptance.md)、[修复记录](../reviews/2026-10-29-spec-064-task-lane-fixes.md)），迁移演练与真实部署验收待执行 |
+| `064` | [任务车道](./064-task-lane/design.md)：独立任务执行、运行时推导状态与聊天控制；已实施（[计划](./064-task-lane/plan.md)、[验收](./064-task-lane/acceptance.md)、[恢复复盘](../reviews/runtime-recovery.md#任务车道验收证据)），迁移演练与真实部署验收待执行 |
 | `065` | [个人交付聚焦与结果保留](./065-personal-delivery-focus/design.md)：产品范围、作业 7 天与委派 30 天保留期；已实施 |
 | `066` | [Cursor CLI harness](./066-cursor-cli-harness/design.md)：外部委派、协议解析与续接；已实施（[计划](./066-cursor-cli-harness/plan.md)、[验收](./066-cursor-cli-harness/acceptance.md)），真实 CLI smoke 与流协议核对待执行 |
 | `067` | [工具执行与委派结果回收提速](./067-execution-latency/design.md)：完成观察、结果回流与共享快速窗口；范围内实现、离线门禁与定向真实模型验收已完成（[计划](./067-execution-latency/plan.md)、[验收](./067-execution-latency/acceptance.md)），使用官方 SDK，分段调度未采用 |

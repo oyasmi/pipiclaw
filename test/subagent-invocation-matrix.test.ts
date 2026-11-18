@@ -121,7 +121,7 @@ describe("resolveConfiguredRole (spec 046, D2.1)", () => {
 });
 
 /**
- * Fix plan §1.1/§1.4 (docs/reviews/2026-08-24-subagents-and-tools-fix-plan.md): the resolved
+ * Fix plan §1.1/§1.4 (Git 5b6fd57:docs/reviews/2026-08-24-subagents-and-tools-fix-plan.md): the resolved
  * thinkingLevel/mutates matrix across runtime x purpose x explicit-vs-default, so a future change
  * cannot silently re-introduce "external work gets force-clamped to the lowest reasoning effort"
  * or "inline delegations can't declare mutates". Split per spec 046: a configured role only ever
