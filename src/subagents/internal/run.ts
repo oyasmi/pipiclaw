@@ -8,7 +8,7 @@
  * lease release on every pre-registration failure, the cancel handle installed before any setup I/O,
  * and the grace/detach split all stay here, in this order.
  */
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Api, cleanupSessionResources, type Model } from "@earendil-works/pi-ai";
 import * as log from "../../log.js";
 import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
@@ -274,6 +274,7 @@ async function runToCompletion(ctx: RunToCompletionContext) {
 	} finally {
 		ctx.unsubscribe();
 		clearTimeout(ctx.wallClockTimer);
+		releaseSessionResources(runContext.runId);
 	}
 	return buildInternalOutcome({
 		worker,
@@ -302,6 +303,7 @@ async function failSetup(
 	} catch {
 		// Preserve the setup error; settlement below is the lifecycle authority.
 	}
+	releaseSessionResources(runContext.runId);
 	const setupError = error instanceof Error ? error : new Error(String(error));
 	await runManager.settle(
 		runContext.runId,
@@ -319,4 +321,15 @@ async function failSetup(
 		{ announce: false },
 	);
 	throw setupError;
+}
+
+function releaseSessionResources(runId: string): void {
+	try {
+		cleanupSessionResources(runId);
+	} catch (error) {
+		log.logWarn("subagent.session.cleanup_failed", "Worker session cleanup failed", {
+			reason: errorMessage(error),
+			fields: { runId },
+		});
+	}
 }

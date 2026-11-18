@@ -17,7 +17,6 @@ import { createEmptyUsageTotals } from "../../usage/totals.js";
 import type { RunMutates, SettleInput, SubAgentThinkingLevel } from "../run-record.js";
 import type { SubAgentRunManager } from "../runs.js";
 import type { WorkspaceBaseline } from "../workspace-summary.js";
-import type { ExternalHarness } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
 import { finalizeExternalRun } from "./settlement.js";
 
@@ -183,17 +182,6 @@ function classifySpawnError(error: Error): "missing-binary" | "launch-failed" {
 	return code === "ENOENT" || code === "EACCES" ? "missing-binary" : "launch-failed";
 }
 
-function buildStdinContent(harness: ExternalHarness, systemPrompt: string, task: string): string {
-	// Harnesses with a dedicated system-prompt flag (`claude-code`'s `--append-system-prompt-file`, D4)
-	// receive `task` alone on stdin; others fold `systemPrompt` ahead of `task`.
-	if (harness.acceptsSystemPromptFlag) return task;
-	const trimmedPrompt = systemPrompt.trim();
-	// A capability entry declares no system prompt at all: the task must then start the prompt,
-	// with no leading blank section and no `---` fence separating it from nothing.
-	if (!trimmedPrompt) return `${task.trim()}\n`;
-	return `${trimmedPrompt}\n\n---\n\n${task.trim()}\n`;
-}
-
 /** Launches an external run. Resolves once the process is confirmed spawned (or fails fast if it
  *  never starts, spec 042 D2); the wait-for-exit-and-settle work continues in the background
  *  afterward. */
@@ -211,13 +199,15 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	// `dispatch.ts` creates the artifact dir for both fresh and `follow_up` runs; ensure it here too.
 	await mkdir(input.artifactDir, { recursive: true });
 	const promptFile = join(input.artifactDir, "prompt.txt");
-	const trimmedSystemPrompt = input.systemPrompt.trim();
-	// Only written when the role actually declares one, so `system-prompt.txt`'s presence in a run's
-	// artifacts stays a truthful record of what was sent (D1 layout) instead of an empty decoy.
-	const systemPromptFile = trimmedSystemPrompt ? join(input.artifactDir, "system-prompt.txt") : undefined;
-	const stdinContent = buildStdinContent(harness, input.systemPrompt, input.task);
-	await writeFile(promptFile, `${input.task.trim()}\n`, "utf-8");
-	if (systemPromptFile) await writeFile(systemPromptFile, `${trimmedSystemPrompt}\n`, "utf-8");
+	const isResume = Boolean(input.resumeSessionId);
+	const task = `${input.task.trim()}\n`;
+	// A resumed transcript already contains the first stdin message. A dedicated system
+	// prompt flag still needs the role instructions on every invocation.
+	const systemPrompt = harness.acceptsSystemPromptFlag || !isResume ? input.systemPrompt.trim() : "";
+	const systemPromptFile = systemPrompt ? join(input.artifactDir, "system-prompt.txt") : undefined;
+	const stdinContent = systemPrompt && !harness.acceptsSystemPromptFlag ? `${systemPrompt}\n\n---\n\n${task}` : task;
+	await writeFile(promptFile, task, "utf-8");
+	if (systemPromptFile) await writeFile(systemPromptFile, `${systemPrompt}\n`, "utf-8");
 
 	const argv = input.shell ? [] : splitShellWords(input.command);
 	const invocation = input.shell

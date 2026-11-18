@@ -1,6 +1,6 @@
 ---
 name: event-scheduling
-description: 创建、改期或删除提醒与定时 event。
+description: 周期 cron、先 show 后整体改期/删除，或区分 text 与 task 事件。
 requires-tools: event_manage
 order: 40
 ---
@@ -23,7 +23,7 @@ order: 40
 
 ## 创建或更新
 
-definition 是类型化对象，不是 JSON 字符串，不写 channelId。一次提醒用 one-shot + at，提前 2 分钟至约 24.8 天；示例时间须换成真实未来时间：
+definition 是类型化对象，不是 JSON 字符串，不写 channelId。时间和时区偏移已明确的单次文本提醒可直接用 create、one-shot + at，提前 2 分钟至约 24.8 天；示例时间须换成真实未来时间：
 
 ```json
 {"type":"one-shot","text":"检查处理结果","at":"2026-12-01T10:00:00+08:00"}

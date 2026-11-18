@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_HARD_UNITS } from "../src/agent/prompt/builder.js";
+import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_TARGET_UNITS } from "../src/agent/prompt/builder.js";
 import { AGENTS_BUDGET_UNITS, loadWorkspacePromptResources, SOUL_BUDGET_UNITS } from "../src/agent/prompt/resources.js";
 import { MAIN_PROMPT_SECTIONS } from "../src/agent/prompt/sections.js";
 import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from "../src/agent/prompt/types.js";
@@ -51,17 +51,39 @@ function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContex
 }
 
 describe("system prompt structure", () => {
-	it("keeps runtime-authored sections inside their unit and char budgets, without error diagnostics", () => {
-		const build = buildPipiclawSystemPrompt(context());
-
-		const ids = build.sections.map((section) => section.id);
-		expect(new Set(ids).size).toBe(ids.length);
-		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(800);
-		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(RUNTIME_PROMPT_HARD_UNITS);
-		expect(build.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
-		for (const definition of MAIN_PROMPT_SECTIONS) {
-			const resolved = build.sections.find((section) => section.id === definition.id);
-			if (resolved) expect(resolved.injectedChars).toBeLessThanOrEqual(definition.maxChars);
+	it("keeps chat and task instructions within budget and points to guides available in that profile", () => {
+		const taskOnly = ["task_report", "task_ask", "task_wait"];
+		const chatOnly = [
+			"task_create",
+			"task_list",
+			"task_message",
+			"task_pause",
+			"task_resume",
+			"memory_save",
+			"event_manage",
+		];
+		for (const [names, guide] of [
+			[FULL_TOOL_NAMES, "task-manage.md"],
+			[FULL_TOOL_NAMES.filter((name) => !taskOnly.includes(name)), "task-manage.md"],
+			[FULL_TOOL_NAMES.filter((name) => !chatOnly.includes(name)), "task-lead.md"],
+		] as const) {
+			const build = buildPipiclawSystemPrompt(context({ tools: tools(names) }));
+			const ids = build.sections.map((section) => section.id);
+			expect(new Set(ids).size).toBe(ids.length);
+			expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(RUNTIME_PROMPT_TARGET_UNITS);
+			expect(build.diagnostics.filter((diagnostic) => diagnostic.level !== "info")).toEqual([]);
+			for (const definition of MAIN_PROMPT_SECTIONS) {
+				const resolved = build.sections.find((section) => section.id === definition.id);
+				if (resolved) expect(resolved.injectedChars).toBeLessThanOrEqual(definition.maxChars);
+			}
+			const section = (id: string) => build.sections.find((item) => item.id === id)?.content;
+			expect(section("runtime.tasks")).toContain(guide);
+			expect(section("playbooks")).toContain(guide);
+			expect(section("subagents")).not.toContain("task-lead.md");
+			if (guide === "task-lead.md") {
+				expect(section("runtime.identity")).toContain("task_report");
+				expect(build.text).not.toContain("task-manage.md");
+			}
 		}
 	});
 

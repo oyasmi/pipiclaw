@@ -1,6 +1,6 @@
 ---
 name: agent-delegation
-description: 选 subagent 角色、交代任务与检查结果。
+description: 多角色取舍、worktree 并行隔离、purpose=verify 独立核验与结果检查。
 requires-tools: subagent
 order: 60
 ---

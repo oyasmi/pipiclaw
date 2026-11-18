@@ -14,11 +14,14 @@ console.table(rows);
 console.log(`all guides: ${rows.reduce((sum, row) => sum + row.units, 0)} units`);
 for (const [label, files] of [
 	["chat task management", ["task-manage.md"]],
+	["task lead", ["task-lead.md"]],
 	["task + delegation", ["task-lead.md", "agent-delegation.md"]],
-	["event reminder", ["event-scheduling.md"]],
-	["event task template", ["event-scheduling.md", "event-task-template.md"]],
-	["event sensor", ["event-scheduling.md", "event-sensors.md"]],
-	["inline delegation", ["agent-delegation.md", "delegation-inline.md"]],
+	["task + verify + delegation", ["task-lead.md", "task-verify.md", "agent-delegation.md"]],
+	["routine event reminder", []],
+	["event scheduling", ["event-scheduling.md"]],
+	["event task template", ["event-task-template.md"]],
+	["event sensor", ["event-sensors.md"]],
+	["inline delegation", ["delegation-inline.md"]],
 	["delegation recovery", ["agent-delegation.md", "delegation-recovery.md"]],
 	["orientation + file map", ["runtime-orientation.md", "runtime-files.md"]],
 	["memory + skill authoring", ["memory-and-learning.md", "memory-learning.md"]],

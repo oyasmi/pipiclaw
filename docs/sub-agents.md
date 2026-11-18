@@ -1,7 +1,7 @@
 # 智能体委派指南（Sub-Agents）
 
 > **适合谁**：想让 Pipiclaw 调用本机的 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI 或轻量内置子智能体协同完成编码、调研与独立审查的用户与管理员。
-> **读完你会得到**：5 分钟启用现成外部 Coding Agent 角色的方法、`/subagents` 控制命令、后台异步唤醒与多轮续接（`follow_up`）机制，以及自定义角色文件的完整字段与安全边界参考。
+> **读完你会得到**：启用内置或外部角色的方法、`/subagents` 控制命令、后台异步唤醒与多轮续接（`follow_up`）机制，以及自定义角色文件的完整字段与安全边界参考。
 
 智能体委派让主智能体把某一步具体工作交给最擅长它的执行者：**进程内轻量角色**适合快速只读检索与筛查，**外部 Coding Agent** 适合跨多文件实现、自测迭代与异构模型交叉审查。它与 [事件与任务](./events-and-tasks.md) 正交——单次聊天回合里即可直接发起委派，无需先建长程任务；在任务步骤内发起委派则会自动归入[团队看板与工作项](./events-and-tasks.md#3-团队看板与工作项)。
 
@@ -16,24 +16,29 @@
 
 ---
 
-## 1. 五分钟启用外部 Coding Agent
+## 1. 启用示例角色
 
-前提：目标 CLI（`claude`、`codex`、`agent` 或 `agy`）已在**运行 Pipiclaw 的同一系统账号**下安装、加入 `PATH` 并完成登录验证。
+外部角色需要在运行 Pipiclaw 的系统账号下安装目标 CLI、加入 `PATH` 并登录。内置 `pi-scout` 复制后可用，优先使用 `settings.subagentModel`，缺省时使用主会话模型。
 
-Pipiclaw 安装包内置了按能力分档的现成角色模板（位于包内或源码仓库的 [`examples/sub-agents/`](../examples/sub-agents/README.md)）：
+Pipiclaw 安装包附带十二个角色模板，位于包内或源码仓库的 [`examples/sub-agents/`](../examples/sub-agents/README.md)。
+
 - **`*-flash`**：做法明确、易检查的轻量快速修改；
 - **`*-main`**：日常功能开发、问题排查与文档编写主力档；
 - **`*-high`**：复杂架构取舍、疑难诊断与高风险变更；
 - **`codex-review`**：通过 `--sandbox read-only` 强制只读的独立代码审查角色。
+- **`pi-scout`**：使用 `read`、`grep` 和 `glob` 快速检索代码、日志与配置，并汇总证据。
 
-> ⚠️ 除只读的 `codex-review` 外，其余示例模板均放开了 CLI 自动写入权限并声明 `mutates: write`，复制前请确认符合你的本机账号权限预期。目录加载为**平铺扫描**（仅读取 `workspace/sub-agents/*.md`，不递归子目录）。
+十个外部执行模板声明 `mutates: write` 并配置了 CLI 自动写入权限。目录加载为**平铺扫描**，路径为 `workspace/sub-agents/*.md`。
 
 ```bash
 mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PKG="$(npm root -g)/@oyasmi/pipiclaw"
 
-# 按需复制你本机已安装 CLI 对应的角色文件（无需重启 daemon）
-cp "$PIPICLAW_PKG"/examples/sub-agents/{claude-main,claude-high,codex-review}.md \
+# 内置只读侦察
+cp "$PIPICLAW_PKG"/examples/sub-agents/pi-scout.md ~/.pipiclaw/workspace/sub-agents/
+
+# 按本机已安装的 CLI 选装外部角色
+cp "$PIPICLAW_PKG"/examples/sub-agents/{claude-main,codex-review}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 
@@ -41,7 +46,7 @@ cp "$PIPICLAW_PKG"/examples/sub-agents/{claude-main,claude-high,codex-review}.md
 
 ```text
 /subagents roles
-/subagents roles claude-main
+/subagents roles pi-scout
 ```
 
 确认状态可用后，直接用自然语言交代目标与工作目录（主智能体会按角色描述自动挑选合适的执行器，也可直接点名）：
@@ -78,8 +83,8 @@ cp "$PIPICLAW_PKG"/examples/sub-agents/{claude-main,claude-high,codex-review}.md
 - **旁路进度播报（`delegation.notices`）**：默认 `"live"` 模式下，长耗时委派会在聊天旁路稀疏推送当前命令/步骤与完成回执；外部进程连续 **10 分钟无输出**会推送一次“可能卡住了”提醒（不占模型上下文，也不自动强杀）。`mutates: write` 的委派结算时还会对比派发前快照，附带本次实际修改的文件摘要。
 - **内置瞬时容错**：内置子代理遇到供应商 429 / 5xx / 网络闪断会自动原地退避重试（最多 3 次：2s / 4s / 8s），仍失败且配了 `fallbackModel` 时自动切换备用模型重试。
 - **外部会话多轮续接（`subagent_run op=follow_up`）**：
-  - `claude-code`、`codex-cli`、`cursor-cli` 与 `antigravity-cli` 支持在已结束的外部 run 基础上追加新一轮指令（生成新 `runId`，仅发送增量指令与新产物目录，避免重复计费）；
-  - **指纹一致性保护**：若中途修改了角色文件的 `command`、`model` 或 `shell`，续接会被拒绝并提示重新派发；仅润色 Markdown 正文提示词不影响续接。
+  - `claude-code`、`codex-cli`、`cursor-cli` 与 `antigravity-cli` 支持在已结束的外部 run 基础上追加指令。新 run 用独立 `runId` 和产物目录，标准输入携带增量指令。Claude 继续通过 `--append-system-prompt-file` 接收角色正文。
+  - 修改角色的 `command`、`model` 或 `shell` 后需要重新派发。Codex、Cursor 和 Antigravity 的续接会使用原会话已有的角色正文，需应用正文改动时请发起新委派。
 
 ---
 

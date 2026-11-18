@@ -17,7 +17,7 @@ export interface BuiltinCommandHost {
 	channelId: string;
 	ensureSessionReady(): Promise<void>;
 	promptTemplates(): ReadonlyArray<{ name: string }>;
-	renderContextReport(args: string): string;
+	renderContextReport(args: string): Promise<string>;
 }
 
 /** A `/steer` or `/followup` needs a message: the trimmed text, or an error telling the user how. */
@@ -65,7 +65,7 @@ export async function handleBuiltinCommand(host: BuiltinCommandHost, command: Ru
 			case "help":
 				return renderHelpWithDiscovery(host, command.args);
 			case "context":
-				return host.renderContextReport(command.args);
+				return await host.renderContextReport(command.args);
 			case "stop":
 				return formatNoRunningTurn("stop");
 			case "steer":

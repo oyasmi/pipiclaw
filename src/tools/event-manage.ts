@@ -15,8 +15,8 @@ import type { TaskCreateInput } from "../tasks/contract-input.js";
 
 const eventDefinitionSchema = Type.Object(
 	{
-		type: Type.Union([Type.Literal("one-shot"), Type.Literal("periodic"), Type.Literal("immediate")], {
-			description: "one-shot requires at; periodic requires schedule; immediate is rejected.",
+		type: Type.Union([Type.Literal("one-shot"), Type.Literal("periodic")], {
+			description: "one-shot requires at; periodic requires schedule.",
 		}),
 		text: Type.Optional(
 			Type.String({
@@ -59,9 +59,6 @@ const eventDefinitionSchema = Type.Object(
 						description: "Exit 0 fires; nonzero skips.",
 					}),
 					timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout in milliseconds." })),
-					timeout: Type.Optional(
-						Type.Integer({ minimum: 1, description: "Update alias for timeoutMs, milliseconds." }),
-					),
 				},
 				{ description: "Optional sensor gate." },
 			),
@@ -392,7 +389,7 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 		name: "event_manage",
 		label: "event_manage",
 		description:
-			"Manage this desk’s scheduled events. Create delivers here; update preserves delivery and replaces the full definition: show first. Read event-scheduling.md for scheduling workflows.",
+			"For a standalone text reminder with known time and offset, use event_manage as the first tool call: action=create, definition with type=one-shot, text and at (e.g. 2026-12-01T10:00:00+08:00). Confirm after success. Read event-sensors.md for preAction, event-task-template.md for task, or event-scheduling.md for other periodic or update calls. Show before replacing a definition; preserve delivery.",
 		parameters: eventManageSchema,
 		execute: async (
 			_toolCallId: string,

@@ -8,6 +8,7 @@ import { PLAYBOOKS_DIR } from "../src/paths.js";
 import { loadRuntimePlaybookCatalog, renderPlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { guardPath } from "../src/security/path-guard.js";
+import { countPromptUnits } from "../src/shared/prompt-units.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -55,13 +56,14 @@ describe("runtime playbook catalog", () => {
 			"agent-delegation.md",
 		);
 		// A chat manager must not pay for the step protocol, or a task for chat-only controls.
-		for (const [taskTool, offered, absent] of [
-			["task_create", "task-manage", "task-lead"],
-			["task_report", "task-lead", "task-manage"],
+		for (const [taskTool, expected] of [
+			["task_create", ["task-manage"]],
+			["task_report", ["task-lead", "task-verify", "task-recovery"]],
 		] as const) {
-			const names = selectRuntimePlaybooks(catalog, [taskTool]).map((item) => item.name);
-			expect(names).toContain(offered);
-			expect(names).not.toContain(absent);
+			const names = selectRuntimePlaybooks(catalog, [taskTool])
+				.map((item) => item.name)
+				.filter((name) => name.startsWith("task-"));
+			expect(names).toEqual(expected);
 		}
 		const documented = [
 			...readFileSync("docs/runtime-playbooks.md", "utf8").matchAll(/^\| `([^`]+\.md)` \| (\d+) \| ([^|]+) \|/gm),
@@ -83,6 +85,9 @@ describe("runtime playbook catalog", () => {
 		expect(index).toContain("probe.md");
 		expect(index).toContain("a trigger");
 		expect(index).not.toContain(body);
+		const taskLead = readFileSync(join(PLAYBOOKS_DIR, "task-lead.md"), "utf8");
+		expect(countPromptUnits(taskLead)).toBeLessThanOrEqual(800);
+		expect(taskLead).toContain("](task-verify.md)");
 		// Splitting a guide must not leave an unreadable link to another playbook.
 		for (const file of markdownFiles(PLAYBOOKS_DIR)) {
 			const text = readFileSync(join(PLAYBOOKS_DIR, file), "utf8");

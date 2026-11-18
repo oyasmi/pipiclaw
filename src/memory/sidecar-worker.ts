@@ -163,7 +163,8 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 			worker = new Agent({
 				initialState: { systemPrompt: task.systemPrompt, model: task.model, thinkingLevel: "off", tools: [] },
 				convertToLlm,
-				streamFn: (model, context, options) => task.modelRequests.stream(model, context, { ...options, signal }),
+				streamFn: (model, context, options) =>
+					task.modelRequests.stream(model, context, { ...options, cacheRetention: "none", signal }),
 			});
 			await worker.prompt(task.prompt);
 			await worker.waitForIdle();

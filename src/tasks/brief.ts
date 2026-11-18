@@ -198,9 +198,6 @@ function renderState(fields: TaskFrontmatter, seq: number, pending: readonly Pen
 	return lines.join("\n");
 }
 
-const STEP_RULES =
-	"回合结束即本步结束：等用户用 task_ask，等某个时刻用 task_wait，完成用 task_close；在途的委派和作业结算或卡住时会自动叫醒你，不要等待或轮询。用最后一段回复写下这一步做了什么、证据和下一步。需要告知用户的内容用 task_report，其余默认静默。";
-
 /**
  * The turn input for one task step (spec 064, D15).
  *
@@ -251,7 +248,7 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<TaskBri
 	blocks.push(`<task_state>\n${renderState(document.fields, input.seq, input.pending)}\n</task_state>`);
 	if (input.full) {
 		blocks.push(
-			`契约文件：${document.path}\n首次执行前读取 ${join(PLAYBOOKS_DIR, "task-lead.md")}；已在当前上下文中读过则复用。\n${STEP_RULES}`,
+			`契约文件：${document.path}\n首次执行前读取 ${join(PLAYBOOKS_DIR, "task-lead.md")}；已在当前上下文中读过则复用。`,
 		);
 	} else {
 		blocks.push(`契约文件：${document.path}。如果上下文中没有完整契约，先读文件确认 Goal 和 DoD。`);

@@ -59,6 +59,7 @@ it("reuses a Codex socket only while the resolved endpoint and auth headers matc
 	const address = server.address();
 	if (typeof address !== "object" || !address) throw new Error("Expected a local TCP listener");
 	const sessionId = "pipiclaw-codex-request-test";
+	const workerSessionId = "pipiclaw-codex-worker-request-test";
 	try {
 		let route = "one";
 		let authHeader = "initial";
@@ -114,29 +115,35 @@ it("reuses a Codex socket only while the resolved endpoint and auth headers matc
 			});
 		});
 		const requests = createModelRequests(runtime);
-		const messages: Message[] = [];
-		const send = async () => {
+		const parentMessages: Message[] = [];
+		const send = async (id = sessionId, messages = parentMessages) => {
 			messages.push({ role: "user", content: `check ${messages.length}`, timestamp: 0 });
 			const result = await requests
-				.stream(selected, { messages }, { sessionId, transport: "auto", timeoutMs: 1500 })
+				.stream(selected, { messages }, { sessionId: id, transport: "auto", timeoutMs: 1500 })
 				.result();
 			expect(result.stopReason, result.errorMessage).toBe("stop");
 			messages.push(result);
 		};
 		await send();
 		await send();
+		// A worker shares the adapter with its parent. Its next request must not
+		// overwrite the route used to verify the parent's cached socket.
+		await send(workerSessionId, []);
 		route = "two";
 		await send();
+		cleanupSessionResources(workerSessionId);
 		authHeader = "renewed";
 		await send();
 		expect(opened).toEqual([
 			{ path: "/one/codex/responses", auth: "initial" },
+			{ path: "/one/codex/responses", auth: "initial" },
 			{ path: "/two/codex/responses", auth: "initial" },
 			{ path: "/two/codex/responses", auth: "renewed" },
 		]);
-		expect(payloads.map(({ items }) => items)).toEqual([1, 1, 5, 7]);
-		expect(payloads.map(({ previous }) => previous)).toEqual([undefined, "resp_1", undefined, undefined]);
+		expect(payloads.map(({ items }) => items)).toEqual([1, 1, 1, 5, 7]);
+		expect(payloads.map(({ previous }) => previous)).toEqual([undefined, "resp_1", undefined, undefined, undefined]);
 	} finally {
+		cleanupSessionResources(workerSessionId);
 		cleanupSessionResources(sessionId);
 		for (const socket of server.clients) socket.terminate();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

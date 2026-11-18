@@ -154,30 +154,38 @@ describe("sub-agent discovery", () => {
 	it("loads every shipped capability entry with routing and permission metadata", () => {
 		const discovery = loadExamples();
 
-		// Bind each entry to a CLI/model; no prompt wording or numeric tuning contracts.
+		const bodies = { read: new Set<string>(), write: new Set<string>() };
+		const readRoles: string[] = [];
 		for (const agent of discovery.agents) {
-			// Cursor chooses reasoning through its model id; its harness rejects a separate level.
-			if (agent.harness === "cursor-cli") expect(agent.thinkingLevel).toBeUndefined();
-			else expect(agent.thinkingLevel).toBeTruthy();
-			if (agent.runtime !== "external") throw new Error("Capability examples must bind an external CLI");
-			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
-			expect(["claude-code", "codex-cli", "cursor-cli", "antigravity-cli"]).toContain(agent.harness);
-			expect(agent.externalModelRef).toBeTruthy();
-		}
-		// A read declaration needs a real CLI sandbox; writers must participate in leases.
-		for (const agent of discovery.agents) {
-			if (agent.mutates === "read") {
-				if (agent.runtime === "external") {
-					expect(agent.command).toContain("--sandbox read-only");
-				}
-			} else {
-				expect(agent.mutates).toBe("write");
-				if (agent.harness === "codex-cli") {
+			if (agent.runtime === "external") {
+				expect(agent.workload).toBe("heavy");
+				expect(["claude-code", "codex-cli", "cursor-cli", "antigravity-cli"]).toContain(agent.harness);
+				expect(agent.externalModelRef).toBeTruthy();
+				// Cursor chooses reasoning through its model id.
+				if (agent.harness === "cursor-cli") expect(agent.thinkingLevel).toBeUndefined();
+				else expect(agent.thinkingLevel).toBeTruthy();
+				if (agent.mutates === "read") expect(agent.command).toContain("--sandbox read-only");
+				else if (agent.harness === "codex-cli") {
 					expect(agent.command).toContain("--dangerously-bypass-approvals-and-sandbox");
 				}
+			} else {
+				expect(agent).toMatchObject({ name: "pi-scout", workload: "light", mutates: "read" });
+				// A read declaration alone does not constrain the worker's file or shell tools.
+				expect(agent.tools.filter((tool) => ["write", "edit", "bash"].includes(tool))).toEqual([]);
+				expect([...agent.tools].sort()).toEqual(["glob", "grep", "read"]);
+			}
+			if (agent.mutates === "read") {
+				readRoles.push(agent.name);
+				bodies.read.add(agent.systemPrompt);
+			} else {
+				expect(agent.mutates).toBe("write");
+				bodies.write.add(agent.systemPrompt);
 			}
 		}
-		expect(discovery.agents.some((agent) => agent.mutates === "read")).toBe(true);
+		expect(readRoles.sort()).toEqual(["codex-review", "pi-scout"]);
+		expect(bodies.read.size).toBe(1);
+		expect(bodies.write.size).toBe(1);
+		expect(bodies.read).not.toEqual(bodies.write);
 	});
 
 	it("ignores predefined prompts that exceed the length limit", () => {

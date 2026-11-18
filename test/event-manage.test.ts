@@ -141,6 +141,9 @@ describe("manageEvent create", () => {
 		await expect(
 			manageEvent(opts(), { action: "create", name: "bad", definition: { type: "periodic", text: "x" } }),
 		).rejects.toThrow(/needs "schedule"/);
+		await expect(
+			manageEvent(opts(), { action: "create", name: "bad", definition: { type: "immediate", text: "x" } }),
+		).rejects.toMatchObject({ name: "RecoverableToolError", message: expect.stringMatching(/current turn/) });
 		expect(await listEventFiles()).toEqual([]);
 	});
 
@@ -210,6 +213,23 @@ describe("manageEvent create", () => {
 		});
 		const updatedOnDisk = JSON.parse(await readFile(join(eventsDir, "task.dm1.demo.gated.json"), "utf-8"));
 		expect(updatedOnDisk.preAction).toMatchObject({ type: "bash", command: "echo hi", timeout: 4000 });
+
+		await manageEvent(opts(), {
+			action: "update",
+			name: "task.dm1.demo.gated",
+			definition: {
+				type: "one-shot",
+				text: "x",
+				at: futureIso(30),
+				preAction: { type: "bash", command: "echo hi", timeout: 5000 },
+			},
+		});
+		expect(
+			parseScheduledEventContent(
+				await readFile(join(eventsDir, "task.dm1.demo.gated.json"), "utf-8"),
+				"task.dm1.demo.gated.json",
+			).preAction?.timeout,
+		).toBe(5000);
 
 		// Hand-edited files using `timeoutMs` directly are accepted by the parser; conflicting values are rejected.
 		expect(

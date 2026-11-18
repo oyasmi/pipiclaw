@@ -140,7 +140,5 @@ export function renderPlaybookCatalog(playbooks: RuntimePlaybookMetadata[]): str
 				: playbook.description;
 		return `- ${playbook.filename} — ${description}`;
 	});
-	return ["For Pipiclaw mechanisms, read the matching file with `read` under:", PLAYBOOKS_DIR, "", ...entries].join(
-		"\n",
-	);
+	return ["Guide directory (open with `read`):", PLAYBOOKS_DIR, "", ...entries].join("\n");
 }

@@ -48,10 +48,12 @@ export const IDENTITY_SECTION: PromptSectionDefinition = {
 	cacheClass: "runtime-stable",
 	maxChars: 600,
 	overflow: "error",
-	render: () =>
+	render: (context) =>
 		[
 			"## Pipiclaw",
-			"You are a long-lived personal assistant running on the host machine. SOUL.md defines your identity and voice. Deliver chat-friendly answers with the outcome first.",
+			hasTool(context, "task_report") && !hasTool(context, "task_create")
+				? "You are leading a persistent background task on the host machine. SOUL.md defines your identity and voice. Ordinary replies stay in the task log; speak to the user only through task_report or task_ask."
+				: "You are a long-lived personal assistant running on the host machine. SOUL.md defines your identity and voice. Deliver chat-friendly answers with the outcome first.",
 		].join("\n"),
 };
 
@@ -65,10 +67,10 @@ export const EXECUTION_SECTION: PromptSectionDefinition = {
 	render: () =>
 		[
 			"## Working Contract",
-			"- For actionable requests, continue until the requested outcome exists or you are genuinely blocked. Inspect before changing and verify material results.",
-			"- State what remains unverified. Tool definitions are the source of truth for available capabilities and parameters.",
-			"- Jobs and delegations you start wake whoever started them — this chat, or the task whose step started them. Finish independent work and dispatches; when only waiting remains, end the turn without polling or check-in events.",
-			"- Before non-trivial use of a runtime mechanism or workspace procedure, read its guide or skill; reuse it while it remains in context.",
+			"- Inspect before edits. Work to the outcome or a real blocker. When the outcome and required checks are satisfied, stop exploring and deliver if nothing changed and no gaps remain. State unverified items.",
+			"- Tool definitions are authoritative. Use Desk for state and Cwd for work from <runtime_turn_context>.",
+			"- Jobs and delegations wake their initiator. Finish independent work and dispatches; end the turn when only waiting remains. Skip polling and check-in events.",
+			"- Use clear routine calls directly. Read the guide or skill for task_*, orchestration, write isolation, independent checks, recurring or gated events, unfamiliar mechanisms, or recovery. Reuse it while in context.",
 		].join("\n"),
 };
 
@@ -98,21 +100,33 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	source: "runtime/tasks",
 	authority: "runtime-hard",
 	cacheClass: "runtime-stable",
-	requiresAllTools: ["task_create", "task_close"],
+	requiresAllTools: ["task_close"],
 	maxChars: 600,
 	overflow: "error",
-	render: () =>
-		[
-			"## Persistent Work",
-			"Use a task for a project that needs persistent goals, acceptance criteria, budget and multi-step progress. A single job or delegation does not need a task just because it is asynchronous. Recurring or scheduled work is an event with a task template. Chat creates and manages tasks; the runtime runs each in its own background session. Lead the work, verify and deliver within its contract; follow the runtime guide.",
-		].join("\n"),
+	render: (context) => {
+		if (hasTool(context, "task_create")) {
+			return [
+				"## Persistent Work",
+				"Use a task when a project needs goals, acceptance criteria, budget and progress across turns. A single job or delegation needs no task. For scheduled projects use an event with a task template. Read task-manage.md before creating or managing tasks; reuse it while in context. Each task runs in its own background session.",
+			].join("\n");
+		}
+		if (hasTool(context, "task_report")) {
+			return [
+				"## Task Steps",
+				"Read task-lead.md before acting on the first step or whenever lost from context. Work and verify within Goal and DoD.",
+				"End the step if only your task's jobs or delegations remain. Use one bounded async job for external conditions, task_wait for a time, and task_ask for a blocking decision.",
+				"Check real state and logs before retrying unknown external effects. End with only new conclusions, evidence, and the next step.",
+			].join("\n");
+		}
+		return undefined;
+	},
 };
 
 export const PLAYBOOKS_SECTION: PromptSectionDefinition = {
 	id: "playbooks",
 	source: "runtime/playbooks",
 	authority: "catalog",
-	cacheClass: "session-stable",
+	cacheClass: "runtime-stable",
 	maxChars: 1_400,
 	overflow: "truncate-items",
 	render: (context) => {
@@ -123,6 +137,10 @@ export const PLAYBOOKS_SECTION: PromptSectionDefinition = {
 	},
 };
 
+const SUBAGENT_HANDOFF = "In task, state the outcome, verified facts, constraints, paths, and acceptance criteria.";
+const SUBAGENT_GUIDES =
+	"Read agent-delegation.md for worktree isolation, purpose=verify, or multi-step delegation; delegation-recovery.md for failed, stalled, or follow_up runs.";
+
 export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 	id: "subagents",
 	source: "workspace/sub-agents",
@@ -132,11 +150,7 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 	maxChars: 2_400,
 	overflow: "truncate-items",
 	render: (context) => {
-		// Two-state (spec 032 D1): an empty configured catalog must not delete the runtime
-		// guidance that lives in this section — only the catalog itself is optional. This
-		// inline-usage text is runtime-authored, not user content; keep it under 40 units
-		// (it does not count toward the 700/1200 unit budget — see builder.ts's
-		// RUNTIME_AUTHORED_SECTION_IDS — so it must not be padded just because it is "free").
+		// Keep the handoff instructions even when no configured roles are available.
 		if (context.subAgents.length === 0) {
 			const hasInline = context.tools.some((tool) => tool.name === "subagent_inline");
 			return [
@@ -144,8 +158,8 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 				hasInline
 					? "No configured role is available, so use `subagent_inline` only as the fallback; provide a complete valid payload with required `task` and `systemPrompt`."
 					: "No configured agent exists and `subagent_inline` is off; ask the deployer to add a role or enable it.",
-				"A sub-agent starts blank — state goal, scope, paths, constraints, acceptance criteria in `task`.",
-				"Read agent-delegation.md before non-trivial delegation.",
+				SUBAGENT_HANDOFF,
+				SUBAGENT_GUIDES,
 			].join("\n");
 		}
 		return renderSubAgentDirectory(context.subAgents);
@@ -184,10 +198,7 @@ function renderSubAgentDirectory(subAgents: SubAgentSummary[]): string {
 		return 0;
 	});
 
-	const lines = [
-		"## Configured Sub-Agents",
-		"A sub-agent starts blank: state the goal, scope, paths, constraints and acceptance criteria in the task you hand it.",
-	];
+	const lines = ["## Configured Sub-Agents", SUBAGENT_HANDOFF];
 	for (const group of sortedGroups) {
 		// The runtime chooses delivery; the model is told the same production policy.
 		const mode =
@@ -200,10 +211,7 @@ function renderSubAgentDirectory(subAgents: SubAgentSummary[]): string {
 			lines.push(`- ${agent.name} — ${agent.description}${suffix}`);
 		}
 	}
-	lines.push(
-		"",
-		"Read agent-delegation.md before non-trivial delegation, and task-lead.md before leading a multi-item task.",
-	);
+	lines.push("", SUBAGENT_GUIDES);
 	return lines.join("\n");
 }
 

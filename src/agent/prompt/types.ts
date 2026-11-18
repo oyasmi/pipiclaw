@@ -121,7 +121,7 @@ export interface PromptDiagnostic {
 }
 
 export interface PromptBuildResult {
-	/** The system prompt Pipiclaw owns. pi appends skills + date + cwd; the boundary footer is appended last. */
+	/** The system prompt Pipiclaw owns. pi appends skills and cwd; the boundary footer is appended last. */
 	text: string;
 	/** Short final footer, injected after pi's tail so late workspace content cannot end the prompt. */
 	footer: string;

@@ -1,3 +1,5 @@
+import { Agent } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream, normalizeContext } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testModelRequests } from "./helpers/model-requests.js";
 
@@ -132,16 +134,30 @@ describe("sidecar-worker", () => {
 			},
 		];
 
+		const stream = vi.fn(createAssistantMessageEventStream);
+		const model = { provider: "test", id: "noop" } as never;
+		promptImpl.mockImplementationOnce(async (prompt) => {
+			const workerOptions = vi.mocked(Agent).mock.calls.at(-1)?.[0];
+			await workerOptions?.streamFn?.(
+				model,
+				normalizeContext({ messages: [{ role: "user", content: prompt, timestamp: 0 }] }),
+			);
+		});
 		await runSidecarTask({
 			name: "memory-inline-consolidation",
-			model: { provider: "test", id: "noop" } as never,
-			modelRequests: testModelRequests(),
+			model,
+			modelRequests: { ...testModelRequests(), stream },
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: (text) => text,
 			usageContext: { channelId: "dingtalk:dm:1", correlationId: "window-123" },
 		});
 
+		expect(stream).toHaveBeenCalledWith(
+			model,
+			expect.anything(),
+			expect.objectContaining({ cacheRetention: "none" }),
+		);
 		expect(recordUsage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				channelId: "dingtalk:dm:1",

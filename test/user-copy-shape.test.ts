@@ -495,20 +495,29 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 			subAgents: [],
 		});
 		const skills = Array.from({ length: 60 }, (_, index) => ({ name: `skill-${index}`, description: "d" }));
+		const reportInput = {
+			build,
+			finalPrompt: build.text,
+			skills,
+			toolNames,
+			toolSchemas: { chars: 90_000, units: 9_000 },
+		};
 		for (const detail of [false, true]) {
-			expectUserCopyShape(
-				`/context${detail ? " detail" : ""}`,
-				renderContextReport({
-					build,
-					finalPrompt: build.text,
-					skills,
-					toolNames,
-					toolSchemas: { chars: 90_000, units: 9_000 },
-					detail,
-				}),
-				{ allowToolNames: detail },
-			);
+			const report = renderContextReport({
+				...reportInput,
+				sessionUsage: { input: 600, cacheRead: 1_500, cacheWrite: 400 },
+				detail,
+			});
+			expectUserCopyShape(`/context${detail ? " detail" : ""}`, report, { allowToolNames: detail });
+			expect(report).toMatch(/1,500 .* 2,500 tokens.*60\.0%.*400/);
 		}
+		expect(
+			renderContextReport({
+				...reportInput,
+				sessionUsage: { input: 0, cacheRead: 0, cacheWrite: 0 },
+				detail: false,
+			}),
+		).not.toMatch(/tokens（.*%/);
 	});
 
 	it("keeps runtime pushes in shape: receipts, notices, refusals and error bubbles", () => {

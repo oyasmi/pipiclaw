@@ -83,6 +83,7 @@ export interface PromptContextReportInput {
 	soul?: LoadedPromptResource;
 	agents?: LoadedPromptResource;
 	lastTurn?: PromptTurnContextStats;
+	sessionUsage?: { input: number; cacheRead: number; cacheWrite: number };
 	detail: boolean;
 }
 
@@ -170,8 +171,19 @@ export function renderContextReport(input: PromptContextReportInput): string {
 		// The assembled system prompt is one part of the provider's prefix, alongside tool
 		// declarations and dialogue. The build fingerprint covers only Pipiclaw's own sections.
 		lines.push(
-			`- 实际发送（含 skills、日期、工作目录）：${formatNumber(finalPrompt.length)} 字，约 ${formatNumber(estimateTokens(finalPrompt))} tokens，指纹 \`${sha256(finalPrompt).slice(0, 16)}\``,
+			`- 实际发送（含 skills、工作目录与边界尾注）：${formatNumber(finalPrompt.length)} 字，约 ${formatNumber(estimateTokens(finalPrompt))} tokens，指纹 \`${sha256(finalPrompt).slice(0, 16)}\``,
 		);
+	}
+	if (input.sessionUsage) {
+		const { input: uncached, cacheRead, cacheWrite } = input.sessionUsage;
+		const totalInput = uncached + cacheRead + cacheWrite;
+		if (totalInput > 0) {
+			const percent = ((100 * cacheRead) / totalInput).toFixed(1);
+			const written = cacheWrite > 0 ? `，写入缓存 ${formatNumber(cacheWrite)}` : "";
+			lines.push(
+				`- 会话缓存：已读缓存 ${formatNumber(cacheRead)} / 总输入 ${formatNumber(totalInput)} tokens（命中率 ${percent}%${written}）`,
+			);
+		}
 	}
 	const overToolBudget = input.toolSchemas.units > TOOL_SCHEMA_TARGET_UNITS;
 	lines.push(

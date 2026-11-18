@@ -99,7 +99,7 @@ export interface AgentRunner {
 	/** `undefined` while the SDK session is still being built. */
 	getStatusSnapshot(): RunnerStatusSnapshot | undefined;
 	/** `/context`: prompt/tool-schema accounting for the live session (spec 025 §9). */
-	renderContextReport(args?: string): string;
+	renderContextReport(args?: string): Promise<string>;
 	/** `/subagents list`'s role-directory health tail (spec 040, D6): whatever this runner has
 	 *  already discovered, without forcing a rescan. */
 	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult;

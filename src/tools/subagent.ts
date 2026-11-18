@@ -45,7 +45,7 @@ const itemField = Type.Optional(
  */
 const subagentSchema = Type.Object({
 	agent: Type.String({ description: "Name of a configured sub-agent from workspaceDir/sub-agents/" }),
-	task: Type.String({ description: "Self-contained goal, inputs, constraints and acceptance criteria." }),
+	task: Type.String({ description: "Outcome, verified facts, constraints, paths and acceptance criteria." }),
 	workingDirectory: workingDirectoryField,
 	worktree: worktreeField,
 	purpose: purposeField,
@@ -106,7 +106,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate to a configured role; it supplies tools, model, budget and context. Prefer this over subagent_inline when a role fits. Read agent-delegation.md for delegation workflows.",
+			"Dispatch a matching configured role directly for a clear task in one directory, e.g. give a read-only scout one file and a question. Read agent-delegation.md for parallel writes, worktrees, purpose=verify, uncertain image support or multi-agent coordination.",
 		parameters: subagentSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			if (signal?.aborted) {

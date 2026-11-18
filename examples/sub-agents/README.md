@@ -2,18 +2,18 @@
 
 本目录的角色示例按执行器、能力与成本组织，不按 planner / builder / reviewer 等岗位预设工作。每次做什么、范围多大、怎样验收，由主代理在 `task` 中交代；配置文件只绑定模型、工具、权限姿态、预算与跨任务的交付约定。
 
-这些文件**不会自动加载**。只安装自己需要且有账号的条目，平铺复制到 `~/.pipiclaw/workspace/sub-agents/`；运行时只读该目录下的 `*.md`，不会递归子目录。
+按需将角色文件平铺复制到 `~/.pipiclaw/workspace/sub-agents/`。`pi-scout` 使用现有 Pipiclaw 模型，外部角色使用各自 CLI 的登录与配置。
 
 ## 安装
 
 ```bash
 # 源码 checkout：
 mkdir -p ~/.pipiclaw/workspace/sub-agents
-cp examples/sub-agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
+cp examples/sub-agents/pi-scout.md ~/.pipiclaw/workspace/sub-agents/
 
 # npm 全局安装：
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{pi-scout,codex-main}.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
 CLI 不在 PATH 上时条目仍会列出，但标为 `unavailable`，调用时给出安装提示。删除包内示例不会删除已经复制到工作区的配置；现有配置由部署者自行管理。删除条目或更改其 command/model/shell 后，旧 run 不能再原样续接。
@@ -33,6 +33,7 @@ CLI 不在 PATH 上时条目仍会列出，但标为 `unavailable`，调用时�
 | `glm-high` | claude-code | `glm-5.3` | high | GLM 高推理候选，使用独立于 Claude/Codex 的额度 |
 | `glm-flash` | claude-code | `glm-5.3-flash` | medium | GLM 低成本候选：做法明确、易检查且易恢复的批量工作 |
 | `codex-review` | codex-cli | `gpt-6.1-sol` | high | CLI 强制只读；独立审查与 `purpose=verify` |
+| `pi-scout` | 内置 | 随 Pipiclaw 配置 | medium | 快速只读检索代码、日志和配置，汇总证据 |
 
 先满足输入能力、权限与可用状态，再按不确定性和错误代价选档。**flash** 用于做法明确、结果易检查、失败易恢复的工作；**main** 用于常规实施；**high** 用于关键取舍、疑难诊断或难以验证的工作。缺输入、缺权限或环境故障不能靠升级模型解决。
 
@@ -57,15 +58,16 @@ exec claude --dangerously-skip-permissions "$@"
 
 ## 交付约定与执行边界
 
-十一个条目共用九条正文约定：授权与改动范围、输入来源、缺口处理、真实证据、失败保留、验收范围、检查复用和交付表达。它们不规定本轮岗位，也不要求固定的规划—实施—审查流水线。
+十二个条目的正文都随各自文件安装。十个可写执行角色遵守七条约定，覆盖授权、保护已有改动、证据与达标后交付。两个只读角色遵守六条约定，覆盖独立取证、只读边界和未运行检查的报告方式。
 
-- **十个写条目放开 CLI 权限。** 除 `codex-review` 外都声明 `mutates: write`，使用 bypass/force 参数；实际权限边界由 CLI、宿主账号与环境提供，task 文字不能替代隔离。
+- **十个写条目在 CLI 中启用自动写入。** 它们声明 `mutates: write`，实际权限边界由 CLI、宿主账号与环境提供。
 - **并行写必须隔离。** 同一及父子目录只能有一个写委派，独立写分片各用 worktree；主代理也不要同时修改活跃委派的工作树。
 - **`codex-review` 的只读由 CLI sandbox 提供。** 它不能运行需写文件的测试或构建；可核查已有且对应当前产物的检查证据，或将缺失检查交给具备适当权限的执行器。
+- **`pi-scout` 只有 `read`、`grep` 和 `glob`。** 访问路径受 Pipiclaw 守卫约束。模型优先取 `settings.subagentModel`，缺省时取主会话模型。聊天内置委派共享 10 秒快速窗口。
 - **独立性来自验收依据与取证。** 给检查者原始要求、待检版本和入口，不把实现者总结当预期行为；先保证独立检查，再考虑不同模型。
 - **`VERDICT` 是信息，不是门禁。** PASS 要有本次范围内的证据；FAIL 应区分已证实缺陷和验证受阻，由负责人决定修复还是补检查。
 
-正文对 Claude 经 `--append-system-prompt-file` 追加，对 Codex/Cursor/Antigravity 与 task 拼入 stdin；相同文字的指令层级并不相同。调优时检查实际 run 的 `system-prompt.txt`、`prompt.txt`、argv 和结果。外部条目正文可以为空，但会失去这些交付约定；内置执行能力仍由运行时支持，不依赖本目录提供模板。
+Claude 每次运行都经 `--append-system-prompt-file` 接收非空角色正文。Codex、Cursor 和 Antigravity 首次运行时将正文与 task 拼入标准输入，续接时传增量指令。调优时可检查实际 run 的 `system-prompt.txt`、`prompt.txt`、argv 和结果。内置角色直接使用正文作为子会话的系统提示词。
 
 ## 自己写条目
 

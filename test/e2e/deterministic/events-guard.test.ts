@@ -5,9 +5,8 @@ import { createDeterministicHarness, type DeterministicHarness, reply } from "..
 
 /**
  * event_manage's self-triggering-loop guard (spec 048 D5, from events-guard).
- * Deterministic half: the immediate-event tool call is rejected with an
- * actionable message and nothing lands on disk. The prompt-level "don't even
- * try" guidance is a model-behaviour concern and lives in live B3 / evals.
+ * An immediate-event call is rejected by the schema before dispatch. The SDK
+ * returns the failure to the model and nothing lands on disk.
  */
 describe("E2E deterministic: event_manage guards", () => {
 	let harness: DeterministicHarness;
@@ -16,8 +15,8 @@ describe("E2E deterministic: event_manage guards", () => {
 	});
 
 	it("rejects an immediate event with an actionable error and writes nothing", async () => {
-		// Catches tool/SDK wiring that persists a self-trigger or bubbles a recoverable refusal
-		// to the user instead of returning it to the model. Domain-only validation cannot prove it.
+		// Catches wiring that advertises the old enum or drops its rejection before the next
+		// provider call. The direct-call guard is covered by the event_manage unit suite.
 		harness = await createDeterministicHarness();
 		const eventsDir = join(harness.deskDir, "events");
 
@@ -36,18 +35,18 @@ describe("E2E deterministic: event_manage guards", () => {
 
 		await harness.sendUserMessage("用 event_manage 建一个 immediate 事件");
 
-		// The SDK must feed a recoverable tool error back to the model, not stop the turn.
+		// The SDK must feed its schema error back to the model so the turn can continue.
 		const followup = harness.mainTurnRequests().at(-1);
 		const toolResult = (followup?.raw.messages as Array<{ role: string; content: string }>).find(
 			(message) => message.role === "tool",
 		);
-		expect(toolResult?.content.length).toBeGreaterThan(0);
+		expect(toolResult?.content).toContain("definition.type");
 		const stored = readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line))
 			.find((entry) => entry.message?.role === "toolResult" && entry.message?.toolName === "event_manage");
-		expect(stored?.message).toMatchObject({ isError: false, details: { kind: "event_manage", recoverable: true } });
+		expect(stored?.message).toMatchObject({ isError: true, details: {} });
 		expect(harness.deliveries.filter((d) => d.method === "sendPlain")).toHaveLength(1);
 
 		// Nothing on disk.

@@ -46,7 +46,7 @@ describe("E2E deterministic: command plane", () => {
 		// Catches a missing command route, including the events wiring formerly checked by a
 		// separate runtime-context unit test. Mutation check (2026-10-13): replacing the router's
 		// events handler with an empty reply leaves this file present and makes A2 fail.
-		for (const command of ["/tasks", "/status", "/memory status", "/session"]) {
+		for (const command of ["/context", "/tasks", "/status", "/memory status", "/session"]) {
 			const before = harness.deliveries.length;
 			await harness.sendUserMessage(command);
 			const replies = harness.deliveries.slice(before);

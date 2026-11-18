@@ -535,7 +535,8 @@ export class ChannelRunner implements AgentRunner {
 	 * breakdown of the system prompt, the tool schemas (billed on top of it, and
 	 * often the larger half), and the last turn's dynamic context.
 	 */
-	renderContextReport(args = ""): string {
+	async renderContextReport(args = ""): Promise<string> {
+		await this.host.ensureSessionReady();
 		const build = this.host.lastPromptBuild ?? this.host.buildSystemPrompt();
 		return renderContextReport({
 			build,
@@ -546,6 +547,7 @@ export class ChannelRunner implements AgentRunner {
 			soul: this.host.lastWorkspaceResources?.soul,
 			agents: this.host.lastWorkspaceResources?.agents,
 			lastTurn: this.lastTurnContextStats,
+			sessionUsage: this.session.getSessionStats().tokens,
 			detail: args.trim().toLowerCase() === "detail",
 		});
 	}

@@ -1,7 +1,13 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	createAssistantMessageEventStream,
+	type Model,
+	registerSessionResourceCleanup,
+} from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
@@ -80,7 +86,7 @@ function scriptedWorker(script: AssistantMessage[], seen: { continues: number; m
 	};
 }
 
-function makeTool(overrides: Partial<SubAgentToolOptions> & Pick<SubAgentToolOptions, "createWorker">) {
+function makeTool(overrides: Partial<SubAgentToolOptions>) {
 	const workspaceDir = createTempWorkspace();
 	const deskDir = join(workspaceDir, "dingtalk:dm:123");
 	mkdirSync(deskDir, { recursive: true });
@@ -153,17 +159,63 @@ describe("internal sub-agent: provider error recovery", () => {
 	);
 
 	it("retries a transient provider error in place and returns the recovered result", async () => {
-		const seen = { continues: 0, models: [] as string[] };
+		const requestedSessions: Array<string | undefined> = [];
+		const releasedSessions: Array<string | undefined> = [];
+		const script = [assistant("", { error: "429 Too Many Requests" }), assistant("Recovered answer.")];
 		const tool = makeTool({
-			createWorker: () =>
-				scriptedWorker([assistant("", { error: "429 Too Many Requests" }), assistant("Recovered answer.")], seen),
+			modelRequests: {
+				...testModelRequests(),
+				stream: (_model, _context, options) => {
+					expect(releasedSessions).toEqual([]);
+					requestedSessions.push(options?.sessionId);
+					const events = createAssistantMessageEventStream();
+					const message = script.shift()!;
+					events.push(
+						message.stopReason === "error"
+							? { type: "error", reason: "error", error: message }
+							: { type: "done", reason: "stop", message },
+					);
+					return events;
+				},
+			},
 		});
 
-		const result = await tool.execute("call-retry", { task: "Find it.", systemPrompt: "Look." });
+		const unregister = registerSessionResourceCleanup((sessionId) => releasedSessions.push(sessionId));
+		try {
+			const result = await tool.execute("call-retry", { task: "Find it.", systemPrompt: "Look." });
 
-		expect(textOf(result)).toContain("Recovered answer.");
-		expect(result.details.failed).toBe(false);
-		expect(seen.continues).toBe(1);
+			expect(textOf(result)).toContain("Recovered answer.");
+			expect(result.details.failed).toBe(false);
+			expect(requestedSessions).toEqual([result.details.runId, result.details.runId]);
+			expect(releasedSessions).toEqual([result.details.runId]);
+		} finally {
+			unregister();
+		}
+	});
+
+	it("releases the worker session and settles the run when setup fails after registration", async () => {
+		const releasedSessions: Array<string | undefined> = [];
+		const tool = makeTool({
+			createWorker: () => ({
+				...scriptedWorker([], { continues: 0, models: [] }),
+				subscribe: () => {
+					throw new Error("Cannot subscribe");
+				},
+			}),
+		});
+		const unregister = registerSessionResourceCleanup((sessionId) => releasedSessions.push(sessionId));
+		try {
+			await expect(tool.execute("call-setup", { task: "Find it.", systemPrompt: "Look." })).rejects.toThrow(
+				"Cannot subscribe",
+			);
+			const run = getSubAgentRunManager("dingtalk:dm:123")
+				.list()
+				.find((item) => item.failureReason === "Cannot subscribe");
+			expect(run?.status).toBe("failed");
+			expect(releasedSessions).toEqual([run?.runId]);
+		} finally {
+			unregister();
+		}
 	});
 
 	it("switches to the backup model once retries cannot help, and bills the run to it", async () => {

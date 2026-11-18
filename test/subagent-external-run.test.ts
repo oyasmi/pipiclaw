@@ -148,7 +148,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 5150 });
 
-		await launchExternalRun({
+		const input = {
 			...testManagers("dingtalk:dm:ext"),
 			runId: "run-ext-1",
 			channelId: "dingtalk:dm:ext",
@@ -167,11 +167,14 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			workspaceDir,
 			securityConfig: DEFAULT_SECURITY_CONFIG,
 			spawnFn: spawnFnForInput,
-		});
+		} satisfies Parameters<typeof launchExternalRun>[0];
+		await launchExternalRun(input);
 
 		expect(spawnFn).toHaveBeenCalledTimes(1);
 		expect(spawnFn.mock.calls[0]?.[0]).toBe("codex");
 		expect(spawnFn.mock.calls[0]?.[1]).toEqual(["exec", "--json", "-"]);
+		expect(child.stdin.read()?.toString()).toBe("You are a builder.\n\n---\n\nImplement the thing.\n");
+		expect(readFileSync(join(artifactDir, "system-prompt.txt"), "utf-8")).toBe("You are a builder.\n");
 
 		const manager = getSubAgentRunManager("dingtalk:dm:ext");
 		await waitFor(() => manager.get("run-ext-1")?.pid !== undefined);
@@ -226,6 +229,21 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const outputPath = join(artifactDir, "output.md");
 		expect(readFileSync(outputPath, "utf-8")).toBe("All done.");
 		expect(dispatched[0]?.text).toContain(`Full output: ${outputPath}`);
+
+		const resumed = makeFakeSpawn({ pid: 5152 });
+		const resumedDir = join(deskDir, "subagent-artifacts", "run-ext-1-resumed");
+		await launchExternalRun({
+			...input,
+			runId: "run-ext-1-resumed",
+			artifactDir: resumedDir,
+			resumeSessionId: record?.sessionId,
+			task: "  Continue the work.  ",
+			spawnFn: resumed.spawnFnForInput,
+		});
+		expect(resumed.child.stdin.read()?.toString()).toBe("Continue the work.\n");
+		expect(existsSync(join(resumedDir, "system-prompt.txt"))).toBe(false);
+		resumed.child.emit("close", 1);
+		await waitFor(() => manager.get("run-ext-1-resumed")?.status === "failed");
 	});
 
 	// The probes (`ps`, `<cli> --version`) are diagnostics: the dispatching tool call must not wait
@@ -816,7 +834,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 7171 });
-		await launchExternalRun({
+		const input = {
 			...testManagers("dingtalk:dm:ext5"),
 			runId: "run-ext-5",
 			channelId: "dingtalk:dm:ext5",
@@ -834,10 +852,16 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			workspaceDir,
 			securityConfig: DEFAULT_SECURITY_CONFIG,
 			spawnFn: spawnFnForInput,
-		});
+		} satisfies Parameters<typeof launchExternalRun>[0];
+		await launchExternalRun(input);
 
 		expect(spawnFn.mock.calls[0]?.[0]).toBe("claude");
 		const args = spawnFn.mock.calls[0]?.[1] as string[];
+		const flag = "--append-system-prompt-file";
+		expect(args).toContain(flag);
+		const originalRole = readFileSync(args[args.indexOf(flag) + 1]!, "utf-8");
+		expect(originalRole).toBe("You are a reviewer.\n");
+		expect(child.stdin.read()?.toString()).toBe("Review the change.\n");
 		expect(args).toContain("--session-id");
 		const sessionIdIndex = args.indexOf("--session-id") + 1;
 		const presetSessionId = args[sessionIdIndex];
@@ -867,6 +891,26 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(dispatched).toHaveLength(1);
 		expect(dispatched[0]?.text).toContain("Looks good.");
 
+		const resumed = makeFakeSpawn({ pid: 7172 });
+		const resumedDir = join(deskDir, "subagent-artifacts", "run-ext-5-resumed");
+		await launchExternalRun({
+			...input,
+			runId: "run-ext-5-resumed",
+			artifactDir: resumedDir,
+			resumeSessionId: presetSessionId,
+			task: "  Continue the review.  ",
+			spawnFn: resumed.spawnFnForInput,
+		});
+		const resumedArgs = resumed.spawnFn.mock.calls[0]?.[1] as string[];
+		expect(resumedArgs).toContain("--resume");
+		expect(resumedArgs).toContain(flag);
+		const resumedRolePath = resumedArgs[resumedArgs.indexOf(flag) + 1]!;
+		expect(resumedRolePath).toBe(join(resumedDir, "system-prompt.txt"));
+		expect(readFileSync(resumedRolePath, "utf-8")).toBe(originalRole);
+		expect(resumed.child.stdin.read()?.toString()).toBe("Continue the review.\n");
+		resumed.child.emit("close", 1);
+		await waitFor(() => manager.get("run-ext-5-resumed")?.status === "failed");
+
 		// Spec 068 D4/D8: antigravity-cli follow-up persists expectedResumeSessionId at launch,
 		// rejects a mismatched conversation_id on exit 0 without leaving a bogus sessionId,
 		// preserves a matched init sessionId across an empty-id ERROR result, and saves the
@@ -894,6 +938,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			securityConfig: DEFAULT_SECURITY_CONFIG,
 			spawnFn: spawnMismatch,
 		});
+		expect(childMismatch.stdin.read()?.toString()).toBe("Continue.\n");
+		expect(existsSync(join(agyMismatchDir, "system-prompt.txt"))).toBe(false);
 		await waitFor(() => manager.get("run-agy-mismatch")?.pid !== undefined);
 		expect(manager.get("run-agy-mismatch")?.expectedResumeSessionId).toBe("conv-expected-1");
 		expect(manager.get("run-agy-mismatch")?.sessionId).toBeUndefined();

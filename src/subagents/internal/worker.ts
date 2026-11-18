@@ -177,6 +177,7 @@ export function startWorker(input: {
 			tools: filterToolsByName(availableTools, config.tools),
 		}) ??
 		new Agent({
+			sessionId: runContext.runId,
 			initialState: {
 				systemPrompt: config.systemPrompt,
 				model: config.model,

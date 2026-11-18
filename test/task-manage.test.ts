@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { measureToolSchemas, TOOL_SCHEMA_TARGET_UNITS } from "../src/agent/prompt/manifest.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
@@ -13,7 +14,7 @@ import { deliverTaskMessage, queueTaskReport } from "../src/tasks/delivery.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
 import { appendTaskLog, readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { beginStep, closeTask as closeStoredTask, readStoredTask } from "../src/tasks/store.js";
-import { buildToolSet } from "../src/tools/registry.js";
+import { createPipiclawTools } from "../src/tools/index.js";
 import { createTask } from "../src/tools/task-manage/create.js";
 import {
 	createTaskAskTool,
@@ -316,27 +317,36 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 		});
 
 		it("are offered to chat only, and the session tools to a task session only — none writes state", () => {
-			const ctx = (extra: Partial<Parameters<typeof buildToolSet>[0]> = {}) =>
-				buildToolSet({
+			const build = (extra: Partial<Parameters<typeof createPipiclawTools>[0]>) =>
+				createPipiclawTools({
 					executor: { exec: async () => ({ stdout: "", stderr: "", code: 1 }) },
 					fileStore: createFileStore(),
 					securityConfig: DEFAULT_SECURITY_CONFIG,
-					securityContext: { agentWorkspaceDir: workspaceDir, cwd: workspaceDir },
+					cwd: workspaceDir,
 					channelId: CHANNEL_ID,
 					desk: "main",
 					deskDir,
 					workspaceDir,
-					toolsConfig: DEFAULT_TOOLS_CONFIG,
+					toolsConfig: {
+						tools: { ...DEFAULT_TOOLS_CONFIG.tools, web: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: true } },
+					},
+					sendMedia: async () => ({ ok: true }),
 					jobManager: options.jobManager,
 					runManager: options.runManager,
 					getCurrentModel: () => ({}) as never,
 					getAvailableModels: () => [],
+					getSubAgentDiscovery: () => ({ directory: "", agents: [], warnings: [] }),
 					modelRequests: testModelRequests(),
 					getSessionSearchSettings: () => ({}) as never,
 					...extra,
-				}).map((tool) => tool.name);
-			const chat = ctx({ taskControl: control });
-			const inSession = ctx({ taskSession: sessionOptions.session });
+				});
+			const chatTools = build({ taskControl: control });
+			const stepTools = build({ taskSession: sessionOptions.session });
+			const chat = chatTools.map((tool) => tool.name);
+			const inSession = stepTools.map((tool) => tool.name);
+			for (const toolSet of [chatTools, stepTools]) {
+				expect(measureToolSchemas(toolSet).units).toBeLessThanOrEqual(TOOL_SCHEMA_TARGET_UNITS);
+			}
 			const taskTools = (names: string[]) => names.filter((name) => name.startsWith("task_")).sort();
 			expect(taskTools(chat)).toEqual([
 				"task_close",

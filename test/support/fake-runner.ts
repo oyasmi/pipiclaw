@@ -27,7 +27,7 @@ export function bootstrapPathsIn(appHomeDir: string): BootstrapPaths {
 export function createFakeRunner(overrides: Partial<AgentRunner> = {}): AgentRunner {
 	return {
 		...createFakeSessionBinding(),
-		renderContextReport: () => "CONTEXT",
+		renderContextReport: async () => "CONTEXT",
 		getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
 		run: vi.fn(async () => ({ stopReason: "stop" })),
 		handleBuiltinCommand: vi.fn(async () => "HELP"),

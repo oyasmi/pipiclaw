@@ -7,6 +7,7 @@ import {
 	type Model,
 	type ModelsSimpleStreamOptions,
 	type ProviderHeaders,
+	registerSessionResourceCleanup,
 } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { withAbortSignal } from "../shared/with-timeout.js";
@@ -18,8 +19,15 @@ export interface ModelRequests {
 	stream(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream;
 }
 
+// One request adapter can serve the chat and multiple internal workers. Keep the route
+// fingerprint with the same session lifetime as the SDK's connection pool.
+const codexRoutes = new Map<string, string>();
+registerSessionResourceCleanup((sessionId) => {
+	if (sessionId === undefined) codexRoutes.clear();
+	else codexRoutes.delete(sessionId);
+});
+
 export function createModelRequests(runtime: ModelRuntime): ModelRequests {
-	let codexRoute: { sessionId: string; fingerprint: string } | undefined;
 	return {
 		ensureAuth: async (model, signal) => {
 			const resolve = () =>
@@ -66,10 +74,11 @@ export function createModelRequests(runtime: ModelRuntime): ModelRequests {
 							]),
 						)
 						.digest("hex");
-					if (codexRoute?.sessionId === sessionId && codexRoute.fingerprint !== fingerprint) {
+					const previous = codexRoutes.get(sessionId);
+					if (previous !== undefined && previous !== fingerprint) {
 						cleanupSessionResources(sessionId);
 					}
-					codexRoute = { sessionId, fingerprint };
+					codexRoutes.set(sessionId, fingerprint);
 					return onPayload?.(payload, resolvedModel);
 				};
 			}

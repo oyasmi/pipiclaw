@@ -19,4 +19,4 @@ task 对象含 title、goal、dod，可选 items、budget；不是 task_create �
 
 task 与 text 不能并存。上个实例未结束时本次跳过并通知用户；各实例不继承前次状态，首步可能提供 previous_occurrence 作衔接资料。投递频道离开工位不阻止 task 创建/推进，报告暂存待切回。
 
-模板持久改进由聊天侧 event_manage update 完整替换。用户已明确要求调整就执行；缺目标或授权才询问。实例只能 task_report 提建议，不能自行改事件；操作仍按 [事件正常流程](event-scheduling.md) 确认成功。
+用 event_manage 创建模板时投递到当前频道。修改已有事件先 show 完整定义，再 update 整体替换，投递频道保持不变。工具返回成功后再向用户确认。缺目标或授权才询问；实例自身通过 task_report 提出模板改进建议。

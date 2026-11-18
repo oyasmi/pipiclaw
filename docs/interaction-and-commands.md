@@ -93,7 +93,7 @@ pipiclaw tui --print "用三句话总结当前仓库架构"     # 单次执行�
 | `/events <list\|show\|delete\|history>` | 查看本工位定时事件、读取 JSON 定义、删除事件或核查触发历史 |
 | `/desk [list\|new\|cwd\|bind\|archive\|unarchive]` | 查看与管理工位及工作目录（仅 `bind` 需空闲时执行） |
 | `/usage [7d\|month]` | 查看今日/近 7 天/本月的本工位与全局 Token 消耗及账单估算明细 |
-| `/context [detail]` | 查看系统提示词、工具 Schema 与动态上下文占用的体积明细 |
+| `/context [detail]` | 查看系统提示词、工具定义、动态上下文和当前会话的缓存命中率 |
 | `/skills [list\|show <名称>]` | 查看已加载的工作区与共享技能列表或具体内容 |
 | `/new` | 立即建立全新对话会话（旧会话在后台完成记忆归档，长期记忆继续保留） |
 

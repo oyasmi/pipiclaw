@@ -7,7 +7,7 @@ order: 42
 
 # 条件传感器与远期提醒
 
-仅外部条件门控或超出 one-shot 范围时读取。普通事件创建/更新按 [事件正常流程](event-scheduling.md)。
+仅外部条件门控或超出 one-shot 范围时读取。在 event_manage 中创建会投递到当前频道。修改已有事件先 show 完整定义，再 update 整体替换，投递频道保持不变。工具返回成功后再向用户确认。
 
 ## preAction 传感器
 

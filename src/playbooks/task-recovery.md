@@ -2,7 +2,7 @@
 name: task-recovery
 description: 任务暂停/重启后恢复或改进周期实例。
 requires-tools: task_report
-order: 71
+order: 72
 ---
 
 # 任务恢复与周期衔接
