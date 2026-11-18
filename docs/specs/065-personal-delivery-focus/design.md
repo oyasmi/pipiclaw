@@ -124,15 +124,15 @@ or advance it merely because this turn has nothing else to do.
 
 ### D7. 示例处置
 
-现有 `agents/` 已按能力和成本组织，[交接方法](../../leverage/005-fewer-roles-better-handoffs.md)也已收敛，因此这部分以补齐剩余入口为主，不重写已经正确的内容。
+现有角色示例已按能力和成本组织，[交接方法](../../leverage/005-fewer-roles-better-handoffs.md)也已收敛，因此这部分以补齐剩余入口为主，不重写已经正确的内容。
 
 具体动作：
 
-- [`examples/sub-agents/README.md`](../../../examples/sub-agents/README.md)与[`docs/sub-agents.md`](../../sub-agents.md)不再把复制 `agents/*.md` 作为默认安装动作；用明确选择的一到两个条目示例，完整目录留作选项参考。
+- [`examples/sub-agents/README.md`](../../../examples/sub-agents/README.md)与[`docs/sub-agents.md`](../../sub-agents.md)用明确选择的一到两个条目演示安装，完整目录留作选项参考。
 - 两份文档的入口与最小示例优先使用能力条目，说明“同一执行器可完成不同阶段”；岗位模板放到可选参考，避免形成“必须凑齐岗位”的暗示。
 - 保留当前八份 `roles/` 参考模板。它们并非全部重复：其中有真实 CLI sandbox、受限写目录、专门 Git 操作纪律等不同边界。退出默认推荐不等于删除这些边界示例。
 - 明确 capability 条目是基础选择，参考模板只在提供实际差异时按需使用；不要要求两组全装，也不要笼统禁止有理由地从两组各选个别条目。
-- 文档中涉及模板权限的说明必须按实际文件核对。例如 `codex-review` 是 read-only，不能写成 `agents/` 全部为放开权限的写条目。
+- 文档中涉及模板权限的说明必须按实际文件核对。例如 `codex-review` 是 read-only，不能写成示例均为放开权限的写条目。
 
 不改用户已经复制到 workspace 的配置，不自动删除、替换或改名角色，不改变现有条目的 CLI 命令、sandbox、模型或时限。尤其不能为了替换一个岗位名，把受限权限条目默默换成更宽权限的主力条目。
 

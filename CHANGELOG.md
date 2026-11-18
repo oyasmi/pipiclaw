@@ -7,6 +7,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 ### Changed
 
 - Upgrade the four direct Pi SDK dependencies together from 1.5.0 to 1.5.2, including tool-argument validation, provider compatibility, session-boundary and terminal-input fixes. Historical sessions need no migration. Check removed model references and the empty-tool-list compatibility setting for older gateways in the [upgrade notes](docs/migrations/sdk-upgrades.md#pi-sdk-152-升级注意事项).
+- Ship sub-agent profiles directly under `examples/sub-agents/`. Use this path in scripts that copy example profiles into a workspace.
 
 ### Fixed
 
@@ -51,12 +52,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Added
 
-- **`antigravity-cli` external harness (spec 068).** External roles can set `harness: antigravity-cli` to delegate to Google Antigravity CLI (`agy`) over `--output-format stream-json`, supporting `--model`, `--effort`, and `--conversation <id>` resume, structured step/subagent progress labels, and token usage accounting, with `examples/sub-agents/agents/agy-main.md` as the example template.
+- **`antigravity-cli` external harness (spec 068).** External roles can set `harness: antigravity-cli` to delegate to Google Antigravity CLI (`agy`) over `--output-format stream-json`, supporting `--model`, `--effort`, and `--conversation <id>` resume, structured step/subagent progress labels, and token usage accounting, with `agy-main.md` as the example template.
 
 ### Changed
 
 - Upgrade all four direct Pi SDK dependencies from 1.4.0 to 1.5.0 for incremental parsing of large tool calls, session-write rollback, provider compatibility and terminal rendering fixes. Keep existing TypeBox tool definitions and partial-write isolation. OpenRouter cost totals can now use provider-reported billing while component costs remain estimates.
-- Simplify sub-agent examples to capability entries under `examples/sub-agents/agents/` (removing `examples/sub-agents/roles/` and `scout.md`), and refine runtime playbooks around delegation selection, cross-turn task creation criteria, incremental step records, verification reuse, and memory scope checks.
+- Simplify sub-agent examples to capability entries (removing the job-role templates and `scout.md`), and refine runtime playbooks around delegation selection, cross-turn task creation criteria, incremental step records, verification reuse, and memory scope checks.
 - Upgrade Fastify, follow-redirects, and Vitest dependencies to resolve `npm audit` vulnerabilities.
 
 ### Fixed

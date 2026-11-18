@@ -32,7 +32,7 @@
 | D1–D6 | `src/subagents/external/antigravity-cli.ts`（新建，561 行）、`src/subagents/external/registry.ts`、`src/subagents/discovery.ts`、`src/subagents/run-record.ts`、`src/subagents/external/harness.ts`、`src/subagents/external/run.ts`、`src/channel/store.ts`、`src/agent/prompt/types.ts`、`src/tools/subagent-manage.ts`、`src/subagents/format.ts`、`src/usage/ledger.ts`、`src/usage/render.ts` |
 | D7 | `src/subagents/external/role-warnings.ts`（323 行，新增 `antigravityCommandWarnings`） |
 | D8 | `src/subagents/run-record.ts`（提取 `ExternalLaunchInfo`、增加 `expectedResumeSessionId`）、`src/subagents/runs.ts`（1048 行降至 1025 行）、`src/subagents/external/harness.ts`、`src/subagents/external/run.ts`、`src/subagents/external/settlement.ts`、`src/subagents/external/reconciliation.ts` |
-| 示例与文档 | `examples/sub-agents/agents/agy-main.md`（唯一新增示例角色）、`examples/sub-agents/README.md`、`src/playbooks/agent-delegation.md`、`docs/sub-agents.md`、`docs/README.md`、`docs/architecture.md`、`docs/deployment-and-operations.md`、`docs/events-and-tasks.md`、`docs/refer/grok-bot-comparison.md`、`docs/specs/README.md`、`AGENTS.md`、`CLAUDE.md` |
+| 示例与文档 | `examples/sub-agents/agy-main.md`（唯一新增示例角色）、`examples/sub-agents/README.md`、`src/playbooks/agent-delegation.md`、`docs/sub-agents.md`、`docs/README.md`、`docs/architecture.md`、`docs/deployment-and-operations.md`、`docs/events-and-tasks.md`、`docs/refer/grok-bot-comparison.md`、`docs/specs/README.md`、`AGENTS.md`、`CLAUDE.md` |
 
 超长文件预算核对：
 - `src/subagents/discovery.ts`：**1031 行**（基线上限 1031 行）

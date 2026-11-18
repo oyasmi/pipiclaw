@@ -253,7 +253,7 @@ pipiclaw
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
 
 # 按你本机实际装有的 CLI 挑选复制（示例包含主力编码档与只读独立审查档）
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main,codex-review}.md \
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{claude-main,codex-main,codex-review}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 

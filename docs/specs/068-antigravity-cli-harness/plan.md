@@ -14,7 +14,7 @@
 本次新增三个文件：
 
 - 产品适配器：`src/subagents/external/antigravity-cli.ts`
-- 示例能力条目：`examples/sub-agents/agents/agy-main.md`（仅此一个示例角色）
+- 示例能力条目：`examples/sub-agents/agy-main.md`（仅此一个示例角色）
 - 适配器单测：`test/antigravity-cli-harness.test.ts`
 
 以上是三个主要交付文件；必要的最小脱敏协议夹具与来源说明可另放在现有 `test/fixtures/` 下，不新增通用采集框架。其余改动在现有文件完成接线、启动元数据、共享结算输入、角色告警、参数化测试扩展与文档同步。无需新增第三方依赖、运行时配置文件、数据迁移或顶层模块。
@@ -137,7 +137,7 @@
 
 ## 7. P4：示例角色、文档同步与行为评测规划
 
-1. 新建 `examples/sub-agents/agents/agy-main.md`（仅此一个示例文件，内容见设计 §4.1；模型标识以 P0.5 核实结果为准），在 `loadExamples` 白名单中加入 harness，确认示例加载无告警。`docs/sub-agents.md` 的验证角色按设计 §4.2 使用写声明；不能复制旧版 read+plan/sandbox 配方。
+1. 新建 `examples/sub-agents/agy-main.md`（仅此一个示例文件，内容见设计 §4.1；模型标识以 P0.5 核实结果为准），在 `loadExamples` 白名单中加入 harness，确认示例加载无告警。`docs/sub-agents.md` 的验证角色按设计 §4.2 使用写声明；不能复制旧版 read+plan/sandbox 配方。
 2. 按设计第 5 节逐项更新文档（注意：`AGENTS.md`、`CLAUDE.md`、`docs/architecture.md` 中反引号引用的 `.ts` 路径受 `scripts/check-architecture.mjs` R5 规则校验，必须在 `src/subagents/external/antigravity-cli.ts` 已创建后同步）：
    - `examples/sub-agents/README.md`
    - `docs/sub-agents.md`
@@ -188,7 +188,7 @@ git diff --check
 人工复核清单：
 - `discovery.ts` ≤ 1031 行、`runs.ts` ≤ 1048 行，`scripts/architecture-baseline.json` 零改动；
 - `antigravity-cli.ts` 未将 `-p` / `--print`、`--disable-slash-commands`、`--mode`、`--dangerously-skip-permissions` 自动写进 argv；
-- `examples/sub-agents/agents/` 只新增 `agy-main.md` 一个文件；
+- `examples/sub-agents/` 只新增 `agy-main.md` 一个文件；
 - 报告 unit / deterministic e2e case-count `before → after` 与每组新增覆盖的独立故障面；有 e2e 增量时附准入理由和 mutation；
 - 正常退出与恢复读取相同的已持久化续接预期，错误身份不冒充成功续接；
 - 完整正文、拒绝摘要和末行 verdict 同时保留；未知统计范围不冒充已知零用量，步骤与 result 不重复加总；

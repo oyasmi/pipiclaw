@@ -20,7 +20,7 @@
 
 前提：目标 CLI（`claude`、`codex`、`agent` 或 `agy`）已在**运行 Pipiclaw 的同一系统账号**下安装、加入 `PATH` 并完成登录验证。
 
-Pipiclaw 安装包内置了按能力分档的现成角色模板（位于包内或源码仓库的 [`examples/sub-agents/agents/`](../examples/sub-agents/README.md)）：
+Pipiclaw 安装包内置了按能力分档的现成角色模板（位于包内或源码仓库的 [`examples/sub-agents/`](../examples/sub-agents/README.md)）：
 - **`*-flash`**：做法明确、易检查的轻量快速修改；
 - **`*-main`**：日常功能开发、问题排查与文档编写主力档；
 - **`*-high`**：复杂架构取舍、疑难诊断与高风险变更；
@@ -33,7 +33,7 @@ mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PKG="$(npm root -g)/@oyasmi/pipiclaw"
 
 # 按需复制你本机已安装 CLI 对应的角色文件（无需重启 daemon）
-cp "$PIPICLAW_PKG"/examples/sub-agents/agents/{claude-main,claude-high,codex-review}.md \
+cp "$PIPICLAW_PKG"/examples/sub-agents/{claude-main,claude-high,codex-review}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 

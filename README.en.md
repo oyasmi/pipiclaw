@@ -188,7 +188,7 @@ mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
 
 # Copy the entries matching the subscriptions you own (Claude, Codex & read-only review shown)
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main,codex-review}.md \
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{claude-main,codex-main,codex-review}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 

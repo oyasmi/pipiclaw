@@ -418,7 +418,7 @@ async function showRoles(options: HandleSubagentsCommandOptions, name?: string):
 	if (external.length > 0) sections.push(`**外部**\n${external.map(formatRoleSummaryLine).join("\n")}`);
 	if (internal.length > 0) sections.push(`**内置**\n${internal.map(formatRoleSummaryLine).join("\n")}`);
 	if (discovery.agents.length === 0) {
-		sections.push("暂无已配置角色。\n可将安装包内 `examples/sub-agents/agents/*.md` 按需复制到该目录启用角色。");
+		sections.push("暂无已配置角色。\n可从安装包的 `examples/sub-agents/` 选择所需的角色文件，复制到该目录启用。");
 	}
 	for (const warning of discovery.warnings) sections.push(`⚠️ 角色文件问题：${warning}`);
 	sections.push("用 `/subagents roles <name>` 看单个角色的详情。");

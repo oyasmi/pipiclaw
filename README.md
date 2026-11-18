@@ -185,7 +185,7 @@ mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
 
 # 按你实际拥有的账号挑选复制（此处以 Claude、Codex 主力档与只读审查档为例）
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main,codex-review}.md \
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{claude-main,codex-main,codex-review}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 

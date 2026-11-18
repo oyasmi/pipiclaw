@@ -7,6 +7,7 @@
 ### 变更
 
 - 四个直接 Pi SDK 依赖从 1.5.0 同步升级到 1.5.2，获得工具参数校验、供应商兼容性、会话边界与终端输入修复，无需迁移历史会话。使用旧网关或旧模型引用的部署，请核对[升级说明](docs/migrations/sdk-upgrades.md#pi-sdk-152-升级注意事项)中的模型移除与空工具列表兼容配置。
+- 子代理角色示例直接放在 `examples/sub-agents/` 下。从安装包复制示例到工作区的脚本可改用此路径。
 
 ### 修复
 
@@ -51,12 +52,12 @@
 
 ### 新增
 
-- **外部执行器 `antigravity-cli`（spec 068）。** 外部角色可声明 `harness: antigravity-cli`，通过 `--output-format stream-json` 委派 Google Antigravity CLI（`agy`），支持 `--model`、`--effort` 与 `--conversation <id>` 续接、结构化步骤与子智能体进度标注及 token 用量记账，并提供 `examples/sub-agents/agents/agy-main.md` 示例条目。
+- **外部执行器 `antigravity-cli`（spec 068）。** 外部角色可声明 `harness: antigravity-cli`，通过 `--output-format stream-json` 委派 Google Antigravity CLI（`agy`），支持 `--model`、`--effort` 与 `--conversation <id>` 续接、结构化步骤与子智能体进度标注及 token 用量记账，并提供 `agy-main.md` 示例条目。
 
 ### 变更
 
 - 四个直接 Pi SDK 依赖从 1.4.0 同步升级到 1.5.0，获得大工具调用增量解析、会话写入失败回滚、提供方兼容性和终端渲染修复。保留现有 TypeBox 工具定义与部分写入隔离；OpenRouter 成本合计可采用提供方报告的计费金额，分项仍为估算。
-- 子代理示例收敛为 `examples/sub-agents/agents/` 下的能力条目（移除 `examples/sub-agents/roles/` 岗位模板与 `scout.md`），并细化运行指南中的委派选型边界、跨回合立项条件、增量步骤记录、检查证据复用与记忆适用范围核对。
+- 子代理示例收敛为能力条目（移除岗位模板与 `scout.md`），并细化运行指南中的委派选型边界、跨回合立项条件、增量步骤记录、检查证据复用与记忆适用范围核对。
 - 升级 Fastify、follow-redirects 与 Vitest 相关依赖，清理 `npm audit` 漏洞。
 
 ### 修复

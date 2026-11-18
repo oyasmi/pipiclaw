@@ -1,6 +1,6 @@
 # 工作区智能体配置示例
 
-[`agents/`](./agents/) 按执行器、能力与成本组织，不按 planner / builder / reviewer 等岗位预设工作。每次做什么、范围多大、怎样验收，由主代理在 `task` 中交代；配置文件只绑定模型、工具、权限姿态、预算与跨任务的交付约定。
+本目录的角色示例按执行器、能力与成本组织，不按 planner / builder / reviewer 等岗位预设工作。每次做什么、范围多大、怎样验收，由主代理在 `task` 中交代；配置文件只绑定模型、工具、权限姿态、预算与跨任务的交付约定。
 
 这些文件**不会自动加载**。只安装自己需要且有账号的条目，平铺复制到 `~/.pipiclaw/workspace/sub-agents/`；运行时只读该目录下的 `*.md`，不会递归子目录。
 
@@ -9,11 +9,11 @@
 ```bash
 # 源码 checkout：
 mkdir -p ~/.pipiclaw/workspace/sub-agents
-cp examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
+cp examples/sub-agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 
 # npm 全局安装：
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/codex-main.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
 CLI 不在 PATH 上时条目仍会列出，但标为 `unavailable`，调用时给出安装提示。删除包内示例不会删除已经复制到工作区的配置；现有配置由部署者自行管理。删除条目或更改其 command/model/shell 后，旧 run 不能再原样续接。

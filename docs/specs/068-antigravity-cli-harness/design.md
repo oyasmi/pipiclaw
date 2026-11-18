@@ -6,7 +6,7 @@
 | 日期 | 2026-11-14；2026-11-15 实施前审查修订 |
 | 承接 | [040 外部委派](../../archive/specs/040-async-delegation-and-external-agents/design.md) 的 D3/D4 harness 接缝、[066 Cursor CLI harness](../066-cursor-cli-harness/design.md)；当前实现见 `src/subagents/external/` |
 | 协议依据 | [官方无头协议](https://antigravity.google/docs/cli/headless/)、[执行模式](https://antigravity.google/docs/cli/modes/)、[权限](https://antigravity.google/docs/permissions/)；本机 `agy 1.5.9` 的 `agy --help`、`agy changelog`、Go 结构体 JSON 标签与管道参数实测 |
-| 实施形态 | 新增结构化外部 harness（`antigravity-cli`）与单个能力条目 `examples/sub-agents/agents/agy-main.md`；补充续接预期 ID 的持久化和共享结算校验。不改 run 状态机、写锁所有权或 prompt 投递方式 |
+| 实施形态 | 新增结构化外部 harness（`antigravity-cli`）与单个能力条目 `examples/sub-agents/agy-main.md`；补充续接预期 ID 的持久化和共享结算校验。不改 run 状态机、写锁所有权或 prompt 投递方式 |
 
 本设计写给实施者。协议依据来自官方文档及本机 `agy 1.5.9` 的参数解析与结构标签实测，未发起消耗额度的真实模型请求。真实端到端流协议核对通过 opt-in smoke（`PIPICLAW_E2E_HARNESS=antigravity-cli npm run test:e2e:external`）单独执行，不进入离线 `npm run test` 或 `npm run check`。
 
@@ -40,7 +40,7 @@ P0.5 按下表收集或登记证据。每份事件样本记录 CLI 版本、认�
 
 它进入现有的「一条 prompt、一个短命进程」模型：`ExternalHarness` 只负责 argv 组装、stdout NDJSON 解析和进度标签。`SubAgentRunManager`（`runs.ts`）继续独占状态机、用量记账、workspace lease 与完成唤醒，`external/run.ts` 继续负责脱离终端 spawn、stdin 写入、敏感环境变量过滤、审计和结算。
 
-仓库示例目录新增且仅新增一个能力条目 `examples/sub-agents/agents/agy-main.md`，对齐现有 `claude-main` / `codex-main` / `cursor-main` 的单文件主力候选组织方式。
+仓库示例目录新增且仅新增一个能力条目 `examples/sub-agents/agy-main.md`，对齐现有 `claude-main` / `codex-main` / `cursor-main` 的单文件主力候选组织方式。
 
 ### 1.1 明确不做
 
@@ -51,7 +51,7 @@ P0.5 按下表收集或登记证据。每份事件样本记录 CLI 版本、认�
 - **默认不追加 `--disable-slash-commands`。** 保留 CLI 默认行为，由角色在 `command` 显式禁用。注意真实委派会在任务前添加角色正文及 `Runtime context:` / follow-up 信封，原始任务前导 `/...` 不再位于 stdin 开头；这不构成 Pipiclaw 已支持原生斜杠命令直达的承诺。
 - 不自动追加 `--dangerously-skip-permissions`、`--mode`、`--sandbox`、`--settings`、`--agent`、`--add-dir`、`--remote-agent`、`--project` 等权限或环境控制参数。权限边界归角色 `command` 与宿主环境所有。
 - 不往工作区写临时 `.agents/rules/`、`.agents/agents/` 或 `GEMINI.md` 再事后清理。
-- 不铺设 `agy-high`、`agy-flash`、`agy-review` 等多档位示例文件；`examples/sub-agents/agents/` 只补充一个 `agy-main.md`。
+- 不铺设 `agy-high`、`agy-flash`、`agy-review` 等多档位示例文件；`examples/sub-agents/` 只补充一个 `agy-main.md`。
 - 确定性 e2e 默认不净增，先扩展相关既有链路。续接预期 ID 从启动持久化经重启到结算是本次新增的跨模块故障面；若既有链路无法覆盖，按仓库准入规则说明增量、故障影响与 mutation 证据，不预先禁止必要覆盖。实施后必须完整运行 `npm run test:e2e`。
 - 不改 `purpose=verify` 的准入。`exec` 仍是唯一因缺少协议终态而被拒绝的外部 harness；`antigravity-cli` 有结构化 `result` 终态事件，允许承担 `purpose=verify`。
 
@@ -209,7 +209,7 @@ D8 另需接入 `run-record.ts`、`runs.ts`、`external/run.ts`、`external/sett
 
 ### 4.1 仓库能力条目示例（仅 `agy-main.md`）
 
-在 `examples/sub-agents/agents/` 下新增**唯一一个** Antigravity 示例文件 `agy-main.md`，正文复用与现有十个能力条目完全一致的九条交付约定：
+在 `examples/sub-agents/` 下新增**唯一一个** Antigravity 示例文件 `agy-main.md`，正文复用与现有十个能力条目完全一致的九条交付约定：
 
 ```yaml
 ---
@@ -234,7 +234,7 @@ maxWallTimeSec: 3600
 
 ### 4.2 验证角色的权限边界与认证（写入 `docs/sub-agents.md`）
 
-验证角色不放进 `examples/sub-agents/agents/`。`purpose=verify` 的“不要修改实现”是任务指令，`mutates` 则描述部署后进程实际可能做出的写入。不能证明只读时采用写声明并获取 lease，例如：
+验证角色不放进 `examples/sub-agents/`。`purpose=verify` 的“不要修改实现”是任务指令，`mutates` 则描述部署后进程实际可能做出的写入。不能证明只读时采用写声明并获取 lease，例如：
 
 ```yaml
 ---
@@ -261,7 +261,7 @@ mutates: write
 
 实现同一交付单元内同步更新下列位置，不留「只写三种结构化 harness」的陈旧描述：
 
-- `examples/sub-agents/agents/agy-main.md`（新增）与 `examples/sub-agents/README.md`（能力条目表增加 `agy-main`；正文十个条目/九个写条目计数更新为十一个条目/十个写条目；`stdin` 拼接说明补上 Antigravity）。
+- `examples/sub-agents/agy-main.md`（新增）与 `examples/sub-agents/README.md`（能力条目表增加 `agy-main`；正文十个条目/九个写条目计数更新为十一个条目/十个写条目；`stdin` 拼接说明补上 Antigravity）。
 - `docs/sub-agents.md`：`harness` 可选值、参数组装表、推理档说明、`follow_up` 可续接集合与身份失败处理、`antigravity-cli` 权限与无头模式注意事项（不传 `-p`、默认不传 `--disable-slash-commands`、信封对斜杠命令的影响、拒绝摘要、plan/sandbox 不保证只读、验证角色的写声明、环境变量剥离说明、工作区 `.agents/` 与 `GEMINI.md` 自动加载事实）。
 - `docs/README.md`：专题导航表中外部委派列举补上 Antigravity CLI。
 - `docs/architecture.md`：`src/subagents/external/` 典型文件列表补上 `antigravity-cli.ts`；用量账本说明中把 `antigravity-cli` 与 `codex-cli` 并列归入「报 token、不报 USD 成本」。
@@ -301,6 +301,6 @@ mutates: write
 - `npm run check` 通过。`discovery.ts` ≤ 1031 行，`runs.ts` ≤ 1048 行，`scripts/architecture-baseline.json` 未新增任何例外。
 - `npm run test:e2e` 完整通过。
 - 新适配器没有把 `-p` / `--print`、`--disable-slash-commands`、位置 prompt 或任何权限/模式开关自动写进 argv。
-- `examples/sub-agents/agents/` 仅新增 `agy-main.md` 一个角色文件，且第 5 节列出的全部文档已同步。
+- `examples/sub-agents/` 仅新增 `agy-main.md` 一个角色文件，且第 5 节列出的全部文档已同步。
 - D8 的续接预期真实落盘，正常退出与重启恢复执行相同身份校验；没有只在内存中生效的分支。多步正文与拒绝诊断完整交付，异常终态不覆盖已知用量。
 - 实施完成后创建 `acceptance.md`，按实际情况将本文件与 `plan.md` 状态更新为「离线实现完成，真实协议待核实」或「已实施，真实协议已核实」，链接证据。逐项记录 §0 未决事项、行为评测与真实 CLI smoke；没有凭据不是质量通过，不将未确认的统计口径或权限边界写成已验证能力。

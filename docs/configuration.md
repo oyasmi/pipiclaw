@@ -45,7 +45,7 @@ Pipiclaw 默认将全部配置与数据存放在 `~/.pipiclaw/`（设置环境�
 | 让大模型请求走代理（不影响钉钉直连） | 环境变量 `PIPICLAW_PROXY` | `export PIPICLAW_PROXY=http://127.0.0.1:7890` |
 | 收紧或放宽文件/命令访问边界 | `security.json` | 调整 `pathGuard`、`commandGuard` 或 `networkGuard`（详见 [安全指南](./security.md)） |
 | 定制助手说话语气或通用研发规矩 | `workspace/SOUL.md` / `AGENTS.md` | 直接编辑 Markdown，新建会话或发送 `/reload` 后生效 |
-| 接入本机 Claude Code / Codex / Cursor / Antigravity | `workspace/sub-agents/*.md` | 从安装包 `examples/sub-agents/agents/` 复制所需角色文件（详见 [智能体委派](./sub-agents.md)） |
+| 接入本机 Claude Code / Codex / Cursor / Antigravity | `workspace/sub-agents/*.md` | 从安装包 `examples/sub-agents/` 复制所需角色文件（详见 [智能体委派](./sub-agents.md)） |
 
 ---
 

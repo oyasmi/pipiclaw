@@ -130,7 +130,7 @@ describe("sub-agent discovery", () => {
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
 
-		const examplesDir = join(process.cwd(), "examples", "sub-agents", "agents");
+		const examplesDir = join(process.cwd(), "examples", "sub-agents");
 		const files = readdirSync(examplesDir).filter(
 			(name) => name.endsWith(".md") && name.toLowerCase() !== "readme.md",
 		);
