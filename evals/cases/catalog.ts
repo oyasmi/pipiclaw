@@ -77,8 +77,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 		dependencies: [
 			"src/agent/session/",
 			"src/playbooks/",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -91,8 +91,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 			"src/memory/scheduler",
 			"src/memory/journal",
 			"src/memory/store.ts",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -105,8 +105,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 			"src/memory/search",
 			"src/memory/store.ts",
 			"src/tools/memory-search.ts",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -118,8 +118,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 			"src/memory/store.ts",
 			"src/memory/index-budget.ts",
 			"src/tools/memory-manage.ts",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -131,8 +131,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 			"src/memory/store.ts",
 			"src/memory/reflect",
 			"src/tools/memory-manage.ts",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -146,8 +146,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 			"src/memory/journal",
 			"src/tools/session-search.ts",
 			"src/tools/memory-search.ts",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -158,8 +158,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 		dependencies: [
 			"src/memory/index-budget.ts",
 			"src/memory/store.ts",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -374,8 +374,8 @@ export const familyCatalog: FamilyDescriptor[] = [
 			"src/security/",
 			"src/memory/reflect",
 			"src/tools/memory-manage.ts",
-			"src/playbooks/memory-and-learning.md",
-			"src/playbooks/memory-learning.md",
+			"src/playbooks/memory-operations.md",
+			"src/playbooks/learning-and-skills.md",
 		],
 	},
 	{
@@ -509,15 +509,15 @@ const caseDependencyOverrides: Record<string, string[]> = {
 	"M-search-01": [
 		"src/memory/session-search",
 		"src/tools/session-search.ts",
-		"src/playbooks/memory-and-learning.md",
-		"src/playbooks/memory-learning.md",
+		"src/playbooks/memory-operations.md",
+		"src/playbooks/learning-and-skills.md",
 	],
 	"M-journal-01": [
 		"src/memory/search",
 		"src/memory/journal",
 		"src/tools/memory-search.ts",
-		"src/playbooks/memory-and-learning.md",
-		"src/playbooks/memory-learning.md",
+		"src/playbooks/memory-operations.md",
+		"src/playbooks/learning-and-skills.md",
 	],
 };
 

@@ -24,7 +24,7 @@ for (const [label, files] of [
 	["inline delegation", ["delegation-inline.md"]],
 	["delegation recovery", ["agent-delegation.md", "delegation-recovery.md"]],
 	["orientation + file map", ["runtime-orientation.md", "runtime-files.md"]],
-	["memory + skill authoring", ["memory-and-learning.md", "memory-learning.md"]],
+	["memory + skill authoring", ["memory-operations.md", "learning-and-skills.md"]],
 ]) {
 	const subset = files.map((file) => {
 		const row = rows.find((entry) => entry.file === file);

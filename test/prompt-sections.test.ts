@@ -94,7 +94,7 @@ describe("system prompt structure", () => {
 		expect(build.sections.some((section) => section.id === "subagents")).toBe(false);
 		expect(build.text).not.toContain("agent-delegation.md");
 		expect(build.text).not.toContain("task-driving.md");
-		expect(build.text).not.toContain("memory-and-learning.md");
+		expect(build.text).not.toContain("memory-operations.md");
 		// The memory invariant is gated on the tool being registered, like the rest.
 		expect(build.text).not.toContain("`memory_save`");
 		expect(build.text).toContain("runtime-orientation.md");

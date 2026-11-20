@@ -1,5 +1,5 @@
 ---
-name: memory-and-learning
+name: memory-operations
 description: 保存、纠正、忘记或检索 memory。
 requires-tools: memory_save, memory_search, memory_forget, skill
 order: 20
@@ -17,7 +17,7 @@ order: 20
 | 今天发生什么 | journal，后台反思写 |
 | 未闭合工作的目标、进度、证据 | task 契约与记录 |
 | 安装、依赖、环境变量来源 | workspace ENVIRONMENT.md，不存密钥 |
-| 多次验证有效的跨任务流程 | workspace skills，创作时读 [学习与技能](memory-learning.md) |
+| 多次验证有效的跨任务流程 | workspace skills，创作时读 [后台学习与技能创作](learning-and-skills.md) |
 
 不把临时进度、猜测或计划存为 memory。memory 只走专用工具，MEMORY.md 是生成索引，journal 不手写。任务步骤没有 memory_save，经验留本步最后回复或 task_close note；约束后续实施的要求写 Goal/DoD。
 
@@ -33,4 +33,4 @@ order: 20
 
 journal 搜索最多最近 30 个日文件、每份末尾 64 KiB；不足按工具给的路径 grep 或按日期 read，原始对话仍走 session_search。无命中不等于不存在。
 
-将适用偏好落实到执行与验收的同一要求；永久保存不代表永久有效。跨工位背景是用户维护的 workspace MEMORY.md，仅应明确要求修改，不自动搬运工位记忆。需要了解自动保留期限或创作 skill 时再读学习指南。
+将适用偏好落实到执行与验收的同一要求；永久保存不代表永久有效。跨工位背景是用户维护的 workspace MEMORY.md，仅应明确要求修改，不自动搬运工位记忆。需要了解自动保留期限或创作 skill 时再读 [后台学习与技能创作](learning-and-skills.md)。

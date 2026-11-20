@@ -46,8 +46,8 @@ order: 70
 | `runtime-orientation.md` | 10 | 恒在 | 执行环境、上下文与状态所有者 |
 | `runtime-files.md` | 11 | 恒在 | 具体文件地图与访问入口 |
 | `runtime-operations.md` | 12 | 恒在 | 用户切换/创建工位与持续宿主 |
-| `memory-and-learning.md` | 20 | `memory_save` / `memory_search` / `memory_forget` / `skill` | 事实存取、纠正和应用范围 |
-| `memory-learning.md` | 25 | `skill` | 自动学习期限、技能创作与来源 |
+| `memory-operations.md` | 20 | `memory_save` / `memory_search` / `memory_forget` / `skill` | 事实存取、纠正和应用范围 |
+| `learning-and-skills.md` | 25 | `skill` | 自动学习期限、技能创作与来源 |
 | `outbound-media.md` | 30 | `send_media` | 附件发送与回执证据 |
 | `event-scheduling.md` | 40 | `event_manage` | 周期、改期、退役与事件类型选择 |
 | `event-task-template.md` | 41 | `event_manage` | 定时或周期项目模板 |

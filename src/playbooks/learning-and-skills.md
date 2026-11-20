@@ -1,5 +1,5 @@
 ---
-name: memory-learning
+name: learning-and-skills
 description: 了解自动学习期限或编写 skill。
 requires-tools: skill
 order: 25
@@ -7,7 +7,7 @@ order: 25
 
 # 后台学习与技能创作
 
-仅了解自动保留期限、维护技能或晋升流程时读取；普通事实存取按 [记忆指南](memory-and-learning.md)。
+仅了解自动保留期限、维护技能或晋升流程时读取；普通事实存取按 [记忆操作](memory-operations.md)。
 
 ## 自动学习
 

@@ -14,7 +14,7 @@ order: 11
 | workspace SOUL.md / AGENTS.md | 身份与共同工作原则，注入 system prompt；工位同名文件不替代 |
 | workspace MEMORY.md | 共享背景，用户维护；明确要求时 read/edit，首轮按预算注入，memory_search 可查 |
 | workspace desk-bindings.json | 唯一频道→工位绑定，运行时管理，不用文件写入模拟切换 |
-| workspace skills/ 与 ~/.agents/skills/ | 两来源共享技能，有效 workspace 同名版本优先；skill list/read，创作见 [学习与技能](memory-learning.md) |
+| workspace skills/ 与 ~/.agents/skills/ | 两来源共享技能，有效 workspace 同名版本优先；skill list/read，创作见 [后台学习与技能创作](learning-and-skills.md) |
 | workspace sub-agents/ | 配置角色，系统目录给出名称；部署者维护，模型不 write/edit 角色 |
 | workspace ENVIRONMENT.md / CHANNELS.md | 机器事实/频道索引；CHANNELS 仅主题列可补写，其余由运行时重建 |
 | 工位 memory/<name>.md / MEMORY.md | 一文件一事实/生成索引；正文可 read，写用 memory_save / memory_forget 串行维护索引 |

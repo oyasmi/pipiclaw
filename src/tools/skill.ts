@@ -55,7 +55,7 @@ export function createSkillTool(options: SkillOptions): AgentTool<typeof skillSc
 		name: "skill",
 		label: "skill",
 		description:
-			"List/read skills from workspace/skills/ and ~/.agents/skills/; valid workspace names win. To author with write/edit, read memory-learning.md under the Runtime Guides directory.",
+			"List/read skills from workspace/skills/ and ~/.agents/skills/; valid workspace names win. To author with write/edit, read learning-and-skills.md under the Runtime Guides directory.",
 		parameters: skillSchema,
 		execute: async (_toolCallId: string, args: { action: string; name?: string }) => {
 			if (args.action === "list") {
