@@ -157,6 +157,7 @@ describe("rejections stay out of the user's chat", () => {
 		);
 
 		expect(failureLines(events)).toEqual([undefined]);
+		expect(events).toContainEqual(expect.objectContaining({ type: "tool.end", callId: "c1", ok: false }));
 		// Regression (P2-3b): memory_forget's schema uses `name`, not `target`.
 		expect(describeToolCall("memory_forget", { name: "deploy-window" })).toBe('记忆删除 "deploy-window"');
 	});

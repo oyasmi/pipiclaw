@@ -24,7 +24,12 @@ const SYNTHETIC_ABORTED_ASSISTANT_TEXT =
 	"Error: Pipiclaw restarted before a response was generated. Re-send the request if it is still needed.";
 
 function toolGuidance(toolName: string): string {
-	if (toolName === "subagent" || toolName === "subagent_list" || toolName === "subagent_run") {
+	if (
+		toolName === "subagent" ||
+		toolName === "subagent_inline" ||
+		toolName === "subagent_list" ||
+		toolName === "subagent_run"
+	) {
 		return "先用 `subagent_list` / `subagent_run op=show` 查询这次委派是否已经作为一个 durable run 存在。";
 	}
 	if (toolName === "job" || toolName === "bash") {

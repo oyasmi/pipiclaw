@@ -19,6 +19,8 @@ import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage
 
 export interface CreatePipiclawToolsOptions {
 	jobManager: DeskJobManager;
+	/** A standalone Web API request has no persistent delivery address. */
+	requestScoped?: boolean;
 	runManager: SubAgentRunManager;
 	executor: Executor;
 	/** File-content port for the generic file tools (spec 044, D1); `Executor` stays command-only. */
@@ -69,29 +71,33 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	// The `subagent` tool is appended separately: it is never available to sub-agents
 	// and needs dispatch-time context the registry does not model.
 	const taskSessionExcluded = new Set(["memory_save", "event_manage"]);
-	const leafTools = buildToolSet({
-		executor: options.executor,
-		fileStore: options.fileStore,
-		securityConfig,
-		securityContext,
-		channelId: options.channelId,
-		desk: options.desk,
-		deskDir: options.deskDir,
-		describeConversation: options.describeConversation,
-		workspaceDir: options.workspaceDir,
-		webConfig: toolsConfig.tools.web,
-		toolsConfig,
-		rtkEnabled: toolsConfig.tools.rtk.enabled,
-		jobManager: options.jobManager,
-		runManager: options.runManager,
-		getCurrentModel: options.getCurrentModel,
-		getAvailableModels: options.getAvailableModels,
-		modelRequests: options.modelRequests,
-		getSessionSearchSettings: options.getSessionSearchSettings,
-		sendMedia: options.sendMedia,
-		taskSession: options.taskSession,
-		taskControl: options.taskControl,
-	});
+	const leafTools = buildToolSet(
+		{
+			executor: options.executor,
+			fileStore: options.fileStore,
+			securityConfig,
+			securityContext,
+			channelId: options.channelId,
+			desk: options.desk,
+			deskDir: options.deskDir,
+			describeConversation: options.describeConversation,
+			workspaceDir: options.workspaceDir,
+			webConfig: toolsConfig.tools.web,
+			toolsConfig,
+			rtkEnabled: toolsConfig.tools.rtk.enabled,
+			jobManager: options.requestScoped ? undefined : options.jobManager,
+			runManager: options.runManager,
+			getCurrentModel: options.getCurrentModel,
+			getAvailableModels: options.getAvailableModels,
+			modelRequests: options.modelRequests,
+			getSessionSearchSettings: options.getSessionSearchSettings,
+			sendMedia: options.sendMedia,
+			taskSession: options.taskSession,
+			taskControl: options.taskControl,
+		},
+		{ requestScoped: options.requestScoped },
+	);
+	if (options.requestScoped) return leafTools;
 	const subAgentToolOptions = {
 		buildWorkerTools: (request: WorkerToolRequest) => buildToolSet(request, { forSubagent: true }),
 		getRunManager: () => options.runManager,
@@ -111,6 +117,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		securityConfig,
 		webConfig: toolsConfig.tools.web,
 		rtkEnabled: toolsConfig.tools.rtk.enabled,
+		bashInterceptorEnabled: toolsConfig.tools.bashInterceptor.enabled,
 		runtimeContext: {
 			workspaceDir: options.workspaceDir,
 			desk: options.desk,

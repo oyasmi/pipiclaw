@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { measureToolSchemas, TOOL_SCHEMA_TARGET_UNITS } from "../src/agent/prompt/manifest.js";
+import { measureToolSchemas } from "../src/agent/prompt/manifest.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/config/tools.js";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
@@ -14,11 +14,13 @@ import { deliverTaskMessage, queueTaskReport } from "../src/tasks/delivery.js";
 import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
 import { appendTaskLog, readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { beginStep, closeTask as closeStoredTask, readStoredTask } from "../src/tasks/store.js";
+import { REQUEST_SCOPED_TOOL_NAMES } from "../src/tools/contract/names.js";
 import { createPipiclawTools } from "../src/tools/index.js";
 import { createTask } from "../src/tools/task-manage/create.js";
 import {
 	createTaskAskTool,
 	createTaskCloseTool,
+	createTaskLogTool,
 	createTaskMessageTool,
 	createTaskReportTool,
 	createTaskWaitTool,
@@ -303,6 +305,17 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 
 	describe("the chat management tools", () => {
 		it("relay the user's words verbatim and say where they landed; an unknown task is the model's to fix", async () => {
+			await writeTask("work");
+			await appendTaskLog(deskDir, "work", {
+				kind: "report",
+				seq: 2,
+				text: 'verified "pagination"',
+				delivered: true,
+			});
+			const log = await createTaskLogTool(options).execute("history", { id: "work" });
+			expect(log.details).toMatchObject({ action: "log", id: "work", entries: expect.any(Array) });
+			expect(log.content[0]).toMatchObject({ text: expect.stringContaining('verified "pagination"') });
+
 			const message = createTaskMessageTool(options);
 			const result = await message.execute("c", { id: "work", text: "  先跑 check  " } as never);
 			expect(control.message).toHaveBeenCalledWith("main", "work", {
@@ -316,7 +329,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			await expect(message.execute("c", { id: "nope", text: "hi" } as never)).rejects.toThrow(/task_list/);
 		});
 
-		it("are offered to chat only, and the session tools to a task session only — none writes state", () => {
+		it("are offered to chat only, and the session tools to a task session only — none writes state", async () => {
 			const build = (extra: Partial<Parameters<typeof createPipiclawTools>[0]>) =>
 				createPipiclawTools({
 					executor: { exec: async () => ({ stdout: "", stderr: "", code: 1 }) },
@@ -328,7 +341,11 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 					deskDir,
 					workspaceDir,
 					toolsConfig: {
-						tools: { ...DEFAULT_TOOLS_CONFIG.tools, web: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: true } },
+						tools: {
+							...DEFAULT_TOOLS_CONFIG.tools,
+							web: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: true },
+							subagentInline: { enabled: true },
+						},
 					},
 					sendMedia: async () => ({ ok: true }),
 					jobManager: options.jobManager,
@@ -344,9 +361,21 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 			const stepTools = build({ taskSession: sessionOptions.session });
 			const chat = chatTools.map((tool) => tool.name);
 			const inSession = stepTools.map((tool) => tool.name);
-			for (const toolSet of [chatTools, stepTools]) {
-				expect(measureToolSchemas(toolSet).units).toBeLessThanOrEqual(TOOL_SCHEMA_TARGET_UNITS);
+			expect(measureToolSchemas(chatTools).units).toBeLessThanOrEqual(2850);
+			expect(measureToolSchemas(stepTools).units).toBeLessThanOrEqual(3000);
+			for (const name of ["subagent", "subagent_inline"]) {
+				expect(chatTools.find((tool) => tool.name === name)?.parameters.properties).not.toHaveProperty("item");
+				expect(stepTools.find((tool) => tool.name === name)?.parameters.properties).toHaveProperty("item");
 			}
+			const request = build({ requestScoped: true });
+			expect(request.map((tool) => tool.name).sort()).toEqual([...REQUEST_SCOPED_TOOL_NAMES].sort());
+			const bash = request.find((tool) => tool.name === "bash")!;
+			expect(bash.parameters.properties).not.toHaveProperty("async");
+			expect(bash.parameters.properties).not.toHaveProperty("notify");
+			expect((await bash.execute("request", { command: "echo 1", async: true })).details).toEqual({
+				kind: "bash",
+				recoverable: true,
+			});
 			const taskTools = (names: string[]) => names.filter((name) => name.startsWith("task_")).sort();
 			expect(taskTools(chat)).toEqual([
 				"task_close",

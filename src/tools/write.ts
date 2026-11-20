@@ -2,6 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { FileStore } from "../file-store.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import type { FileObservations } from "./file-observations.js";
 import { writeContent } from "./write-content.js";
 
 const writeSchema = Type.Object({
@@ -15,6 +16,7 @@ export interface WriteToolOptions {
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
 	leaseOwnerRunId?: string;
+	observations?: FileObservations;
 }
 
 export function createWriteTool(fileStore: FileStore, options: WriteToolOptions = {}): AgentTool<typeof writeSchema> {
@@ -32,7 +34,7 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 			{ path, content }: { path: string; content: string },
 			signal?: AbortSignal,
 		) => {
-			const target = await writeContent(fileStore, path, content, signal, {
+			const { target, note } = await writeContent(fileStore, path, content, signal, {
 				deskDir: options.deskDir,
 				createParentDir: true,
 				securityConfig: options.securityConfig,
@@ -40,10 +42,13 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 				channelId: options.channelId,
 				toolName: "write",
 				leaseOwnerRunId: options.leaseOwnerRunId,
+				observations: options.observations,
 			});
 			const bytesWritten = Buffer.byteLength(content, "utf-8");
 			return {
-				content: [{ type: "text", text: `Successfully wrote ${bytesWritten} bytes to ${path}` }],
+				content: [
+					{ type: "text", text: `Successfully wrote ${bytesWritten} bytes to ${path}${note ? `\n${note}` : ""}` },
+				],
 				details: { path: target },
 			};
 		},

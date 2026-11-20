@@ -4,9 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandTerminatedError, createExecutor } from "../src/executor.js";
 import { DeskJobManager } from "../src/jobs/manager.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
-import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
+import { BASH_MAX_OUTPUT_LINES, createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { createJobTool } from "../src/tools/job.js";
-import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 import { RecordingExecutor } from "./helpers/recording-executor.js";
 
@@ -209,10 +208,7 @@ describe("bash tool", () => {
 	});
 
 	it("spills long output to a temp file the executor itself streams to, and keeps it when truncated", async () => {
-		const output = Array.from(
-			{ length: DEFAULT_MAX_LINES + 15 },
-			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
-		).join("\n");
+		const output = "x".repeat(35 * 1024);
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: output, stderr: "" }));
 		const tool = createBashTool(executor);
 
@@ -223,7 +219,7 @@ describe("bash tool", () => {
 		expect(details.fullOutputPath).toMatch(/^\/tmp\/pipiclaw-bash-[0-9a-f]+\.log$/);
 		expect(result.content[0]).toMatchObject({
 			type: "text",
-			text: expect.stringContaining("Full output:"),
+			text: expect.stringMatching(/Full output: .*use grep.*read with offset\/limit/),
 		});
 		// One exec call: the executor streams the spill file itself as output arrives -- no second
 		// process and no separate write step for bash.ts to drive.
@@ -257,14 +253,13 @@ describe("bash tool", () => {
 		});
 		expect(result.content[0]).toMatchObject({
 			type: "text",
-			text: expect.stringContaining("async: true"),
+			text: expect.stringContaining("split the command"),
 		});
 
 		// The same timeout path still spills when the partial output alone exceeds the limits.
-		const largeOutput = Array.from(
-			{ length: DEFAULT_MAX_LINES + 15 },
-			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
-		).join("\n");
+		const largeOutput = Array.from({ length: BASH_MAX_OUTPUT_LINES + 15 }, (_, index) => `line ${index + 1}`).join(
+			"\n",
+		);
 		const spillingExecutor = new RecordingExecutor(async () => {
 			throw new CommandTerminatedError("timeout", largeOutput, "", 5);
 		});

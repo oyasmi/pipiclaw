@@ -13,78 +13,48 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage } from "../shared/text-utils.js";
 import type { TaskCreateInput } from "../tasks/contract-input.js";
 
-const eventDefinitionSchema = Type.Object(
-	{
-		type: Type.Union([Type.Literal("one-shot"), Type.Literal("periodic")], {
-			description: "one-shot requires at; periodic requires schedule.",
+const eventDefinitionSchema = Type.Object({
+	type: Type.Union([Type.Literal("one-shot"), Type.Literal("periodic")]),
+	text: Type.Optional(Type.String({ description: "Reminder message." })),
+	task: Type.Optional(
+		Type.Object(
+			{
+				title: Type.String(),
+				goal: Type.String(),
+				dod: Type.String({ description: "Markdown checklist." }),
+				items: Type.Optional(Type.Array(Type.Object({ text: Type.String() }))),
+				budget: Type.Optional(
+					Type.Object({
+						steps: Type.Optional(Type.Integer({ minimum: 1 })),
+						usd: Type.Optional(Type.Number()),
+					}),
+				),
+			},
+			{ description: "Task template. Provide text or task." },
+		),
+	),
+	at: Type.Optional(
+		Type.String({ description: "Required for one-shot: time with offset, 2 min to ~24.8 days ahead." }),
+	),
+	schedule: Type.Optional(Type.String({ description: "Required for periodic: five-field cron in host timezone." })),
+	preAction: Type.Optional(
+		Type.Object({
+			type: Type.Literal("bash"),
+			command: Type.String({ description: "Exit 0 fires; nonzero skips." }),
+			timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
 		}),
-		text: Type.Optional(
-			Type.String({
-				description: "Reminder message; exactly one of text or task.",
-			}),
-		),
-		task: Type.Optional(
-			Type.Object(
-				{
-					title: Type.String({ description: "Task title." }),
-					goal: Type.String({
-						description: "Result, scope, allowed external actions and constraints.",
-					}),
-					dod: Type.String({ description: "Checklist string using - [ ] items." }),
-					items: Type.Optional(
-						Type.Array(Type.Object({ text: Type.String({ description: "Work item." }) }), {
-							description: "Optional initial work items, numbered W1…Wn.",
-						}),
-					),
-					budget: Type.Optional(
-						Type.Object({
-							steps: Type.Optional(Type.Integer({ minimum: 1 })),
-							usd: Type.Optional(Type.Number({ description: "Per-instance cost limit." })),
-						}),
-					),
-				},
-				{
-					description:
-						"Task template; exactly one of text or task. Each firing creates an independent task; overlapping occurrence is skipped.",
-				},
-			),
-		),
-		at: Type.Optional(Type.String({ description: "one-shot time with offset, 2 minutes to ~24.8 days ahead." })),
-		schedule: Type.Optional(Type.String({ description: "Five-field cron in host timezone." })),
-		preAction: Type.Optional(
-			Type.Object(
-				{
-					type: Type.Literal("bash"),
-					command: Type.String({
-						description: "Exit 0 fires; nonzero skips.",
-					}),
-					timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout in milliseconds." })),
-				},
-				{ description: "Optional sensor gate." },
-			),
-		),
-	},
-	{ description: "Typed event object. Delivery channel is runtime-bound." },
-);
+	),
+});
 
 const eventManageSchema = Type.Object({
-	action: Type.Union(
-		[
-			Type.Literal("list"),
-			Type.Literal("show"),
-			Type.Literal("create"),
-			Type.Literal("update"),
-			Type.Literal("delete"),
-		],
-		{
-			description: "list this desk’s events; show full definition; create/update/delete require name.",
-		},
-	),
-	name: Type.Optional(
-		Type.String({
-			description: "Event filename without .json; required except for list.",
-		}),
-	),
+	action: Type.Union([
+		Type.Literal("list"),
+		Type.Literal("show"),
+		Type.Literal("create"),
+		Type.Literal("update"),
+		Type.Literal("delete"),
+	]),
+	name: Type.Optional(Type.String({ description: "Filename stem, required except for list." })),
 	definition: Type.Optional(eventDefinitionSchema),
 });
 
@@ -404,8 +374,16 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 				name: args.name,
 				definition: args.definition,
 			});
-			const text =
-				result.action === "list" || result.action === "show" ? result.notice : JSON.stringify(result, null, 2);
+			let text = result.notice;
+			if (result.action !== "list" && result.action !== "show") {
+				const fields = [
+					`name=${result.name}`,
+					result.eventType && `type=${result.eventType}`,
+					result.channelId && `channel=${result.channelId}`,
+					result.deleted !== undefined && `deleted=${result.deleted}`,
+				].filter(Boolean);
+				text += ` (${fields.join(", ")})`;
+			}
 			return {
 				content: [{ type: "text", text }],
 				details: { ...result },

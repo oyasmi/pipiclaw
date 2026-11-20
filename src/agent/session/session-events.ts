@@ -44,6 +44,10 @@ import {
 	isUserEventMessage,
 } from "./event-guards.js";
 
+function isDelegationToolName(name: string): boolean {
+	return name === "subagent" || name === "subagent_inline";
+}
+
 export interface SessionEventHandlerContext {
 	ctx: TurnOutput;
 	logCtx: RunLogContext;
@@ -126,7 +130,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	}
 
 	if (isToolExecutionUpdateEvent(event)) {
-		if (event.toolName !== "subagent") {
+		if (!isDelegationToolName(event.toolName)) {
 			return;
 		}
 		const partialText = truncate(extractToolResultText(event.partialResult), 200);
@@ -144,7 +148,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 		const durationMs = pending ? Date.now() - pending.startTime : 0;
 		const subAgentDetails =
-			event.toolName === "subagent" &&
+			isDelegationToolName(event.toolName) &&
 			isRecord(event.result) &&
 			"details" in event.result &&
 			isSubAgentToolDetails((event.result as { details?: unknown }).details)
@@ -216,7 +220,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		ctx.emit({
 			type: "tool.end",
 			callId: event.toolCallId,
-			ok: !event.isError && !subAgentDetails?.failed,
+			ok: !treatAsError && !rejected,
 			output: truncate(resultStr, TOOL_EVENT_OUTPUT_CHARS),
 			...(failure ? { failure } : {}),
 		});

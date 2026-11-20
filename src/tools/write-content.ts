@@ -5,6 +5,8 @@ import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.j
 import { assertPathWritableUnderLease } from "../subagents/workspace-lease.js";
 import { preserveTaskFields, withTaskFileMutation } from "../tasks/file-mutation.js";
 
+import { type FileObservations, observeCurrentFile } from "./file-observations.js";
+
 export async function writeContent(
 	fileStore: FileStore,
 	path: string,
@@ -18,8 +20,9 @@ export async function writeContent(
 		channelId?: string;
 		toolName?: string;
 		leaseOwnerRunId?: string;
+		observations?: FileObservations;
 	},
-): Promise<string> {
+) {
 	const createParentDir = options?.createParentDir ?? false;
 	const securityConfig = options?.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options?.securityContext ?? {
@@ -41,12 +44,16 @@ export async function writeContent(
 	// `cp -p` + `cat > tmp && mv` shell script did, but content now goes straight to `node:fs`
 	// instead of a stdin pipe into `sh -c` -- it never exists in memory twice, and there is no
 	// shell script to escape or an EPIPE to swallow.
-	await withTaskFileMutation(options?.deskDir, target, (document) =>
-		fileStore.writeAtomic(target, preserveTaskFields(document, content), {
+	return withTaskFileMutation(options?.deskDir, target, async (document) => {
+		const observations = options?.observations;
+		const before = observations ? await fileStore.stat(target).catch(() => undefined) : undefined;
+		const note = observations?.describeWriteNote(target, path, before);
+		await fileStore.writeAtomic(target, preserveTaskFields(document, content), {
 			createParentDir,
 			preserveMode: true,
 			signal,
-		}),
-	);
-	return target;
+		});
+		await observeCurrentFile(observations, fileStore, target);
+		return { target, note };
+	});
 }

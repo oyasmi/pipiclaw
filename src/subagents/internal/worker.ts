@@ -103,25 +103,35 @@ export function buildSubagentTools(
 		options.deskDir,
 		options.workspaceDir,
 	);
-	return options
-		.buildWorkerTools({
-			executor,
-			fileStore: options.fileStore,
-			securityConfig,
-			securityContext: {
-				agentWorkspaceDir: options.workspaceDir,
-				cwd: runContext.workingDirectory,
-				...(options.appHomeDir ? { appHomeDir: options.appHomeDir } : {}),
-			},
-			channelId: options.runtimeContext.channelId,
-			deskDir: options.deskDir,
-			workspaceDir: options.workspaceDir,
-			webConfig: options.webConfig,
-			rtkEnabled: options.rtkEnabled,
-			bashDefaultTimeoutSeconds: bashTimeoutSec,
-			leaseOwnerRunId: runContext.runId,
-		})
-		.filter((tool) => runContext.purpose !== "verify" || (tool.name !== "write" && tool.name !== "edit"));
+	const tools = options.buildWorkerTools({
+		executor,
+		fileStore: options.fileStore,
+		securityConfig,
+		securityContext: {
+			agentWorkspaceDir: options.workspaceDir,
+			cwd: runContext.workingDirectory,
+			...(options.appHomeDir ? { appHomeDir: options.appHomeDir } : {}),
+		},
+		channelId: options.runtimeContext.channelId,
+		deskDir: options.deskDir,
+		workspaceDir: options.workspaceDir,
+		webConfig: options.webConfig,
+		rtkEnabled: options.rtkEnabled,
+		bashInterceptorEnabled: options.bashInterceptorEnabled,
+		bashDefaultTimeoutSeconds: bashTimeoutSec,
+		leaseOwnerRunId: runContext.runId,
+	});
+	if (runContext.purpose !== "verify") return tools;
+	return tools
+		.filter((tool) => tool.name !== "write" && tool.name !== "edit")
+		.map((tool) =>
+			tool.name === "bash"
+				? {
+						...tool,
+						description: `${tool.description} Verification mode (purpose=verify): run read-only checks and tests only; do NOT modify tracked workspace files.`,
+					}
+				: tool,
+		);
 }
 
 function filterToolsByName(allTools: AgentTool<any>[], names: string[]): AgentTool<any>[] {

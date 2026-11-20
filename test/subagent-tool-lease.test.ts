@@ -324,9 +324,11 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const released = new Promise<void>((resolve) => {
 			releasePrompt = resolve;
 		});
+		let workerTools: AgentTool<any>[] = [];
 		const tool = createSubAgentInlineTool({
 			...testManagers(channelId),
 			boundTaskId: "ship",
+			bashInterceptorEnabled: true,
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -337,25 +339,32 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			deskDir,
 			runtimeContext: { workspaceDir, desk: "news", deskDir, channelId },
 			getRunManager: () => manager,
-			createWorker: () =>
-				new FakeWorker(async (_input, worker) => {
+			createWorker: ({ tools }) => {
+				workerTools = tools;
+				return new FakeWorker(async (_input, worker) => {
 					started();
 					await released;
 					const message = createAssistantMessage("Checks passed.\nVERDICT: PASS");
 					worker.state.messages = [message];
 					worker.emit({ type: "message_end", message });
-				}),
+				});
+			},
 		});
 
 		const resultPromise = tool.execute("verify-write-lease", {
 			systemPrompt: "Run checks.",
-			tools: ["read", "bash"],
+			tools: ["read", "bash", "write", "edit"],
 			mutates: "write",
 			task: "Run the acceptance checks.",
 			purpose: "verify",
 		});
 		await arrived;
 		try {
+			expect(workerTools.map((tool) => tool.name).sort()).toEqual(["bash", "read"]);
+			const bash = workerTools.find((tool) => tool.name === "bash")!;
+			expect(bash.description).toMatch(/read-only checks.*tracked workspace files/);
+			const result = await bash.execute("inspect", { command: "cat README.md" });
+			expect(result.details).toMatchObject({ kind: "bash", recoverable: true });
 			const runningLease = acquireWorkspaceLease({
 				runId: "competing-verify",
 				channelId: "dingtalk:dm:other",

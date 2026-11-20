@@ -29,6 +29,7 @@ import type {
 	TaskCloseRequest,
 	TaskCreateRequest,
 	TaskListRequest,
+	TaskListToolOptions,
 	TaskLogRequest,
 	TaskManageResult,
 	TaskManageToolOptions,
@@ -41,8 +42,43 @@ import type {
 
 export type { TaskManageResult, TaskManageToolOptions } from "./types.js";
 
+function formatTaskResultText(result: TaskManageResult): string {
+	const lines = [result.notice];
+	if (result.action === "log") lines.push(...(result.entries ?? []));
+	if (result.action === "list") {
+		for (const task of result.tasks ?? []) {
+			const state = task.state + (task.archived ? " (archived)" : "") + (task.frozen ? " (frozen)" : "");
+			const fields = [
+				task.steps !== undefined && `steps=${task.steps}`,
+				task.usd !== undefined && `usd=${task.usd}`,
+				Boolean(task.unknownCostCount) && `unknown costs=${task.unknownCostCount}`,
+				task.items && `items=${task.items}`,
+				task.closedAt && `closed=${task.closedAt}`,
+				task.waiting && `waiting for ${task.waiting}`,
+				task.activity,
+				task.inFlight?.join("; "),
+				!task.deliversHere && `delivers to ${task.channel ?? "another channel"}`,
+			].filter(Boolean);
+			lines.push(`- [${task.id}] ${state} — ${task.title}${fields.length ? ` (${fields.join(" · ")})` : ""}`);
+		}
+	}
+	const fields = [
+		result.id && `id=${result.id}`,
+		result.path && `path=${result.path}`,
+		result.state && `state=${result.state}`,
+		result.archived !== undefined && `archived=${result.archived}`,
+		result.cancelled?.length && `cancelled=${result.cancelled.join(", ")}`,
+	].filter(Boolean);
+	if (fields.length) lines.push(fields.join(" · "));
+	return lines.join("\n");
+}
+
 function asResult(result: TaskManageResult, terminate = false) {
-	return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: { ...result }, terminate };
+	return {
+		content: [{ type: "text" as const, text: formatTaskResultText(result) }],
+		details: { ...result },
+		terminate,
+	};
 }
 
 /**
@@ -53,12 +89,12 @@ async function withLock<T>(options: TaskManageToolOptions, id: string, mutate: (
 	return withTaskMutation(options.deskDir, normalizeTaskId(id), mutate);
 }
 
-export function createTaskListTool(options: TaskManageToolOptions): AgentTool<typeof taskListSchema> {
+export function createTaskListTool(options: TaskListToolOptions): AgentTool<typeof taskListSchema> {
 	return {
 		name: "task_list",
 		label: "task_list",
 		description:
-			"Get live task progress for this desk: state, waiting source, current step and in-flight delegations. Includes other channels' tasks; deliversHere marks reports to this chat. Use task_log for history.",
+			"Get live task progress for this desk: state, waiting source, current step and in-flight delegations. Marks reports delivered to other channels. Use task_log for history.",
 		parameters: taskListSchema,
 		execute: async (_toolCallId, args: TaskListRequest) => asResult(await listTasks(options, args)),
 	};

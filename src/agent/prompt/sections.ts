@@ -67,10 +67,10 @@ export const EXECUTION_SECTION: PromptSectionDefinition = {
 	render: () =>
 		[
 			"## Working Contract",
-			"- Inspect before edits. Work to the outcome or a real blocker. When the outcome and required checks are satisfied, stop exploring and deliver if nothing changed and no gaps remain. State unverified items.",
-			"- Tool definitions are authoritative. Use Desk for state and Cwd for work from <runtime_turn_context>.",
-			"- Jobs and delegations wake their initiator. Finish independent work and dispatches; end the turn when only waiting remains. Skip polling and check-in events.",
-			"- Use clear routine calls directly. Read the guide or skill for task_*, orchestration, write isolation, independent checks, recurring or gated events, unfamiliar mechanisms, or recovery. Reuse it while in context.",
+			"- Inspect before edits. Batch independent read/grep/glob/web_fetch calls in parallel. Run bash/edit/write in separate batches.",
+			"- Tool definitions are authoritative. Use Desk for state and Cwd for work. Finish the work and required checks, or report a real blocker. State unverified items.",
+			"- Jobs and delegations wake their initiator. Finish independent work and dispatches, then end the turn when only waiting remains. Skip polling and check-in events.",
+			"- Use routine calls directly. Read the guide or skill for task_*, orchestration, write isolation, independent checks, recurring or gated events, unfamiliar mechanisms or recovery. Reuse it while in context.",
 		].join("\n"),
 };
 

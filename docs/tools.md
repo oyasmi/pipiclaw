@@ -14,9 +14,9 @@
 |---|---|---|---|---|
 | `read` | 读文件 | 恒开 | — | 是 |
 | `write` | 创建或覆盖文件 | 恒开 | — | 是 |
-| `edit` | 精准局部改写 | 恒开 | — | 是 |
+| `edit` | 精准替换单处或原子应用多块编辑 | 恒开 | — | 是 |
 | `grep` | 正则搜索文件内容，分组分页、有 token 上限 | 恒开 | — | 是 |
-| `glob` | 按 glob 模式发现文件路径，按修改时间排序、有条数上限 | 恒开 | — | 是 |
+| `glob` | 按模式发现文件路径，支持分页 | 恒开 | — | 是 |
 | `bash` | 执行 shell 命令与外部程序 | 恒开 | — | 是 |
 | `web_search` | 搜索公网，返回标题/URL/摘要 | **关** | `tools.web.enable` | 是 |
 | `web_fetch` | 抓取 URL 并提取正文 | **关** | `tools.web.enable` | 是 |
@@ -45,18 +45,22 @@
 
 外部智能体是独立宿主机进程，不使用这套工具实现，也不经过这些守卫。它的真实边界来自角色 `command` 中目标 CLI 的 sandbox 参数、运行账号和宿主环境。
 
-`grep` 优于 `bash` 里的 `grep`：结果分组、分页、有 token 上限，不会因为一次宽泛匹配把上下文冲爆。`pattern` 默认按 ERE 正则，`literal: true` 走字面量；`mode: "files"` 只返回命中文件路径、`mode: "count"` 返回每文件命中数，只想定位时远比返回内容省 token。`glob` 字段匹配 basename，支持 `*` `?` `[abc]` `{a,b}`。落在 `readDeny` 或敏感路径下的命中文件会被排除并在 footer 说明。
+同一会话的 `read`、`write`、`edit` 共享文件观察记录。覆盖尚未读取的已有非空文件，或改写上次观察后被外部修改的文件时，成功结果会附上提示。会话重新加载工具后会重新记录。
 
-`bash` 执行的是真正的 `bash`（宿主机若无 bash 才回退 POSIX `/bin/sh`，工具描述会如实标注）。截断输出的完整副本写在工位目录的 `logs/`（主智能体两种 path-guard 边界下都可 `read`），是命令输出末尾的真实尾部而非捕获窗口的中间部分。
+`edit` 优先匹配原始字节，并支持用 LF 锚点编辑 CRLF 文件。多个匹配时返回行号。传 `edits` 可一次应用同一文件中的多个替换，每块都在修改前的内容中定位。任一块找不到匹配或区间重叠时，整次批量编辑取消。超过 8 MiB 的文件可分次使用单块编辑。
 
-`glob` 优于 `bash find`/`ls -R`：按 glob 模式做路径发现（不读文件内容，这是它和 `grep` 的分工），排除 VCS/构建目录，命中数在阈值内时按修改时间从新到旧排序，超出条数上限时给出下一步提示。裸 `find … -name …` 和 `ls -R` 会被 bash 拦截器引导到这个工具。模式支持 `*`、`?`、`**`（跨路径段）与 `{a,b}`（可嵌套）；匹配按路径段逐段进行、不编译成正则，所以任意模式的匹配代价都是线性的。模式长度上限 512 字符，花括号展开上限 64 种组合，超出即报错并提示收窄模式。
+`grep` 优先使用宿主上的 ripgrep（`rg`），按工作树的忽略规则搜索并包含隐藏文件。未安装时使用 `grep -I`。两者都按读策略过滤结果并跳过二进制文件。可用 `literal: true` 搜索字面量，`mode: "files"` 返回路径，`mode: "count"` 返回每个文件的匹配行数。可选 `glob` 匹配文件名，支持 `*`、`?`、`[abc]` 和 `{a,b}`。
+
+`glob` 排除常见的版本管理和构建目录。命中不超过 2,000 个文件时按修改时间从新到旧排序。每页最多 100 条，用返回的 `skip` 继续。模式支持 `*`、`?`、跨路径段的 `**` 和可嵌套的 `{a,b}`。模式长度上限 512 字符，花括号展开上限 64 种组合。
+
+`bash` 使用宿主的 Bash，缺少 Bash 时使用 POSIX `/bin/sh`。前台命令和单个后台作业最多内联末尾 30 KiB 或 1,000 行，以先达到的上限为准。长输出保留完整文件路径，可用 `grep` 定位错误，或用 `read` 分页。主会话的前台命令输出保存在工位的 `logs/` 下。
 
 `bash` 有两个可选增强，都在 `tools.json`：
 
 - `tools.bashInterceptor.enabled`（默认开）——拦截常见的低效或危险命令写法并给出更好的替代。
 - `tools.rtk.enabled`（默认关）——启用 rtk 命令优化。
 
-耗时命令应走 `bash async: true` 交给后台作业，见下。
+持久聊天和任务会话可用 `bash async: true` 运行耗时命令。一次性 Web API 请求和内置子代理使用前台命令。
 
 ## 后台作业（`job`）
 
@@ -103,7 +107,7 @@
 
 ## 智能体委派（`subagent` / `subagent_list` / `subagent_run`）
 
-`subagent` 把一项聚焦工作交给**已配置**的角色，必填 `agent`、`task`，可选 `workingDirectory`、`worktree`（Git 仓库写委派自动建 `.git/pipiclaw-worktrees/<runId>` 隔离分支）、`purpose`、`item`。工具、模型、预算和上下文策略来自角色文件，调用侧不能覆盖。`item` 仅在任务步骤中有效，所属任务自动绑定；聊天中的委派不绑定任务。`subagent_inline` 用于没有合适角色时的一次性内置执行者，携带 `systemPrompt` 和所需的工具、模型、预算档等参数；可用 `tools.subagentInline.enabled: false` 关闭（默认开）。
+`subagent` 把一项聚焦工作交给**已配置**的角色，必填 `agent`、`task`，可选 `workingDirectory`、`worktree`（Git 仓库写委派自动建 `.git/pipiclaw-worktrees/<runId>` 隔离分支）、`purpose`、`item`。工具、模型、预算和上下文策略来自角色文件，调用侧不能覆盖。任务步骤的委派自动绑定当前任务，工具定义还提供可选的 `item` 字段，用于指定工作项。`subagent_inline` 用于没有合适角色时的一次性内置执行者，携带 `systemPrompt` 和所需的工具、模型、预算档等参数；可用 `tools.subagentInline.enabled: false` 关闭（默认开）。
 
 - **内置角色**使用 Pipiclaw 的模型和工具，聊天共享 10 秒快速返回窗口，超过后转为后台运行；任务步骤内确认启动后立即异步返回。
 - **外部角色**启动 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI 或脚本，确认启动后立即返回 `runId`。聊天委派完成时通知发起频道，任务委派直接将结果送入任务。长期后台工作需要常驻 daemon；终端内嵌运行时只在终端打开期间跟踪与通知。

@@ -110,7 +110,7 @@ describe("recoverInterruptedTurn", () => {
 	it("appends a synthetic error tool result for a dangling call, marked isError", () => {
 		const m = openSession();
 		appendUser(m);
-		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "write", arguments: {} }], "toolUse");
+		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "subagent_inline", arguments: {} }], "toolUse");
 		const outcome = recoverInterruptedTurn(m, fallbackModel);
 		expect(outcome).toEqual({ kind: "repaired", appendedToolResults: 1, appendedAbortedAssistant: false });
 
@@ -120,6 +120,7 @@ describe("recoverInterruptedTurn", () => {
 		expect(result.message.toolCallId).toBe("tc1");
 		expect(result.message.isError).toBe(true);
 		expect(result.message.usage).toBeUndefined();
+		expect(result.message.content[0]).toMatchObject({ text: expect.stringMatching(/subagent_list.*subagent_run/) });
 
 		// Running it again is a no-op: idempotent.
 		const beforeReplay = m.getBranch().length;
@@ -127,8 +128,6 @@ describe("recoverInterruptedTurn", () => {
 		expect(second).toEqual({ kind: "clean" });
 		expect(m.getBranch().length).toBe(beforeReplay);
 	});
-
-	// Spec 047, D3.3: the recovery guidance must name the post-split tools, not `subagent_manage`.
 
 	it("appends a runtime-authored aborted assistant when the branch ends on a user message", () => {
 		const m = openSession();

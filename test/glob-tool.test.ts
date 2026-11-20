@@ -1,6 +1,6 @@
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createFileStore } from "../src/file-store.js";
 import { createGlobTool } from "../src/tools/glob.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -87,6 +87,35 @@ describe("glob tool result addresses (batch 2.1)", () => {
 		const address = text(result).split("\n")[0]?.trim();
 
 		expect(address).toBe(join("nested", "same.ts"));
+	});
+
+	it("pages over the same mtime order using at most 32 concurrent stats", async () => {
+		const dir = makeWorkspace();
+		const store = createFileStore();
+		const root = (await store.stat(dir))!;
+		const names = Array.from({ length: 103 }, (_, index) => `file-${index}.ts`);
+		vi.spyOn(store, "walkFiles").mockResolvedValue({ files: names, truncated: false });
+		let active = 0;
+		let peak = 0;
+		vi.spyOn(store, "stat").mockImplementation(async (path) => {
+			if (path === dir) return root;
+			peak = Math.max(peak, ++active);
+			await Promise.resolve();
+			active--;
+			return { ...root, isDirectory: false, isFile: true, mtimeMs: Number(/file-(\d+)/.exec(path)?.[1]) };
+		});
+		const tool = createGlobTool(store, {
+			securityConfig: disabledSecurity,
+			securityContext: { agentWorkspaceDir: dir, cwd: dir },
+		});
+		const first = await tool.execute("first", { pattern: "*.ts" });
+		expect(text(first).split("\n").slice(0, 100)).toEqual(names.slice(3).reverse());
+		expect(text(first)).toContain("skip=100");
+		const second = await tool.execute("second", { pattern: "*.ts", skip: 100 });
+		expect(text(second).split("\n")).toEqual(names.slice(0, 3).reverse());
+		expect(second.details).toMatchObject({ matchCount: 103, shownCount: 3 });
+		expect(peak).toBeGreaterThan(1);
+		expect(peak).toBeLessThanOrEqual(32);
 	});
 
 	it("distinguishes a missing root, a file root, and an empty result", async () => {

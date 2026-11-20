@@ -3,12 +3,13 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { extname } from "path";
 import { Type } from "typebox";
 import type { Executor } from "../executor.js";
-import type { DirectoryEntry, FileStore } from "../file-store.js";
+import type { DirectoryEntry, FileStat, FileStore } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { shellEscape } from "../shared/os.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import type { FileObservations } from "./file-observations.js";
 import { resolveLineOffset } from "./line-index.js";
 import {
 	DEFAULT_MAX_BYTES,
@@ -107,6 +108,7 @@ interface ReadToolDetails {
 }
 
 export interface ReadToolOptions {
+	observations?: FileObservations;
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
@@ -164,7 +166,8 @@ export function createReadTool(
 							"Compress or resize it first with bash (e.g. sips/convert/ffmpeg), or read it as text to inspect metadata only.",
 					);
 				}
-				const { data } = await fileStore.readBytes(target, { signal });
+				const { data, stat: readStat } = await fileStore.readBytes(target, { signal });
+				options.observations?.record(target, readStat);
 				return {
 					content: [
 						{ type: "text", text: `Read image file [${mimeType}]` },
@@ -179,7 +182,9 @@ export function createReadTool(
 			// it still goes through `Executor`.
 			const isPdf = extname(path).toLowerCase() === ".pdf";
 			let pdfText = "";
+			let observedStat: FileStat | undefined;
 			if (isPdf) {
+				const pdfStat = options.observations ? await fileStore.stat(target).catch(() => undefined) : undefined;
 				const converted = await executor.exec(`pdftotext -layout ${shellEscape(target)} - 2>&1`, { signal });
 				if (converted.code === 127) {
 					throw new Error(
@@ -192,6 +197,7 @@ export function createReadTool(
 							`The file may be scanned/image-based — ask the user for a text version or a screenshot.`,
 					);
 				}
+				observedStat = pdfStat;
 				pdfText = converted.stdout;
 				if (converted.stdoutTruncated) {
 					// The 10MB capture cap hit mid-conversion — the rest of the PDF's text is gone.
@@ -259,6 +265,7 @@ export function createReadTool(
 							`Offset ${offset} is beyond end of file (0 lines total). The file is empty; omit offset.`,
 						);
 					}
+					observedStat = fileStat;
 					selectedContent = "";
 					windowEof = true;
 					linesBeforeWindow = 0;
@@ -277,11 +284,16 @@ export function createReadTool(
 					// `truncateHead` enough to apply whichever limit binds first (line or byte), however
 					// short the lines are.
 					const readWindowBytes = DEFAULT_MAX_BYTES * 2;
-					const { data, eof } = await fileStore.readBytes(target, {
+					const {
+						data,
+						eof,
+						stat: readStat,
+					} = await fileStore.readBytes(target, {
 						start: located.offset,
 						maxBytes: readWindowBytes,
 						signal,
 					});
+					observedStat = readStat;
 					selectedContent = data.toString("utf-8");
 					windowEof = eof;
 					linesBeforeWindow = startLine - 1;
@@ -347,6 +359,7 @@ export function createReadTool(
 				outputText = truncation.content;
 			}
 
+			if (observedStat) options.observations?.record(target, observedStat);
 			return {
 				content: [{ type: "text", text: outputText }],
 				details,

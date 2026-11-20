@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionCorpus } from "../src/memory/session-corpus.js";
 import { searchDeskSessions } from "../src/memory/session-search.js";
+import { createSessionSearchTool } from "../src/tools/session-search.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 import { testModelRequests } from "./helpers/model-requests.js";
 
@@ -90,7 +91,7 @@ describe("session search", () => {
 		mkdirSync(deskDir, { recursive: true });
 		writeJsonl(join(conv(deskDir), "log.jsonl"), [
 			{ date: "2026-04-19T00:00:00.000Z", userName: "Alice", text: "需要优化记忆管理", isBot: false },
-			{ date: "2026-04-19T00:01:00.000Z", text: "Assistant discussed session_search design", isBot: true },
+			{ date: "2026-04-19T00:01:00.000Z", text: 'Assistant discussed "session_search" design', isBot: true },
 		]);
 
 		const chinese = await searchDeskSessions({
@@ -122,6 +123,28 @@ describe("session search", () => {
 		expect(chinese.results).toHaveLength(1);
 		expect(chinese.results[0]?.role).toBe("user");
 		expect(english.results[0]?.summary).toContain("session_search");
+		const tool = createSessionSearchTool({
+			desk: "main",
+			deskDir,
+			channelId: "dingtalk:dm:123",
+			describeConversation: () => "Release chat",
+			getCurrentModel: () => TEST_MODEL,
+			modelRequests: testModelRequests(),
+			getSessionSearchSettings: () => ({
+				maxFiles: 6,
+				maxChunks: 20,
+				maxCharsPerChunk: 800,
+				summarizeWithModel: false,
+				timeoutMs: 1000,
+			}),
+		});
+		const hit = await tool.execute("call", { query: "session_search" });
+		expect(hit.details).toEqual({ resultCount: 1, searchedDocuments: 2 });
+		expect(hit.content[0]).toMatchObject({
+			text: expect.stringContaining(
+				'[Release chat · conversations/dm-1/log.jsonl · assistant · 2026-04-19T00:01:00.000Z] Assistant discussed "session_search" design',
+			),
+		});
 	});
 
 	it("returns recent entries when query is empty", async () => {

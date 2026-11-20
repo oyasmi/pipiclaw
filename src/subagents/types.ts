@@ -199,6 +199,7 @@ export interface WorkerToolRequest {
 	workspaceDir: string;
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
+	bashInterceptorEnabled?: boolean;
 	bashDefaultTimeoutSeconds: number;
 	leaseOwnerRunId?: string;
 }
@@ -225,6 +226,7 @@ export interface SubAgentToolOptions {
 	securityConfig?: SecurityConfig;
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
+	bashInterceptorEnabled?: boolean;
 	runtimeContext: {
 		workspaceDir: string;
 		/** The desk the delegating turn belongs to, and its directory (tasks, memory). */

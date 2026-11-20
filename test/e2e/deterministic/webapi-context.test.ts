@@ -28,10 +28,17 @@ describe("E2E deterministic: Responses context strategies", () => {
 		// Regression: flattening history into user text changes authority; emitting imported assistant
 		// events presents historical replies as new output, and replaying tool calls repeats side effects.
 		harness = await createWebApiHarness();
+		const deskDir = join(harness.workspaceDir, `desk-${WEBAPI_DESK}`);
+		// A standalone request must reject detached work through the model-facing tool contract.
+		const asyncMarker = join(deskDir, "async-marker");
 		harness.model.script.route({
 			name: "turn",
 			when: (r) => r.isMainTurn,
-			respond: [reply.toolCall("write", { path: "live-marker", content: "live" }), reply.text("finished")],
+			respond: [
+				reply.toolCall("bash", { command: `touch ${asyncMarker}`, async: true }),
+				reply.toolCall("write", { path: "live-marker", content: "live" }),
+				reply.text("finished"),
+			],
 		});
 		const result = await harness.tcp.responses.create({
 			store: false,
@@ -59,10 +66,16 @@ describe("E2E deterministic: Responses context strategies", () => {
 		await harness.waitForIdle();
 		expect(result.status).toBe("completed");
 		expect(result.conversation).toBeNull();
-		expect(result.output.filter((i) => i.type === "mcp_call")).toHaveLength(1);
+		const tools = result.output.filter((i) => i.type === "mcp_call");
+		expect(tools.map(({ name, status }) => ({ name, status }))).toEqual([
+			{ name: "bash", status: "failed" },
+			{ name: "write", status: "completed" },
+		]);
+		expect(tools[0]).not.toHaveProperty("pipiclaw_failure");
+		expect(existsSync(asyncMarker)).toBe(false);
 		expect(JSON.stringify(result.output)).not.toContain("HISTORICAL_ANSWER_731");
 		const requests = harness.mainTurnRequests();
-		expect(requests).toHaveLength(2);
+		expect(requests).toHaveLength(3);
 		for (const request of requests) {
 			expect(request.messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
 				"HISTORICAL_USER_731",
@@ -92,8 +105,7 @@ describe("E2E deterministic: Responses context strategies", () => {
 				],
 			}),
 		).rejects.toMatchObject({ status: 400, param: "input[0].content[0].file_data" });
-		expect(harness.mainTurnRequests()).toHaveLength(2);
-		const deskDir = join(harness.workspaceDir, `desk-${WEBAPI_DESK}`);
+		expect(harness.mainTurnRequests()).toHaveLength(3);
 		expect(existsSync(join(deskDir, "replay-marker"))).toBe(false);
 		expect(readFileSync(join(deskDir, "live-marker"), "utf8")).toBe("live");
 	});

@@ -58,7 +58,10 @@ const DESCRIBERS: Record<string, Describer> = {
 		const path = str(args, "path");
 		return `搜索 "${clipText(pattern, 40, { collapseWhitespace: true })}"${path ? ` · ${path}` : ""}`;
 	},
-	edit: (args) => `编辑 ${str(args, "path") ?? "?"}`,
+	edit: (args) => {
+		const count = isRecord(args) && Array.isArray(args.edits) ? args.edits.length : 0;
+		return `编辑 ${str(args, "path") ?? "?"}${count > 1 ? ` (${count} 处)` : ""}`;
+	},
 	write: (args) => `写入 ${str(args, "path") ?? "?"}`,
 	bash: (args) => {
 		const command = clipText(str(args, "command") ?? "?", 60, { collapseWhitespace: true });

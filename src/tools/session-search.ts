@@ -77,10 +77,20 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 				response.partialDocuments > 0
 					? ` ${response.partialDocuments} scanned message(s) were themselves clipped at the scan cap, so a keyword past that point would not be found — this is not proof it was never said.`
 					: "";
-			const text =
+			const lines =
 				response.results.length === 0
-					? `${JSON.stringify(response)}\n\nNo matches in cold transcript storage. Try a broader query, drop roleFilter, or read the distilled memory directly (the desk's MEMORY.md index and journal/).${partialNote}`
-					: JSON.stringify(response);
+					? [
+							`No matches in cold transcript storage (searched ${response.searchedDocuments} documents). Try a broader query, drop roleFilter, or check MEMORY.md / journal/.${partialNote}`,
+						]
+					: [
+							`Found ${response.results.length} match(es) across ${response.searchedDocuments} cold documents.${partialNote}`,
+						];
+			for (const hit of response.results) {
+				const source = hit.channel ?? hit.conversation ?? hit.source;
+				const labels = [source, hit.path, hit.role, hit.when].filter(Boolean);
+				lines.push(`- [${labels.join(" · ")}] ${hit.summary}`);
+			}
+			const text = lines.join("\n");
 
 			return {
 				content: [

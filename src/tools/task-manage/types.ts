@@ -63,6 +63,8 @@ export type TaskReportRequest = Static<typeof taskReportSchema>;
 export type TaskAskRequest = Static<typeof taskAskSchema>;
 export type TaskWaitRequest = Static<typeof taskWaitSchema>;
 
+export type TaskListToolOptions = Pick<TaskManageToolOptions, "desk" | "deskDir" | "channelId" | "control">;
+
 export interface TaskManageToolOptions {
 	jobManager: DeskJobManager;
 	runManager: SubAgentRunManager;

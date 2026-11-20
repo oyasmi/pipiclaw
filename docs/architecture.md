@@ -322,13 +322,15 @@ spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性
 
 增强类开关：`tools.rtk`（token 优化改写，默认关）、`tools.bashInterceptor`（把裸 `cat`/递归 grep/`sed -i` 导向专用工具，默认开）。
 
-`write.ts` 是共享 `write-content.ts` 的薄包装（子代理工具也复用后者）——这个拆分是有意的。
+持久聊天、任务步骤、一次性 Web API 请求和内置 worker 从同一注册表构建对应的工具集。一次性请求在构建时按 allowlist 选工具，`bash` 使用前台 Schema。委派的 `item` 字段由任务绑定决定。可恢复拒单经 `withToolDetails` 回传模型，Web API 将该工具调用标为失败，人侧进度保持静默。
 
-**`FileStore`（`src/file-store.ts`，spec 044）与 `Executor` 并列**：文件内容工具（`read`/`edit`/`write`/`send_media`）走 `FileStore`，直接在 `node:fs` 流上读写；`Executor` 只服务真正的命令工具（`bash`/`grep`/`pdftotext`）。两者共享同一条 `guardPath` 解出的 `resolvedPath`——路径只解析一次，守卫判定的和实际打开的必然是同一个值。`edit` 在这条路径上做字节级 splice（不解码整份文件，大文件走两趟流式扫描+应用），从根本上避免了文件内容穿过 shell 捕获缓冲导致的截断/编码损坏。
+**`FileStore` 与 `Executor`** 并列提供宿主 I/O。文件内容工具走 `FileStore` 和 `node:fs`，命令工具走 `Executor`。实际 I/O 使用路径守卫返回的地址，`edit` 核对读写守卫对同一路径的解析结果一致。每份工具集共享有界文件观察表，`write` 和 `edit` 在成功回执中附带相关提示。`edit` 对同一原始快照定位各块并原子写入，大文件支持单块流式编辑。
+
+`grep` 按 `Executor` 实例缓存 ripgrep 探测结果。它将目录排除规则传给搜索命令，使用明确的文件名分隔符解析输出，再按文件应用读策略。运行时提示词引导把独立的只读探查放在同一批次，把 `bash`、`edit`、`write` 放在后续批次，以使用官方 SDK 的并行调度。
 
 **子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 区分 `internal` 与 `external`，也可通过 `subagent_inline` 按次定义 internal 执行者；命名角色统一走 `subagent` 的路由字段，inline 才接受模型、工具和预算覆盖。Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置默认限额为 32 turns / 96 tool calls / 600s；外部角色只有 `maxWallTimeSec`（默认 3600s）。
 
-`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——聊天共享 10 秒快速窗口内结算完直接内联返回（`agent/session/session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成异步返回；task 内置委派和外部角色确认启动后一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
+`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——聊天共享 10 秒快速窗口内结算完直接内联返回（`agent/session/session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成异步返回；task 内置委派和外部角色确认启动后一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器移除 write/edit，bash 描述提示只执行只读检查和测试。声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
 
 ## 9. 安全层（`src/security/`）
 

@@ -60,16 +60,18 @@ export function createSkillTool(options: SkillOptions): AgentTool<typeof skillSc
 		execute: async (_toolCallId: string, args: { action: string; name?: string }) => {
 			if (args.action === "list") {
 				const catalog = loadPipiclawSkills(options);
-				const skills = catalog.skills.map((skill) => ({
-					name: skill.name,
-					description: skill.description,
-					path: skill.filePath,
-					source: skill.source,
-					disableModelInvocation: skill.disableModelInvocation,
-				}));
+				const lines = catalog.skills.map((skill) => {
+					const invocation = skill.disableModelInvocation ? " (user-only: disableModelInvocation)" : "";
+					return `- ${skill.name} [${skill.source}]${invocation} — ${skill.description} (${skill.filePath})`;
+				});
+				if (lines.length === 0) lines.push("No skills found.");
+				for (const diagnostic of catalog.diagnostics) {
+					const location = diagnostic.path ?? diagnostic.name ?? diagnostic.source;
+					lines.push(`- ${diagnostic.type} [${location}]: ${diagnostic.message}`);
+				}
 				return {
-					content: [{ type: "text" as const, text: JSON.stringify({ skills, diagnostics: catalog.diagnostics }) }],
-					details: { action: "list", count: skills.length },
+					content: [{ type: "text" as const, text: lines.join("\n") }],
+					details: { action: "list", count: catalog.skills.length },
 				};
 			}
 			if (args.action !== "read") {

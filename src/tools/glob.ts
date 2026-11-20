@@ -23,6 +23,7 @@ import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 const MAX_SCAN_ENTRIES = 50_000;
 /** Matched files are only `stat`-ed (for mtime ordering) up to this many; beyond it, scan order stands. */
 const MAX_STAT_FOR_SORT = 2_000;
+const STAT_CONCURRENCY = 32;
 /** Paths shown inline; matching `grep`'s FILE_PAGE_LIMIT order of magnitude for a discovery tool. */
 const GLOB_MAX_RESULTS = 100;
 
@@ -35,6 +36,7 @@ const globSchema = Type.Object({
 	path: Type.Optional(
 		Type.String({ description: "Directory to search in. Defaults to the current working directory." }),
 	),
+	skip: Type.Optional(Type.Integer({ minimum: 0, description: "Result offset for paging." })),
 });
 
 export interface GlobToolOptions {
@@ -71,17 +73,9 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 	return {
 		name: "glob",
 		label: "glob",
-		description:
-			"Find files whose paths match a glob pattern. Returns matching file paths only (never directories), " +
-			"including hidden files; VCS/build directories (node_modules, .git, dist, ...) are excluded. Prefer this " +
-			"over `bash find`/`ls -R` for path discovery — it is bounded and sorted by modification time (newest first) " +
-			`when few enough files match; up to ${GLOB_MAX_RESULTS} paths come back inline.`,
+		description: `Find paths, including hidden files. Skips common VCS/build directories. Returns up to ${GLOB_MAX_RESULTS} files, newest first when possible. Use skip to page.`,
 		parameters: globSchema,
-		execute: async (
-			_toolCallId: string,
-			{ pattern, path }: { pattern: string; path?: string },
-			signal?: AbortSignal,
-		) => {
+		execute: async (_toolCallId: string, { pattern, path, skip }, signal?: AbortSignal) => {
 			if (!pattern.trim()) {
 				throw new RecoverableToolError("Pattern must not be empty.");
 			}
@@ -161,11 +155,18 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 			let ordered: string[];
 			if (sortableByMtime) {
 				const withMtime: MatchedFile[] = [];
-				for (const relativePath of matched) {
-					const stat = await fileStore.stat(join(target, ...relativePath.split("/")));
-					withMtime.push({ relativePath, mtimeMs: stat?.mtimeMs ?? 0 });
+				for (let start = 0; start < matched.length; start += STAT_CONCURRENCY) {
+					signal?.throwIfAborted();
+					const batch = await Promise.all(
+						matched.slice(start, start + STAT_CONCURRENCY).map(async (relativePath) => {
+							const stat = await fileStore.stat(join(target, ...relativePath.split("/")));
+							return { relativePath, mtimeMs: stat?.mtimeMs ?? 0 };
+						}),
+					);
+					withMtime.push(...batch);
 				}
-				withMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
+				signal?.throwIfAborted();
+				withMtime.sort((a, b) => b.mtimeMs - a.mtimeMs || a.relativePath.localeCompare(b.relativePath));
 				ordered = withMtime.map((entry) => entry.relativePath);
 			} else {
 				ordered = matched;
@@ -175,15 +176,33 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 			// `target` alone is ambiguous (read resolves relative paths against the cwd, not
 			// the search root), so emit a cwd-relative path when the hit is inside it and
 			// an absolute path otherwise.
-			const page = ordered.slice(0, GLOB_MAX_RESULTS).map((rel) => toReadableAddress(target, rel, securityContext));
+			const startOffset = Math.max(0, skip ?? 0);
+			const page = ordered
+				.slice(startOffset, startOffset + GLOB_MAX_RESULTS)
+				.map((rel) => toReadableAddress(target, rel, securityContext));
 			const footerParts: string[] = [];
-			if (ordered.length > page.length) {
+			const truncation = truncateHead(page.join("\n"));
+			let shownCount = page.length;
+			if (truncation.truncated) {
+				let chars = 0;
+				for (const [index, path] of page.entries()) {
+					chars += path.length + 1;
+					if (chars - 1 > truncation.content.length) {
+						shownCount = index;
+						break;
+					}
+				}
+			}
+			const end = startOffset + shownCount;
+			if (page.length === 0) {
+				footerParts.push(`skip=${startOffset} is past the ${ordered.length} matches. Use skip=0 to start again.`);
+			} else if (end < ordered.length) {
 				footerParts.push(
-					`Showing ${page.length} of ${ordered.length} matches${sortableByMtime ? ", newest first" : ""}. ` +
-						"Narrow the pattern, or pass path=<subdir>, to see the rest.",
+					`Showing ${startOffset + 1}-${end} of ${ordered.length} matches. Use skip=${end} for the next page, or narrow the pattern or path.`,
 				);
-			} else if (!sortableByMtime) {
-				footerParts.push(`${ordered.length} matches, in scan order (too many to sort by modification time).`);
+			}
+			if (!sortableByMtime) {
+				footerParts.push("Results are in scan order (too many to sort by modification time).");
 			}
 			if (walk.truncated) {
 				footerParts.push(
@@ -194,9 +213,7 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 				footerParts.push(`${readDenyExcluded} matching path(s) excluded by the read policy.`);
 			}
 
-			const body = page.join("\n");
-			const truncation = truncateHead(body);
-			let outputText = truncation.content;
+			let outputText = page.slice(0, shownCount).join("\n");
 			if (footerParts.length > 0) {
 				outputText += `\n\n[${footerParts.join(" ")}]`;
 			}
@@ -208,7 +225,7 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 				content: [{ type: "text" as const, text: outputText }],
 				details: {
 					matchCount: ordered.length,
-					shownCount: page.length,
+					shownCount,
 					scanTruncated: walk.truncated,
 					...(readDenyExcluded > 0 ? { readDenyExcluded } : {}),
 				},

@@ -98,16 +98,21 @@ const subagentInlineSchema = Type.Object({
 	item: itemField,
 });
 
+const subagentChatSchema = Type.Omit(subagentSchema, ["item"]);
+const subagentInlineChatSchema = Type.Omit(subagentInlineSchema, ["item"]);
+
 /** The shape consumers read post-wrap, once `withToolDetails` has stamped `kind`. */
 export type SubAgentToolDetails = SubAgentToolFields & { kind: "subagent" | "subagent_inline" };
 
-export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<typeof subagentSchema, SubAgentToolFields> {
+export function createSubAgentTool(
+	options: SubAgentToolOptions,
+): AgentTool<typeof subagentSchema | typeof subagentChatSchema, SubAgentToolFields> {
 	return {
 		name: "subagent",
 		label: "subagent",
 		description:
 			"Dispatch a matching configured role directly for a clear task in one directory, e.g. give a read-only scout one file and a question. Read agent-delegation.md for parallel writes, worktrees, purpose=verify, uncertain image support or multi-agent coordination.",
-		parameters: subagentSchema,
+		parameters: options.boundTaskId ? subagentSchema : subagentChatSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			if (signal?.aborted) {
 				throw new Error("Sub-agent aborted");
@@ -142,13 +147,13 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 
 export function createSubAgentInlineTool(
 	options: SubAgentToolOptions,
-): AgentTool<typeof subagentInlineSchema, SubAgentToolFields> {
+): AgentTool<typeof subagentInlineSchema | typeof subagentInlineChatSchema, SubAgentToolFields> {
 	return {
 		name: "subagent_inline",
 		label: "subagent_inline",
 		description:
 			"Fallback only when no configured role fits; otherwise use subagent. Supply task and systemPrompt. Before inline setup, read delegation-inline.md under the Runtime Guides directory.",
-		parameters: subagentInlineSchema,
+		parameters: options.boundTaskId ? subagentInlineSchema : subagentInlineChatSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			if (signal?.aborted) {
 				throw new Error("Sub-agent aborted");

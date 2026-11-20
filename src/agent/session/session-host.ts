@@ -67,7 +67,6 @@ import { RequestContextInput } from "./context-input.js";
 import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./event-guards.js";
 import { SessionExecutionTrace } from "./execution-trace.js";
 import type { ModelSelection } from "./model-selection.js";
-import { requestTools } from "./request-tools.js";
 import {
 	asSdkSettingsManager,
 	DEFAULT_MAIN_THINKING_LEVEL,
@@ -685,7 +684,8 @@ export class SessionHost {
 		reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics], this.channelId);
 		this.tasksEnabled = toolsLoad.config.tools.tasks.enabled;
 
-		const tools = createPipiclawTools({
+		const active = createPipiclawTools({
+			requestScoped: this.deps.profile.kind === "request",
 			jobManager: this.jobManager,
 			runManager: this.runManager,
 			executor: this.executor,
@@ -710,7 +710,6 @@ export class SessionHost {
 			...(this.deps.profile.kind === "task" ? { taskSession: this.deps.profile.session } : {}),
 			...(this.deps.profile.kind === "chat" ? { taskControl: this.deps.getTaskControl?.() } : {}),
 		});
-		const active = this.deps.profile.kind === "request" ? requestTools(tools) : tools;
 		this.currentTools = active;
 		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.
 		// Warn where the prompt's own budget diagnostics are reported, once per tool rebuild.

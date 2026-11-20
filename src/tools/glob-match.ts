@@ -43,7 +43,7 @@ const STAR = Symbol("star");
 /** `?` inside a segment: exactly one character. */
 const ANY = Symbol("any");
 
-type SegmentToken = typeof STAR | typeof ANY | string;
+type SegmentToken = typeof STAR | typeof ANY | string | RegExp;
 type PatternSegment = typeof GLOBSTAR | SegmentToken[];
 
 interface CompiledVariant {
@@ -56,14 +56,15 @@ interface CompiledVariant {
 	trailingGlobstar: boolean;
 }
 
-export function compileGlobPattern(pattern: string): GlobMatcher {
+export function compileGlobPattern(pattern: string, options: { characterClasses?: boolean } = {}): GlobMatcher {
 	if (pattern.length > MAX_PATTERN_LENGTH) {
 		throw new Error(`pattern is longer than ${MAX_PATTERN_LENGTH} characters`);
 	}
 	// The anchoring decision is made on the pattern as written, before expansion: `{src/a,b}`
 	// carries a separator and is therefore path-anchored for *both* of its alternatives.
 	const matchBasenameOnly = !pattern.includes("/");
-	const variants = expandBraces(pattern).map(compileVariant);
+	const characterClasses = options.characterClasses === true;
+	const variants = expandBraces(pattern, characterClasses).map((variant) => compileVariant(variant, characterClasses));
 
 	return {
 		test(path: string): boolean {
@@ -80,13 +81,13 @@ export function compileGlobPattern(pattern: string): GlobMatcher {
  * and a comma inside a nested group are read the way the writer meant. An unmatched `{` stays a
  * literal character, as it did before.
  */
-function expandBraces(pattern: string): string[] {
-	const open = findBraceGroup(pattern);
+function expandBraces(pattern: string, characterClasses: boolean): string[] {
+	const open = findBraceGroup(pattern, characterClasses);
 	if (!open) return [pattern];
 
 	const results: string[] = [];
 	for (const alternative of open.alternatives) {
-		for (const expanded of expandBraces(`${open.prefix}${alternative}${open.suffix}`)) {
+		for (const expanded of expandBraces(`${open.prefix}${alternative}${open.suffix}`, characterClasses)) {
 			results.push(expanded);
 			if (results.length > MAX_BRACE_VARIANTS) {
 				throw new Error(`brace expansion produces more than ${MAX_BRACE_VARIANTS} patterns`);
@@ -102,18 +103,31 @@ interface BraceGroup {
 	suffix: string;
 }
 
-function findBraceGroup(pattern: string): BraceGroup | undefined {
-	const start = pattern.indexOf("{");
-	if (start === -1) return undefined;
+function classEnd(pattern: string, start: number, characterClasses: boolean): number {
+	return characterClasses && pattern[start] === "[" ? pattern.indexOf("]", start + 1) : -1;
+}
 
+function findBraceGroup(pattern: string, characterClasses: boolean): BraceGroup | undefined {
+	let start = -1;
 	let depth = 0;
 	const alternatives: string[] = [];
 	let current = "";
-	for (let i = start; i < pattern.length; i++) {
+	for (let i = 0; i < pattern.length; i++) {
+		const end = classEnd(pattern, i, characterClasses);
+		if (end > i) {
+			if (depth > 0) current += pattern.slice(i, end + 1);
+			i = end;
+			continue;
+		}
 		const char = pattern[i];
 		if (char === "{") {
 			depth++;
-			if (depth === 1) continue; // the group's own opening brace is not content
+			if (depth === 1) {
+				start = i;
+				continue;
+			}
+		} else if (depth === 0) {
+			continue;
 		} else if (char === "}") {
 			depth--;
 			if (depth === 0) {
@@ -130,18 +144,27 @@ function findBraceGroup(pattern: string): BraceGroup | undefined {
 	return undefined; // unbalanced `{` — leave it as a literal
 }
 
-function compileVariant(pattern: string): CompiledVariant {
+function compileVariant(pattern: string, characterClasses: boolean): CompiledVariant {
 	const rawSegments = pattern.split("/");
 	const segments: PatternSegment[] = rawSegments.map((segment) =>
-		segment === "**" ? GLOBSTAR : compileSegment(segment),
+		segment === "**" ? GLOBSTAR : compileSegment(segment, characterClasses),
 	);
 	const trailingGlobstar = segments.length > 1 && segments[segments.length - 1] === GLOBSTAR;
 	return { segments, trailingGlobstar };
 }
 
-function compileSegment(segment: string): SegmentToken[] {
+function compileSegment(segment: string, characterClasses: boolean): SegmentToken[] {
 	const tokens: SegmentToken[] = [];
-	for (const char of segment) {
+	for (let i = 0; i < segment.length; i++) {
+		const char = segment[i];
+		const end = classEnd(segment, i, characterClasses);
+		if (end >= 0) {
+			const body = segment.slice(i + 1, end).replace(/^!/, "^");
+			// Compile only one character class. The wildcard matcher handles the surrounding stars.
+			tokens.push(new RegExp(`[${body}]`));
+			i = end;
+			continue;
+		}
 		if (char === "*") {
 			// Adjacent stars are the same star. A `**` that is not a whole segment (`a**b`) has
 			// always meant single-segment `*`, and collapsing keeps that without a second token.
@@ -212,7 +235,7 @@ function matchSegment(tokens: SegmentToken[], text: string): boolean {
 			tokenIndex++;
 			continue;
 		}
-		if (token === ANY || (typeof token === "string" && token === text[textIndex])) {
+		if (token === ANY || token === text[textIndex] || (token instanceof RegExp && token.test(text[textIndex]))) {
 			tokenIndex++;
 			textIndex++;
 			continue;

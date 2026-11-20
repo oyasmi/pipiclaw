@@ -15,7 +15,7 @@ import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.j
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText } from "../shared/text-utils.js";
 import { maybeOptimizeCommand } from "./command-optimizer.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
+import { formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
 /**
  * Default wall-clock timeout for bash commands when the caller supplies neither a
@@ -25,10 +25,19 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
  */
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
 
+export const BASH_MAX_OUTPUT_BYTES = 30 * 1024;
+export const BASH_MAX_OUTPUT_LINES = 1000;
+
+const outputLimits = { maxBytes: BASH_MAX_OUTPUT_BYTES, maxLines: BASH_MAX_OUTPUT_LINES };
+
+export function formatFullOutputHint(path: string): string {
+	return `Full output: ${path} — use grep on this path to locate errors, or read with offset/limit.`;
+}
+
 /** Spill files kept per desk before the oldest are pruned on the next tool build. */
 const BASH_LOG_RETENTION = 40;
 /** Bytes read back from the spill file when the in-memory capture was truncated (D2.3). */
-const TAIL_FROM_SPILL_BYTES = DEFAULT_MAX_BYTES * 4;
+const TAIL_FROM_SPILL_BYTES = BASH_MAX_OUTPUT_BYTES * 4;
 
 /**
  * Where the "full output" spill file for a command goes: under `<deskDir>/logs/` on the main
@@ -82,19 +91,17 @@ const bashSchema = Type.Object({
 	),
 	async: Type.Optional(
 		Type.Boolean({
-			description:
-				"Run in the background and return immediately with a job id instead of blocking. Use for long commands so the channel stays responsive; you are woken automatically when the job finishes.",
+			description: "Run in the background; returns a job id immediately and wakes this session on completion.",
 		}),
 	),
 	notify: Type.Optional(
 		Type.Boolean({
-			description:
-				"For async jobs: wake this channel when the job finishes (default true). Set false only for fire-and-forget work whose result you will never need.",
+			description: "Wake this session when the async job finishes (default true). False is fire-and-forget.",
 		}),
 	),
 });
 
-/** Schema shown when background execution is unavailable (sub-agent path): the async trio is
+/** Schema for sessions without background execution: the async fields are
  * dropped so the model is never offered a parameter its context cannot honor (fix plan §3.2). */
 const bashSchemaNoJobs = Type.Omit(bashSchema, ["async", "notify"]);
 
@@ -227,7 +234,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 		// is a process-local measure only: external sub-agents are separate host processes and are
 		// not serialized by it. The SDK serializes the whole batch if *any* tool in it is sequential.
 		executionMode: "sequential",
-		description: `Execute a ${EXECUTOR_SHELL_IS_BASH ? "bash" : "POSIX sh (no bash on this host)"} command in the current working directory. Returns stdout, stderr, and the exit code (a non-zero exit code is reported in the output, not raised as an error). Output is truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, the full output is saved to a file whose path is included. Commands time out after ${options.defaultTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS}s unless you pass a larger \`timeout\`.`,
+		description: `Run a ${EXECUTOR_SHELL_IS_BASH ? "bash" : "POSIX sh"} command in the current directory. Returns output and exit code. Output beyond ${BASH_MAX_OUTPUT_LINES} lines or ${BASH_MAX_OUTPUT_BYTES / 1024}KB spills to a file. Default timeout: ${options.defaultTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS}s.`,
 		parameters: (options.jobManager ? bashSchema : bashSchemaNoJobs) as typeof bashSchema,
 		execute: async (
 			_toolCallId: string,
@@ -245,7 +252,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 					if (guardResult.category === "unsupported-shell") {
 						throw new RecoverableToolError(
 							`Command rejected by static shell parser (${guardResult.reason ?? "unsupported syntax"}). ` +
-								"Rewrite using simple commands without shell expansions, globs, or heredocs, or use the dedicated read, write, edit, find, or grep tools instead.",
+								"Rewrite using simple commands without shell expansions, globs, or heredocs, or use the dedicated read, write, edit, glob, or grep tools instead.",
 						);
 					}
 					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
@@ -294,7 +301,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				}
 				if (!options.jobManager) {
 					throw new RecoverableToolError(
-						"This context does not support background execution (sub-agents never get it). Run the command without async, or split it into shorter steps.",
+						"This context does not support background execution (async=true requires a persistent chat or task session). Run the command in the foreground without async.",
 					);
 				}
 				if (!options.channelId)
@@ -343,6 +350,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				spillPath: string,
 				captureTruncated: boolean,
 			): Promise<{ text: string; details: BashToolDetails }> => {
+				const fullOutputHint = formatFullOutputHint(spillPath);
 				let output = "";
 				if (stdout) output += stdout;
 				if (stderr) {
@@ -356,23 +364,25 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				// spill file — the one uncapped copy — and never quote a total line count we never saw.
 				if (captureTruncated) {
 					let tailSource = output;
+					let hasFullTail = false;
 					try {
 						tailSource = await readFileTail(spillPath, TAIL_FROM_SPILL_BYTES);
+						hasFullTail = true;
 					} catch {
 						// Spill unreadable: fall back to the capped head's tail; still bounded.
 					}
-					const tailTrunc = truncateTail(tailSource);
+					const tailTrunc = truncateTail(tailSource, outputLimits);
 					const shownBytes = Buffer.byteLength(tailTrunc.content, "utf-8");
 					const text =
 						`${tailTrunc.content || "(no output)"}\n\n` +
-						`[Output capture was cut off at ${formatSize(DEFAULT_MAX_BYTES)}+; showing the last ${formatSize(shownBytes)} of the complete output. Full output: ${spillPath}]`;
+						`[Output capture was cut off; showing the last ${formatSize(shownBytes)} of ${hasFullTail ? "the full output" : "the captured output"}. ${fullOutputHint}]`;
 					return {
 						text,
 						details: { truncation: tailTrunc, fullOutputPath: spillPath, producedOutput: true },
 					};
 				}
 
-				const truncation = truncateTail(output);
+				const truncation = truncateTail(output, outputLimits);
 				let text = truncation.content || "(no output)";
 				let details: BashToolDetails | undefined;
 
@@ -381,15 +391,14 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 
 					const startLine = truncation.totalLines - truncation.outputLines + 1;
 					const endLine = truncation.totalLines;
-					const fullOutputHint = ` Full output: ${spillPath}`;
 
 					if (truncation.lastLinePartial) {
 						const lastLineSize = formatSize(Buffer.byteLength(output.split("\n").pop() || "", "utf-8"));
-						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}).${fullOutputHint}]`;
+						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). ${fullOutputHint}]`;
 					} else if (truncation.truncatedBy === "lines") {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}.${fullOutputHint}]`;
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. ${fullOutputHint}]`;
 					} else {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit).${fullOutputHint}]`;
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(BASH_MAX_OUTPUT_BYTES)} limit). ${fullOutputHint}]`;
 					}
 				} else {
 					// No truncation happened after all -- the spill file was insurance against the
@@ -439,7 +448,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				const built = await buildOutputText(error.stdout, error.stderr, spillPath, error.captureTruncated);
 				const nextStep =
 					error.reason === "timeout"
-						? `Retry with a larger \`timeout\` (currently ${error.timeoutSeconds}s), or pass \`async: true\` to run it in the background and be woken when it finishes.`
+						? `Retry with a larger \`timeout\` (currently ${error.timeoutSeconds}s)${options.jobManager ? " or pass `async: true` to get a completion wake" : " or split the command into shorter steps"}.`
 						: "The command was stopped (e.g. by /stop or a run cancellation); partial output above.";
 				const outputText = `${built.text}\n\n[${error.message}; partial output above. ${nextStep}]`;
 				const details: BashToolDetails = { ...built.details, timedOut: true };

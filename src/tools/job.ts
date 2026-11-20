@@ -4,6 +4,7 @@ import type { DeskJobManager } from "../jobs/manager.js";
 import type { JobSnapshot } from "../jobs/record.js";
 import { formatDuration } from "../shared/format.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { BASH_MAX_OUTPUT_BYTES, BASH_MAX_OUTPUT_LINES, formatFullOutputHint } from "./bash.js";
 import { truncateTail } from "./truncate.js";
 
 const jobSchema = Type.Object({
@@ -49,17 +50,21 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 		for (const job of jobs) {
 			const header = `### [${job.id}] ${job.label} — ${job.status}${job.exitCode !== undefined ? `, exit ${job.exitCode}` : ""}`;
 			const output = await jobManager.readOutput(job.id);
-			// Total budget across all finished jobs in one poll: 5 jobs × the 50KB per-job tail would
-			// otherwise be 250KB of context. Once spent, later jobs get a header + a pointer only.
-			if (spent >= COMPLETED_DETAIL_TOTAL_BUDGET) {
+			const remaining = COMPLETED_DETAIL_TOTAL_BUDGET - spent;
+			const path = output ? `\n${formatFullOutputHint(output.spillFile)}` : "";
+			if (remaining <= 0) {
 				sections.push(
-					`${header}\n(output omitted to stay within budget — run \`job op=poll ids=["${job.id}"]\` for it)${output ? `\nFull output: ${output.spillFile}` : ""}`,
+					`${header}\n(output omitted to stay within budget — run \`job op=poll ids=["${job.id}"]\` for it)${path}`,
 				);
 				continue;
 			}
-			const tail = output ? truncateTail(output.text).content : "";
+			const tail = output
+				? truncateTail(output.text, {
+						maxBytes: Math.min(remaining, BASH_MAX_OUTPUT_BYTES),
+						maxLines: BASH_MAX_OUTPUT_LINES,
+					}).content
+				: "";
 			const body = tail.trim() ? tail : "(no output)";
-			const path = output ? `\nFull output: ${output.spillFile}` : "";
 			spent += Buffer.byteLength(body, "utf-8");
 			sections.push(`${header}\n${body}${path}`);
 		}

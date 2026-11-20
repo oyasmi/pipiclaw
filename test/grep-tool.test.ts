@@ -13,6 +13,7 @@ function fakeExecutor(
 	const commands: string[] = [];
 	const executor: Executor = {
 		exec: async (command: string) => {
+			if (command === "command -v rg") return { stdout: "", stderr: "", code: 1 };
 			commands.push(command);
 			return { stdout, stderr, code, ...(stdoutTruncated ? { stdoutTruncated: true } : {}) };
 		},
@@ -33,6 +34,7 @@ function makeToolTrackingCalls(stdout: string) {
 	const commands: string[] = [];
 	const executor: Executor = {
 		exec: async (command: string, options?: ExecOptions) => {
+			if (command === "command -v rg") return { stdout: "", stderr: "", code: 1 };
 			calls.push({ command, options });
 			commands.push(command);
 			return { stdout, stderr: "", code: 0 };
@@ -46,9 +48,22 @@ async function run(tool: ReturnType<typeof createGrepTool>, args: Record<string,
 	return result.content[0].type === "text" ? result.content[0].text : "";
 }
 
+function match(file: string, line: number, text: string): string {
+	return `${file}\0${line}:${text}`;
+}
+
+function context(file: string, line: number, text: string): string {
+	return `${file}\0${line}-${text}`;
+}
+
 describe("grep tool", () => {
 	it("groups matches by file and marks match vs context lines", async () => {
-		const stdout = ["a.txt-1-alpha", "a.txt:2:beta match", "a.txt-3-gamma", "sub/b.txt:5:yes match"].join("\n");
+		const stdout = [
+			context("a.txt", 1, "alpha"),
+			match("a.txt", 2, "beta match"),
+			context("a.txt", 3, "gamma"),
+			match("sub/b.txt", 5, "yes match"),
+		].join("\n");
 		const { tool } = makeTool(stdout);
 		const text = await run(tool, { pattern: "match" });
 
@@ -60,21 +75,20 @@ describe("grep tool", () => {
 		expect(text).toContain("*5:yes match");
 	});
 
-	it("attributes context unambiguously even for hyphenated numeric filenames", async () => {
-		// `a-1-x.txt` before-context precedes its first match; naive parsing would misread the line
-		// number out of the filename. Anchoring on the match path keeps it correct.
-		const stdout = ["a-1-x.txt-9-before", "a-1-x.txt:10:the match"].join("\n");
+	it("attributes filenames and context even when they contain separator characters and newlines", async () => {
+		const file = "a-1-x:3:\ncontent.txt";
+		const stdout = [context(file, 9, "before:5:context"), match(file, 10, "the match")].join("\n");
 		const { tool } = makeTool(stdout);
 		const text = await run(tool, { pattern: "match" });
 
-		expect(text).toContain("== a-1-x.txt ==");
-		expect(text).toContain(" 9:before");
+		expect(text).toContain(`== ${file} ==`);
+		expect(text).toContain(" 9:before:5:context");
 		expect(text).toContain("*10:the match");
 	});
 
 	it("caps matches per file in multi-file scopes", async () => {
-		const fileA = Array.from({ length: 25 }, (_, i) => `a.txt:${i + 1}:hit`).join("\n");
-		const stdout = `${fileA}\nb.txt:1:hit`;
+		const fileA = Array.from({ length: 25 }, (_, i) => match("a.txt", i + 1, "hit")).join("\n");
+		const stdout = `${fileA}\n${match("b.txt", 1, "hit")}`;
 		const { tool } = makeTool(stdout);
 		const text = await run(tool, { pattern: "hit" });
 
@@ -86,7 +100,7 @@ describe("grep tool", () => {
 	it("paginates files, reports the next skip offset, and honors it on the next call", async () => {
 		const lines: string[] = [];
 		for (let f = 0; f < 25; f++) {
-			lines.push(`f${String(f).padStart(2, "0")}.txt:1:hit`);
+			lines.push(match(`f${String(f).padStart(2, "0")}.txt`, 1, "hit"));
 		}
 		const { tool } = makeTool(lines.join("\n"));
 		const firstPage = await run(tool, { pattern: "hit" });
@@ -103,7 +117,7 @@ describe("grep tool", () => {
 	});
 
 	it("drops matches inside ignored directories", async () => {
-		const stdout = ["node_modules/x/index.js:1:hit", "src/real.ts:1:hit"].join("\n");
+		const stdout = [match("node_modules/x/index.js", 1, "hit"), match("src/real.ts", 1, "hit")].join("\n");
 		const { tool } = makeTool(stdout);
 		const text = await run(tool, { pattern: "hit" });
 
@@ -127,7 +141,7 @@ describe("grep tool", () => {
 		await expect(rejected).rejects.toBeInstanceOf(RecoverableToolError);
 		await expect(rejected).rejects.toThrow(/must not be empty/);
 
-		const { tool, commands } = makeTool("a.txt:1:hit");
+		const { tool, commands } = makeTool(match("a.txt", 1, "hit"));
 		await run(tool, { pattern: "foo|bar", caseSensitive: false });
 		expect(commands[0]).toContain("-E");
 		expect(commands[0]).toContain("-i");
@@ -135,9 +149,10 @@ describe("grep tool", () => {
 	});
 
 	it("pushes ignored-dir and glob filters down into grep itself, and bounds capture by bytes not the executor's default (D5.1/D5.2)", async () => {
-		const { tool, commands, calls } = makeToolTrackingCalls("a.ts:1:hit");
+		const { tool, commands, calls } = makeToolTrackingCalls(match("a.ts", 1, "hit"));
 		await run(tool, { pattern: "hit", glob: "*.ts" });
 
+		expect(commands[0]).toContain(" -I ");
 		expect(commands[0]).toContain("--exclude-dir=node_modules");
 		expect(commands[0]).toContain("--exclude-dir=.git");
 		// The glob is model-controlled and the executor runs the command via `sh -c`, so it must be
@@ -151,7 +166,7 @@ describe("grep tool", () => {
 	it("reports a distinct truncation message instead of 'no matches' when the capture cap was hit before filtering kept anything (D5.3)", async () => {
 		// Every line falls inside an ignored directory, so everything is filtered away in JS -- but
 		// the executor reports the raw capture was truncated regardless.
-		const lines = Array.from({ length: 50 }, (_, i) => `node_modules/x/f${i}.js:1:hit`);
+		const lines = Array.from({ length: 50 }, (_, i) => match(`node_modules/x/f${i}.js`, 1, "hit"));
 		const { tool } = makeTool(lines.join("\n"), 0, "", true);
 		const text = await run(tool, { pattern: "hit" });
 
@@ -183,7 +198,7 @@ describe("grep tool against a real shell (glob injection)", () => {
 	}
 
 	it("does not execute shell commands appended to a malicious glob, while a legal glob still filters normally", async () => {
-		const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+		const { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
 		const { join } = await import("node:path");
 		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-grep-glob-"));
@@ -214,6 +229,16 @@ describe("grep tool against a real shell (glob injection)", () => {
 			expect(legal.text).toMatch(/== .*\/a\.ts ==/);
 			expect(legal.text).not.toContain("b.js");
 			expect(legal.matchCount).toBe(1);
+
+			if ((await createExecutor().exec("command -v rg")).code === 0) {
+				mkdirSync(join(dir, ".git"));
+				writeFileSync(join(dir, ".gitignore"), "generated.ts\n");
+				writeFileSync(join(dir, "generated.ts"), "hit\n");
+				writeFileSync(join(dir, ".hidden.ts"), "hit\n");
+				const ignored = await runReal(tool, { glob: "*.ts" });
+				expect(ignored.text).toContain(".hidden.ts");
+				expect(ignored.text).not.toContain("generated.ts");
+			}
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -288,19 +313,61 @@ describe("grep tool read-guard backstop (batch 1.4)", () => {
 			writeFileSync(join(dir, "keep.txt"), "MATCHME in the open\n");
 			writeFileSync(join(dir, "keys", "id_rsa"), "MATCHME PRIVATE_KEY_BODY\n");
 
-			const tool = createGrepTool(createExecutor(), {
-				securityConfig: { ...DEFAULT_SECURITY_CONFIG, enabled: true },
-				securityContext: { agentWorkspaceDir: dir, cwd: dir },
-			});
+			writeFileSync(join(dir, "binary.txt"), "\0MATCHME binary");
+			writeFileSync(join(dir, "keep.txt"), "MATCHME MATCHME in the open\n");
+			writeFileSync(join(dir, "keys", "id_rsa"), "9:private context\nMATCHME PRIVATE_KEY_BODY\n");
+			const host = createExecutor();
+			const hasRg = (await host.exec("command -v rg")).code === 0;
 
-			const result = await tool.execute("call", { label: "s", pattern: "MATCHME", path: dir } as never);
-			const text = result.content[0].type === "text" ? result.content[0].text : "";
+			for (const backend of ["grep", "rg"]) {
+				let probes = 0;
+				const commands: string[] = [];
+				const executor: Executor = {
+					async exec(command, options) {
+						if (command === "command -v rg") {
+							probes++;
+							return { code: backend === "rg" ? 0 : 1, stdout: "", stderr: "" };
+						}
+						commands.push(command);
+						// CI need not install ripgrep. Exercise its framing and policy with the real
+						// rg command when present and representative wire records otherwise.
+						if (backend === "rg" && !hasRg) {
+							const keep = join(dir, "keep.txt");
+							const secret = join(dir, "keys", "id_rsa");
+							const stdout = command.includes("--files-with-matches")
+								? `${keep}\0${secret}\0`
+								: command.includes("--count")
+									? `${keep}\x001\n${secret}\x001\n`
+									: [
+											match(keep, 1, "MATCHME MATCHME in the open"),
+											context(secret, 1, "9:private context"),
+											match(secret, 2, "MATCHME PRIVATE_KEY_BODY"),
+										].join("\n");
+							return { code: 0, stdout, stderr: "" };
+						}
+						return host.exec(command, options);
+					},
+				};
+				const tool = createGrepTool(executor, {
+					securityConfig: { ...DEFAULT_SECURITY_CONFIG, enabled: true },
+					securityContext: { agentWorkspaceDir: dir, cwd: dir },
+				});
 
-			expect(text).toContain("keep.txt");
-			expect(text).not.toContain("id_rsa");
-			expect(text).not.toContain("PRIVATE_KEY_BODY");
-			expect(text).toContain("read policy");
-			expect(result.details).toMatchObject({ readDenyExcluded: 1 });
+				const [content, files, count] = await Promise.all([
+					tool.execute("content", { pattern: "MATCHME" }),
+					tool.execute("files", { pattern: "matchme", mode: "files", caseSensitive: false, literal: true }),
+					tool.execute("count", { pattern: "MATCHME", mode: "count" }),
+				]);
+				expect(probes).toBe(1);
+				expect(commands.every((command) => command.startsWith(`${backend} `))).toBe(true);
+				for (const result of [content, files, count]) {
+					const text = result.content[0].type === "text" ? result.content[0].text : "";
+					expect(text).toContain("keep.txt");
+					expect(text).not.toMatch(/id_rsa|PRIVATE_KEY_BODY|private context|binary\.txt/);
+				}
+				expect(content.details).toMatchObject({ readDenyExcluded: 1 });
+				expect(count.details).toMatchObject({ fileCount: 1, matchCount: 1 });
+			}
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -309,18 +376,18 @@ describe("grep tool read-guard backstop (batch 1.4)", () => {
 
 describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
 	it("passes -F for a literal search and -E otherwise", async () => {
-		const { tool, commands } = makeToolTrackingCalls("a.ts:1:foo.bar(x)");
+		const { tool, commands } = makeToolTrackingCalls(match("a.ts", 1, "foo.bar(x)"));
 		await tool.execute("call", { label: "s", pattern: "foo.bar(", literal: true } as never);
 		expect(commands[0]).toContain(" -F ");
 		expect(commands[0]).not.toMatch(/\s-E\s/);
 
-		const { tool: t2, commands: c2 } = makeToolTrackingCalls("a.ts:1:hit");
+		const { tool: t2, commands: c2 } = makeToolTrackingCalls(match("a.ts", 1, "hit"));
 		await t2.execute("call", { label: "s", pattern: "fo+" } as never);
 		expect(c2[0]).toContain(" -E ");
 	});
 
 	it("mode:files returns only paths and mode:count returns per-file counts", async () => {
-		const filesOut = "src/a.ts\nsrc/b.ts\nnode_modules/x/c.ts";
+		const filesOut = "src/a.ts\0src/b.ts\0node_modules/x/c.ts\0truncated-partial-name";
 		const { tool } = makeTool(filesOut);
 		const files = await tool.execute("call", { label: "s", pattern: "x", mode: "files" } as never);
 		const filesText = files.content[0].type === "text" ? files.content[0].text : "";
@@ -329,7 +396,12 @@ describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
 		expect(filesText).not.toContain("node_modules"); // ignored dir still filtered
 		expect(files.details).toMatchObject({ fileCount: 2, mode: "files" });
 
-		const countOut = "src/a.ts:3\nsrc/b.ts:1\nsrc/c.ts:0";
+		const countOut = [
+			match("src/a.ts", 1, "x x"),
+			match("src/a.ts", 3, "x"),
+			match("src/a.ts", 5, "x"),
+			match("src/b.ts", 1, "x"),
+		].join("\n");
 		const { tool: t2 } = makeTool(countOut);
 		const counts = await t2.execute("call", { label: "s", pattern: "x", mode: "count" } as never);
 		const countText = counts.content[0].type === "text" ? counts.content[0].text : "";
@@ -340,7 +412,7 @@ describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
 
 	it("the JS glob backstop filters on the basename at any depth, brace patterns included", async () => {
 		// `*.{ts,tsx}` used to match nothing in the JS filter -> silent no-results. Now it agrees.
-		const out = ["a.ts:1:hit", "b.tsx:1:hit", "c.js:1:hit", "sub/d.ts:1:hit"].join("\n");
+		const out = ["a.ts", "b.tsx", "c.js", "sub/d.ts"].map((path) => match(path, 1, "hit")).join("\n");
 		const { tool } = makeTool(out);
 		const text = await run(tool, { glob: "*.{ts,tsx}" });
 		expect(text).toContain("== a.ts ==");
@@ -351,7 +423,10 @@ describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
 		// Search root inside `.git/pipiclaw-worktrees/<runId>` must not drop matches because of the
 		// ancestor `.git` segment, while still filtering `node_modules` beneath that search root.
 		const wtRoot = "/tmp/repo/.git/pipiclaw-worktrees/run_abc";
-		const wtOut = [`${wtRoot}/src/app.ts:3:hit`, `${wtRoot}/node_modules/pkg/index.ts:1:hit`].join("\n");
+		const wtOut = [
+			match(`${wtRoot}/src/app.ts`, 3, "hit"),
+			match(`${wtRoot}/node_modules/pkg/index.ts`, 1, "hit"),
+		].join("\n");
 		const { tool: wtTool } = makeTool(wtOut);
 		const wtText = await run(wtTool, { pattern: "hit", path: wtRoot });
 		expect(wtText).toContain("src/app.ts");

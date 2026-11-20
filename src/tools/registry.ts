@@ -12,9 +12,10 @@ import type { SubAgentRunManager } from "../subagents/runs.js";
 import type { TaskControl, TaskSessionContext } from "../tasks/control.js";
 import { createBashTool } from "./bash.js";
 import { type ToolDetailsKind, withToolDetails } from "./contract/details.js";
-import { SUBAGENT_TOOL_NAMES } from "./contract/names.js";
+import { REQUEST_SCOPED_TOOL_NAMES, SUBAGENT_TOOL_NAMES } from "./contract/names.js";
 import { createEditTool } from "./edit.js";
 import { createEventManageTool } from "./event-manage.js";
+import { createFileObservations, type FileObservations } from "./file-observations.js";
 import { createGlobTool } from "./glob.js";
 import { createGrepTool } from "./grep.js";
 import { createJobTool } from "./job.js";
@@ -67,17 +68,11 @@ export interface ToolBuildContext {
 	bashDefaultTimeoutSeconds?: number;
 	/** Gates the bash tool's rtk command optimizer (`tools.rtk.enabled`). Threaded to both sets. */
 	rtkEnabled?: boolean;
-	/**
-	 * Set by `buildToolSet` from `BuildToolSetOptions.forSubagent`. A sub-agent works in its own
-	 * working directory, so tools that would otherwise write into the desk directory (bash/job
-	 * output spill) fall back to a neutral location for it.
-	 */
-	forSubagent?: boolean;
+	bashInterceptorEnabled?: boolean;
 	/** Internal sub-agent run id that owns this worker's checkout lease, so it does not block itself. */
 	leaseOwnerRunId?: string;
 	/**
-	 * Present only on the main path. Enables bash `async` and the `job` tool.
-	 * The sub-agent set never supplies it, so sub-agents get neither.
+	 * Present in persistent chat and task sessions. Enables bash `async` and the `job` tool.
 	 */
 	jobManager?: DeskJobManager;
 	runManager?: SubAgentRunManager;
@@ -102,12 +97,18 @@ export interface ToolBuildContext {
 	taskControl?: TaskControl;
 }
 
+interface ToolRegistrationContext extends ToolBuildContext {
+	/** One per build, shared only by this session's file tools. */
+	observations: FileObservations;
+	forSubagent?: boolean;
+}
+
 export interface ToolRegistration {
 	/** Also the tool's `details.kind`: the name is the authoritative discriminator. */
 	name: ToolDetailsKind;
 	/** Config gate; when omitted the tool is always enabled. */
 	enabledBy?: (ctx: ToolBuildContext) => boolean;
-	create: (ctx: ToolBuildContext) => AgentTool<any>;
+	create: (ctx: ToolRegistrationContext) => AgentTool<any>;
 }
 
 function req<T>(value: T | undefined, name: string): T {
@@ -173,7 +174,8 @@ function webEnabled(ctx: ToolBuildContext): boolean {
 export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "read",
-		create: (ctx) => createReadTool(ctx.executor, ctx.fileStore, fileToolOptions(ctx)),
+		create: (ctx) =>
+			createReadTool(ctx.executor, ctx.fileStore, { ...fileToolOptions(ctx), observations: ctx.observations }),
 	},
 	{
 		name: "bash",
@@ -181,7 +183,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			createBashTool(ctx.executor, {
 				...fileToolOptions(ctx),
 				rtkEnabled: ctx.rtkEnabled === true,
-				interceptorEnabled: ctx.toolsConfig?.tools.bashInterceptor.enabled === true,
+				interceptorEnabled: ctx.bashInterceptorEnabled ?? ctx.toolsConfig?.tools.bashInterceptor.enabled === true,
 				// Sub-agents get no channel dir (their guard context has none); their spill stays in tmpdir.
 				...(ctx.forSubagent ? {} : { deskDir: ctx.deskDir }),
 				...(ctx.taskSession ? { boundTaskId: ctx.taskSession.taskId } : {}),
@@ -195,6 +197,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "edit",
 		create: (ctx) =>
 			createEditTool(ctx.fileStore, {
+				observations: ctx.observations,
 				...fileToolOptions(ctx),
 				deskDir: ctx.deskDir,
 				leaseOwnerRunId: ctx.leaseOwnerRunId,
@@ -212,6 +215,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "write",
 		create: (ctx) =>
 			createWriteTool(ctx.fileStore, {
+				observations: ctx.observations,
 				...fileToolOptions(ctx),
 				deskDir: ctx.deskDir,
 				leaseOwnerRunId: ctx.leaseOwnerRunId,
@@ -299,7 +303,13 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "task_list",
 		enabledBy: chatTasksEnabled,
-		create: (ctx) => createTaskListTool(taskToolOptions(ctx)),
+		create: (ctx) =>
+			createTaskListTool({
+				desk: req(ctx.desk, "desk"),
+				deskDir: ctx.deskDir,
+				channelId: ctx.channelId,
+				control: ctx.taskControl,
+			}),
 	},
 	{
 		name: "task_create",
@@ -348,8 +358,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "job",
-		// Present only when a job manager was supplied (always on the main path,
-		// never for sub-agents).
 		enabledBy: (ctx) => ctx.jobManager !== undefined,
 		create: (ctx) => createJobTool({ jobManager: req(ctx.jobManager, "jobManager"), channelId: ctx.channelId }),
 	},
@@ -377,6 +385,7 @@ export const TOOL_NAMES: ReadonlySet<string> = new Set<string>([
 export interface BuildToolSetOptions {
 	/** When true, include only tools in the sub-agent whitelist. */
 	forSubagent?: boolean;
+	requestScoped?: boolean;
 }
 
 /**
@@ -387,18 +396,20 @@ export interface BuildToolSetOptions {
  * normal result the model can act on. Doing it at this single seam means a new tool conforms
  * without its author having to remember, and `kind` can never disagree with the name.
  */
-export function buildToolSet(ctx: ToolBuildContext, options: BuildToolSetOptions = {}): AgentTool<any>[] {
+export function buildToolSet(context: ToolBuildContext, options: BuildToolSetOptions = {}): AgentTool<any>[] {
+	const ctx = { ...context, forSubagent: options.forSubagent, observations: createFileObservations() };
 	const result: AgentTool<any>[] = [];
 	for (const registration of TOOL_REGISTRY) {
 		if (options.forSubagent && !SUBAGENT_TOOL_NAMES.some((name) => name === registration.name)) {
 			continue;
 		}
+		if (options.requestScoped && !REQUEST_SCOPED_TOOL_NAMES.some((name) => name === registration.name)) {
+			continue;
+		}
 		if (registration.enabledBy && !registration.enabledBy(ctx)) {
 			continue;
 		}
-		result.push(
-			withToolDetails(registration.create({ ...ctx, forSubagent: options.forSubagent }), registration.name),
-		);
+		result.push(withToolDetails(registration.create(ctx), registration.name));
 	}
 	return result;
 }

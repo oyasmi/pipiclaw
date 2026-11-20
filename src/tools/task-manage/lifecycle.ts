@@ -9,7 +9,13 @@ import { completedReceipt, formatRetainedWorktreeLines } from "../../tasks/recei
 import { closeTask as closeStoredTask, readStoredTask } from "../../tasks/store.js";
 import { RecoverableToolError } from "../contract/details.js";
 import { assertCompletable, requiredField, tasksDir } from "./shared.js";
-import type { TaskCloseRequest, TaskListRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
+import type {
+	TaskCloseRequest,
+	TaskListRequest,
+	TaskListToolOptions,
+	TaskManageResult,
+	TaskManageToolOptions,
+} from "./types.js";
 
 export async function requireTask(options: TaskManageToolOptions, id: string) {
 	const document = await readStoredTask(options.deskDir, id);
@@ -50,7 +56,7 @@ function describeInFlight(live: TaskLiveSnapshot | undefined, now: number): stri
 
 /** `task_list`: active tasks of the desk (plus archived tasks when requested), optionally filtered by keyword. */
 export async function listTasks(
-	options: TaskManageToolOptions,
+	options: TaskListToolOptions,
 	request: TaskListRequest = {},
 ): Promise<TaskManageResult> {
 	const dir = tasksDir(options);

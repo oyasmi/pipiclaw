@@ -4,7 +4,7 @@ import type { StoredTaskDocument } from "../../tasks/store.js";
 import { RecoverableToolError } from "../contract/details.js";
 import type { TaskManageToolOptions } from "./types.js";
 
-export function tasksDir(options: TaskManageToolOptions): string {
+export function tasksDir(options: Pick<TaskManageToolOptions, "deskDir">): string {
 	return join(options.deskDir, "tasks");
 }
 

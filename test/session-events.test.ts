@@ -306,7 +306,7 @@ describe("usage accounting", () => {
 	});
 
 	it("folds sub-agent usage into the turn tally without double counting, and no longer writes the ledger itself (spec 040 D7)", async () => {
-		const { ctx } = createOutput();
+		const { ctx, events } = createOutput();
 		const runState = createEmptyRunState();
 		const records: Array<Omit<UsageLedgerEntry, "ts">> = [];
 		const context = handlerContext(ctx, runState, { ledger: createLedger(records) });
@@ -330,19 +330,29 @@ describe("usage accounting", () => {
 			cost: { input: 0.2, output: 0.08, cacheRead: 0, cacheWrite: 0, total: 0.28 },
 		};
 		context.pendingTools.set("call-1", {
-			toolName: "subagent",
+			toolName: "subagent_inline",
 			args: { label: "researcher" },
 			startTime: Date.now(),
 		});
 		await handleSessionEvent(
 			{
+				type: "tool_execution_update",
+				toolCallId: "call-1",
+				toolName: "subagent_inline",
+				partialResult: { content: [{ type: "text", text: "checking" }] },
+			},
+			context,
+		);
+		expect(events).toContainEqual({ type: "tool.update", callId: "call-1", text: "checking" });
+		await handleSessionEvent(
+			{
 				type: "tool_execution_end",
 				toolCallId: "call-1",
-				toolName: "subagent",
+				toolName: "subagent_inline",
 				isError: false,
 				result: {
 					details: {
-						kind: "subagent",
+						kind: "subagent_inline",
 						agent: "researcher",
 						source: "inline",
 						model: "anthropic/claude-x",
@@ -364,5 +374,6 @@ describe("usage accounting", () => {
 		expect(runState.assistantUsage.cost.total).toBeCloseTo(0.155);
 		// totalUsage (console) is assistant + sub-agent.
 		expect(runState.totalUsage.cost.total).toBeCloseTo(0.435);
+		expect(runState.usageSources).toBe(2);
 	});
 });

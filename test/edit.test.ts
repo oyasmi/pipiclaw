@@ -104,6 +104,31 @@ describe("edit tool", () => {
 		expect(text).toContain("Replaced 2 occurrences in");
 	});
 
+	it("applies CRLF edits to the same snapshot and commits only when every interval is valid", async () => {
+		const original = "header\r\n  one\r\n  two\r\n  three\r\nend\r\n";
+		const path = tempFile("batched.txt", original);
+		const tool = makeTool();
+		const first = { oldText: "  one\n  two", newText: "changed\nand added\nmore" };
+		const overlap = { oldText: "  two\n  three", newText: "conflict" };
+		const second = { oldText: "end", newText: "new\nend" };
+
+		await expect(tool.execute("c", { path, edits: [first, overlap] })).rejects.toThrow(
+			/Edits #1 and #2 overlap around line 3/,
+		);
+		expect(readFileSync(path, "utf-8")).toBe(original);
+		await expect(tool.execute("c", { path, edits: [first, { ...second, oldText: "absent" }] })).rejects.toThrow(
+			/edit #2/,
+		);
+		expect(readFileSync(path, "utf-8")).toBe(original);
+		await expect(tool.execute("c", { path, edits: [first], ...second })).rejects.toBeInstanceOf(RecoverableToolError);
+		await expect(tool.execute("c", { path })).rejects.toBeInstanceOf(RecoverableToolError);
+		expect(readFileSync(path, "utf-8")).toBe(original);
+
+		const result = await tool.execute("c", { path, edits: [second, first] });
+		expect(readFileSync(path, "utf-8")).toBe("header\r\nchanged\r\nand added\r\nmore\r\n  three\r\nnew\r\nend\r\n");
+		expect(result.details).toMatchObject({ diff: expect.stringContaining("+6 new") });
+	});
+
 	it("fails when the file does not exist", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-edit-test-"));
 		dirs.push(dir);
@@ -122,20 +147,20 @@ describe("edit tool", () => {
 		const tool = makeTool();
 
 		const missingAnchor = tool.execute("call", {
-			path: tempFile("a.txt", "alpha\nbeta\n"),
-			oldText: "omega",
+			path: tempFile("a.txt", "alpha\n  omega\n"),
+			oldText: "    omega",
 			newText: "delta",
 		});
 		await expect(missingAnchor).rejects.toBeInstanceOf(RecoverableToolError);
-		await expect(missingAnchor).rejects.toThrow("Could not find the exact text");
+		await expect(missingAnchor).rejects.toThrow(/Near-matches.*lines 2 .*read that range/);
 
 		await expect(
 			tool.execute("call", {
-				path: tempFile("b.txt", "beta\nbeta\n"),
+				path: tempFile("b.txt", "a\nbeta\nc\nd\nbeta\n"),
 				oldText: "beta",
 				newText: "delta",
 			}),
-		).rejects.toThrow("Found 2 occurrences");
+		).rejects.toThrow(/Found 2 occurrences.*lines 2, 5/);
 
 		await expect(
 			tool.execute("call", {
@@ -222,32 +247,43 @@ describe("edit tool", () => {
 	});
 
 	describe("streaming path (files over the inline threshold)", () => {
-		it("edits a >8MB file correctly, preserving the tail and file size delta", async () => {
+		it("stream-edits a >8MB CRLF file and preserves its tail and line endings", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "pipiclaw-edit-test-"));
 			dirs.push(dir);
 			const path = join(dir, "big.txt");
-			const marker = "UNIQUE_MARKER_AT_START";
+			const marker = "UNIQUE_MARKER_AT_START\r\nsecond line";
+			const replacement = "REPLACED_MARKER_AT_START\r\nthird line";
 			const tail = "TAIL_MARKER_PRESENT";
 			const filler = "x".repeat(1024 * 1024); // 1MB per chunk
-			const chunks = [marker, "\n"];
+			const chunks = [marker, "\r\n"];
 			for (let i = 0; i < 9; i++) chunks.push(filler);
-			chunks.push("\n", tail, "\n");
+			chunks.push("\r\n", tail, "\r\n");
 			writeFileSync(path, chunks.join(""));
 			const before = statSync(path).size;
 			expect(before).toBeGreaterThan(8 * 1024 * 1024);
 
 			const tool = makeTool();
+			await expect(
+				tool.execute("batch", {
+					path,
+					edits: [
+						{ oldText: "second line", newText: "x" },
+						{ oldText: tail, newText: "y" },
+					],
+				}),
+			).rejects.toThrow(/separate single-edit calls/);
+			expect(statSync(path).size).toBe(before);
 			const result = await tool.execute("call", {
 				path,
-				oldText: marker,
-				newText: "REPLACED_MARKER_AT_START",
+				oldText: marker.replaceAll("\r\n", "\n"),
+				newText: replacement.replaceAll("\r\n", "\n"),
 			});
 
 			const after = statSync(path).size;
-			expect(after - before).toBe("REPLACED_MARKER_AT_START".length - marker.length);
+			expect(after - before).toBe(replacement.length - marker.length);
 			const content = readFileSync(path, "utf-8");
-			expect(content.startsWith("REPLACED_MARKER_AT_START\n")).toBe(true);
-			expect(content).toContain(tail);
+			expect(content.startsWith(`${replacement}\r\n`)).toBe(true);
+			expect(content.endsWith(`\r\n${tail}\r\n`)).toBe(true);
 			const text = result.content[0].type === "text" ? result.content[0].text : "";
 			expect(text).toContain("Successfully replaced text in");
 		});

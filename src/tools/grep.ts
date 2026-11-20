@@ -1,4 +1,4 @@
-import { basename, isAbsolute, relative } from "node:path";
+import { isAbsolute, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { Executor } from "../executor.js";
@@ -6,20 +6,17 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import { partitionByReadGuard, readGuardAllows } from "../security/path-guard-filter.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import { shellEscape } from "../shared/os.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { errorMessage } from "../shared/text-utils.js";
+import { compileGlobPattern, type GlobMatcher } from "./glob-match.js";
+import { buildSearchCommand, isRgAvailable } from "./grep-command.js";
 import { IGNORED_DIR_SEGMENTS } from "./ignore-dirs.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 /**
- * Structured content search over the filesystem. The execution layer is deliberately thin — one
- * `grep -rnH -B1 -A3` invocation through the shared Executor, with no native dependency. The value
- * lives in the JS-side output shaping: per-file grouping, per-file and per-page caps, and a final
- * byte bound, so a broad search can never flood the model's context the way raw `bash grep -rn` would.
+ * Structured filesystem search via ripgrep or grep, with per-file grouping, pagination and output limits.
  */
 
-const CONTEXT_BEFORE = 1;
-const CONTEXT_AFTER = 3;
 const LINE_MAX_CHARS = 512;
 /** Match cap per file: tight for multi-file scopes (anti-monopoly), generous for a single file. */
 const MULTI_FILE_PER_FILE_MATCHES = 20;
@@ -38,9 +35,9 @@ const MAX_RAW_RESULT_BYTES = 768 * 1024;
 
 const grepSchema = Type.Object({
 	pattern: Type.String({
-		description: "Text to search for. An extended regular expression (ERE) unless `literal` is set.",
+		description: "Regex or literal search pattern.",
 	}),
-	path: Type.Optional(Type.String({ description: "File or directory to search. Defaults to the workspace root." })),
+	path: Type.Optional(Type.String({ description: "File or directory; defaults to cwd." })),
 	glob: Type.Optional(
 		Type.String({
 			description:
@@ -53,7 +50,7 @@ const grepSchema = Type.Object({
 	mode: Type.Optional(
 		Type.Union([Type.Literal("content"), Type.Literal("files"), Type.Literal("count")], {
 			description:
-				'"content" (default) = matching lines; "files" = matching paths only; "count" = per-file counts. files/count cost far fewer tokens when you only need to locate.',
+				'"content" (default) includes context. "files" lists paths; "count" counts matching lines per file.',
 		}),
 	),
 	caseSensitive: Type.Optional(Type.Boolean({ description: "Case-sensitive match. Defaults to true." })),
@@ -74,58 +71,6 @@ interface MatchEntry {
 	isMatch: boolean;
 }
 
-/**
- * Convert a basename glob into an anchored regex. Supports `*`, `?`, character classes `[...]`, and
- * brace alternation `{a,b}` so the JS-side backstop filter is never *stricter* than the `--include`
- * glob pushed to `grep` — a mismatch there produced silent "no results" (fix plan §3.5).
- */
-function globToRegExp(glob: string): RegExp {
-	let out = "";
-	for (let i = 0; i < glob.length; i++) {
-		const ch = glob[i];
-		if (ch === "*") {
-			out += ".*";
-		} else if (ch === "?") {
-			out += ".";
-		} else if (ch === "[") {
-			// Copy the class verbatim to the closing `]` (leading `!` -> `^` for negation).
-			let j = i + 1;
-			let cls = "";
-			if (glob[j] === "!" || glob[j] === "^") {
-				cls += "^";
-				j++;
-			}
-			while (j < glob.length && glob[j] !== "]") {
-				cls += glob[j];
-				j++;
-			}
-			if (j < glob.length) {
-				out += `[${cls}]`;
-				i = j;
-			} else {
-				out += "\\[";
-			}
-		} else if (ch === "{") {
-			const end = glob.indexOf("}", i);
-			if (end > i) {
-				const alts = glob
-					.slice(i + 1, end)
-					.split(",")
-					.map((alt) => alt.replace(/[.+^${}()|[\]\\]/g, "\\$&"));
-				out += `(?:${alts.join("|")})`;
-				i = end;
-			} else {
-				out += "\\{";
-			}
-		} else if (/[.+^$()|\\]/.test(ch)) {
-			out += `\\${ch}`;
-		} else {
-			out += ch;
-		}
-	}
-	return new RegExp(`^${out}$`);
-}
-
 function truncateLine(text: string): string {
 	return text.length > LINE_MAX_CHARS ? `${text.slice(0, LINE_MAX_CHARS)}…` : text;
 }
@@ -140,67 +85,42 @@ function isIgnoredPath(filePath: string, searchTarget: string): boolean {
 }
 
 /**
- * Parse `grep -rnH -B -A` output into ordered per-file entries. Match lines are `path:N:text`;
- * context lines are `path-N-text`. Context is attributed by anchoring on the current match file's
- * exact path string, so a hyphen or colon inside a filename can never misattribute a line. Before
- * context (which precedes a file's first match) is buffered until that match names the file.
+ * Both engines emit NUL-terminated filenames. Only the payload after NUL contains line syntax;
+ * guessing the boundary from ':' or '-' can attribute a denied file's content to another path.
+ * Complete records survive a capture cut; a partial filename or payload is discarded.
  */
-function parseGrepOutput(stdout: string): Map<string, MatchEntry[]> {
-	const files = new Map<string, MatchEntry[]>();
-	let currentFile: string | undefined;
-	const pendingContext: string[] = [];
-
-	const ensure = (file: string): MatchEntry[] => {
-		let entries = files.get(file);
-		if (!entries) {
-			entries = [];
-			files.set(file, entries);
-		}
-		return entries;
-	};
-
-	const attributeContext = (raw: string, file: string): boolean => {
-		const prefix = `${file}-`;
-		if (!raw.startsWith(prefix)) {
-			return false;
-		}
-		const rest = raw.slice(prefix.length);
-		const sep = rest.indexOf("-");
-		if (sep < 0) {
-			return false;
-		}
-		const lineNum = Number.parseInt(rest.slice(0, sep), 10);
-		if (!Number.isFinite(lineNum)) {
-			return false;
-		}
-		ensure(file).push({ line: lineNum, text: rest.slice(sep + 1), isMatch: false });
-		return true;
-	};
-
-	for (const raw of stdout.split("\n")) {
-		if (raw === "" || raw === "--") {
-			continue;
-		}
-		const matchDelim = raw.match(/^(.+?):(\d+):/);
-		if (matchDelim) {
-			const file = matchDelim[1];
-			const line = Number.parseInt(matchDelim[2], 10);
-			const text = raw.slice(matchDelim[0].length);
-			currentFile = file;
-			// Retro-attribute any before-context buffered ahead of this file's first match.
-			for (const buffered of pendingContext.splice(0)) {
-				attributeContext(buffered, file);
-			}
-			ensure(file).push({ line, text, isMatch: true });
-			continue;
-		}
-		// Context line: attribute to the current file, else buffer for the next match.
-		if (!currentFile || !attributeContext(raw, currentFile)) {
-			pendingContext.push(raw);
-		}
+function* searchRecords(stdout: string, truncated: boolean): Generator<[file: string, payload: string]> {
+	let cursor = 0;
+	while (cursor < stdout.length) {
+		if (stdout.startsWith("--\n", cursor)) cursor += 3;
+		const delimiter = stdout.indexOf("\0", cursor);
+		if (delimiter < 0) break;
+		const newline = stdout.indexOf("\n", delimiter + 1);
+		if (newline < 0 && truncated) break;
+		const end = newline < 0 ? stdout.length : newline;
+		yield [stdout.slice(cursor, delimiter), stdout.slice(delimiter + 1, end)];
+		cursor = end + 1;
 	}
+}
 
+function parseGrepOutput(stdout: string, truncated: boolean): Map<string, MatchEntry[]> {
+	const files = new Map<string, MatchEntry[]>();
+	for (const [file, payload] of searchRecords(stdout, truncated)) {
+		const prefix = /^(\d+)([:-])/.exec(payload);
+		if (!prefix) continue;
+		const entry = { line: Number(prefix[1]), text: payload.slice(prefix[0].length), isMatch: prefix[2] === ":" };
+		const entries = files.get(file);
+		if (entries) entries.push(entry);
+		else files.set(file, [entry]);
+	}
 	return files;
+}
+
+function boundedList(body: string): string {
+	const result = truncateHead(body);
+	return result.truncated
+		? `${result.content}\n\n[Output truncated; narrow the pattern or path to see the rest.]`
+		: result.content;
 }
 
 function renderFileGroup(
@@ -236,10 +156,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 		name: "grep",
 		label: "grep",
 		description:
-			"Search file contents across a file or directory tree — an ERE regex, or a literal string with `literal:true`. " +
-			"Output is grouped by file, capped per file, paginated, and token-bounded — prefer this over `bash grep -rn`, " +
-			'which floods context. `mode:"files"` returns just matching paths and `mode:"count"` per-file counts (both ' +
-			"much cheaper when you only need to locate). Match lines are marked with `*`, context lines with a space.",
+			"Search file contents with a regex or literal pattern. Content mode marks matches with * and shows nearby context. Use files/count to locate matches cheaply.",
 		parameters: grepSchema,
 		execute: async (
 			_toolCallId: string,
@@ -277,51 +194,27 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				channelId: options.channelId,
 			});
 
-			// `-rnH` for content; `-rlH` (paths only) for `files`; `-rcH` (per-file counts) for `count`.
-			const flags =
-				effectiveMode === "files"
-					? ["-rlH"]
-					: effectiveMode === "count"
-						? ["-rcH"]
-						: ["-rnH", `-B${CONTEXT_BEFORE}`, `-A${CONTEXT_AFTER}`];
-			flags.push(literal ? "-F" : "-E");
-			if (caseSensitive === false) {
-				flags.push("-i");
-			}
-			// Push directory and glob filters down into `grep` itself (D5.1) so a huge `node_modules`
-			// is never scanned in the first place, rather than being scanned, capped, and then
-			// filtered away in JS after it already ate the whole result budget (F7). The JS-side
-			// `isIgnoredPath`/`globRegExp` filtering below stays as a backstop for a `grep` whose
-			// `--exclude-dir` semantics differ.
-			for (const segment of IGNORED_DIR_SEGMENTS) {
-				flags.push(`--exclude-dir=${segment}`);
-			}
-			// Push `readDeny` down into `grep` so a denied subtree is never opened (D5.1). `grep`'s
-			// `--exclude`/`--exclude-dir` match a *basename* glob, so a plain (non-glob) deny entry
-			// becomes a basename exclude — coarser than the path guard (it also skips a same-named
-			// dir elsewhere), but only ever *more* restrictive, and the post-parse read-guard filter
-			// below is the actual guarantee that no denied content is returned.
-			const denyBasenames = new Set<string>();
-			for (const entry of securityConfig.pathGuard.readDeny) {
-				if (!/[*?[\]{}]/.test(entry)) {
-					const base = basename(entry.replace(/\/+$/, ""));
-					if (base && base !== "." && base !== "..") denyBasenames.add(base);
+			let basenameFilter: GlobMatcher | undefined;
+			if (glob) {
+				try {
+					basenameFilter = compileGlobPattern(glob, { characterClasses: true });
+				} catch (error) {
+					throw new RecoverableToolError(
+						`Invalid filename glob (${errorMessage(error)}). Simplify the glob or omit it.`,
+					);
 				}
 			}
-			for (const base of denyBasenames) {
-				flags.push(`--exclude-dir=${shellEscape(base)}`, `--exclude=${shellEscape(base)}`);
-			}
-			if (glob) {
-				// Model-controlled, so it must be shell-escaped like the pattern and path below -- the
-				// executor runs the command via `sh -c`, and an unescaped glob such as `*.ts; rm -rf x`
-				// would otherwise run as an extra command instead of matching nothing.
-				flags.push(`--include=${shellEscape(glob)}`);
-			}
-			// `--` terminates flags so a pattern beginning with `-` is not read as one. Bounded via
-			// `maxCaptureBytes` (D5.2) rather than a `| head -n` pipe: piping through `head` would
-			// have `sh -c` (no pipefail) report `head`'s exit status instead of grep's, silently
-			// masking a real grep error (bad regex, missing path) behind `head`'s always-0 exit.
-			const command = `grep ${flags.join(" ")} -- ${shellEscape(pattern)} ${shellEscape(target)}`;
+			const useRg = await isRgAvailable(executor);
+			signal?.throwIfAborted();
+			const command = buildSearchCommand(useRg, {
+				mode: effectiveMode,
+				pattern,
+				target,
+				glob,
+				literal,
+				caseSensitive,
+				readDeny: securityConfig.pathGuard.readDeny,
+			});
 			const result = await executor.exec(command, {
 				timeout: SEARCH_TIMEOUT_SECONDS,
 				signal,
@@ -333,25 +226,19 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				const stderr = result.stderr.trim();
 				throw new RecoverableToolError(
 					`grep failed: ${stderr || `exit code ${result.code}`}. ${
-						literal
-							? "Check that the path exists."
-							: "Check the regex (ERE syntax) and that the path exists, or pass literal:true."
+						literal ? "Check that the path exists." : "Check the regex syntax and path, or pass literal:true."
 					}`,
 				);
 			}
 
 			const rawTruncated = result.stdoutTruncated === true;
-			// A truncated capture may end mid-line; drop that dangling partial line rather than feed
-			// it to the parser, which expects each line to be a complete match or context line.
-			const boundedStdout = rawTruncated ? result.stdout.slice(0, result.stdout.lastIndexOf("\n")) : result.stdout;
 
-			const globRegExp = glob ? globToRegExp(glob) : undefined;
 			const keepFile = (file: string): boolean => {
 				const normalized = file.replace(/^\.\//, "");
 				if (isIgnoredPath(normalized, target)) return false;
-				if (globRegExp) {
+				if (basenameFilter) {
 					const base = normalized.split("/").pop() ?? normalized;
-					if (!globRegExp.test(base)) return false;
+					if (!basenameFilter.test(base)) return false;
 				}
 				return readGuardAllows(normalized, securityConfig, securityContext);
 			};
@@ -361,14 +248,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 
 			// `mode: "files"` — just the paths that matched, one per line.
 			if (effectiveMode === "files") {
-				const paths = [
-					...new Set(
-						boundedStdout
-							.split("\n")
-							.map((l) => l.trim())
-							.filter(Boolean),
-					),
-				]
+				const paths = [...new Set(result.stdout.split("\0").slice(0, -1).filter(Boolean))]
 					.filter(keepFile)
 					.sort((a, b) => a.localeCompare(b));
 				if (paths.length === 0) {
@@ -378,20 +258,24 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 					};
 				}
 				return {
-					content: [{ type: "text", text: truncateHead(paths.join("\n")).content + truncationFooter }],
+					content: [{ type: "text", text: boundedList(paths.join("\n")) + truncationFooter }],
 					details: { fileCount: paths.length, mode: "files" },
 				};
 			}
 
-			// `mode: "count"` — `path:N` per file that matched.
+			// Both engines count matching lines. The fallback derives counts from numbered records.
 			if (effectiveMode === "count") {
-				const rows: Array<[string, number]> = [];
-				for (const line of boundedStdout.split("\n")) {
-					const m = line.match(/^(.*):(\d+)$/);
-					if (!m) continue;
-					const count = Number.parseInt(m[2], 10);
-					if (count > 0 && keepFile(m[1])) rows.push([m[1].replace(/^\.\//, ""), count]);
+				const counts = new Map<string, number>();
+				for (const [file, payload] of searchRecords(result.stdout, rawTruncated)) {
+					if (useRg) {
+						if (/^\d+$/.test(payload)) counts.set(file, Number(payload));
+					} else if (/^\d+:/.test(payload)) {
+						counts.set(file, (counts.get(file) ?? 0) + 1);
+					}
 				}
+				const rows = [...counts]
+					.filter(([file, count]) => count > 0 && keepFile(file))
+					.map(([file, count]): [string, number] => [file.replace(/^\.\//, ""), count]);
 				rows.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 				if (rows.length === 0) {
 					return {
@@ -402,23 +286,24 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				const total = rows.reduce((sum, [, n]) => sum + n, 0);
 				const body = rows.map(([f, n]) => `${n}\t${f}`).join("\n");
 				return {
-					content: [{ type: "text", text: truncateHead(body).content + truncationFooter }],
+					content: [{ type: "text", text: boundedList(body) + truncationFooter }],
 					details: { matchCount: total, fileCount: rows.length, mode: "count" },
 				};
 			}
 
-			const parsed = parseGrepOutput(boundedStdout);
+			const parsed = parseGrepOutput(result.stdout, rawTruncated);
 
 			// Filter ignored dirs and (for directory scopes) the optional glob, on the basename.
 			const files: Array<[string, MatchEntry[]]> = [];
 			for (const [file, entries] of parsed) {
+				if (!entries.some((entry) => entry.isMatch)) continue;
 				const normalized = file.replace(/^\.\//, "");
 				if (isIgnoredPath(normalized, target)) {
 					continue;
 				}
-				if (globRegExp) {
+				if (basenameFilter) {
 					const base = normalized.split("/").pop() ?? normalized;
-					if (!globRegExp.test(base)) {
+					if (!basenameFilter.test(base)) {
 						continue;
 					}
 				}
