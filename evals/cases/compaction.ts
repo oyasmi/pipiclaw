@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import { compactionObservations, evidenceGrade } from "../harness/evidence.js";
 import { fixtureToken } from "../harness/fixture-seed.js";
 import { tracePredicate } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
@@ -74,20 +75,25 @@ export const compactionCases: EvalCase[] = [
 		},
 		script: [{ kind: "compact" }, { kind: "user", text: "继续完成刚才的交接文件任务，写完后告诉我。" }],
 		graders: [
-			tracePredicate(
-				"compaction-occurred",
-				(ctx) => {
-					const path = join(ctx.deskDir, "conversations/dm-1/context.jsonl");
-					return (
-						existsSync(path) &&
-						readFileSync(path, "utf8")
-							.split("\n")
-							.filter(Boolean)
-							.some((line) => JSON.parse(line).type === "compaction")
+			{
+				kind: "code",
+				graderId: "compaction-occurred",
+				graderVersion: "3",
+				parameters: { evidence: "compaction-projection" },
+				grade: (ctx) => {
+					const facts = compactionObservations(ctx);
+					const verdict = facts.length
+						? facts.some((event) => event.fields?.compactionType === "compaction")
+						: "missing";
+					return evidenceGrade(
+						ctx,
+						"compaction-occurred",
+						"3",
+						verdict,
+						"a persisted compaction projection must record type, generation, and position; the raw session log stays excluded",
 					);
 				},
-				"the real session must contain a persisted compaction, not merely a successful continuation",
-			),
+			},
 			tracePredicate(
 				"checkpoint-task-retained",
 				(ctx) => {
@@ -164,23 +170,27 @@ compactionCases.push({
 		},
 	],
 	graders: [
-		tracePredicate(
-			"compaction-occurred",
-			(ctx) => {
-				const path = join(ctx.deskDir, "conversations/dm-1/context.jsonl");
-				return (
-					existsSync(path) &&
-					readFileSync(path, "utf8")
-						.split("\n")
-						.filter(Boolean)
-						.some((line) => {
-							const entry = JSON.parse(line);
-							return entry.type === "compaction" && entry.details?.background === true;
-						})
+		{
+			kind: "code",
+			graderId: "compaction-occurred",
+			graderVersion: "3",
+			parameters: { evidence: "background-compaction-projection" },
+			grade: (ctx) => {
+				const facts = compactionObservations(ctx);
+				const verdict = facts.length
+					? facts.some(
+							(event) => event.fields?.compactionType === "compaction" && event.fields.background === "true",
+						)
+					: "missing";
+				return evidenceGrade(
+					ctx,
+					"compaction-occurred",
+					"3",
+					verdict,
+					"a background compaction projection must be present; a manual checkpoint or the raw session log does not substitute",
 				);
 			},
-			"a background candidate must actually be persisted before the continuation",
-		),
+		},
 		manualCheckpoint.graders[1]!,
 		tracePredicate(
 			"artifact-written-after-checkpoint",

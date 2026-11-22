@@ -217,6 +217,8 @@ export interface TrialRecord {
 		segments: number;
 		duplicateExternalEffects: number;
 		userEscalations: number;
+		/** Milliseconds from the user step to the first accepted text delivery, when that observation exists. */
+		firstDeliveryMs?: number;
 	};
 	startedAt: string;
 }

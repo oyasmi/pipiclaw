@@ -13,7 +13,7 @@ import type { AgentRunner, RunnerFactoryPaths } from "./types.js";
  */
 export function createRunner(conversation: DeskConversation, paths: RunnerFactoryPaths): AgentRunner {
 	return new ChannelRunner(conversation, paths, {
-		executor: createExecutor(),
+		executor: paths.executor ?? createExecutor(),
 		fileStore: paths.fileStore ?? createFileStore(),
 		loadSecurityConfig: () => loadSecurityConfigWithDiagnostics(paths.appHomeDir),
 	});

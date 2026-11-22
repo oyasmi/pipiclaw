@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MemoryType } from "../../src/memory/store.js";
-import { localDayKey } from "../../src/shared/local-time.js";
+import { evidenceGrade, maintenanceDayKey } from "../harness/evidence.js";
 import { codeGrader, recallQuiz, tracePredicate } from "../harness/graders.js";
 import type { CodeGrader, EvalCase, TrialSetup } from "../harness/schema.js";
 import { seedChannelMemory, warmupTurns } from "./helpers.js";
@@ -313,25 +313,41 @@ export const memoryRecallQualityCases: EvalCase[] = [
 			{ kind: "runMemoryMaintenance" },
 		],
 		graders: [
-			codeGrader("reflect-wrote-journal", (ctx) => {
-				const ranReflect = ctx.trace.some(
-					(event) => event.kind === "step" && event.fields?.kind === "runMemoryMaintenance",
-				);
-				const journalPath = join(ctx.deskDir, "journal", `${localDayKey()}.md`);
-				const ok = ranReflect && existsSync(journalPath) && /\S/.test(readFileSync(journalPath, "utf8"));
-				return {
-					schemaVersion: 1,
-					graderId: "reflect-wrote-journal",
-					graderVersion: "1",
-					graderKind: "code",
-					status: ok ? "pass" : "fail",
-					severity: "quality",
-					evidence: [{ kind: "file", ref: `journal/${localDayKey()}.md` }],
-					rationale: ok
-						? "the reflect pass executed and recorded today's working journal"
-						: "expected runMemoryMaintenance step and non-empty today's journal",
-				};
-			}),
+			{
+				kind: "code",
+				graderId: "reflect-wrote-journal",
+				graderVersion: "3",
+				parameters: { evidence: "maintenance-day" },
+				grade: (ctx) => {
+					const ranReflect = ctx.trace.some(
+						(event) => event.kind === "step" && event.fields?.kind === "runMemoryMaintenance",
+					);
+					const day = maintenanceDayKey(ctx);
+					if (!day) {
+						const journalDir = join(ctx.deskDir, "journal");
+						const wroteJournal =
+							existsSync(journalDir) && readdirSync(journalDir).some((name) => name.endsWith(".md"));
+						return evidenceGrade(
+							ctx,
+							"reflect-wrote-journal",
+							"3",
+							wroteJournal || ranReflect ? "missing" : false,
+							"the reflect step did not freeze a journal day key",
+						);
+					}
+					const journalPath = join(ctx.deskDir, "journal", `${day}.md`);
+					const ok = ranReflect && existsSync(journalPath) && /\S/.test(readFileSync(journalPath, "utf8"));
+					return evidenceGrade(
+						ctx,
+						"reflect-wrote-journal",
+						"3",
+						ok,
+						ok
+							? "the reflect pass executed and recorded the frozen day's working journal"
+							: "expected a runMemoryMaintenance step and a non-empty journal for the frozen day",
+					);
+				},
+			},
 			codeGrader("no-progress-promoted-to-memory", (ctx) => {
 				const memoryDir = join(ctx.deskDir, "memory");
 				const files = existsSync(memoryDir) ? readdirSync(memoryDir).filter((f) => f.endsWith(".md")) : [];
@@ -349,6 +365,133 @@ export const memoryRecallQualityCases: EvalCase[] = [
 							: `expected no durable memory entries, found ${files.length}: ${files.join(", ")}`,
 				};
 			}),
+		],
+	},
+	{
+		id: "M-abstain-01",
+		suite: "capability",
+		source: "spec 071 M-abstain-01",
+		description: "缺证据时说明不知道，冲突时不选边，证据存在时回答该事实，并且不写无关记忆。",
+		definitionFile,
+		budget: { maxWallMs: 180_000, maxTurns: 8 },
+		setup: async (ctx) => {
+			await seedChannelMemory(ctx, "审批人记录甲：审批人是陈浩。", {
+				name: "approver-a",
+				type: "reference",
+				source: "user",
+			});
+			await seedChannelMemory(ctx, "审批人记录乙：审批人是赵强。两份记录都未作废。", {
+				name: "approver-b",
+				type: "reference",
+				source: "user",
+			});
+			await seedChannelMemory(ctx, "灰度观察时长是 40 分钟，依据 WINDOW-40。", {
+				name: "window-40",
+				type: "reference",
+				source: "user",
+			});
+			await seedChannelMemory(ctx, "干扰代号 NOISE-KEY，与工号和观察时长无关。", {
+				name: "noise-key",
+				type: "reference",
+				source: "user",
+			});
+		},
+		script: [
+			{ kind: "user", text: "我的工号是多少？只根据已保存的事实回答。" },
+			{ kind: "user", text: "审批人到底是谁？两份记录如果对不上，不要替我选。" },
+			{ kind: "user", text: "灰度观察时长是多少分钟？请依据已保存的事实。" },
+		],
+		graders: [
+			{
+				kind: "code",
+				graderId: "missing-evidence-abstains",
+				graderVersion: "1",
+				severity: "quality",
+				parameters: {},
+				grade: (ctx) => {
+					const text = ctx.deliveries
+						.filter((delivery) => delivery.stepIndex === 0)
+						.map((delivery) => delivery.text ?? "")
+						.join("\n");
+					const spoke = ctx.deliveries.some((delivery) => Boolean(delivery.text?.trim()));
+					const abstains = /不知道|没有|无法确认|未记录|没有保存/.test(text);
+					const invented = /\b\d{4,}\b/.test(text);
+					return evidenceGrade(
+						ctx,
+						"missing-evidence-abstains",
+						"1",
+						text ? abstains && !invented : spoke ? false : "missing",
+						abstains && !invented
+							? "the missing employee id was left unknown"
+							: "missing evidence must be stated as unknown without inventing an id",
+					);
+				},
+			},
+			{
+				kind: "code",
+				graderId: "conflict-not-resolved",
+				graderVersion: "1",
+				severity: "quality",
+				parameters: {},
+				grade: (ctx) => {
+					const text = ctx.deliveries
+						.filter((delivery) => delivery.stepIndex === 1)
+						.map((delivery) => delivery.text ?? "")
+						.join("\n");
+					const spoke = ctx.deliveries.some((delivery) => Boolean(delivery.text?.trim()));
+					const both = /陈浩/.test(text) && /赵强/.test(text);
+					const unresolved = /冲突|对不上|无法确定|哪一份|不要选/.test(text);
+					return evidenceGrade(
+						ctx,
+						"conflict-not-resolved",
+						"1",
+						text ? both || unresolved : spoke ? false : "missing",
+						both || unresolved
+							? "the approver conflict stayed unresolved"
+							: "a contradiction must not be reduced to one name",
+					);
+				},
+			},
+			{
+				kind: "code",
+				graderId: "present-evidence-answered",
+				graderVersion: "1",
+				severity: "quality",
+				parameters: {},
+				grade: (ctx) => {
+					const text = ctx.deliveries
+						.filter((delivery) => delivery.stepIndex === 2)
+						.map((delivery) => delivery.text ?? "")
+						.join("\n");
+					const spoke = ctx.deliveries.some((delivery) => Boolean(delivery.text?.trim()));
+					const answered = /40/.test(text) && !/不知道|无法确认|没有保存/.test(text);
+					return evidenceGrade(
+						ctx,
+						"present-evidence-answered",
+						"1",
+						text ? answered : spoke ? false : "missing",
+						answered
+							? "the stored 40-minute window was answered"
+							: "available evidence must be answered with the stored duration",
+					);
+				},
+			},
+			tracePredicate(
+				"no-distractor-citation",
+				(ctx) => !ctx.deliveries.some((delivery) => /NOISE-KEY/.test(delivery.text ?? "")),
+				"the unrelated noise key must not be cited as evidence",
+			),
+			tracePredicate(
+				"no-unsolicited-write",
+				(ctx) =>
+					!ctx.trace.some(
+						(event) =>
+							event.kind === "tool-result" &&
+							(event.tool === "memory_save" || event.fields?.tool === "memory_save") &&
+							event.ok !== false,
+					),
+				"answering or abstaining must not save a new memory",
+			),
 		],
 	},
 ];

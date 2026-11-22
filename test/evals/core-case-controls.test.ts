@@ -245,12 +245,17 @@ describe("offline contributor CLI", () => {
 		expect(plan).toContain("coverage: 12 cases / 12 families; 36 trials");
 		expect(plan).toContain("未调用模型");
 		expect(selectCases([]).cases).toHaveLength(6);
-		expect(allCases).toHaveLength(42);
+		expect(allCases).toHaveLength(43);
 		expect(selectCases(["--all"]).cases).toHaveLength(41);
+		expect(metadataForCase("M-quality-recall-03", "source", "description").lifecycle).toBe("retired");
 		expect(
 			allCases.every((item) => {
 				const meta = metadataForCase(item.id, item.source, item.description);
-				return meta.scope === "journey" && meta.tags.includes("natural") && meta.lifecycle !== "retired";
+				return (
+					meta.scope === "journey" &&
+					meta.tags.includes("natural") &&
+					(item.id === "M-quality-recall-03" || meta.lifecycle !== "retired")
+				);
 			}),
 		).toBe(true);
 		expect(
@@ -285,9 +290,14 @@ describe("offline contributor CLI", () => {
 				{ cwd: root },
 			).status,
 		).toBe(0);
-		expect(() => selectCases(["--changed-since", "HEAD"], false, root)).toThrow(/No eval cases/);
+		const empty = selectCases(["--changed-since", "HEAD"], false, root);
+		expect(empty.cases).toHaveLength(0);
+		expect(empty.emptyReason).toBe("empty diff");
 		writeFileSync(join(root, "unmapped.txt"), "change");
-		expect(selectCases(["--changed-since", "HEAD"], false, root).cases).toHaveLength(12);
+		const unmapped = selectCases(["--changed-since", "HEAD"], false, root);
+		expect(unmapped.cases).toHaveLength(3);
+		expect(unmapped.unknownPaths).toEqual(["unmapped.txt"]);
+		expect(unmapped.uncovered.length).toBeGreaterThan(0);
 		expect(
 			selectCases(["--domain", "memory", "--changed-since", "HEAD"], false, root).cases.every(
 				(item) => metadataForCase(item.id, item.source, item.description).domain === "memory",
@@ -314,11 +324,14 @@ describe("offline contributor CLI", () => {
 		checkSingleChange("src/tools/event-manage.ts", ["E-schedule-01"]);
 		checkSingleChange("src/dingtalk/inbound-media.ts", ["I-inbound-context-01"]);
 		checkSingleChange("src/desk/commands.ts", ["U-desk-cwd-01"]);
-		checkSingleChange("src/agent/session/compaction.ts", ["M-compaction-01", "M-compaction-02"]);
+		checkSingleChange("src/agent/session/compaction.ts", ["M-compaction-01"]);
 		mkdirSync(join(root, "src/agent/prompt"), { recursive: true });
 		writeFileSync(join(root, "src/agent/prompt/system-prompt.ts"), "// cross-cutting\n");
+		const directed = selectCases(["--changed-since", "HEAD"], false, root);
+		expect(directed.cases).toHaveLength(3);
+		expect(directed.uncovered.length).toBe(coreRepresentativeIds.length - 3);
 		expect(
-			selectCases(["--changed-since", "HEAD"], false, root)
+			selectCases(["--profile", "core", "--changed-since", "HEAD"], false, root)
 				.cases.map((item) => item.id)
 				.sort(),
 		).toEqual([...coreRepresentativeIds].sort());

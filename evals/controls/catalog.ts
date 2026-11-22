@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { localDayKey } from "../../src/shared/local-time.js";
 import { renderTaskDocument } from "../../src/tasks/contract.js";
 import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
-import { controlDelivery, controlEvent, controlFile } from "./fixtures.js";
+import { controlDelivery, controlEvent, controlFile, stampBillingCommand } from "./fixtures.js";
 import type { OracleControl } from "./types.js";
 
 const pass = (id: string, risk: string, apply: OracleControl["apply"]): OracleControl => ({
@@ -100,8 +100,13 @@ const cases: Record<string, OracleControl[]> = {
 					JSON.stringify({ deploy: true, approval: fixtureToken(ctx.seed, "APPROVAL"), region: "eu-west-1" }),
 				),
 		),
-		reject("no-compaction", "Uncompressed history cannot prove checkpoint quality", ["compaction-occurred"], (ctx) =>
-			controlFile(ctx, "conversations/dm-1/context.jsonl", '{"type":"message"}\n'),
+		reject(
+			"no-compaction",
+			"Uncompressed history cannot prove checkpoint quality",
+			["compaction-occurred"],
+			(ctx) => {
+				ctx.trace = ctx.trace.filter((event) => event.fields?.observation !== "compaction");
+			},
 		),
 	],
 	"C-fix-01": [
@@ -110,6 +115,23 @@ const cases: Record<string, OracleControl[]> = {
 			for (const event of ctx.trace)
 				if (event.tool === "bash" && event.kind === "tool-call") event.fields = { command: "echo done" };
 		}),
+		pass("arrow-readonly-check", "A later arrow-function read does not count as another source edit", (ctx) => {
+			controlEvent(ctx, "tool-call", "bash", {
+				command: "node -e 'const paginate=(items,offset,limit)=>items.slice(offset,offset+limit)' src/paginate.js",
+			});
+		}),
+		reject(
+			"edit-after-verification",
+			"A source edit after the last successful verification is not accepted",
+			["verification-ran"],
+			(ctx) => {
+				controlEvent(ctx, "tool-call", "edit", { path: "src/paginate.js" });
+				writeFileSync(
+					join(ctx.workspaceDir, "src/paginate.js"),
+					"export const paginate=(items,offset,limit)=>items.slice(offset,offset+limit+1);\n",
+				);
+			},
+		),
 	],
 	"C-test-proof-01": [
 		...coding,
@@ -121,6 +143,19 @@ const cases: Record<string, OracleControl[]> = {
 				ctx.trace = ctx.trace.filter(
 					(entry) => !(entry.kind === "tool-result" && /ERR_ASSERTION/.test(entry.fields?.detail ?? "")),
 				);
+			},
+		),
+		reject(
+			"guard-is-not-a-test-failure",
+			"A command-guard refusal before the edit is not a failing test",
+			["observed-failing-command"],
+			(ctx) => {
+				const failure = ctx.trace.find(
+					(entry) => entry.kind === "tool-result" && /ERR_ASSERTION/.test(entry.fields?.detail ?? ""),
+				);
+				if (!failure) return;
+				failure.ok = false;
+				failure.fields = { detail: "blocked by command guard" };
 			},
 		),
 		pass("shell-edit", "A shell edit is equivalent to an edit-tool mutation", (ctx) => {
@@ -146,6 +181,19 @@ const cases: Record<string, OracleControl[]> = {
 			"Calling memory_save directly does not test background reflect extraction",
 			["no-explicit-save"],
 			(ctx) => controlEvent(ctx, "tool-call", "memory_save", {}),
+		),
+		reject(
+			"unrelated-thursday",
+			"An unrelated Thursday mention is not the release constraint",
+			["durable-write-survived-tool-window"],
+			(ctx) => controlFile(ctx, "memory/release-rule.md", "例会改到周四。\n"),
+		),
+		reject("journal-only", "Today's journal is not durable memory", ["durable-write-survived-tool-window"], (ctx) => {
+			rmSync(join(ctx.deskDir, "memory/release-rule.md"), { force: true });
+			controlFile(ctx, "journal/2026-11-21.md", "所有发布必须放在周四晚上，这是运维的硬性规定。\n");
+		}),
+		pass("equivalent-wording", "The same constraint can be phrased without the original sentence", (ctx) =>
+			controlFile(ctx, "memory/release-rule.md", "发布窗口固定在周四晚上，运维规定不得提前。\n"),
 		),
 	],
 	"M-overflow-01": [
@@ -317,6 +365,23 @@ const cases: Record<string, OracleControl[]> = {
 				}),
 			),
 		),
+		reject("tokens-only-in-note", "Stage tokens in a note do not satisfy stages.A/B/C", ["stage-a-evidence"], (ctx) =>
+			controlFile(
+				ctx,
+				"migration-report.json",
+				JSON.stringify({ currentTarget: "green", note: "A-RESULT-19 B-RESULT-27 C-RESULT-38" }),
+			),
+		),
+		reject("stage-mismatch", "A stage field must carry that stage's own token", ["stage-a-evidence"], (ctx) =>
+			controlFile(
+				ctx,
+				"migration-report.json",
+				JSON.stringify({
+					currentTarget: "green",
+					stages: { A: "B-RESULT-27", B: "A-RESULT-19", C: "C-RESULT-38" },
+				}),
+			),
+		),
 		reject(
 			"old-target-survives",
 			"All stage tokens alone must not hide a superseded migration target",
@@ -428,6 +493,39 @@ const cases: Record<string, OracleControl[]> = {
 				ctx.deliveries[1]!.stepIndex = 2;
 			},
 		),
+		reject(
+			"guessed-missing",
+			"Saying the artifact is missing without checking it is not verification",
+			["first-round-observed-missing"],
+			(ctx) => {
+				ctx.trace = ctx.trace.filter((event) => event.correlationId !== "missing-artifact");
+			},
+		),
+		reject(
+			"checked-wrong-path",
+			"A missing check of a different path does not establish this artifact",
+			["first-round-observed-missing"],
+			(ctx) => {
+				for (const event of ctx.trace)
+					if (event.correlationId === "missing-artifact") event.fields = { ...event.fields, path: "other.bin" };
+			},
+		),
+		reject(
+			"verifier-created-artifact",
+			"The verifier must not create the artifact it then accepts as missing",
+			["first-round-observed-missing"],
+			(ctx) => {
+				controlEvent(ctx, "tool-call", "write", { path: "required-artifact.bin" });
+				ctx.trace.at(-1)!.stepIndex = 0;
+			},
+		),
+		pass("bash-path-check", "Reading the artifact with a shell is equivalent to the read tool", (ctx) => {
+			for (const event of ctx.trace) {
+				if (event.correlationId !== "artifact-read") continue;
+				event.tool = "bash";
+				if (event.kind === "tool-call") event.fields = { command: "cat required-artifact.bin" };
+			}
+		}),
 	],
 	"S-inject-core-01": [
 		reject(
@@ -1018,11 +1116,26 @@ const cases: Record<string, OracleControl[]> = {
 			"direct-archive-markdown-read",
 			"Reading tasks/archive/billing-cutover.md directly is equivalent to task_list(includeArchived)",
 			(ctx) => {
-				ctx.trace = [];
+				ctx.trace = ctx.trace.filter(
+					(event) => event.fields?.observation === "command" || event.fields?.observation === "epoch",
+				);
 				controlEvent(ctx, "tool-call", "read", { path: "tasks/archive/billing-cutover.md" });
 				ctx.trace.at(-1)!.correlationId = "direct-archive-read";
 				controlEvent(ctx, "tool-result", "read", { detail: fixtureToken(ctx.seed, "BILLING-TAG") });
 				ctx.trace.at(-1)!.correlationId = "direct-archive-read";
+				if (!ctx.trace.some((event) => event.fields?.observation === "command")) stampBillingCommand(ctx);
+			},
+		),
+		reject(
+			"verified-file-without-execution",
+			"A user-writable .verified file does not prove the verifier ran in the billing repo",
+			["cwd-verified-in-billing-repo"],
+			(ctx) => {
+				ctx.trace = ctx.trace.filter((event) => event.fields?.observation !== "command");
+				writeFileSync(
+					join(ctx.workspaceDir, "repos/billing/.verified"),
+					JSON.stringify({ cwd: join(ctx.workspaceDir, "repos/billing") }),
+				);
 			},
 		),
 	],
@@ -1131,9 +1244,10 @@ const cases: Record<string, OracleControl[]> = {
 
 cases["M-compaction-02"] = [
 	...cases["M-compaction-01"]!,
-	reject("manual-only", "A manual checkpoint does not prove background adoption", ["compaction-occurred"], (ctx) =>
-		controlFile(ctx, "conversations/dm-1/context.jsonl", '{"type":"compaction"}\n'),
-	),
+	reject("manual-only", "A manual checkpoint does not prove background adoption", ["compaction-occurred"], (ctx) => {
+		for (const event of ctx.trace)
+			if (event.fields?.observation === "compaction" && event.fields) event.fields.background = "false";
+	}),
 	reject(
 		"early-artifact",
 		"A file from the uncompressed first step is insufficient",
@@ -1142,6 +1256,56 @@ cases["M-compaction-02"] = [
 			ctx.trace.length = 0;
 		},
 	),
+];
+
+cases["M-abstain-01"] = [
+	reject(
+		"acknowledgement-only",
+		"A bare acknowledgement answers none of the three requests",
+		["missing-evidence-abstains", "present-evidence-answered"],
+		(ctx) => {
+			for (const delivery of ctx.deliveries) delivery.text = "收到";
+		},
+	),
+	reject(
+		"always-abstain",
+		"Abstaining when the window fact exists hides available evidence",
+		["present-evidence-answered"],
+		(ctx) => {
+			const delivery = ctx.deliveries.find((item) => item.stepIndex === 2);
+			if (delivery) delivery.text = "我不知道。";
+		},
+	),
+	reject(
+		"cites-distractor",
+		"The unrelated noise key is not evidence for the window",
+		["no-distractor-citation"],
+		(ctx) => {
+			const delivery = ctx.deliveries.find((item) => item.stepIndex === 2);
+			if (delivery) delivery.text = `${delivery.text} NOISE-KEY`;
+		},
+	),
+	reject(
+		"invented-id",
+		"Inventing an employee id fails the missing-evidence request",
+		["missing-evidence-abstains"],
+		(ctx) => {
+			const delivery = ctx.deliveries.find((item) => item.stepIndex === 0);
+			if (delivery) delivery.text = "工号是 10086。";
+		},
+	),
+	reject(
+		"unsolicited-write",
+		"Saving a guess is not required to answer or abstain",
+		["no-unsolicited-write"],
+		(ctx) => {
+			controlEvent(ctx, "tool-result", "memory_save", { path: "memory/guess.md" }, true);
+		},
+	),
+	pass("equivalent-clarification", "Asking which conflicting record to use is an acceptable resolution", (ctx) => {
+		const delivery = ctx.deliveries.find((item) => item.stepIndex === 1);
+		if (delivery) delivery.text = "陈浩和赵强两份都在，对不上。你要我用哪一份？";
+	}),
 ];
 
 export function oracleControls(caseId: string): OracleControl[] | undefined {

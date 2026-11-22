@@ -2,8 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { cliScopeContract, tsPublicTestsPreserved, tsRefactorContract } from "../graders/coding.js";
+import { BILLING_VERIFY_SCRIPT, billingCommandBound } from "../graders/desk-cwd.js";
 import { callPath, observesFile, toolObservations } from "../graders/observations.js";
 import { writeTsRefactorFixture } from "../graders/ts-refactor-fixture.js";
+import { evidenceGrade } from "../harness/evidence.js";
 import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
 import {
 	deliveryMatches,
@@ -245,10 +247,7 @@ export const extendedFamilyCases: EvalCase[] = [
 				join(ctx.workspaceDir, "repos/billing/config.json"),
 				`${JSON.stringify({ service: "billing", port: 18000, releaseTag: "PENDING" }, null, 2)}\n`,
 			);
-			await writeFile(
-				join(ctx.workspaceDir, "repos/billing/verify.mjs"),
-				`import { readFileSync, writeFileSync } from "node:fs";\nimport { resolve } from "node:path";\nconst cfg = JSON.parse(readFileSync("config.json", "utf8"));\nwriteFileSync(".verified", JSON.stringify({ cwd: resolve("."), port: cfg.port, releaseTag: cfg.releaseTag }) + "\\n");\n`,
-			);
+			await writeFile(join(ctx.workspaceDir, "repos/billing/verify.mjs"), BILLING_VERIFY_SCRIPT);
 			await writeFile(
 				join(ctx.workspaceDir, "repos/shipping/config.json"),
 				`${JSON.stringify({ service: "shipping", port: 19000, releaseTag: "SHIP-LOCK-9" }, null, 2)}\n`,
@@ -278,11 +277,12 @@ export const extendedFamilyCases: EvalCase[] = [
 					const tag = fixtureToken(ctx.seed, "BILLING-TAG");
 					return toolObservations(ctx).some(({ call, result }) => {
 						if (!result.ok) return false;
-						if (call.tool === "task_list" && call.fields?.includeArchived === "true") return true;
 						const detail = result.fields?.detail ?? "";
+						if (call.tool === "task_list" && call.fields?.includeArchived === "true") return detail.includes(tag);
 						return (
 							["read", "bash", "grep"].includes(call.tool ?? "") &&
-							(detail.includes(tag) || /billing-cutover/.test(callPath(call) || (call.fields?.command ?? "")))
+							detail.includes(tag) &&
+							/billing-cutover/.test(callPath(call) || (call.fields?.command ?? ""))
 						);
 					});
 				},
@@ -310,28 +310,20 @@ export const extendedFamilyCases: EvalCase[] = [
 				},
 				"repos/billing/config.json must carry the archived billing port and releaseTag",
 			),
-			tracePredicate(
-				"cwd-verified-in-billing-repo",
-				(ctx) => {
-					const verifiedPath = join(ctx.workspaceDir, "repos/billing/.verified");
-					if (!existsSync(verifiedPath)) return false;
-					try {
-						const parsed = JSON.parse(readFileSync(verifiedPath, "utf8")) as {
-							cwd?: string;
-							port?: number;
-							releaseTag?: string;
-						};
-						return (
-							parsed.cwd === join(ctx.workspaceDir, "repos/billing") &&
-							parsed.port === fixtureInteger(ctx.seed, "billing-port", 18100, 18999) &&
-							parsed.releaseTag === fixtureToken(ctx.seed, "BILLING-TAG")
-						);
-					} catch {
-						return false;
-					}
-				},
-				"verify.mjs must execute with cwd === repos/billing and record matching cutover parameters",
-			),
+			{
+				kind: "code",
+				graderId: "cwd-verified-in-billing-repo",
+				graderVersion: "3",
+				parameters: { cwd: "workspace:repos/billing", command: "node verify.mjs" },
+				grade: (ctx) =>
+					evidenceGrade(
+						ctx,
+						"cwd-verified-in-billing-repo",
+						"3",
+						billingCommandBound(ctx),
+						"node verify.mjs must run in repos/billing, keep the original verifier, and hash the config that is finally accepted",
+					),
+			},
 			tracePredicate(
 				"delivery-reports-cutover-values",
 				(ctx) => {

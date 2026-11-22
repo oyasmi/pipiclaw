@@ -3,17 +3,18 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { familyCatalog, metadataForCase } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
+import { atomicJson } from "./artifacts.js";
 import { validateCases } from "./cases.js";
 import { runCycle } from "./cycle.js";
 import { renderDiagnostics } from "./diagnostics.js";
 import { compareRuns, type Experiment } from "./diff.js";
+import { applyRunBudget, buildExecutionPlan, planPath } from "./execution-plan.js";
 import { checkOracles, renderOracleChecks } from "./oracle-checks.js";
 import { promoteRun } from "./promote.js";
 import { regradeRun } from "./regrade.js";
 import { rerenderReport } from "./report.js";
 import { runMain } from "./run.js";
 import type { EvalCase } from "./schema.js";
-
 import { option, profiles, selectCases } from "./selection.js";
 
 function has(args: string[], name: string): boolean {
@@ -129,7 +130,9 @@ export function renderPlan(args: string[]): string {
 	return [
 		`Eval plan (read-only; 未调用模型)`,
 		`profile: ${profileName} — ${profiles[profileName].description}`,
-		`coverage: ${selection.cases.length} cases / ${familyCount} families; ${total} trials`,
+		`coverage: ${selection.cases.length} cases / ${familyCount} families; ${total} trials${selection.emptyReason ? ` (${selection.emptyReason}; model requests: 0)` : ""}`,
+		...(selection.uncovered.length ? [`uncovered by directed cap: ${selection.uncovered.join(", ")}`] : []),
+		...(selection.unknownPaths.length ? [`unknown paths: ${selection.unknownPaths.join(", ")}`] : []),
 		`resource ceiling: $${maxCost.toFixed(2)} agent cost; ${(maxWall / 60_000).toFixed(1)} serial minutes (upper bound, not ETA)`,
 		`concurrency: ${selection.concurrency} agent / ${selection.judgeConcurrency} judge`,
 		`model judging: ${selection.judgeEnabled ? selection.cases.reduce((sum, item) => sum + [...item.graders, ...(item.invariants ?? [])].filter((grader) => grader.kind === "model").length * trials, 0) : 0} advisory decisions; judge spend is separate from the agent ceiling`,
@@ -143,7 +146,7 @@ export function renderPlan(args: string[]): string {
 }
 
 function usage(): string {
-	return `Usage:\n  npm run eval -- cycle [selection] [--max-cost-usd 25] [--max-wall-minutes 180] [--experiment none|runtime|model]\n  npm run eval -- list [--domain memory|--family ID|--tag core]\n  npm run eval -- selftest [selection]\n  npm run eval -- doctor\n  npm run eval -- plan [--changed-since REF|--case ID|--family ID] [--profile dev|core|candidate|explore|external]\n  npm run eval -- run [selection|--all] [--trials N] [--concurrency N] [--judge-concurrency N]\n  npm run eval -- report <runId> [--verbose]\n  npm run eval -- resume <runId>\n  npm run eval -- regrade <runId> [--grader ID]\n  npm run eval -- diagnose <runId>\n  npm run eval -- compare <runA> <runB|baseline> --experiment none|runtime|model\n  npm run eval -- baseline promote <runId>`;
+	return `Usage:\n  npm run eval -- cycle [selection] [--plan FILE] [--max-cost-usd 25] [--max-wall-minutes 180] [--max-tokens N] [--max-elapsed-minutes N] [--experiment none|runtime|model]\n  npm run eval -- list [--domain memory|--family ID|--tag core]\n  npm run eval -- selftest [selection]\n  npm run eval -- doctor\n  npm run eval -- plan [--changed-since REF|--case ID|--family ID] [--profile dev|core|candidate|explore|external] [--output FILE]\n  npm run eval -- run [selection|--all] [--trials N] [--concurrency N] [--max-tokens N] [--max-elapsed-minutes N]\n  npm run eval -- report <runId> [--verbose]\n  npm run eval -- resume <runId>\n  npm run eval -- regrade <runId> [--grader ID]\n  npm run eval -- diagnose <runId>\n  npm run eval -- compare <runA> <runB|baseline> --experiment none|runtime|model\n  npm run eval -- baseline promote <runId>`;
 }
 
 export function setSelectedCasesEnvironment(caseIds: string[], env: NodeJS.ProcessEnv = process.env): void {
@@ -177,7 +180,17 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 		if (Object.values(results).some((result) => result.status !== "qualified")) process.exitCode = 2;
 		return;
 	}
-	if (command === "plan") return void process.stdout.write(`${renderPlan(args.slice(1))}\n`);
+	if (command === "plan") {
+		const output = option(args, "--output");
+		const text = renderPlan(args.slice(1));
+		if (output) {
+			const plan = buildExecutionPlan(args.slice(1));
+			atomicJson(planPath(output), plan);
+			process.stdout.write(`${text}\nWrote ${output}\n`);
+			return;
+		}
+		return void process.stdout.write(`${text}\n`);
+	}
 	if (command === "report") {
 		if (!args[1]) throw new Error("Use npm run eval -- report <runId> [--verbose].");
 		const result = rerenderReport(process.cwd(), args[1]);
@@ -219,6 +232,11 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 		process.env.EVAL_TRIALS = String(selection.trials);
 		process.env.EVAL_CONCURRENCY = String(selection.concurrency);
 		process.env.EVAL_JUDGE_CONCURRENCY = String(selection.judgeConcurrency);
+		applyRunBudget(process.env, buildExecutionPlan(args.slice(1)).budgets);
+		if (!selection.cases.length) {
+			process.stdout.write(`Eval plan is empty (${selection.emptyReason ?? "no cases"}). Model requests: 0.\n`);
+			return;
+		}
 		await runMain([], {
 			profile: selection.profile,
 			reasons: selection.reasons,

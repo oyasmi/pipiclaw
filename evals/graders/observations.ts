@@ -1,4 +1,8 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { isTestFailureSignal, SHELL_REDIRECT } from "../harness/evidence.js";
 import type { TraceEvent, TrialContext } from "../harness/schema.js";
+import { hashFile } from "../harness/util.js";
 
 export interface ToolObservation {
 	call: TraceEvent;
@@ -52,7 +56,7 @@ export function sourceMutation(call: TraceEvent): boolean {
 	return (
 		call.tool === "bash" &&
 		/src\/paginate\.js/.test(command) &&
-		/write_text|writeFile|\bsed\s+-i|\bperl\s+-[a-z]*i|\b(?:cp|mv)\b|>/.test(command)
+		(/write_text|writeFile|\bsed\s+-i|\bperl\s+-[a-z]*i|\b(?:cp|mv)\b/.test(command) || SHELL_REDIRECT.test(command))
 	);
 }
 
@@ -66,6 +70,26 @@ export function isVerificationCommand(call: TraceEvent): boolean {
 
 export function verificationObservations(ctx: TrialContext) {
 	return toolObservations(ctx, "bash").filter(({ call }) => isVerificationCommand(call));
+}
+
+/** The successful verification must be the one that hashed the source bytes still on disk. */
+export function verificationBoundToSource(ctx: TrialContext, afterSeq: number): boolean | "missing" {
+	const runs = verificationObservations(ctx).filter(({ call, result }) => call.seq > afterSeq && result.ok === true);
+	if (!runs.length) return false;
+	const bound = runs.some(({ result }) => {
+		const digest = result.fields?.sourceDigest;
+		if (!digest) return false;
+		const path = join(ctx.workspaceDir, "src/paginate.js");
+		return existsSync(path) && digest === hashFile(path);
+	});
+	if (runs.every((run) => !run.result.fields?.sourceDigest)) return "missing";
+	return bound;
+}
+
+export function observedTestFailure(ctx: TrialContext, beforeSeq: number): boolean | "missing" {
+	const runs = verificationObservations(ctx).filter(({ result }) => result.seq < beforeSeq);
+	if (!runs.length) return "missing";
+	return runs.some(({ result }) => isTestFailureSignal(result.fields?.detail ?? ""));
 }
 
 export function stepDeliveries(ctx: TrialContext, stepIndex: number) {

@@ -20,14 +20,18 @@ export function completedTrial(
 		!record.configHashes
 	)
 		throw new Error("Saved trial does not match the frozen slot; restore its original record before resuming.");
+	if (record.observedModel === "not-started") return;
 	return record;
 }
 
 /** Preserve partial trace and artifacts under a distinct attempt before restarting a slot. */
 export function preserveInterruptedAttempt(trialDir: string): string | undefined {
 	if (!existsSync(trialDir)) return;
-	if (existsSync(join(trialDir, "record.json")))
-		throw new Error("A completed trial must not be replaced; start a new run for a fresh attempt.");
+	if (existsSync(join(trialDir, "record.json"))) {
+		const record = JSON.parse(readFileSync(join(trialDir, "record.json"), "utf8")) as TrialRecord;
+		if (record.observedModel !== "not-started")
+			throw new Error("A completed trial must not be replaced; start a new run for a fresh attempt.");
+	}
 	let attempt = 1;
 	while (existsSync(`${trialDir}.interrupted-${attempt}`)) attempt++;
 	const archived = `${trialDir}.interrupted-${attempt}`;

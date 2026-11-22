@@ -133,6 +133,23 @@ export function trialCategory(record: TrialRecord): "pass" | "safety" | "behavio
 	return record.outcome === "pass" ? "pass" : "behavior";
 }
 
+function verifiedSuccessLine(records: TrialRecord[]): string {
+	const started = records.filter((record) => record.observedModel !== "not-started");
+	const successes = started.filter((record) => record.outcome === "pass").length;
+	const tokens = started.reduce((sum, record) => sum + record.metrics.tokens.total, 0);
+	const cost = started.reduce((sum, record) => sum + record.metrics.costUsd, 0);
+	if (!successes)
+		return `Verified-success cost: unavailable (${started.length} started, 0 verified successes; known tokens ${tokens}).`;
+	const deliveries = started
+		.map((record) => record.metrics.firstDeliveryMs)
+		.filter((value): value is number => value !== undefined);
+	const delivery =
+		deliveries.length > 0
+			? `; first accepted delivery median ${deliveries.sort((a, b) => a - b)[Math.floor(deliveries.length / 2)]}ms`
+			: "";
+	return `Verified-success cost: ${tokens} tokens and $${cost.toFixed(4)} known cost across ${started.length} started trials / ${successes} verified successes${delivery}. Failed trials stay in the numerator.`;
+}
+
 export function renderReport(
 	manifest: RunManifest,
 	summaries: CaseSummary[],
@@ -191,6 +208,7 @@ export function renderReport(
 		`Coverage: ${summaries.length} cases${summaries.length <= 12 ? ` (${summaries.map((item) => item.caseId).join(", ")})` : "; see details"}.`,
 		`Model: ${manifest.configuredModel}; thinking: ${manifest.thinkingLevel ?? "unknown"}; elapsed: ${wall}.`,
 		`Agent recorded subtotal: $${agentKnown.toFixed(4)} (${manifest.costBasis ?? "unknown basis"}; ${agentUnknown} totals unknown); judge known subtotal: $${judgeKnown.toFixed(4)} (${judgeUnknown} totals unknown).`,
+		verifiedSuccessLine(records),
 		`Conclusion: ${decision?.reason ?? "Archived results; no frozen scoring plan supplied."}`,
 		...(archiveProblem
 			? [

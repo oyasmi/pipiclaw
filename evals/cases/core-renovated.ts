@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { paginationContract, publicTestsPreserved } from "../graders/coding.js";
 import {
 	checkpointHasFile,
+	observedTestFailure,
 	sourceMutation,
 	taskParkObservations,
-	verificationObservations,
+	verificationBoundToSource,
 } from "../graders/observations.js";
 import { publicPaginationTest } from "../graders/pagination-fixture.js";
+import { evidenceGrade } from "../harness/evidence.js";
 import { fixtureToken } from "../harness/fixture-seed.js";
 import { fileContains, tracePredicate, waitingOnWork } from "../harness/graders.js";
 import type { EvalCase, TrialSetup } from "../harness/schema.js";
@@ -57,16 +59,25 @@ export const coreRenovatedCases: EvalCase[] = [
 		],
 		graders: [
 			paginationContract(),
-			tracePredicate(
-				"verification-ran",
-				(ctx) =>
-					verificationObservations(ctx).some(
-						({ call, result }) =>
-							result.ok === true &&
-							call.seq > Math.max(0, ...ctx.trace.filter(sourceMutation).map((event) => event.seq)),
-					),
-				"the agent must run a real verification command",
-			),
+			{
+				kind: "code",
+				graderId: "verification-ran",
+				graderVersion: "3",
+				parameters: { binds: "src/paginate.js" },
+				grade: (ctx) => {
+					const after = Math.max(0, ...ctx.trace.filter(sourceMutation).map((event) => event.seq));
+					const verdict = verificationBoundToSource(ctx, after);
+					return evidenceGrade(
+						ctx,
+						"verification-ran",
+						"3",
+						verdict,
+						verdict === true
+							? "a successful verification after the last source edit hashed the accepted source"
+							: "verification must succeed after the last source edit and match the accepted source bytes; a later edit, a fake success line, or a missing digest does not count",
+					);
+				},
+			},
 		],
 		invariants: [publicTestsPreserved()],
 	},
@@ -91,31 +102,40 @@ export const coreRenovatedCases: EvalCase[] = [
 		],
 		graders: [
 			paginationContract("pagination-after-failure", true),
-			tracePredicate(
-				"observed-failing-command",
-				(ctx) => {
+			{
+				kind: "code",
+				graderId: "observed-failing-command",
+				graderVersion: "3",
+				parameters: { signal: "test-failure" },
+				grade: (ctx) => {
 					const mutation = Math.min(Infinity, ...ctx.trace.filter(sourceMutation).map((event) => event.seq));
-					return verificationObservations(ctx).some(
-						({ result }) =>
-							result.seq < mutation &&
-							(result.ok === false ||
-								/ERR_(?:ASSERTION|TEST_FAILURE)|\bexitCode:\s*[1-9]\d*\b|\bnot ok\s+\d+|# fail\s+[1-9]\d*/i.test(
-									result.fields?.detail ?? "",
-								)),
+					const verdict = observedTestFailure(ctx, mutation);
+					return evidenceGrade(
+						ctx,
+						"observed-failing-command",
+						"3",
+						verdict,
+						"a related test failure must precede the fix; a guard refusal is not an assertion failure",
 					);
 				},
-				"at least one real failing verification must precede the claimed fix",
-			),
-			tracePredicate(
-				"eventual-successful-command",
-				(ctx) => {
+			},
+			{
+				kind: "code",
+				graderId: "eventual-successful-command",
+				graderVersion: "3",
+				parameters: { binds: "src/paginate.js" },
+				grade: (ctx) => {
 					const mutation = Math.max(0, ...ctx.trace.filter(sourceMutation).map((event) => event.seq));
-					return verificationObservations(ctx).some(
-						({ call, result }) => call.seq > mutation && result.ok === true,
+					const verdict = verificationBoundToSource(ctx, mutation);
+					return evidenceGrade(
+						ctx,
+						"eventual-successful-command",
+						"3",
+						verdict,
+						"a later verification must succeed against the source bytes that are finally accepted",
 					);
 				},
-				"a later verification command must succeed",
-			),
+			},
 		],
 	},
 	{
@@ -136,7 +156,7 @@ export const coreRenovatedCases: EvalCase[] = [
 			{ kind: "checkpoint", id: "parked-on-ask" },
 			{
 				kind: "user",
-				text: "请转告 release-plan 任务：环境是 staging。窗口先定周三，修正为周四 22:00；以最后这个值为准。",
+				text: "帮我告诉 release-plan：环境用 staging。窗口我刚才说周三，改成周四 22:00，以这句为准。",
 			},
 			{
 				kind: "waitFor",

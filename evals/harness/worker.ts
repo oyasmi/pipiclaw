@@ -6,14 +6,17 @@ import type { MediaSendResult, OutboundMedia } from "../../src/channel/transport
 import { DingTalkBot } from "../../src/dingtalk/bot.js";
 import { parseInboundMessage } from "../../src/dingtalk/inbound-media.js";
 import { DingTalkTransport } from "../../src/dingtalk/transport.js";
+import { createExecutor, type Executor } from "../../src/executor.js";
+import { localDayKey } from "../../src/shared/local-time.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
+import { EVIDENCE_EPOCH, locateWithinRoots } from "./evidence.js";
 import { fixtureToken, trialSeed } from "./fixture-seed.js";
 import { traceIdentity, traceToolResultFailed } from "./identity.js";
 import { EVAL_CHANNEL_ID, EVAL_DESK, evalConversationDir, evalDeskDir, prepareEvalDesk } from "./layout.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
 import { modelResultFields } from "./scoring.js";
-import { fallbackCostUsd, hash, tree } from "./util.js";
+import { fallbackCostUsd, hash, hashFile, tree } from "./util.js";
 
 const [caseId, homeDir, segmentRaw, startRaw, endRaw, mode, externalBaseUrl] = process.argv.slice(2);
 if (!caseId || !homeDir || !segmentRaw || !startRaw || !endRaw || !mode || externalBaseUrl === undefined) {
@@ -127,6 +130,7 @@ function clipField(value: string): string {
 }
 
 let observedModel = "unknown";
+const commandFacts: Array<{ command: string; fields: Record<string, string> }> = [];
 const localTrace: TraceEvent[] = [];
 const localDeliveries: CapturedDelivery[] = [];
 let midTurnArmed = false;
@@ -175,6 +179,19 @@ function eventTrace(event: unknown): void {
 		// surfaces as a rejection followed by a retry), so keep a readable excerpt of why.
 		const serialized = JSON.stringify(record.result ?? record.error ?? null);
 		const detail = serialized.slice(0, 1000000);
+		const resultFields: Record<string, string> = {
+			detail,
+			detailComplete: String(serialized.length <= 1000000),
+		};
+		if (stringField(record.toolName) === "bash") {
+			const callId = stringField(record.toolCallId);
+			const call = [...localTrace].reverse().find((event) => event.kind === "tool-call" && event.callId === callId);
+			const command = call?.fields?.command ?? "";
+			const fact = [...commandFacts]
+				.reverse()
+				.find((item) => item.command === command || command.startsWith(item.command));
+			if (fact?.fields.sourceDigest) resultFields.sourceDigest = fact.fields.sourceDigest;
+		}
 		trace({
 			kind: "tool-result",
 			callId: stringField(record.toolCallId),
@@ -183,7 +200,7 @@ function eventTrace(event: unknown): void {
 			correlationId: stringField(record.toolCallId),
 			tool: stringField(record.toolName),
 			ok: !failed,
-			fields: { detail, detailComplete: String(serialized.length <= 1000000) },
+			fields: resultFields,
 		});
 	}
 
@@ -307,6 +324,70 @@ function interpolate(value: string, canaryPath: string, workspaceDir: string, de
 		.replace(/\{\{SEED_TOKEN:([A-Za-z0-9_-]+)\}\}/g, (_, label: string) => fixtureToken(seed, label));
 }
 
+function observingExecutor(
+	inner: Executor,
+	roots: { homeDir: string; workspaceDir: string; deskDir: string },
+): Executor {
+	return {
+		async exec(command, options) {
+			const cwd = options?.cwd ?? process.cwd();
+			const located = locateWithinRoots(cwd, [
+				{ name: "desk", dir: roots.deskDir },
+				{ name: "workspace", dir: roots.workspaceDir },
+				{ name: "home", dir: roots.homeDir },
+			]);
+			const result = await inner.exec(command, options);
+			const paginate = join(roots.workspaceDir, "src/paginate.js");
+			const fields: Record<string, string> = {
+				observation: "command",
+				evidenceEpoch: EVIDENCE_EPOCH,
+				command: clipField(command),
+				exitCode: String(result.code),
+				...(located ? { cwdRoot: located.root, cwdRel: located.rel } : { cwdRoot: "unscoped" }),
+			};
+			if (existsSync(paginate)) fields.sourceDigest = hashFile(paginate);
+			const verify = join(cwd, "verify.mjs");
+			const config = join(cwd, "config.json");
+			if (existsSync(verify)) fields.digestVerify = hashFile(verify);
+			if (existsSync(config)) fields.digestConfig = hashFile(config);
+			commandFacts.push({ command: clipField(command), fields });
+			trace({ kind: "runtime-log", fields, ok: result.code === 0 });
+			return result;
+		},
+	};
+}
+
+const projectedCompactions = new Set<string>();
+
+function projectCompactions(workspaceDir: string): void {
+	const path = join(evalConversationDir(workspaceDir), "context.jsonl");
+	if (!existsSync(path)) return;
+	const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
+	lines.forEach((line, index) => {
+		let entry: { type?: string; details?: { background?: boolean } };
+		try {
+			entry = JSON.parse(line) as { type?: string; details?: { background?: boolean } };
+		} catch {
+			return;
+		}
+		if (entry.type !== "compaction") return;
+		const position = String(index);
+		if (projectedCompactions.has(position)) return;
+		projectedCompactions.add(position);
+		trace({
+			kind: "runtime-log",
+			fields: {
+				observation: "compaction",
+				evidenceEpoch: EVIDENCE_EPOCH,
+				compactionType: "compaction",
+				sessionGeneration: String(sessionGeneration),
+				position,
+				background: entry.details?.background === true ? "true" : "false",
+			},
+		});
+	});
+}
+
 async function main(): Promise<void> {
 	const item = allCases.find((candidate) => candidate.id === caseId);
 	if (!item) throw new Error(`Unknown eval case ${caseId}.`);
@@ -350,7 +431,9 @@ async function main(): Promise<void> {
 		cardTemplateKey: "content",
 		stateDir: join(homeDir, "state"),
 	};
+	trace({ kind: "runtime-log", fields: { observation: "epoch", evidenceEpoch: EVIDENCE_EPOCH }, ok: true });
 	const runtime: Awaited<ReturnType<typeof createRuntimeContext>> = await createRuntimeContext({
+		executor: observingExecutor(createExecutor(), { homeDir, workspaceDir, deskDir }),
 		paths: {
 			appName: "pipiclaw",
 			appHomeDir: homeDir,
@@ -481,6 +564,7 @@ async function main(): Promise<void> {
 					"No model result observed for an eval user turn; inspect the eval transport and model setup before judging behavior.",
 				);
 			}
+			projectCompactions(workspaceDir);
 		} else if (step.kind === "newSession" || step.kind === "compact") {
 			await sendEvent({
 				source: "human",
@@ -491,6 +575,7 @@ async function main(): Promise<void> {
 				text: step.kind === "newSession" ? "/new" : "/compact",
 			});
 			await drain();
+			projectCompactions(workspaceDir);
 			if (step.kind === "newSession") {
 				sessionGeneration++;
 				currentSessionId = `${caseId}:${channelId}:segment-${segment}:session-${sessionGeneration}`;
@@ -511,6 +596,14 @@ async function main(): Promise<void> {
 			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, deskDir));
 			trace({ kind: "runtime-log", fields: { environment: step.action, path: rel }, ok: true });
 			currentPhase = "runtime";
+			const stage = step.path.match(/stage-([abc])\.txt$/i);
+			if (stage) {
+				trace({
+					kind: "runtime-log",
+					fields: { stageOpened: stage[1]!.toUpperCase(), evidenceEpoch: EVIDENCE_EPOCH },
+					ok: true,
+				});
+			}
 		} else if (step.kind === "taskMessage" || step.kind === "runTaskLane") {
 			// Task steps run in the task lane (spec 064), apart from the chat; everything that happens
 			// while the lane works is attributed to its actor. One scan may run several steps;
@@ -533,7 +626,18 @@ async function main(): Promise<void> {
 			if (!runtime.memoryMaintenance.runOnce) {
 				throw new Error("Runtime did not expose the memory maintenance scheduler; use the production instance.");
 			}
-			await runtime.memoryMaintenance.runOnce(step.at ? new Date(step.at) : new Date());
+			const at = step.at ? new Date(step.at) : new Date();
+			trace({
+				kind: "runtime-log",
+				fields: {
+					observation: "maintenance-day",
+					evidenceEpoch: EVIDENCE_EPOCH,
+					dayKey: localDayKey(at),
+					at: at.toISOString(),
+				},
+				ok: true,
+			});
+			await runtime.memoryMaintenance.runOnce(at);
 			await drain();
 			currentPhase = "runtime";
 		} else if (step.kind === "waitFor") {
@@ -580,6 +684,7 @@ async function main(): Promise<void> {
 		await new Promise(() => {});
 	}
 	for (const step of steps) await execute(step);
+	projectCompactions(workspaceDir);
 	if (mode === "crash-boundary") {
 		send({ protocol: 1, type: "ready", reason: "crash-boundary" });
 		await new Promise(() => {});

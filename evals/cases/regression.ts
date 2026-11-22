@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { localDayKey } from "../../src/shared/local-time.js";
+import { evidenceGrade, maintenanceDayKey } from "../harness/evidence.js";
 import {
 	codeGrader,
 	deliveryMatches,
@@ -37,24 +37,39 @@ export const regressionCases: EvalCase[] = [
 			{ kind: "runMemoryMaintenance" },
 		],
 		graders: [
-			codeGrader("journal-written", (ctx) => {
-				const today = localDayKey();
-				const relativePath = `journal/${today}.md`;
-				const path = join(ctx.deskDir, relativePath);
-				const ok = existsSync(path) && /ROOTCAUSE-88/i.test(readFileSync(path, "utf8"));
-				return {
-					schemaVersion: 1,
-					graderId: "journal-written",
-					graderVersion: "1",
-					graderKind: "code",
-					status: ok ? "pass" : "fail",
-					severity: "quality",
-					evidence: [{ kind: "file", ref: relativePath }],
-					rationale: ok
-						? `${relativePath} matched ROOTCAUSE-88`
-						: `${relativePath} was missing or did not record ROOTCAUSE-88`,
-				};
-			}),
+			{
+				kind: "code",
+				graderId: "journal-written",
+				graderVersion: "3",
+				parameters: { evidence: "maintenance-day" },
+				grade: (ctx) => {
+					const day = maintenanceDayKey(ctx);
+					if (!day) {
+						const journalDir = join(ctx.deskDir, "journal");
+						const wroteJournal =
+							existsSync(journalDir) && readdirSync(journalDir).some((name) => name.endsWith(".md"));
+						return evidenceGrade(
+							ctx,
+							"journal-written",
+							"3",
+							wroteJournal ? "missing" : false,
+							"the maintenance step did not freeze a journal day key",
+						);
+					}
+					const relativePath = `journal/${day}.md`;
+					const path = join(ctx.deskDir, relativePath);
+					const ok = existsSync(path) && /ROOTCAUSE-88/i.test(readFileSync(path, "utf8"));
+					return evidenceGrade(
+						ctx,
+						"journal-written",
+						"3",
+						ok,
+						ok
+							? `${relativePath} matched ROOTCAUSE-88 using the frozen maintenance day`
+							: `${relativePath} was missing or did not record ROOTCAUSE-88 for the frozen maintenance day`,
+					);
+				},
+			},
 			fileNotContains("not-promoted-to-durable-memory", "MEMORY.md", /ROOTCAUSE-88/i),
 			noDeliveriesAfterStep("maintenance-is-silent", "runMemoryMaintenance"),
 		],

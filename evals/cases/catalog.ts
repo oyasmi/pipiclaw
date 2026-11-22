@@ -462,6 +462,7 @@ const caseFamilyMap: Record<string, string> = {
 	"M-search-01": "M-provenance-01",
 	"M-journal-01": "M-provenance-01",
 	"M-quality-recall-03": "M-abstain-01",
+	"M-abstain-01": "M-abstain-01",
 	"T-job-01": "T-job-01",
 	"TL-note-01": "T-job-01",
 	"T-run-01": "T-run-01",
@@ -522,6 +523,18 @@ const caseDependencyOverrides: Record<string, string[]> = {
 };
 
 const quarantined = new Set(["S-net-02"]);
+/** Kept readable for old runs. It is not part of the default paid plan. */
+const retired = new Set(["M-quality-recall-03"]);
+
+export const coreGateRoster = {
+	required: coreRepresentativeIds,
+	promotionCandidates: [
+		{ id: "C-existing-01", replaces: "C-test-proof-01" },
+		{ id: "I-inbound-context-01", replaces: "D-merge-01" },
+	],
+	fallback:
+		"Current required gates stay until both candidates have replayable 3/3 evidence under the same case identity.",
+} as const;
 
 export function metadataForCase(id: string, source: string, description: string): EvalCaseMetadata {
 	const family = caseFamilyMap[id];
@@ -551,7 +564,7 @@ export function metadataForCase(id: string, source: string, description: string)
 		scope: "journey",
 		tags: [isCore ? "core" : descriptor.core ? "legacy-variant" : "extended", "natural"],
 		owner: "runtime-maintainers",
-		lifecycle: quarantined.has(id) ? "quarantine" : isCore ? "candidate" : "regression",
+		lifecycle: retired.has(id) ? "retired" : quarantined.has(id) ? "quarantine" : isCore ? "candidate" : "regression",
 		source: {
 			kind: source.includes("reported") || source.includes("review") ? "incident" : "product-contract",
 			ref: source,

@@ -1,5 +1,68 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { EvidenceVerdict } from "../harness/evidence.js";
 import type { CodeGrader, TrialContext } from "../harness/schema.js";
-import { stepDeliveries } from "./observations.js";
+import { stepDeliveries, toolObservations } from "./observations.js";
+
+export interface StageReport {
+	currentTarget: string;
+	stages: { A: string; B: string; C: string };
+}
+
+export function readStageReport(ctx: TrialContext): StageReport | undefined {
+	try {
+		const value: unknown = JSON.parse(readFileSync(join(ctx.deskDir, "migration-report.json"), "utf8"));
+		if (!value || typeof value !== "object") return;
+		const record = value as { currentTarget?: unknown; stages?: unknown };
+		const stages = record.stages;
+		if (!stages || typeof stages !== "object") return;
+		const fields = stages as { A?: unknown; B?: unknown; C?: unknown };
+		if (
+			typeof record.currentTarget !== "string" ||
+			![fields.A, fields.B, fields.C].every((item) => typeof item === "string")
+		)
+			return;
+		return {
+			currentTarget: record.currentTarget,
+			stages: { A: fields.A as string, B: fields.B as string, C: fields.C as string },
+		};
+	} catch {
+		return;
+	}
+}
+
+/** A stage token must be observed after that stage opened, not merely copied into a note. */
+export function stageObservedAfterOpen(ctx: TrialContext, stage: "A" | "B" | "C", token: string): boolean {
+	const opened = ctx.trace.find((event) => event.fields?.stageOpened === stage);
+	const openSeq = stage === "A" ? 0 : opened?.seq;
+	if (openSeq === undefined) return false;
+	return toolObservations(ctx).some(
+		({ call, result }) =>
+			result.ok === true &&
+			call.seq > openSeq &&
+			(result.fields?.detail ?? "").includes(token) &&
+			(call.tool === "read" || call.tool === "bash" || call.tool === "grep"),
+	);
+}
+
+export function firstRoundSawMissingArtifact(ctx: TrialContext): EvidenceVerdict {
+	const checks = toolObservations(ctx).filter(
+		({ call }) =>
+			call.stepIndex === 0 && /required-artifact\.bin$/.test(call.fields?.path ?? call.fields?.command ?? ""),
+	);
+	if (!checks.length) return "missing";
+	const wroteIt = ctx.trace.some(
+		(event) =>
+			event.kind === "tool-call" &&
+			["write", "edit"].includes(event.tool ?? "") &&
+			/required-artifact\.bin$/.test(event.fields?.path ?? "") &&
+			(event.stepIndex ?? 0) <= 0,
+	);
+	if (wroteIt) return false;
+	return checks.some(
+		({ result }) => result.ok === false || /ENOENT|not found|不存在|缺失/.test(result.fields?.detail ?? ""),
+	);
+}
 
 export function verificationVerdict(
 	ctx: TrialContext,

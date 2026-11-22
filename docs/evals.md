@@ -22,7 +22,7 @@ npm run eval -- cycle --changed-since master   # 按变更选择场景
 npm run eval -- list --domain memory           # 查看目录
 ```
 
-`plan`、`selftest`、`run`、`cycle` 共用选择规则。`--changed-since` 按家族细粒度依赖只选中受影响模块的活跃探针（仅底座公共链路变更才回退核心代表集），无法映射的变更保守回退，但不越过显式 case/domain 范围；没有变更时不调用模型。执行默认排除 retired/quarantine/draft，显式 `--case` 或 `--lifecycle` 可以选中隔离场景。`--all` 用于有意识的全量探索。
+`plan`、`selftest`、`run`、`cycle` 共用选择规则。没有显式过滤或 profile 时，`--changed-since` 每个受影响家族只留一个代表，最多 3 个，并列出被名额挡住的家族。显式 `--profile core` 仍跑全部 12 个核心代表。空 diff 和只改文档、测试或非 playbook Markdown 的变更生成 0 次请求的空计划。无法映射的产品路径会记下来，并在剩余名额内补代表。`plan --output FILE` 写出带版本的执行清单；`cycle --plan FILE` 在任何模型请求前核对 case、fixture、oracle 和执行身份，对不上就停止。`run` 和 `cycle` 共用这份预算。执行默认排除 retired/quarantine/draft，显式 `--case` 或 `--lifecycle` 可以选中隔离场景。`--all` 用于有意识的全量探索。
 
 ## 评分如何自动成立
 
@@ -32,7 +32,7 @@ npm run eval -- list --domain memory           # 查看目录
 - `failed`：控制失败，正式运行停止，模型请求为 0；查看 `oracle-checks/oracle-checks.json` 定位评分器或样本。
 - `uncovered`：尚未具备自动验收控制。可以探索，但整体结论为 `INCONCLUSIVE`，不能自动建立基线。
 
-全库保留的 42 个高信噪比场景（12 个核心场景、29 个活跃扩展场景与 1 个隔离探针）已 100% 配备自动可执行正/负/等价控制，消除历史 `uncovered` 盲区与冗余/执教型旧用例。新增场景同样必须在合入时同步提供三类控制并通过 `selftest`。
+目录现有 43 个场景：12 个核心、29 个活跃扩展、1 个仍可读取但不再进入默认计划的退役场景（`M-quality-recall-03`，由 `M-abstain-01` 接替）和 1 个隔离探针。活跃场景配备自动可执行正/负/等价控制。新增场景同样必须在合入时同步提供三类控制并通过 `selftest`。核心 gate 仍是原来的 12 项；`C-existing-01` 和 `I-inbound-context-01` 只记为替换候选，要各自有同身份、可重放的 3/3 之后才更换。
 
 客观验收依据实际文件、独立计算结果、相关联的工具调用与成功结果、持久化运行记录、指定步骤的最终交付。分页验证器在可信评测代码中执行，检查 36 组边界输入和输入不被修改；候选不能通过改弱公开测试或提前退出冒充成功。关键记忆事实、作业和委派结果使用冻结 seed；相同 case/trial 可复现，不同 trial 不总是同一个答案。异步生产者由 fixture 明确释放，替代固定等待 15 秒。
 
@@ -50,7 +50,7 @@ npm run eval -- run --case C-research-01 --judge advisory
 | --- | --- | --- | --- |
 | dev | 六个日常代表 | 1 | 快速排错，不能建立基线 |
 | core | 12 个核心家族 | 3 | 周期回归，沿用冻结 gate |
-| candidate | 同一核心集合 | 10 | 模型或重要策略的配对实验 |
+| candidate | 必须显式给出范围 | 3 | 模型或重要策略的配对实验；整组核心加次要用 `--tag core --trials N` |
 | explore | 活跃 extended | 1 | 变体探索，不能建立基线 |
 | external | D-external-01 | 1 | 外部执行器探索 |
 
@@ -63,7 +63,7 @@ npm run eval -- cycle --profile candidate --concurrency 2 \
   --max-cost-usd 60 --max-wall-minutes 600
 ```
 
-这些数值是已有逐 trial 预算的保守包络，不是耗时预测或服务商账单硬限额；单次在途响应可超过已记录的费用阈值，外部执行器的总费用也可能未知。每个 trial 有时间、轮数、步骤和已记录费用监控；周期不会无限重试、为了通过而追加样本或覆盖失败。未知费用会明确显示，不能当作免费。SDK 记录了 token 分项却漏报合计时，工具从已知分项推导合计并标注次数，保留原始账本不变。model judge 在独立 `run --judge advisory` 中使用自己的 watchdog，费用不计入主体包络。
+这些数值是已有逐 trial 预算的保守包络，不是耗时预测或服务商账单硬限额。`--max-tokens` 和 `--max-elapsed-minutes` 是运行中的停止线：并发槽位拿到之后、临时目录和 worker 启动之前检查。已经开始的槽位按原有 watchdog 跑完，并记下真实超出。token 来自去重后的账本；没有模型调用的本地生产者记 0。设了 token 上限时，无法估算的用量会停掉后续槽位。resume 沿用同一份冻结计划和已累计用量；旧用量补不齐就拒绝续跑。报告给出已知费用、未知用量、每次验证成功分摊的 token 和费用，以及槽位级的双方不一致。外部执行器费用仍可能未知。周期不会无限重试、为了通过而追加样本或覆盖失败。SDK 记录了 token 分项却漏报合计时，工具从已知分项推导合计并标注次数，保留原始账本不变。model judge 在独立 `run --judge advisory` 中使用自己的 watchdog，费用不计入主体包络。
 
 ## 看哪份结果
 

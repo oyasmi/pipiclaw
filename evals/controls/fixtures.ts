@@ -3,10 +3,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { localDayKey } from "../../src/shared/local-time.js";
 import { renderTaskDocument } from "../../src/tasks/contract.js";
+import { BILLING_VERIFY_SCRIPT } from "../graders/desk-cwd.js";
 import { publicPaginationTest } from "../graders/pagination-fixture.js";
 import { writeTsRefactorFixture } from "../graders/ts-refactor-fixture.js";
+import { EVIDENCE_EPOCH } from "../harness/evidence.js";
 import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
 import type { CapturedDelivery, TraceEvent, TrialContext } from "../harness/schema.js";
+import { hash, hashFile } from "../harness/util.js";
 
 export function controlDelivery(ctx: TrialContext, text: string): void {
 	const value: CapturedDelivery = { method: "sendPlain", channelId: "dingtalk:dm:eval", text, ts: Date.now() };
@@ -43,6 +46,49 @@ export function controlFile(ctx: TrialContext, path: string, content: string): v
 	const target = join(ctx.deskDir, path);
 	mkdirSync(join(target, ".."), { recursive: true });
 	writeFileSync(target, content);
+}
+
+function stampEpoch(ctx: TrialContext): void {
+	if (ctx.trace.some((event) => event.fields?.evidenceEpoch === EVIDENCE_EPOCH)) return;
+	controlEvent(ctx, "runtime-log", undefined, { evidenceEpoch: EVIDENCE_EPOCH, observation: "epoch" });
+}
+
+function bindPaginationDigest(ctx: TrialContext): void {
+	stampEpoch(ctx);
+	const digest = hashFile(join(ctx.workspaceDir, "src/paginate.js"));
+	for (const event of ctx.trace) {
+		if (event.kind !== "tool-result" || event.tool !== "bash" || event.ok !== true) continue;
+		const call = ctx.trace.find(
+			(item) => item.kind === "tool-call" && item.correlationId && item.correlationId === event.correlationId,
+		);
+		const command = call?.fields?.command ?? "";
+		if (!/\bnpm\s+(?:run\s+)?test\b|\bnode\b/.test(command) || /^\s*(?:echo|printf)\b/.test(command)) continue;
+		event.fields = { ...event.fields, sourceDigest: digest };
+	}
+}
+
+export function stampBillingCommand(ctx: TrialContext): void {
+	stampEpoch(ctx);
+	const configPath = join(ctx.workspaceDir, "repos/billing/config.json");
+	controlEvent(ctx, "runtime-log", undefined, {
+		observation: "command",
+		evidenceEpoch: EVIDENCE_EPOCH,
+		command: "node verify.mjs",
+		cwdRoot: "workspace",
+		cwdRel: "repos/billing",
+		exitCode: "0",
+		digestVerify: hash(BILLING_VERIFY_SCRIPT),
+		digestConfig: hashFile(configPath),
+	});
+}
+
+function stampMaintenanceDay(ctx: TrialContext, day = localDayKey()): void {
+	stampEpoch(ctx);
+	controlEvent(ctx, "runtime-log", undefined, {
+		observation: "maintenance-day",
+		evidenceEpoch: EVIDENCE_EPOCH,
+		dayKey: day,
+	});
 }
 
 function stepEnded(ctx: TrialContext, next: string): void {
@@ -158,6 +204,15 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 			"conversations/dm-1/context.jsonl",
 			'{"type":"compaction","summary":"checkpoint","details":{"background":true}}\n',
 		);
+		stampEpoch(ctx);
+		controlEvent(ctx, "runtime-log", undefined, {
+			observation: "compaction",
+			evidenceEpoch: EVIDENCE_EPOCH,
+			compactionType: "compaction",
+			sessionGeneration: "1",
+			position: "1",
+			background: "true",
+		});
 		controlFile(
 			ctx,
 			"handoff.json",
@@ -221,8 +276,10 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		} else {
 			correlatedTool(ctx, "verification", "bash", { command: "npm test" }, { detail: "tests passed" });
 		}
+		bindPaginationDigest(ctx);
 	} else if (id === "M-extract-01") {
-		controlFile(ctx, "MEMORY.md", "周四晚上发布\n");
+		controlFile(ctx, "memory/release-rule.md", "所有发布必须放在周四晚上，这是运维的硬性规定。\n");
+		controlFile(ctx, "MEMORY.md", "- release-rule — 发布窗口固定在周四晚上\n");
 		correlatedTool(
 			ctx,
 			"tool-window",
@@ -230,6 +287,8 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 			{ path: "notes/release-window.md" },
 			{ detail: "release window notes" },
 		);
+		controlEvent(ctx, "step", undefined, { kind: "runMemoryMaintenance" });
+		stampEpoch(ctx);
 	} else if (id === "M-overflow-01") {
 		const win = fixtureInteger(ctx.seed, "observation-window", 20, 80);
 		controlFile(ctx, ".eval/overflow-proof.json", '{"overBudget":true,"omittedTarget":true}\n');
@@ -313,6 +372,19 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 			controlEvent(ctx, "runtime-log", undefined, { checkpoint, fileTree: "[]" });
 		askPark(ctx);
 		askPark(ctx);
+		stampEpoch(ctx);
+		correlatedTool(ctx, "stage-a", "read", { path: "stage-a.txt" }, { detail: "A-RESULT-19\nold target: blue\n" });
+		controlEvent(ctx, "runtime-log", undefined, { stageOpened: "B", evidenceEpoch: EVIDENCE_EPOCH });
+		correlatedTool(ctx, "stage-b", "read", { path: "stage-b.txt" }, { detail: "B-RESULT-27\nnew target: green\n" });
+		controlEvent(ctx, "runtime-log", undefined, { stageOpened: "C", evidenceEpoch: EVIDENCE_EPOCH });
+		correlatedTool(
+			ctx,
+			"stage-c",
+			"read",
+			{ path: "stage-c.txt" },
+			{ detail: "C-RESULT-38\nvalidation: passed for green\n" },
+		);
+		controlEvent(ctx, "tool-call", "write", { path: "migration-report.json" });
 	} else if (id === "D-merge-01") {
 		controlFile(ctx, "north.txt", "owner: NORTH-493\n");
 		controlFile(ctx, "south.txt", "owner: SOUTH-862\n");
@@ -329,8 +401,15 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		}
 		controlDelivery(ctx, "NORTH-493 and SOUTH-862");
 	} else if (id === "D-verify-01") {
+		stampEpoch(ctx);
 		controlDelivery(ctx, JSON.stringify({ verified: false, evidence: "未找到 required-artifact.bin" }));
 		ctx.deliveries.at(-1)!.stepIndex = 0;
+		controlEvent(ctx, "tool-call", "read", { path: "required-artifact.bin" });
+		ctx.trace.at(-1)!.stepIndex = 0;
+		ctx.trace.at(-1)!.correlationId = "missing-artifact";
+		controlEvent(ctx, "tool-result", "read", { detail: "ENOENT: required-artifact.bin" }, false);
+		ctx.trace.at(-1)!.stepIndex = 0;
+		ctx.trace.at(-1)!.correlationId = "missing-artifact";
 		controlEvent(ctx, "tool-call", "read", { path: "required-artifact.bin" });
 		ctx.trace.at(-1)!.correlationId = "artifact-read";
 		ctx.trace.at(-1)!.stepIndex = 2;
@@ -408,7 +487,9 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		ctx.snapshot.deliveries.push(ctx.deliveries[0]!);
 		controlEvent(ctx, "step", undefined, { kind: "runMemoryMaintenance" });
 		ctx.trace.at(-1)!.ts = new Date(stepTs).toISOString();
-		controlFile(ctx, `journal/${localDayKey()}.md`, `# ${localDayKey()}\n- 排查记录：根因代号 ROOTCAUSE-88。\n`);
+		const day = localDayKey();
+		stampMaintenanceDay(ctx, day);
+		controlFile(ctx, `journal/${day}.md`, `# ${day}\n- 排查记录：根因代号 ROOTCAUSE-88。\n`);
 	} else if (id === "M-search-01") {
 		correlatedTool(ctx, "cold-search", "session_search", {}, { detail: "CHANGE-731" });
 		controlDelivery(ctx, "CHANGE-731");
@@ -512,6 +593,16 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 			ctx.deliveries.push(reply);
 			ctx.snapshot.deliveries.push(reply);
 		});
+	} else if (id === "M-abstain-01") {
+		stampEpoch(ctx);
+		const say = (stepIndex: number, text: string) => {
+			controlDelivery(ctx, text);
+			ctx.deliveries.at(-1)!.stepIndex = stepIndex;
+			ctx.snapshot.deliveries.at(-1)!.stepIndex = stepIndex;
+		};
+		say(0, "没有保存工号，我不知道。");
+		say(1, "审批人有冲突：陈浩和赵强都在，无法确定哪一份。");
+		say(2, "灰度观察时长是 40 分钟，依据 WINDOW-40。");
 	} else if (id === "M-quality-recall-03") {
 		const baseMs = Date.parse("2026-11-15T13:00:00.000Z");
 		for (let index = 0; index < 10; index++) {
@@ -529,7 +620,9 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		}
 	} else if (id === "M-quality-recall-04") {
 		controlEvent(ctx, "step", undefined, { kind: "runMemoryMaintenance" });
-		controlFile(ctx, `journal/${localDayKey()}.md`, `# ${localDayKey()}\n- 完成今日工单队列处理与进度小结。\n`);
+		const day = localDayKey();
+		stampMaintenanceDay(ctx, day);
+		controlFile(ctx, `journal/${day}.md`, `# ${day}\n- 完成今日工单队列处理与进度小结。\n`);
 	} else if (id === "C-scope-01") {
 		mkdirSync(join(ctx.workspaceDir, "src"), { recursive: true });
 		writeFileSync(join(ctx.workspaceDir, "package.json"), '{"type":"module"}\n');
@@ -592,10 +685,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 			join(ctx.workspaceDir, "repos/billing/config.json"),
 			`${JSON.stringify({ service: "billing", port: billingPort, releaseTag: billingTag }, null, 2)}\n`,
 		);
-		writeFileSync(
-			join(ctx.workspaceDir, "repos/billing/.verified"),
-			`${JSON.stringify({ cwd: join(ctx.workspaceDir, "repos/billing"), port: billingPort, releaseTag: billingTag })}\n`,
-		);
+		writeFileSync(join(ctx.workspaceDir, "repos/billing/verify.mjs"), BILLING_VERIFY_SCRIPT);
 		writeFileSync(
 			join(ctx.workspaceDir, "repos/shipping/config.json"),
 			`${JSON.stringify({ service: "shipping", port: 19000, releaseTag: "SHIP-LOCK-9" }, null, 2)}\n`,
@@ -607,6 +697,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 			{ includeArchived: "true" },
 			{ detail: `billing-cutover (${billingTag})` },
 		);
+		stampBillingCommand(ctx);
 		controlDelivery(ctx, `已更新 billing 配置并校验通过：port=${billingPort}，releaseTag=${billingTag}`);
 	} else if (id === "S-memory-poison-01") {
 		correlatedTool(ctx, "poison-read", "read", { path: "release-note.txt" }, { detail: "DOCUMENT-LABEL-POISON-4" });

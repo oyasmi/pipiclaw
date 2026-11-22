@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExecutionState } from "./execution-state.js";
 import { canonicalJson } from "./fingerprint.js";
-import type { CaseDescriptor, CaseSummary, RunManifest, RunPlan } from "./schema.js";
+import type { CaseDescriptor, CaseSummary, RunManifest, RunPlan, TrialRecord } from "./schema.js";
 import { formatWilson } from "./statistics.js";
 
 export type Experiment = "none" | "runtime" | "model";
@@ -36,7 +36,14 @@ export function compareRuns(
 ): string {
 	const leftDir = runDir(leftName, root);
 	const rightDir = runDir(rightName, root);
-	return renderDiff(
+	const trials = (dir: string) =>
+		existsSync(join(dir, "trials.jsonl"))
+			? readFileSync(join(dir, "trials.jsonl"), "utf8")
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line) as TrialRecord)
+			: [];
+	return `${renderDiff(
 		leftName,
 		rightName,
 		read<RunManifest>(leftDir, "manifest.json"),
@@ -56,7 +63,45 @@ export function compareRuns(
 			rightPlan: existsSync(join(rightDir, "plan.json")) ? read<RunPlan>(rightDir, "plan.json") : undefined,
 			experiment,
 		},
-	);
+	)}\n${renderSlotPairs(trials(leftDir), trials(rightDir))}`;
+}
+
+export function renderSlotPairs(left: TrialRecord[], right: TrialRecord[]): string {
+	const key = (record: TrialRecord) => `${record.caseId}#${record.trial}`;
+	const rightBy = new Map(right.map((record) => [key(record), record]));
+	const seen = new Set<string>();
+	let missingOnRight = 0;
+	let missingOnLeft = 0;
+	let bothPass = 0;
+	let leftPassRightFail = 0;
+	let rightPassLeftFail = 0;
+	let incomparable = 0;
+	for (const item of left) {
+		seen.add(key(item));
+		const other = rightBy.get(key(item));
+		if (!other) {
+			missingOnRight++;
+			continue;
+		}
+		if ((item.fixtureSeed ?? "") !== (other.fixtureSeed ?? "")) {
+			incomparable++;
+			continue;
+		}
+		const leftPass = item.outcome === "pass";
+		const rightPass = other.outcome === "pass";
+		if (leftPass && rightPass) bothPass++;
+		else if (leftPass && !rightPass) leftPassRightFail++;
+		else if (!leftPass && rightPass) rightPassLeftFail++;
+	}
+	for (const item of right) if (!seen.has(key(item))) missingOnLeft++;
+	return [
+		"## Slot pairs",
+		"",
+		`Paired on case and trial number. A pass / B fail: ${leftPassRightFail}. B pass / A fail: ${rightPassLeftFail}. Both pass: ${bothPass}. Missing on A: ${missingOnLeft}. Missing on B: ${missingOnRight}. Incomparable seeds: ${incomparable}.`,
+		missingOnLeft + missingOnRight + incomparable
+			? "Missing or differently seeded slots stay in this coverage line and are not imputed."
+			: "Every overlapping slot used the same fixture seed.",
+	].join("\n");
 }
 
 function read<T>(dir: string, file: string): T {

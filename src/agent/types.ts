@@ -317,6 +317,8 @@ export type RunnerProfile =
 
 export interface RunnerFactoryPaths {
 	fileStore?: FileStore;
+	/** Shared host executor. The runtime owns it so one process does not grow a second, unobserved one. */
+	executor?: Executor;
 	profile?: RunnerProfile;
 	/** Chat only: resolves the task lane's control port (the lane is built after the runners' factory). */
 	getTaskControl?: () => TaskControl | undefined;

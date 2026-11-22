@@ -15,6 +15,7 @@ import { basename, join } from "node:path";
 import { canRunE2E, createE2ETestHome, getE2ESkipReason } from "../../test/support/setup.js";
 import { metadataForCase } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
+import { Admission, beginTrial, chargeableTokens } from "./admission.js";
 import { atomicJson, captureArtifacts, sealArtifactIndex } from "./artifacts.js";
 import { caseHash, rubricHash, selectedCases } from "./cases.js";
 import { assertExecutionUnchanged, type ExecutionState, executionFingerprint } from "./execution-state.js";
@@ -477,6 +478,17 @@ export async function gradeModel(
 	};
 }
 
+function firstAcceptedDeliveryMs(trace: TraceEvent[], deliveries: OutcomeSnapshot["deliveries"]): number | undefined {
+	const start = trace.find((event) => event.kind === "step" && event.fields?.kind === "user");
+	const delivery = deliveries.find(
+		(item) =>
+			["sendPlain", "finalizeCard", "finalizeExistingCard"].includes(item.method) && Boolean(item.text?.trim()),
+	);
+	if (!start || !delivery) return;
+	const delta = delivery.ts - Date.parse(start.ts);
+	return Number.isFinite(delta) && delta >= 0 ? delta : undefined;
+}
+
 async function runTrial(
 	item: EvalCase,
 	descriptor: CaseDescriptor,
@@ -489,11 +501,48 @@ async function runTrial(
 	attempt = 1,
 	judgeEnabled = false,
 	executionHash?: string,
+	admission: Admission = new Admission({}),
 ): Promise<{ record: TrialRecord; configHashes: [string, string, string] }> {
 	const queuedAt = Date.now();
-	const releaseAgent = await agentPool.acquire();
+	const gate = await beginTrial(agentPool, admission);
 	let temporaryHome: string | undefined;
 	try {
+		if (gate.skip) {
+			const record: TrialRecord = {
+				schemaVersion: 5,
+				result: {
+					execution: "cancelled",
+					acceptance: "unknown",
+					invariants: "unknown",
+					grading: "error",
+					evidenceComplete: false,
+					stopReason: { source: "batch-budget", code: gate.skip, evidenceId: "plan.json" },
+				},
+				runId,
+				caseId: item.id,
+				caseHash: descriptor.caseHash,
+				trial,
+				attempt,
+				observedModel: "not-started",
+				outcome: "invalid",
+				grades: [],
+				metrics: {
+					costUsd: 0,
+					costBasis: "provider",
+					tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					wallMs: 0,
+					turns: 0,
+					toolCalls: 0,
+					segments: 0,
+					duplicateExternalEffects: 0,
+					userEscalations: 0,
+				},
+				startedAt: new Date().toISOString(),
+			};
+			mkdirSync(trialDir, { recursive: true });
+			atomicJson(join(trialDir, "record.json"), record);
+			return { record, configHashes: ["not-started", "not-started", "not-started"] };
+		}
 		assertExecutionUnchanged(executionHash);
 		const startedAt = new Date().toISOString();
 		mkdirSync(trialDir, { recursive: true });
@@ -580,7 +629,6 @@ async function runTrial(
 			}
 		} finally {
 			await fixture.close();
-			releaseAgent();
 		}
 		const agentWallMs = Date.now() - Date.parse(startedAt);
 		const snapshot: OutcomeSnapshot = {
@@ -718,6 +766,7 @@ async function runTrial(
 				userEscalations: deliveries.filter((delivery) =>
 					/\?|clarif|confirm|请.*确认|需要.*用户/i.test(delivery.text ?? ""),
 				).length,
+				firstDeliveryMs: firstAcceptedDeliveryMs(trace, deliveries),
 			},
 			startedAt,
 		};
@@ -764,9 +813,11 @@ async function runTrial(
 			record.archiveComplete,
 		);
 		rmSync(homeDir, { recursive: true, force: true });
+		const modelCalls = trace.some((event) => event.kind === "model-result" || event.kind === "usage");
+		admission.record(chargeableTokens(modelCalls, ledger.entries.length, tokens.total));
 		return { record, configHashes };
 	} finally {
-		releaseAgent();
+		gate.release();
 		if (temporaryHome) rmSync(temporaryHome, { recursive: true, force: true });
 	}
 }
@@ -951,6 +1002,40 @@ export async function runMain(
 		writeJson(join(resultDir, "manifest.json"), manifest);
 		const ordered = jobs.map((job, order) => ({ ...job, order }));
 		const results: Array<{ order: number; record: TrialRecord; configHashes: [string, string, string] }> = [];
+		const maxTokens = Number(process.env.EVAL_MAX_TOKENS ?? "");
+		const maxElapsedMinutes = Number(process.env.EVAL_MAX_ELAPSED_MINUTES ?? "");
+		let alreadySpent = 0;
+		if (resumeId) {
+			for (const job of jobs) {
+				const prior = completedTrial(
+					join(resultDir, "trials", `${job.item.id}-${job.trial}`),
+					runId,
+					job.descriptor,
+					job.trial,
+				);
+				if (!prior || prior.observedModel === "not-started") continue;
+				const total = prior.metrics?.tokens?.total;
+				if (!Number.isFinite(total)) {
+					alreadySpent = Number.NaN;
+					break;
+				}
+				alreadySpent += total;
+			}
+		}
+		if (Number.isFinite(maxTokens) && maxTokens > 0 && !Number.isFinite(alreadySpent))
+			throw new Error(
+				"Cannot resume a token-capped run because prior usage is incomplete. Start a new plan. Model requests: 0.",
+			);
+		const admission = new Admission(
+			{
+				maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : undefined,
+				maxElapsedMs:
+					Number.isFinite(maxElapsedMinutes) && maxElapsedMinutes > 0 ? maxElapsedMinutes * 60_000 : undefined,
+				unknownUsage: "stop",
+			},
+			undefined,
+			Number.isFinite(alreadySpent) ? alreadySpent : 0,
+		);
 		const agentPool = new EvalPool(concurrency);
 		const judgePool = new EvalPool(judgeConcurrency);
 		process.stdout.write(`eval ${runId}: ${jobs.length} trials; concurrency ${concurrency}; evidence ${resultDir}\n`);
@@ -977,6 +1062,7 @@ export async function runMain(
 					nextAttemptNumber(trialDir),
 					plan.judgeEnabled,
 					executionState.expected,
+					admission,
 				);
 				results.push({ order: job.order, ...result });
 				process.stdout.write(
@@ -1004,6 +1090,17 @@ export async function runMain(
 			JSON.stringify(results.map(({ record, configHashes }) => [record.caseId, configHashes[2]])),
 		);
 		writeFileSync(join(resultDir, "trials.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+		atomicJson(join(resultDir, "budget.json"), {
+			schemaVersion: 1,
+			...admission.snapshot(),
+			notStarted: records
+				.filter((record) => record.observedModel === "not-started")
+				.map((record) => ({
+					caseId: record.caseId,
+					trial: record.trial,
+					reason: record.result?.stopReason?.code,
+				})),
+		});
 
 		manifest.finishedAt = new Date().toISOString();
 		writeJson(join(resultDir, "manifest.json"), manifest);

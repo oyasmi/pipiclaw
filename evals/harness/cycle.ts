@@ -4,6 +4,13 @@ import { allCases } from "../cases/index.js";
 import { atomicJson } from "./artifacts.js";
 import { renderDiagnostics } from "./diagnostics.js";
 import { caseComparisonBlockers, type Experiment, renderDiff } from "./diff.js";
+import {
+	applyRunBudget,
+	assertPlanIdentity,
+	buildExecutionPlan,
+	loadExecutionPlan,
+	planPath,
+} from "./execution-plan.js";
 import type { ExecutionState } from "./execution-state.js";
 import { canonicalJson } from "./fingerprint.js";
 import { assertPromotableSummary, promoteRun, validateBaselineEvidence } from "./promote.js";
@@ -18,7 +25,15 @@ function read<T>(dir: string, file: string): T {
 
 /** Reject oversized plans before any agent request; this does not estimate provider invoices. */
 export function cycleBudget(args: string[]) {
-	const flags = ["--max-cost-usd", "--max-wall-minutes", "--experiment"];
+	const flags = [
+		"--max-cost-usd",
+		"--max-wall-minutes",
+		"--max-tokens",
+		"--max-elapsed-minutes",
+		"--experiment",
+		"--plan",
+		"--output",
+	];
 	const selectionArgs = args.filter((arg, index) => !flags.includes(arg) && !flags.includes(args[index - 1] ?? ""));
 	const selection = selectCases(selectionArgs);
 	const positive = (flag: string, fallback: number) => {
@@ -63,7 +78,8 @@ export async function replayRun(dir: string): Promise<{ matched: number; total: 
 		grades
 			.filter((grade) => grade.graderKind !== "model")
 			.map(({ graderId, graderVersion, status, severity }) => ({ graderId, graderVersion, status, severity }));
-	for (const record of records) {
+	const started = records.filter((record) => record.observedModel !== "not-started");
+	for (const record of started) {
 		const slot = `${record.caseId}-${record.trial}`;
 		try {
 			const item = allCases.find((item) => item.id === record.caseId);
@@ -86,7 +102,7 @@ export async function replayRun(dir: string): Promise<{ matched: number; total: 
 			errors.push(`${slot}: ${String(error)}`);
 		}
 	}
-	const result = { matched, total: records.length, errors };
+	const result = { matched, total: started.length, errors };
 	atomicJson(join(dir, "replay.json"), { schemaVersion: 1, agentRequests: 0, judgeRequests: 0, ...result });
 	return result;
 }
@@ -177,8 +193,36 @@ export function selectReference(
 }
 
 export async function runCycle(args: string[], setEnvironment: (ids: string[]) => void): Promise<void> {
-	const envelope = cycleBudget(args);
+	const planFile = option(args, "--plan");
+	const frozenPlan = planFile ? loadExecutionPlan(planPath(planFile)) : undefined;
+	if (frozenPlan) assertPlanIdentity(frozenPlan);
+	const envelope = frozenPlan
+		? {
+				selection: {
+					cases: allCases.filter((item) => frozenPlan.slots.some((slot) => slot.caseId === item.id)),
+					trials: frozenPlan.trials,
+					concurrency: frozenPlan.concurrency,
+					judgeConcurrency: frozenPlan.judgeConcurrency,
+					profile: frozenPlan.profile as "dev",
+					reasons: frozenPlan.reasons,
+					judgeEnabled: false,
+					uncovered: frozenPlan.uncovered,
+					unknownPaths: frozenPlan.unknownPaths,
+					emptyReason: frozenPlan.emptyReason,
+				},
+				maxCostUsd: frozenPlan.budgets.maxCostUsd,
+				maxWallMs: frozenPlan.budgets.maxWallMinutes * 60_000,
+				agentCeilingUsd: frozenPlan.budgets.maxCostUsd,
+				wallCeilingMs: frozenPlan.budgets.maxWallMinutes * 60_000,
+				experiment: (option(args, "--experiment") ?? "none") as Experiment,
+			}
+		: cycleBudget(args);
 	const { selection } = envelope;
+	if (!selection.cases.length) {
+		process.stdout.write(`Eval plan is empty (${selection.emptyReason ?? "no cases"}). Model requests: 0.\n`);
+		return;
+	}
+	applyRunBudget(process.env, frozenPlan?.budgets ?? buildExecutionPlan(args).budgets);
 	setEnvironment(selection.cases.map((item) => item.id));
 	delete process.env.EVAL_RESUME;
 	process.env.EVAL_TRIALS = String(selection.trials);

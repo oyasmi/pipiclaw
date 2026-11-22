@@ -351,6 +351,7 @@ async function buildRuntimeContext(
 	/** What every runner of a channel shares: the desk's managers, settings and how the channel is named and answered. */
 	const runnerPaths = (conversation: DeskConversation, channelId: string): RunnerFactoryPaths => ({
 		fileStore,
+		executor,
 		jobManager: jobs.get(conversation.desk),
 		runManager: runs.get(conversation.desk),
 		appHomeDir,
@@ -424,6 +425,7 @@ async function buildRuntimeContext(
 			createRunner: (conversation) =>
 				createRunner(conversation, {
 					profile: { kind: "request" },
+					executor,
 					jobManager: jobs.get(conversation.desk),
 					runManager: runs.get(conversation.desk),
 					appHomeDir,
