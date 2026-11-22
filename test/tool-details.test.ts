@@ -13,7 +13,6 @@ import { validateToolNames } from "../src/subagents/discovery.js";
 import { createBashTool } from "../src/tools/bash.js";
 import { isRecoverableRejection, toolResultDetails, withToolDetails } from "../src/tools/contract/details.js";
 import { REQUEST_SCOPED_TOOL_NAMES, SUBAGENT_TOOL_NAMES } from "../src/tools/contract/names.js";
-import { describeToolCall } from "../src/tools/contract/presentation.js";
 import { createEditTool } from "../src/tools/edit.js";
 import { buildToolSet, TOOL_REGISTRY, type ToolBuildContext } from "../src/tools/registry.js";
 import { createSubAgentTool } from "../src/tools/subagent.js";
@@ -158,8 +157,6 @@ describe("rejections stay out of the user's chat", () => {
 
 		expect(failureLines(events)).toEqual([undefined]);
 		expect(events).toContainEqual(expect.objectContaining({ type: "tool.end", callId: "c1", ok: false }));
-		// Regression (P2-3b): memory_forget's schema uses `name`, not `target`.
-		expect(describeToolCall("memory_forget", { name: "deploy-window" })).toBe('记忆删除 "deploy-window"');
 	});
 
 	it("still shows an error bubble for a real tool failure or a user-only scope decision", async () => {

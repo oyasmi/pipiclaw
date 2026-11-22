@@ -21,6 +21,16 @@ export interface MockProvider {
 	close(): Promise<void>;
 }
 
+export function summarizeProviderRequests(requests: CapturedRequest[]): string {
+	const routes = requests
+		.slice(-8)
+		.map(
+			(request) =>
+				`${request.model}/${request.isMainTurn ? "tool-enabled" : "tool-free"}:${request.matchedRoute ?? "held"}`,
+		);
+	return `Provider requests: ${requests.length}; last routes: ${routes.join(", ") || "none"}`;
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of req) chunks.push(chunk as Buffer);

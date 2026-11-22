@@ -11,6 +11,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import * as journal from "../src/memory/journal.js";
 import { runReflect } from "../src/memory/reflect.js";
+import { reviewLogEntryFor } from "../src/memory/review-log.js";
 import { runRetriedSidecarTask } from "../src/memory/sidecar-worker.js";
 import { applyMemoryOps, isDescriptionTombstoned, listMemoryEntries } from "../src/memory/store.js";
 import { createMemorySaveTool } from "../src/tools/memory-manage.js";
@@ -319,6 +320,9 @@ describe("reflect — user-source protection", () => {
 		});
 		const result = await run(deskDir);
 		expect(result.deleted).toEqual([]);
+		expect(reviewLogEntryFor(result).skipped).toContainEqual(
+			expect.objectContaining({ target: "memory", op: "delete", name: "u" }),
+		);
 		expect((await listMemoryEntries(deskDir)).map((e) => e.name)).toContain("u");
 	});
 
@@ -390,7 +394,11 @@ describe("reflect — deterministic pre-step", () => {
 		await applyMemoryOps(deskDir, [
 			{ op: "add", name: "old", description: "stale probation", source: "agent", expires: "2026-09-01" },
 		]);
-		scripted({ journal: [], ops: [], discarded: [] });
+		vi.mocked(runRetriedSidecarTask).mockImplementationOnce(async (task) => {
+			expect(await listMemoryEntries(deskDir)).toEqual([]);
+			const text = JSON.stringify({ journal: [], ops: [], discarded: [] });
+			return { rawText: text, output: task.parse(text) } as never;
+		});
 		const result = await run(deskDir);
 		expect(result.expiredProbation).toEqual(["old"]);
 		expect(await listMemoryEntries(deskDir)).toEqual([]);

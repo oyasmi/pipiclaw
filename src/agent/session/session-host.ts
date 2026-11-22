@@ -41,6 +41,7 @@ import {
 	resolveInitialModel,
 	wrapModelRegistry,
 } from "../../models/runtime.js";
+import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../../playbooks/catalog.js";
 import type { LoadedSecurityConfig } from "../../security/config.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { isRecord } from "../../shared/type-guards.js";
@@ -54,11 +55,12 @@ import type { SubAgentDiscoveryResult } from "../../subagents/types.js";
 import type { TaskControl } from "../../tasks/control.js";
 import { withExecutionTrace } from "../../tools/contract/execution-trace.js";
 import { createPipiclawTools } from "../../tools/index.js";
+import { TOOL_NAMES } from "../../tools/registry.js";
 import type { UsageLedger } from "../../usage/ledger.js";
 import { buildPipiclawSystemPrompt } from "../prompt/builder.js";
 import { createPromptBoundaryExtension } from "../prompt/extension.js";
 import { measureToolSchemas, TOOL_SCHEMA_TARGET_UNITS, toolSchemaBudgetWarning } from "../prompt/manifest.js";
-import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResources } from "../prompt/resources.js";
+import { loadWorkspacePromptResources, type WorkspacePromptResources } from "../prompt/resources.js";
 import type { PromptBuildResult } from "../prompt/types.js";
 import type { RunnerProfile, RunState } from "../types.js";
 import { createCommandExtension } from "./command-extension.js";
@@ -482,7 +484,7 @@ export class SessionHost {
 			})),
 			soul: resources.soul,
 			agents: resources.agents,
-			playbooks: loadPlaybooks(toolNames),
+			playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(TOOL_NAMES), toolNames),
 			subAgents: this.subAgentDiscovery.agents.map((agent) => ({
 				name: agent.name,
 				description: agent.description,

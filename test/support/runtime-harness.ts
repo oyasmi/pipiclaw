@@ -9,7 +9,7 @@ import { DingTalkTransport } from "../../src/dingtalk/transport.js";
 import { waitFor } from "../e2e/helpers/wait.js";
 import { type CapturedDelivery, HarnessDingTalkBot } from "./harness-bot.js";
 import type { CapturedRequest } from "./mock-provider/script.js";
-import { startMockProvider } from "./mock-provider/server.js";
+import { startMockProvider, summarizeProviderRequests } from "./mock-provider/server.js";
 import { cleanupE2ETestHome, createDeterministicHome, createE2ETestHome, type E2ETestHome } from "./setup.js";
 
 export { reply } from "./mock-provider/script.js";
@@ -175,7 +175,7 @@ export interface DeterministicHarness {
 	/** Wait until no channel queue has pending/in-flight work and the runner is idle. */
 	waitForIdle(): Promise<void>;
 	/** Wait for a captured delivery matching `predicate`. */
-	waitForDelivery(predicate: (d: CapturedDelivery) => boolean): Promise<CapturedDelivery>;
+	waitForDelivery(label: string, predicate: (d: CapturedDelivery) => boolean): Promise<CapturedDelivery>;
 	/** Gracefully reinitialize the runtime in this process; does not prove process/crash recovery. */
 	restart(): Promise<void>;
 	/** Count of chat-completions requests the provider has received so far. */
@@ -350,6 +350,11 @@ export async function createDeterministicHarness(options?: {
 		};
 	}
 
+	function describeTurn(): string {
+		const recent = deliveries.slice(-8).map(({ method, channelId }) => `${channelId}:${method}`);
+		return `${summarizeProviderRequests(model.requests)}\nDeliveries: ${deliveries.length}; last: ${recent.join(", ") || "none"}`;
+	}
+
 	async function waitForIdle(): Promise<void> {
 		await waitFor(
 			"channel idle",
@@ -357,6 +362,8 @@ export async function createDeterministicHarness(options?: {
 			{
 				timeoutMs: 30_000,
 				intervalMs: 25,
+				describeLastObservation: () =>
+					`Queue idle: ${runtime.ingress.isIdle()}; pending ingest: ${bot.hasPendingIngest()}; channel running: ${runtime.ingress.isRunning(channelId)}\n${describeTurn()}`,
 			},
 		);
 	}
@@ -365,9 +372,10 @@ export async function createDeterministicHarness(options?: {
 		const bad = model.unmatched();
 		if (bad.length > 0) {
 			const lines = bad
+				.slice(-5)
 				.map((r) => `  - ${r.isMainTurn ? "main" : "sidecar"}: ${(r.lastUserText || r.systemPrompt).slice(0, 200)}`)
 				.join("\n");
-			throw new Error(`mock provider received ${bad.length} unmatched request(s):\n${lines}`);
+			throw new Error(`mock provider received ${bad.length} unmatched request(s):\n${lines}\n${describeTurn()}`);
 		}
 	}
 
@@ -409,7 +417,13 @@ export async function createDeterministicHarness(options?: {
 			return runtime.ingress.runRuntimeCommand(buildEvent(`/${name} ${args}`), name as never, args);
 		},
 		waitForIdle,
-		waitForDelivery: (predicate) => bot.whenDelivered(predicate),
+		async waitForDelivery(label, predicate) {
+			try {
+				return await bot.whenDelivered(predicate);
+			} catch (cause) {
+				throw new Error(`Waiting for ${label} failed\n${describeTurn()}`, { cause });
+			}
+		},
 		async restart(): Promise<void> {
 			await runtime.shutdown("manual");
 			await boot();
@@ -428,6 +442,7 @@ export async function createDeterministicHarness(options?: {
 				// Include requests issued by the final reflect pass, not just those seen by afterEach.
 				assertNoUnmatchedRequests();
 			} finally {
+				console.info(describeTurn());
 				await model.close();
 				delete process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS;
 				restoreOffline();

@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_TARGET_UNITS } from "../src/agent/prompt/builder.js";
+import type { PromptBuildContext } from "../src/agent/prompt/types.js";
 import { parseScheduledEventContent } from "../src/events/parse.js";
 import { validateScheduledEvent } from "../src/events/validation.js";
 import { PLAYBOOKS_DIR } from "../src/paths.js";
@@ -158,6 +160,63 @@ describe("runtime playbook catalog", () => {
 		const directory = makeTempDir();
 		writeFileSync(join(directory, "probe.md"), `---\n${fields}\n---\nbody`);
 		expect(() => loadRuntimePlaybookCatalog(TOOL_NAMES, directory)).toThrow(error);
+	});
+});
+
+function promptContext(names: string[]): PromptBuildContext {
+	return {
+		tools: names.map((name) => ({ name, description: `${name} description` })),
+		playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(TOOL_NAMES), names),
+		subAgents: [
+			{ name: "reviewer", description: "Reviews a diff", runtime: "internal", workload: "light", mutates: "read" },
+		],
+	};
+}
+
+describe("system prompt structure", () => {
+	it("keeps chat and task instructions within budget and points to guides available in that profile", () => {
+		const taskOnly = ["task_report", "task_ask", "task_wait"];
+		const chatOnly = [
+			"task_create",
+			"task_list",
+			"task_message",
+			"task_pause",
+			"task_resume",
+			"memory_save",
+			"event_manage",
+		];
+		for (const [names, guide] of [
+			[ALL_TOOLS, "task-manage.md"],
+			[ALL_TOOLS.filter((name) => !taskOnly.includes(name)), "task-manage.md"],
+			[ALL_TOOLS.filter((name) => !chatOnly.includes(name)), "task-lead.md"],
+		] as const) {
+			const build = buildPipiclawSystemPrompt(promptContext(names));
+			const ids = build.sections.map((section) => section.id);
+			expect(new Set(ids).size).toBe(ids.length);
+			expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(RUNTIME_PROMPT_TARGET_UNITS);
+			expect(build.diagnostics.filter((diagnostic) => diagnostic.level !== "info")).toEqual([]);
+			const section = (id: string) => build.sections.find((item) => item.id === id)?.content;
+			expect(section("runtime.tasks")).toContain(guide);
+			expect(section("playbooks")).toContain(guide);
+			expect(section("subagents")).not.toContain("task-lead.md");
+			if (guide === "task-lead.md") {
+				expect(section("runtime.identity")).toContain("task_report");
+				expect(build.text).not.toContain("task-manage.md");
+			}
+		}
+	});
+
+	it("drops a mechanism's whole surface when its tool is off", () => {
+		const build = buildPipiclawSystemPrompt(promptContext(["read", "bash", "grep"]));
+
+		expect(build.sections.some((section) => section.id === "runtime.tasks")).toBe(false);
+		expect(build.sections.some((section) => section.id === "subagents")).toBe(false);
+		expect(build.text).not.toContain("agent-delegation.md");
+		expect(build.text).not.toContain("task-lead.md");
+		expect(build.text).not.toContain("memory-operations.md");
+		// The memory invariant is gated on the tool being registered, like the rest.
+		expect(build.text).not.toContain("`memory_save`");
+		expect(build.text).toContain("runtime-orientation.md");
 	});
 });
 

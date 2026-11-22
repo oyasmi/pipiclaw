@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { changedPathsSummary, snapshotWorkspace } from "../src/subagents/workspace-summary.js";
@@ -24,15 +24,17 @@ describe("write-run workspace summary", () => {
 	it("credits a run only with what it changed, not what was already dirty when it started", async () => {
 		const dir = gitRepo();
 		// Dirty before the run: the leader's own edit, and an untracked scratch file.
-		appendFileSync(join(dir, "a.ts"), "leader edit\n");
+		const shared = join(dir, "a.ts");
+		appendFileSync(shared, "leader edit\n");
+		utimesSync(shared, 1, 1);
 		writeFileSync(join(dir, "scratch.md"), "notes\n");
 		const baseline = await snapshotWorkspace(dir);
 
 		// The run: edits a clean file, adds a new one, and touches a file that was already dirty.
-		await new Promise((resolve) => setTimeout(resolve, 15)); // distinct mtime for the re-touched file
 		appendFileSync(join(dir, "b.ts"), "run edit\n");
 		writeFileSync(join(dir, "new.ts"), "new\n");
-		appendFileSync(join(dir, "a.ts"), "run edit too\n");
+		writeFileSync(shared, "a\nworker edit\n"); // Same-length edit needs the mtime to be noticed.
+		utimesSync(shared, 2, 2);
 
 		const summary = await changedPathsSummary(dir, baseline);
 		expect(summary).toContain("b.ts");
@@ -60,8 +62,10 @@ describe("write-run workspace summary", () => {
 		chmodSync(executable, 0o755);
 		vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 		try {
-			expect(await snapshotWorkspace(dir)).toBeUndefined();
-			expect(await changedPathsSummary(dir)).toBeUndefined();
+			await expect(Promise.all([snapshotWorkspace(dir), changedPathsSummary(dir)])).resolves.toEqual([
+				undefined,
+				undefined,
+			]);
 			expect(readFileSync(marker, "utf8").split("\n").filter(Boolean)).toHaveLength(2);
 		} finally {
 			vi.unstubAllEnvs();

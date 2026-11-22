@@ -7,7 +7,7 @@ async function sleep(ms: number): Promise<void> {
 export async function waitFor<T>(
 	label: string,
 	check: () => T | null | undefined | false | Promise<T | null | undefined | false>,
-	options?: { timeoutMs?: number; intervalMs?: number },
+	options?: { timeoutMs?: number; intervalMs?: number; describeLastObservation?: () => string },
 ): Promise<T> {
 	const timeoutMs = options?.timeoutMs ?? 30_000;
 	const intervalMs = options?.intervalMs ?? 500;
@@ -21,7 +21,8 @@ export async function waitFor<T>(
 		await sleep(intervalMs);
 	}
 
-	throw new Error(`Timed out waiting for ${label} after ${timeoutMs}ms`);
+	const observation = options?.describeLastObservation?.();
+	throw new Error(`Timed out waiting for ${label} after ${timeoutMs}ms${observation ? `\n${observation}` : ""}`);
 }
 
 export async function waitForFile(

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PLAYBOOKS_DIR } from "../../../src/paths.js";
@@ -142,8 +142,10 @@ describe("E2E deterministic: system prompt", () => {
 		expect(prompt).not.toContain(harness.channelId);
 		// Reload must update the provider's actual declaration and executable tool instances.
 		const fixturePath = join(harness.workspaceDir, "fixture.txt");
+		const searchPath = join(harness.workspaceDir, "reload-search.txt");
 		const aliasRoot = getSkillRoots(harness.workspaceDir)[1].dir;
 		writeFileSync(fixturePath, "RELOADED_TOOL_RESULT");
+		writeFileSync(searchPath, "RELOADED_SEARCH_RESULT");
 		writeFileSync(join(harness.homeDir, "tools.json"), JSON.stringify({ tools: { tasks: { enabled: false } } }));
 		writeFileSync(workspaceFile, markdown("release", "EXTERNAL_UPDATE_063", "EXTERNAL_DESCRIPTION_063"));
 		// With symlink resolution explicitly disabled, write details contain the lexical alias.
@@ -164,6 +166,12 @@ describe("E2E deterministic: system prompt", () => {
 			when: (r) => r.lastUserText.includes("RELOAD"),
 			respond: [
 				reply.toolCall("read", { path: fixturePath }),
+				reply.toolCall("grep", { pattern: "RELOADED_SEARCH_RESULT", path: searchPath }, "reload-search"),
+				reply.toolCall(
+					"task_create",
+					{ id: "disabled-task", title: "Disabled", goal: "Verify tool reload", dod: "- [ ] Done" },
+					"disabled-task-create",
+				),
 				reply.toolCall("write", {
 					path: join(aliasRoot, "shared-only/SKILL.md"),
 					content: markdown("shared-only", "ALIAS_BODY_063", "ALIAS_WRITE_063"),
@@ -173,11 +181,23 @@ describe("E2E deterministic: system prompt", () => {
 		});
 		await harness.sendUserMessage("RELOAD");
 		const reloaded = harness.lastMainTurnRequest()!;
+		// Mutation: ignoring the configured task switch creates this task despite /reload.
+		expect(existsSync(join(harness.deskDir, "tasks", "disabled-task.md"))).toBe(false);
 		expect(reloaded.tools).toContain("read");
 		expect(reloaded.systemPrompt).toContain("runtime-orientation.md");
 		expect(reloaded.systemPrompt).toContain("EXTERNAL_DESCRIPTION_063");
 		expect(reloaded.tools).not.toContain("task_create");
 		expect(JSON.stringify(reloaded.messages)).toContain("RELOADED_TOOL_RESULT");
+		expect(reloaded.raw.messages).toContainEqual(
+			expect.objectContaining({
+				role: "tool",
+				tool_call_id: "reload-search",
+				content: expect.stringContaining("RELOADED_SEARCH_RESULT"),
+			}),
+		);
+		expect(reloaded.raw.messages).toContainEqual(
+			expect.objectContaining({ role: "tool", tool_call_id: "disabled-task-create" }),
+		);
 		harness.model.script.route({
 			name: "alias-check",
 			when: (r) => r.lastUserText.includes("CHECK_ALIAS"),

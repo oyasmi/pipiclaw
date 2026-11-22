@@ -3,6 +3,9 @@ import { createExecutor, type ExecOptions, type Executor } from "../src/executor
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createGrepTool } from "../src/tools/grep.js";
+import { useTempDirs } from "./helpers/fixtures.js";
+
+const makeWorkspace = useTempDirs("pipiclaw-grep-");
 
 function fakeExecutor(
 	stdout: string,
@@ -135,17 +138,12 @@ describe("grep tool", () => {
 		await expect(run(failed.tool, { pattern: "[" })).rejects.toThrow(/grep failed/);
 	});
 
-	it("validates the pattern and passes ERE plus the pattern safely to grep", async () => {
+	it("rejects empty patterns before invoking the search backend", async () => {
 		const empty = makeTool("");
 		const rejected = run(empty.tool, { pattern: "   " });
 		await expect(rejected).rejects.toBeInstanceOf(RecoverableToolError);
 		await expect(rejected).rejects.toThrow(/must not be empty/);
-
-		const { tool, commands } = makeTool(match("a.txt", 1, "hit"));
-		await run(tool, { pattern: "foo|bar", caseSensitive: false });
-		expect(commands[0]).toContain("-E");
-		expect(commands[0]).toContain("-i");
-		expect(commands[0]).toContain("'foo|bar'");
+		expect(empty.commands).toEqual([]);
 	});
 
 	it("pushes ignored-dir and glob filters down into grep itself, and bounds capture by bytes not the executor's default (D5.1/D5.2)", async () => {
@@ -375,15 +373,22 @@ describe("grep tool read-guard backstop (batch 1.4)", () => {
 });
 
 describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
-	it("passes -F for a literal search and -E otherwise", async () => {
-		const { tool, commands } = makeToolTrackingCalls(match("a.ts", 1, "foo.bar(x)"));
-		await tool.execute("call", { label: "s", pattern: "foo.bar(", literal: true } as never);
-		expect(commands[0]).toContain(" -F ");
-		expect(commands[0]).not.toMatch(/\s-E\s/);
-
-		const { tool: t2, commands: c2 } = makeToolTrackingCalls(match("a.ts", 1, "hit"));
-		await t2.execute("call", { label: "s", pattern: "fo+" } as never);
-		expect(c2[0]).toContain(" -E ");
+	it("treats metacharacters literally only when requested and honors case-insensitive regex", async () => {
+		const { writeFileSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const dir = makeWorkspace();
+		const path = join(dir, "input.txt");
+		writeFileSync(path, "foo.bar(x)\nFOOxBARx\n");
+		const tool = createGrepTool(createExecutor(), {
+			securityConfig,
+			securityContext: { agentWorkspaceDir: dir, cwd: dir },
+		});
+		const literal = await run(tool, { path, pattern: "foo.bar(", literal: true });
+		expect(literal).toContain("*1:foo.bar(x)");
+		expect(literal).not.toContain("*2:");
+		const regex = await run(tool, { path, pattern: "foo.barx|absent", caseSensitive: false });
+		expect(regex).toContain("*2:FOOxBARx");
+		expect(regex).not.toContain("*1:");
 	});
 
 	it("mode:files returns only paths and mode:count returns per-file counts", async () => {

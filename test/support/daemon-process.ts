@@ -9,13 +9,18 @@ export async function startDaemon(homeDir: string, worker = "./daemon-worker.mjs
 	});
 	let stderr = "";
 	child.stderr!.on("data", (data) => {
-		stderr += String(data);
+		stderr = (stderr + String(data)).slice(-4096);
 	});
 	async function receive(): Promise<{ ready?: boolean; value?: unknown; error?: string }> {
 		try {
 			return (await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0];
 		} catch (error) {
-			throw new Error(`daemon IPC failed: ${stderr}`, { cause: error });
+			throw new Error(
+				`daemon IPC failed (pid ${child.pid}, exit ${child.exitCode ?? child.signalCode ?? "pending"})\n${stderr}`,
+				{
+					cause: error,
+				},
+			);
 		}
 	}
 	try {

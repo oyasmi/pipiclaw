@@ -323,7 +323,10 @@ describe("E2E deterministic: the task lane", () => {
 			await recorded("skipped", 1);
 			writeOccurrence("2020-01-13T09:00:00+08:00");
 			// The previous instance is still running (held): the new occurrence is skipped and the user told.
-			await harness.waitForDelivery((d) => d.method === "sendPlain" && (d.text ?? "").includes(`/tasks show ${id}`));
+			await harness.waitForDelivery(
+				`completion receipt for ${id}`,
+				(d) => d.method === "sendPlain" && (d.text ?? "").includes(`/tasks show ${id}`),
+			);
 			await recorded("skipped", 2);
 			expect((await readActiveTasks(tasksDir())).map((e) => e.id)).toEqual([id]);
 		} finally {

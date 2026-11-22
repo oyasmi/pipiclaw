@@ -13,11 +13,6 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		await harness.shutdown();
 	});
 
-	const lastUserContent = (): string => {
-		const users = (harness.lastMainTurnRequest()?.messages ?? []).filter((m) => m.role === "user");
-		return users.at(-1)?.content ?? "";
-	};
-
 	it("M2/DESK-1: two channels of one desk share memory and journal, never each other's conversation", async () => {
 		// Spec 058, G1/D1: memory belongs to the desk, conversations to the channel. Catches (a) a
 		// first-turn bootstrap built from the conversation directory instead of the desk, and (b) two
@@ -153,6 +148,8 @@ describe("E2E deterministic: memory (spec 050)", () => {
 	});
 
 	it("M1: memory_save writes a file; the index is injected on a new session's first turn only", async () => {
+		// A saved fact must stay user-owned on disk and enter the new session exactly once.
+		// Mutation: bypassing firstTurnMemoryBootstrapPending puts a second index in the follow-up request.
 		harness = await createDeterministicHarness();
 		harness.model.script.route({
 			name: "ack",
@@ -180,16 +177,27 @@ describe("E2E deterministic: memory (spec 050)", () => {
 			{ timeoutMs: 10_000, intervalMs: 100 },
 		);
 		expect(saved).toContain("type: reference");
+		expect(saved).toContain("source: user");
 
-		// New session: the index is injected on the first turn.
+		const requestFor = async (marker: string) => {
+			const before = harness.mainTurnRequests().length;
+			await harness.sendUserMessage(marker);
+			const requests = harness.mainTurnRequests().slice(before);
+			expect(requests).toHaveLength(1);
+			expect(requests[0].lastUserText).toContain(marker);
+			return requests[0];
+		};
+
 		await harness.sendUserMessage("/new");
-		await harness.sendUserMessage("你好");
-		expect(lastUserContent()).toContain("<memory_index>");
-		expect(lastUserContent()).toContain("生产数据库端口是 6432");
-
-		// Second turn of the same session: no bootstrap block.
-		await harness.sendUserMessage("再聊一句");
-		expect(lastUserContent()).not.toContain("<memory_bootstrap>");
+		const first = await requestFor("BOOTSTRAP_FIRST");
+		expect(first.lastUserText).toContain("<memory_index>");
+		expect(first.lastUserText).toContain("生产数据库端口是 6432");
+		const next = await requestFor("BOOTSTRAP_FOLLOWUP");
+		expect(next.lastUserText).not.toContain("<memory_index>");
+		const bootstraps = next.messages.filter(
+			(message) => message.role === "user" && message.content.includes("<memory_index>"),
+		);
+		expect(bootstraps.map((message) => message.content)).toEqual([first.lastUserText]);
 	});
 
 	it("M3: the boundary reflect pass writes memory + journal and does not reprocess an empty window", async () => {
@@ -287,6 +295,14 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		});
 		expect(journal).toContain("01:00 完成一次部署");
 		expect(readdirSync(join(harness.deskDir, "memory")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
+		// Mutation: suppressing journal actions in reviewLogEntryFor loses the persisted audit evidence.
+		const audit = readFileSync(join(harness.deskDir, "memory-review.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(audit.flatMap((entry) => entry.actions ?? [])).toContainEqual(
+			expect.objectContaining({ target: "journal", action: "append", count: 1 }),
+		);
 
 		// A second /new with nothing said in between reflects on an empty window — no new call.
 		// Instantiate the empty session: /new alone can take the runner-free runtime path.
@@ -295,102 +311,5 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// Drain the queue used by the detached boundary reflect; no observation-time guess.
 		await getDeskMemoryQueue().run(harness, async () => {});
 		expect(harness.model.requests.filter((r) => r.matchedRoute === "reflect-once")).toHaveLength(reflected.length);
-	});
-
-	it("M4: a source:user memory survives a reflect delete attempt, logged as skipped", async () => {
-		harness = await createDeterministicHarness();
-		harness.model.script.route({
-			name: "ack",
-			when: (r) => r.isMainTurn,
-			respond: [reply.text("好的")],
-			repeat: true,
-		});
-		harness.model.script.prependRoute({
-			name: "save",
-			when: (r) => r.isMainTurn && r.lastUserText.includes("记住"),
-			respond: [
-				reply.toolCall("memory_save", {
-					content: "生产密钥保管在保险柜",
-					name: "prod-key-location",
-					type: "project",
-				}),
-				reply.text("已记住。"),
-			],
-		});
-		harness.model.script.prependRoute({
-			name: "reflect-delete-user-entry",
-			when: (r) => !r.isMainTurn && r.systemPrompt.includes("memory reflection worker"),
-			respond: [
-				reply.json({
-					journal: [],
-					ops: [{ op: "delete", name: "prod-key-location", confidence: 0.99, reason: "seems outdated" }],
-					discarded: [],
-				}),
-			],
-			repeat: true,
-		});
-
-		await harness.sendUserMessage("记住：生产密钥保管在保险柜。");
-		await waitForFileContent(join(harness.deskDir, "memory", "prod-key-location.md"), () => true, {
-			timeoutMs: 10_000,
-			intervalMs: 100,
-		});
-
-		await harness.sendUserMessage("/new");
-		const reviewLogPath = join(harness.deskDir, "memory-review.jsonl");
-		await waitForFileContent(
-			reviewLogPath,
-			(c) => c.includes("prod-key-location") && c.includes("cannot be auto-deleted"),
-			{ timeoutMs: 10_000, intervalMs: 100 },
-		);
-
-		expect(existsSync(join(harness.deskDir, "memory", "prod-key-location.md"))).toBe(true);
-	});
-
-	it("M8: touch clears probation; an untouched, already-expired entry is deleted before the next reflect", async () => {
-		harness = await createDeterministicHarness();
-		harness.model.script.route({
-			name: "ack",
-			when: (r) => r.isMainTurn,
-			respond: [reply.text("好的")],
-			repeat: true,
-		});
-
-		// First turn establishes the channel (and its migration) before we hand-seed entries.
-		await harness.sendUserMessage("你好");
-
-		const memoryDir = join(harness.deskDir, "memory");
-		mkdirSync(memoryDir, { recursive: true });
-		const yesterday = localDayKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
-		const farFuture = localDayKey(new Date(Date.now() + 20 * 24 * 60 * 60 * 1000));
-		writeFileSync(
-			join(memoryDir, "still-probationary.md"),
-			`---\nname: still-probationary\ndescription: touched probationary fact\ntype: project\nsource: agent\ncreated: 2026-01-01\nupdated: 2026-01-01\nexpires: ${farFuture}\n---\n`,
-			"utf-8",
-		);
-		writeFileSync(
-			join(memoryDir, "already-expired.md"),
-			`---\nname: already-expired\ndescription: expired probationary fact\ntype: project\nsource: agent\ncreated: 2026-01-01\nupdated: 2026-01-01\nexpires: ${yesterday}\n---\n`,
-			"utf-8",
-		);
-
-		harness.model.script.prependRoute({
-			name: "reflect-touch",
-			when: (r) => !r.isMainTurn && r.systemPrompt.includes("memory reflection worker"),
-			respond: [reply.json({ journal: [], ops: [{ op: "touch", names: ["still-probationary"] }], discarded: [] })],
-			repeat: true,
-		});
-
-		await harness.sendUserMessage("继续");
-		await harness.sendUserMessage("/new");
-
-		await waitForFileContent(
-			join(harness.deskDir, "MEMORY.md"),
-			(c) => c.includes("touched probationary fact") && !c.includes("already-expired"),
-			{ timeoutMs: 10_000, intervalMs: 100 },
-		);
-		expect(existsSync(join(memoryDir, "already-expired.md"))).toBe(false);
-		const touchedRaw = readFileSync(join(memoryDir, "still-probationary.md"), "utf-8");
-		expect(touchedRaw).not.toContain("expires:");
 	});
 });

@@ -12,6 +12,7 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 
 	it("A4: messages that arrive mid-turn are serialized, not interleaved, and all answered", async () => {
 		// Catches the per-channel queue starting a second model turn before its current turn ends.
+		// Mutation: finalizing every card twice fails the ordered delivery-count assertion.
 		harness = await createDeterministicHarness();
 		harness.model.script.route({
 			name: "turn",
@@ -20,24 +21,24 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 		});
 		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn && r.lastUserText.includes("MSG_ONE") });
 
-		await harness.sendUserMessageNoWait("MSG_ONE");
-		await gate.arrived;
-		await harness.sendUserMessageNoWait("MSG_TWO");
-		await harness.sendUserMessageNoWait("MSG_THREE");
+		try {
+			await harness.sendUserMessageNoWait("MSG_ONE");
+			await gate.arrived;
+			await harness.sendUserMessageNoWait("MSG_TWO");
+			await harness.sendUserMessageNoWait("MSG_THREE");
 
-		// While turn 1 is held at the provider, no later turn may have started.
-		expect(harness.mainTurnRequests()).toHaveLength(1);
-		expect(harness.model.unmatched()).toHaveLength(0);
-
-		gate.release();
+			// While turn 1 is held at the provider, no later turn may have started.
+			expect(harness.mainTurnRequests()).toHaveLength(1);
+		} finally {
+			gate.release();
+		}
 		await harness.waitForIdle();
 
 		// All three turns ran, in arrival order, one at a time.
 		const order = harness.mainTurnRequests().map((r) => r.lastUserText.match(/MSG_\w+/)?.[0]);
 		expect(order).toEqual(["MSG_ONE", "MSG_TWO", "MSG_THREE"]);
-		for (const marker of ["ans-1", "ans-2", "ans-3"]) {
-			expect(harness.deliveries.some((d) => (d.text ?? "").includes(marker))).toBe(true);
-		}
+		const final = harness.deliveries.filter((d) => d.method === "finalizeCard" || d.method === "sendPlain");
+		expect(final.map((d) => d.text?.match(/ans-\d+/)?.[0])).toEqual(["ans-1", "ans-2", "ans-3"]);
 	});
 
 	it("A7: /new is an atomic boundary — the next turn's request carries no prior history", async () => {
@@ -83,7 +84,10 @@ describe("E2E deterministic: concurrency & boundaries", () => {
 			expect(JSON.stringify(request.messages)).not.toContain("CHANNEL_A_ONLY");
 			peer.release();
 			// A text-only reply completes in its waiting card; channel A must still be awaiting its model.
-			await harness.waitForDelivery((d) => d.channelId === otherChannel && d.method === "finalizeCard");
+			await harness.waitForDelivery(
+				"the peer channel's final card",
+				(d) => d.channelId === otherChannel && d.method === "finalizeCard",
+			);
 			expect(harness.runtime.ingress.isRunning(harness.channelId)).toBe(true);
 			expect(
 				harness.deliveries.filter((d) => d.channelId === harness.channelId && d.method === "finalizeCard"),

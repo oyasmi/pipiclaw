@@ -1,8 +1,10 @@
 import { defineConfig } from "vitest/config";
+import { testReporting } from "./test/reporting.js";
 import { createSuiteHome } from "./test/suite-home.js";
 
 export default defineConfig({
 	test: {
+		...testReporting("unit"),
 		environment: "node",
 		globalSetup: ["test/suite-home.ts"],
 		setupFiles: ["test/skills-isolation.ts"],

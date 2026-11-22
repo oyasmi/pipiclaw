@@ -1,8 +1,10 @@
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createExecutor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { createGlobTool } from "../src/tools/glob.js";
+import { createReadTool } from "../src/tools/read.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const fileStore = createFileStore();
@@ -79,14 +81,18 @@ describe("glob tool result addresses (batch 2.1)", () => {
 		writeFileSync(join(dir, "same.ts"), "TOP");
 		writeFileSync(join(dir, "nested", "same.ts"), "NESTED");
 
-		const tool = createGlobTool(fileStore, {
-			securityConfig: { enabled: false } as never,
+		const options = {
+			securityConfig: disabledSecurity,
 			securityContext: { agentWorkspaceDir: dir, cwd: dir },
+		};
+		const result = await createGlobTool(fileStore, options).execute("glob", {
+			pattern: "*.ts",
+			path: join(dir, "nested"),
 		});
-		const result = await tool.execute("call", { pattern: "*.ts", path: join(dir, "nested") });
-		const address = text(result).split("\n")[0]?.trim();
+		const address = text(result).trim();
 
-		expect(address).toBe(join("nested", "same.ts"));
+		const read = await createReadTool(createExecutor(), fileStore, options).execute("read", { path: address });
+		expect(text(read)).toBe("NESTED");
 	});
 
 	it("pages over the same mtime order using at most 32 concurrent stats", async () => {

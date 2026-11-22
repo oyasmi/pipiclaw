@@ -2,26 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { TurnStateMachine } from "../src/agent/turn/turn-state.js";
 
 describe("TurnStateMachine", () => {
-	it("reports busy from begin until end, and carries the turn's task text", () => {
-		const machine = new TurnStateMachine();
-		expect(machine.isBusy()).toBe(false);
-
-		machine.begin("build the thing");
-		expect(machine.isBusy()).toBe(true);
-		expect(machine.status()).toEqual({
-			phase: "dispatching",
-			stopRequested: false,
-			taskText: "build the thing",
-			generation: 1,
-		});
-
-		machine.end();
-		expect(machine.isBusy()).toBe(false);
-		expect(machine.status().taskText).toBeUndefined();
-		machine.begin("build the thing");
-		expect(machine.status().generation).toBe(2);
-	});
-
 	describe("force-release", () => {
 		it("absorbs one late end() per force-release, not just the first", () => {
 			const machine = new TurnStateMachine();
@@ -66,27 +46,19 @@ describe("TurnStateMachine", () => {
 	});
 
 	describe("setPhase", () => {
-		it("advances the turn it is addressed to", () => {
-			const machine = new TurnStateMachine();
-			machine.begin("turn");
-			const handle = machine.current();
-
-			machine.setPhase(handle, "preparing");
-			expect(machine.phase()).toBe("preparing");
-			machine.setPhase(handle, "streaming");
-			expect(machine.phase()).toBe("streaming");
-		});
-
 		it("ignores a handle whose turn was already released", () => {
 			const machine = new TurnStateMachine();
 			machine.begin("wedged turn");
 			const staleHandle = machine.current();
 			machine.forceEnd("watchdog");
 			machine.begin("next turn");
+			const current = machine.current();
+			machine.setPhase(current, "preparing");
+			machine.setPhase(current, "streaming");
 
 			// The wedged turn's epilogue still runs `setPhase(ownTurn, "finishing")`.
 			machine.setPhase(staleHandle, "finishing");
-			expect(machine.phase()).toBe("dispatching");
+			expect(machine.status()).toMatchObject({ phase: "streaming", taskText: "next turn" });
 		});
 
 		it("ignores a stale handle even while idle", () => {

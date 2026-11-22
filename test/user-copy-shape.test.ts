@@ -32,6 +32,7 @@ import {
 	pausedReceipt,
 	reportReceipt,
 } from "../src/tasks/receipts.js";
+import { describeToolCall } from "../src/tools/contract/presentation.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";
 import type { UsageLedger } from "../src/usage/ledger.js";
 import { renderUsageReport } from "../src/usage/render.js";
@@ -521,6 +522,8 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 	});
 
 	it("keeps runtime pushes in shape: receipts, notices, refusals and error bubbles", () => {
+		// The progress label must carry the memory's actionable name from the tool schema.
+		expect(describeToolCall("memory_forget", { name: "deploy-window" })).toContain("deploy-window");
 		for (const breach of ["steps", "usd", "idle", undefined] as const) {
 			expectUserCopyShape(`pause receipt ${breach}`, pausedReceipt("weekly", "周报", "已用满 60 步", breach));
 		}

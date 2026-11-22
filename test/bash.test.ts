@@ -27,17 +27,16 @@ describe("bash tool", () => {
 		unlinkMock.mockClear();
 	});
 
-	it("uses the caller-provided default timeout and returns empty output markers", async () => {
+	it("applies default and caller-provided deadlines and discards the spill for empty output", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
+		await createBashTool(executor).execute("default", { command: "true" });
 		const tool = createBashTool(executor, { defaultTimeoutSeconds: 45 });
 
 		const result = await tool.execute("call", { command: "true" });
 
-		expect(executor.calls).toEqual([
-			{
-				command: "true",
-				options: { timeout: 45, signal: undefined, spillTo: expect.stringMatching(SPILL_PATH_PATTERN) },
-			},
+		expect(executor.calls.map((call) => [call.command, call.options?.timeout])).toEqual([
+			["true", DEFAULT_BASH_TIMEOUT_SECONDS],
+			["true", 45],
 		]);
 		expect(result).toEqual({
 			content: [{ type: "text", text: "(no output)" }],
@@ -46,23 +45,14 @@ describe("bash tool", () => {
 		});
 		// Output was tiny and never truncated -- the spill file (insurance, not a promised artifact)
 		// gets cleaned up rather than left as tmp clutter.
-		expect(unlinkMock).toHaveBeenCalledWith(expect.stringMatching(SPILL_PATH_PATTERN));
-	});
-
-	it("defaults to the built-in timeout, no rtk probe, and no interceptor when no options are supplied", async () => {
-		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
-		const tool = createBashTool(executor);
-
-		await tool.execute("call", { command: "git status" });
-		await tool.execute("call", { command: "cat notes.txt" });
-
-		expect(executor.calls[0].options?.timeout).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
-		// Neither `command -v rtk` nor a rewrite, and a bare tool-better command is not steered away.
-		expect(executor.calls.map((c) => c.command)).toEqual(["git status", "cat notes.txt"]);
+		const spill = executor.calls[1].options?.spillTo;
+		expect(spill).toMatch(SPILL_PATH_PATTERN);
+		expect(unlinkMock).toHaveBeenCalledWith(spill);
 	});
 
 	it("intercepts bare tool-better commands only when the interceptor is enabled", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
+		await createBashTool(executor).execute("plain", { command: "cat notes.txt" });
 		const gated = createBashTool(executor, { interceptorEnabled: true });
 
 		const rejected = gated.execute("call", { command: "cat notes.txt" });
@@ -83,6 +73,7 @@ describe("bash tool", () => {
 		await gated.execute("call", { command: "sed -i 's/a/b/' f1 f2" });
 		await gated.execute("call", { command: "sed -i 's/a/b/' *.txt" });
 		expect(executor.calls.map((c) => c.command)).toEqual([
+			"cat notes.txt",
 			"cat notes.txt | jq .",
 			"grep foo file.txt",
 			"grep -rn foo . | wc -l",

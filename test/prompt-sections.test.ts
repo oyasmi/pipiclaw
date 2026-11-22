@@ -1,26 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_TARGET_UNITS } from "../src/agent/prompt/builder.js";
+import { buildPipiclawSystemPrompt } from "../src/agent/prompt/builder.js";
 import { AGENTS_BUDGET_UNITS, loadWorkspacePromptResources, SOUL_BUDGET_UNITS } from "../src/agent/prompt/resources.js";
-import { MAIN_PROMPT_SECTIONS } from "../src/agent/prompt/sections.js";
-import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from "../src/agent/prompt/types.js";
+import type { LoadedPromptResource, PromptBuildContext } from "../src/agent/prompt/types.js";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../src/agent/prompt/workspace-templates.js";
-import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
-import { TOOL_NAMES } from "../src/tools/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-prompt-");
-
-// Derived from the registry (not hand-maintained) so this fixture cannot drift from the real
-// tool set — a renamed or retired tool here would otherwise leave `requiresAllTools` gating
-// silently untested (spec 046 D6).
-const FULL_TOOL_NAMES = Array.from(TOOL_NAMES);
-
-function tools(names: string[]): ToolDescriptor[] {
-	return names.map((name) => ({ name, description: `${name} description` }));
-}
 
 function resource(path: string, content: string): LoadedPromptResource {
 	const units = countPromptUnits(content);
@@ -36,70 +24,8 @@ function resource(path: string, content: string): LoadedPromptResource {
 }
 
 function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContext {
-	const toolList = overrides.tools ?? tools(FULL_TOOL_NAMES);
-	return {
-		tools: toolList,
-		playbooks: selectRuntimePlaybooks(
-			loadRuntimePlaybookCatalog(TOOL_NAMES),
-			toolList.map((tool) => tool.name),
-		),
-		subAgents: [
-			{ name: "reviewer", description: "Reviews a diff", runtime: "internal", workload: "light", mutates: "read" },
-		],
-		...overrides,
-	};
+	return { tools: [{ name: "read", description: "Read a file" }], playbooks: [], subAgents: [], ...overrides };
 }
-
-describe("system prompt structure", () => {
-	it("keeps chat and task instructions within budget and points to guides available in that profile", () => {
-		const taskOnly = ["task_report", "task_ask", "task_wait"];
-		const chatOnly = [
-			"task_create",
-			"task_list",
-			"task_message",
-			"task_pause",
-			"task_resume",
-			"memory_save",
-			"event_manage",
-		];
-		for (const [names, guide] of [
-			[FULL_TOOL_NAMES, "task-manage.md"],
-			[FULL_TOOL_NAMES.filter((name) => !taskOnly.includes(name)), "task-manage.md"],
-			[FULL_TOOL_NAMES.filter((name) => !chatOnly.includes(name)), "task-lead.md"],
-		] as const) {
-			const build = buildPipiclawSystemPrompt(context({ tools: tools(names) }));
-			const ids = build.sections.map((section) => section.id);
-			expect(new Set(ids).size).toBe(ids.length);
-			expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(RUNTIME_PROMPT_TARGET_UNITS);
-			expect(build.diagnostics.filter((diagnostic) => diagnostic.level !== "info")).toEqual([]);
-			for (const definition of MAIN_PROMPT_SECTIONS) {
-				const resolved = build.sections.find((section) => section.id === definition.id);
-				if (resolved) expect(resolved.injectedChars).toBeLessThanOrEqual(definition.maxChars);
-			}
-			const section = (id: string) => build.sections.find((item) => item.id === id)?.content;
-			expect(section("runtime.tasks")).toContain(guide);
-			expect(section("playbooks")).toContain(guide);
-			expect(section("subagents")).not.toContain("task-lead.md");
-			if (guide === "task-lead.md") {
-				expect(section("runtime.identity")).toContain("task_report");
-				expect(build.text).not.toContain("task-manage.md");
-			}
-		}
-	});
-
-	it("drops a mechanism's whole surface when its tool is off", () => {
-		const build = buildPipiclawSystemPrompt(context({ tools: tools(["read", "bash", "grep"]) }));
-
-		expect(build.sections.some((section) => section.id === "runtime.tasks")).toBe(false);
-		expect(build.sections.some((section) => section.id === "subagents")).toBe(false);
-		expect(build.text).not.toContain("agent-delegation.md");
-		expect(build.text).not.toContain("task-driving.md");
-		expect(build.text).not.toContain("memory-operations.md");
-		// The memory invariant is gated on the tool being registered, like the rest.
-		expect(build.text).not.toContain("`memory_save`");
-		expect(build.text).toContain("runtime-orientation.md");
-	});
-});
 
 describe("workspace resources in the prompt", () => {
 	it("rebuilds byte-identically until a workspace file actually changes", () => {

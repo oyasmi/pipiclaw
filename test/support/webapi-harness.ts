@@ -11,7 +11,7 @@ import type { WebApiConfig } from "../../src/webapi/config.js";
 import { WebApiTransport } from "../../src/webapi/transport.js";
 import { waitFor } from "../e2e/helpers/wait.js";
 import type { CapturedRequest } from "./mock-provider/script.js";
-import { startMockProvider } from "./mock-provider/server.js";
+import { startMockProvider, summarizeProviderRequests } from "./mock-provider/server.js";
 import { cleanupE2ETestHome, createDeterministicHome } from "./setup.js";
 
 export { reply } from "./mock-provider/script.js";
@@ -155,7 +155,11 @@ export async function createWebApiHarness(options?: {
 				: new ResponsesWS(socket, { createConnection: () => net.connect(socketPath) });
 		},
 		async waitForIdle() {
-			await waitFor("webapi idle", () => runtime.ingress.isIdle(), { timeoutMs: 30_000, intervalMs: 20 });
+			await waitFor("webapi idle", () => runtime.ingress.isIdle(), {
+				timeoutMs: 30_000,
+				intervalMs: 20,
+				describeLastObservation: () => summarizeProviderRequests(model.requests),
+			});
 		},
 		mainTurnRequests: () => model.requests.filter((request) => request.isMainTurn),
 		async restart() {
@@ -169,9 +173,12 @@ export async function createWebApiHarness(options?: {
 				// as the DingTalk harness does, instead of silently accepting a background 502.
 				const unmatched = model.unmatched();
 				if (unmatched.length > 0) {
-					throw new Error(`Web API mock provider received ${unmatched.length} unmatched request(s)`);
+					throw new Error(
+						`Web API mock provider received ${unmatched.length} unmatched request(s)\n${summarizeProviderRequests(model.requests)}`,
+					);
 				}
 			} finally {
+				console.info(summarizeProviderRequests(model.requests));
 				await dispatcher.close().catch(() => undefined);
 				try {
 					await model.close();

@@ -60,12 +60,14 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 - `npm run test:coverage`
 - `npm run test:evals` — offline eval-tooling checks, including the actual worker with a mock provider
 - `npm run eval` — read-only daily evaluation plan; `npm run eval -- cycle` executes autonomous real-model probes
-- `npm run test:e2e` — deterministic full-stack layer (scripted mock provider, offline, no API cost; builds the current daemon first)
+- `npm run test:e2e` — on-demand deterministic full-stack layer (scripted mock provider, offline, no API cost; builds the current daemon first). Pass a file and `-t` after `--` to reproduce a single case. The command prints separate build and test timings.
 - `npm run test:e2e:live` — the 5-ish real-model smoke cases (follows `~/.pipiclaw/settings.json`; manual / nightly)
 - `npm run build`
 - `npm run check`
 
 Use `npm run typecheck` and `npm run test` as the minimum validation after non-trivial changes. **Also run `npm run test:e2e` when you change the runtime, memory, delegation, or command plane** — that layer is the only coverage for `runner ↔ session ↔ tools ↔ memory ↔ delivery`, the transport queue, and process/restart behaviour (spec 048).
+
+Unit and deterministic e2e runs print copyable failure rerun commands and write Vitest JSON reports under `.cache/test-results/`. Use `npm run test:e2e -- --silent=false` to include logs from passing cases.
 
 ## Test Layering
 

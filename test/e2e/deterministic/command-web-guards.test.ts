@@ -46,31 +46,4 @@ describe("E2E deterministic: command & network guards", () => {
 		expect(audit).toContain("bash");
 		expect(audit).toContain("169.254.169.254");
 	});
-
-	it("A20: a grep glob with shell metacharacters is escaped, not executed", async () => {
-		// beta.3 fix: grep.ts shell-escapes the model-controlled glob before `grep --include=`.
-		// Mutation check: drop the shellEscape() around the glob and `pwned` gets created.
-		harness = await createDeterministicHarness();
-		writeWorkspaceFile(harness, "src/hello.ts", "const needle = 1;");
-		const pwned = join(harness.workspaceDir, "pwned-by-grep-glob");
-
-		harness.model.script.route({
-			name: "grep",
-			when: (r) => r.isMainTurn && r.lastUserText.includes("RUN_GREP"),
-			respond: [
-				reply.toolCall("grep", {
-					pattern: "needle",
-					path: join(harness.workspaceDir, "src"),
-					glob: `*.ts; touch ${pwned}`,
-				}),
-				reply.text("搜索结束。"),
-			],
-			repeat: true,
-		});
-
-		await harness.sendUserMessage("RUN_GREP 搜一下");
-		expect(existsSync(pwned), "the injected `touch` must not run").toBe(false);
-		// The grep still ran (result fed back to the model), it just matched nothing.
-		expect(JSON.stringify(harness.mainTurnRequests().at(-1)?.messages)).toMatch(/No matches|matches/i);
-	});
 });

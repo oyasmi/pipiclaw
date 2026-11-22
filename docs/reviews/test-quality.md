@@ -2,6 +2,18 @@
 
 适用于删除重叠覆盖、引入新场景或优化执行时间。现行准入规则见 [AGENTS.md](../../AGENTS.md#test-layering)，评测控制与封存流程见[评测指南](../evals.md)。
 
+## 按需运行与复现
+
+```sh
+npm test -- test/memory-reflect.test.ts -t 'expires a lapsed probationary entry'
+npm run test:e2e -- test/e2e/deterministic/webapi.test.ts -t 'W4: cancelling a queued response'
+npm run test:e2e
+```
+
+确定性 e2e 按需启动。命令先构建 daemon，再执行选定的确定性用例，分别报告两段耗时。`--` 后可用文件、`文件:行号` 和 `-t` 缩小执行范围。修改跨模块接线后，按 [AGENTS.md](../../AGENTS.md#development-commands) 的要求再跑全套。
+
+单测和 e2e 的 JSON 报告位于 `.cache/test-results/`，文件名包含进程 ID。失败摘要直接打印复跑命令。确定性夹具在失败日志中提供最近的 mock 路由和投递记录。排查成功用例的运行细节时可传 `--silent=false`。
+
 ## 按故障决定覆盖层
 
 | 要防的回归 | 曾经容易误判的证据 | 保留的验证方式 |
@@ -30,3 +42,9 @@
 10 月 30 日同机、同依赖各跑三轮，单测墙钟中位数从 113.74 秒降到 105.26 秒，前后范围重叠，e2e 和 evals 中位数略升。WebSocket 单文件执行中位数从 14.21 秒降到 0.73 秒，记忆反思从 7.69 秒降到 1.51 秒。局部数据可定位 fixture 成本，全套运行时间还受构建、进程启动和机器负载影响。同套用例交错比较 `forks` 与 `threads` 也未发现稳定收益。
 
 原始单测审计见 `83b593d:docs/reviews/2026-10-13-unit-test-pruning.md`，55 个 e2e 的逐项复核见 `b61465f:docs/reviews/2026-10-13-e2e-test-review.md`。后续测试审计和原始计时 JSON 见 `69acd35:docs/reviews/2026-10-30-test-quality-review.md`、`69acd35:docs/reviews/2026-10-30-test-quality-metrics.json`。
+
+11 月 22 日基于 `b7322bf` 调整，单测从 1,041 减至 1,038 例，确定性 e2e 从 74 减至 71 例。单测移除两组正常阶段的重复检查，将 Bash 默认行为放到对应的期限和拦截场景。独立进程恢复、并发隔离、真实落盘和守卫覆盖仍可直接复跑。
+
+搜索参数安全由真实 shell 单测验证，`/reload` 链路验证注册后的搜索结果和停用工具零写入。反思中的用户来源保护、试用期续期及过期由领域单测验证，e2e 检查真实请求里的记忆注入和反思审计落盘。变异验证覆盖重复注入、停用任务被创建、会话缓存键缺失、重复卡片投递、搜索地址错根、同大小工作区修改丢失、用户记忆被删、过期清理缺失及审计记录漏写。
+
+同一工作树、Node 22.21.0 和 Vitest 5.1.0 下交错各跑三轮。提示词和手册的 14 例中位数从 3.69 秒降至 3.09 秒。全量单测从 68.47 秒降至 66.74 秒，前后范围重叠，整体提速尚无稳定证据。确定性 e2e 两次全量通过，含构建约 103–110 秒，成功报告约 140 行。
