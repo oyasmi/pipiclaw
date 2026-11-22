@@ -221,7 +221,9 @@ export function evaluateSummary(cases: CaseSummary[], plan: ScoringPlan): { code
 			item.invariantUnknown === undefined
 		)
 			return fail(2, `Incomplete plan for ${id}; finish the planned trials.`);
-		if (plan.mode === "smoke") continue;
+	}
+	for (const item of plan.mode === "smoke" ? [] : cases) {
+		const id = item.caseId;
 		const rule = plan.gates[id];
 		if (rule?.gate !== "required") continue;
 		const ratio = rule.minPass ? parseRatio(rule.minPass) : { passed: 1, total: 1 };

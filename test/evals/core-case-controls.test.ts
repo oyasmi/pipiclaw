@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { coreRepresentativeIds, metadataForCase } from "../../evals/cases/catalog.js";
 import { allCases } from "../../evals/cases/index.js";
 import { doctor, renderList, renderPlan, setSelectedCasesEnvironment } from "../../evals/harness/cli.js";
-import { cycleBudget } from "../../evals/harness/cycle.js";
+import { runCycle } from "../../evals/harness/cycle.js";
 import { renderDiagnostics } from "../../evals/harness/diagnostics.js";
 import { traceIdentity, traceToolResultFailed } from "../../evals/harness/identity.js";
 import { checkOracle } from "../../evals/harness/oracle-checks.js";
@@ -234,13 +234,12 @@ describe("renovated core family controls", () => {
 });
 
 describe("offline contributor CLI", () => {
-	it("keeps daily selection bounded, validates options, and preserves plan reproduction filters", () => {
+	it("keeps daily selection bounded, validates options, and preserves plan reproduction filters", async () => {
 		expect(renderList(["--domain", "memory"])).toContain("M-overflow-01");
-		expect(cycleBudget(["--profile", "core"]).selection.cases).toHaveLength(12);
-		expect(() => cycleBudget(["--max-cost-usd", "0.01"])).toThrow(/Model requests: 0/);
-		expect(() => cycleBudget(["--max-wall-minutes", "0.01"])).toThrow(/Model requests: 0/);
-		expect(() => cycleBudget(["--max-cost-usd", "NaN"])).toThrow(/positive finite/);
-		expect(() => cycleBudget(["--judge", "advisory"])).toThrow(/separately budgeted/);
+		await expect(runCycle(["--max-cost-usd", "0.01"])).rejects.toThrow(/Model requests: 0/);
+		await expect(runCycle(["--max-wall-minutes", "0.01"])).rejects.toThrow(/Model requests: 0/);
+		await expect(runCycle(["--max-cost-usd", "NaN"])).rejects.toThrow(/positive finite/);
+		await expect(runCycle(["--judge", "advisory"])).rejects.toThrow(/separately budgeted/);
 		const plan = renderPlan(["--profile", "core"]);
 		expect(plan).toContain("coverage: 12 cases / 12 families; 36 trials");
 		expect(plan).toContain("未调用模型");

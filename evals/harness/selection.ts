@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { coreRepresentativeIds, metadataForCase } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
 import { validateCases } from "./cases.js";
+import type { ProfileName } from "./schema.js";
 
 export const profiles = {
 	dev: { trials: 1, mode: "smoke", description: "Six daily probes; no release conclusion" },
@@ -10,7 +11,6 @@ export const profiles = {
 	explore: { trials: 1, mode: "smoke", description: "Extended probes" },
 	external: { trials: 1, mode: "smoke", description: "External executor smoke" },
 } as const;
-export type ProfileName = keyof typeof profiles;
 export const dailyCaseIds = [
 	"C-fix-01",
 	"M-overflow-01",

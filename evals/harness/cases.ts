@@ -65,7 +65,9 @@ export function caseHash(item: EvalCase, root = process.cwd()): string {
 		suite: item.suite,
 		source: item.source,
 		budget: item.budget,
+		modelFreeExternalRoles: item.modelFreeExternalRoles,
 		artifacts: item.artifacts,
+		observeGitChanges: item.observeGitChanges,
 		steps: item.script.map((step) =>
 			step.kind === "waitFor" ? { ...step, predicate: String(step.predicate) } : step,
 		),

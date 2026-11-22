@@ -5,9 +5,10 @@ import { atomicJson } from "./artifacts.js";
 import { renderDiagnostics } from "./diagnostics.js";
 import { caseComparisonBlockers, type Experiment, renderDiff } from "./diff.js";
 import {
-	applyRunBudget,
+	assertPlanEnvelope,
 	assertPlanIdentity,
 	buildExecutionPlan,
+	executionCases,
 	loadExecutionPlan,
 	planPath,
 } from "./execution-plan.js";
@@ -17,53 +18,34 @@ import { assertPromotableSummary, promoteRun, validateBaselineEvidence } from ".
 import { regradeTrial } from "./regrade.js";
 import { runMain } from "./run.js";
 import type { CaseSummary, GradeResult, RunManifest, RunPlan, TrialRecord } from "./schema.js";
-import { option, selectCases } from "./selection.js";
+import { option } from "./selection.js";
 
 function read<T>(dir: string, file: string): T {
 	return JSON.parse(readFileSync(join(dir, file), "utf8")) as T;
 }
 
-/** Reject oversized plans before any agent request; this does not estimate provider invoices. */
-export function cycleBudget(args: string[]) {
-	const flags = [
-		"--max-cost-usd",
-		"--max-wall-minutes",
-		"--max-tokens",
-		"--max-elapsed-minutes",
-		"--experiment",
-		"--plan",
-		"--output",
-	];
-	const selectionArgs = args.filter((arg, index) => !flags.includes(arg) && !flags.includes(args[index - 1] ?? ""));
-	const selection = selectCases(selectionArgs);
-	const positive = (flag: string, fallback: number) => {
-		const value = Number(option(args, flag) ?? fallback);
-		if (!Number.isFinite(value) || value <= 0) throw new Error(`${flag} must be a positive finite number.`);
-		return value;
-	};
-	const maxCostUsd = positive("--max-cost-usd", 25);
-	const maxWallMs = positive("--max-wall-minutes", 180) * 60_000;
+function cyclePlan(args: string[]) {
+	const planFile = option(args, "--plan");
+	if (
+		planFile &&
+		args.some(
+			(arg, index) =>
+				!["--plan", "--experiment"].includes(arg) && !["--plan", "--experiment"].includes(args[index - 1] ?? ""),
+		)
+	)
+		throw new Error(
+			"A frozen plan only accepts --experiment at execution. Set selection and budgets in eval plan. Model requests: 0.",
+		);
+	const plan = planFile ? loadExecutionPlan(planPath(planFile)) : buildExecutionPlan(args);
+	if (planFile) assertPlanIdentity(plan);
 	const experiment = (option(args, "--experiment") ?? "none") as Experiment;
 	if (!["none", "runtime", "model"].includes(experiment))
 		throw new Error("--experiment must be none, runtime or model.");
-	if (selection.judgeEnabled)
+	if (plan.judgeEnabled)
 		throw new Error(
 			"Autonomous cycles use objective oracles and a bounded agent budget. Use run --judge advisory for a separately budgeted opinion.",
 		);
-	const agentCeilingUsd = selection.cases.reduce(
-		(sum, item) => sum + (item.budget?.maxCostUsd ?? 0.5) * selection.trials,
-		0,
-	);
-	// Conservative serial ceiling: concurrency can only shorten it. Reserve watchdog grace and grading.
-	const wallCeilingMs = selection.cases.reduce(
-		(sum, item) => sum + ((item.budget?.maxWallMs ?? 180_000) + 15_000) * selection.trials,
-		0,
-	);
-	if (agentCeilingUsd > maxCostUsd || wallCeilingMs > maxWallMs)
-		throw new Error(
-			`Cycle plan exceeds its envelope ($${agentCeilingUsd.toFixed(2)} / ${(wallCeilingMs / 60_000).toFixed(1)} serial minutes). Reduce cases/trials or set explicit --max-cost-usd and --max-wall-minutes. Model requests: 0.`,
-		);
-	return { selection, maxCostUsd, maxWallMs, agentCeilingUsd, wallCeilingMs, experiment };
+	return { plan, experiment, ...assertPlanEnvelope(executionCases(plan), plan.trials, plan.budgets) };
 }
 
 /** Replay saved evidence, never rerun a failed agent in place and never call a judge. */
@@ -192,43 +174,14 @@ export function selectReference(
 	return { rejected };
 }
 
-export async function runCycle(args: string[], setEnvironment: (ids: string[]) => void): Promise<void> {
-	const planFile = option(args, "--plan");
-	const frozenPlan = planFile ? loadExecutionPlan(planPath(planFile)) : undefined;
-	if (frozenPlan) assertPlanIdentity(frozenPlan);
-	const envelope = frozenPlan
-		? {
-				selection: {
-					cases: allCases.filter((item) => frozenPlan.slots.some((slot) => slot.caseId === item.id)),
-					trials: frozenPlan.trials,
-					concurrency: frozenPlan.concurrency,
-					judgeConcurrency: frozenPlan.judgeConcurrency,
-					profile: frozenPlan.profile as "dev",
-					reasons: frozenPlan.reasons,
-					judgeEnabled: false,
-					uncovered: frozenPlan.uncovered,
-					unknownPaths: frozenPlan.unknownPaths,
-					emptyReason: frozenPlan.emptyReason,
-				},
-				maxCostUsd: frozenPlan.budgets.maxCostUsd,
-				maxWallMs: frozenPlan.budgets.maxWallMinutes * 60_000,
-				agentCeilingUsd: frozenPlan.budgets.maxCostUsd,
-				wallCeilingMs: frozenPlan.budgets.maxWallMinutes * 60_000,
-				experiment: (option(args, "--experiment") ?? "none") as Experiment,
-			}
-		: cycleBudget(args);
-	const { selection } = envelope;
-	if (!selection.cases.length) {
-		process.stdout.write(`Eval plan is empty (${selection.emptyReason ?? "no cases"}). Model requests: 0.\n`);
+export async function runCycle(args: string[]): Promise<void> {
+	const envelope = cyclePlan(args);
+	const { plan } = envelope;
+	if (!plan.slots.length) {
+		process.stdout.write(`Eval plan is empty (${plan.emptyReason ?? "no cases"}). Model requests: 0.\n`);
 		return;
 	}
-	applyRunBudget(process.env, frozenPlan?.budgets ?? buildExecutionPlan(args).budgets);
-	setEnvironment(selection.cases.map((item) => item.id));
-	delete process.env.EVAL_RESUME;
-	process.env.EVAL_TRIALS = String(selection.trials);
-	process.env.EVAL_CONCURRENCY = String(selection.concurrency);
-	process.env.EVAL_JUDGE_CONCURRENCY = String(selection.judgeConcurrency);
-	const completed = await runMain([], { profile: selection.profile, reasons: selection.reasons, judgeEnabled: false });
+	const completed = await runMain([], plan);
 	const dir = completed.resultDir;
 	if (!existsSync(join(dir, "trials.jsonl"))) return;
 	writeFileSync(join(dir, "diagnostics.md"), `${renderDiagnostics(process.cwd(), completed.runId)}\n`);
@@ -305,13 +258,14 @@ export async function runCycle(args: string[], setEnvironment: (ids: string[]) =
 			started: total.started + (item.started ?? 0),
 			failed: total.failed + (item.valid - item.passed),
 			unknown: total.unknown + item.invalid,
+			notStarted: total.notStarted + (item.planned ?? 0) - (item.started ?? 0),
 		}),
-		{ passed: 0, started: 0, failed: 0, unknown: 0 },
+		{ passed: 0, started: 0, failed: 0, unknown: 0, notStarted: 0 },
 	);
 	const cycleReport = [
 		`# ${exitCode === 0 ? (counts.failed ? "PASS WITH FINDINGS" : "PASS") : exitCode === 1 ? "FAIL" : "INCONCLUSIVE"} — autonomous cycle ${completed.runId}`,
 		"",
-		`${counts.passed}/${counts.started} trials passed; ${counts.failed} known failures; ${counts.unknown} unavailable. Frozen policy exit ${completed.exitCode}.`,
+		`${counts.passed}/${counts.started} trials passed; ${counts.failed} known failures; ${counts.unknown} started trials unavailable; ${counts.notStarted} not started. Frozen policy exit ${completed.exitCode}.`,
 		`Offline evidence replay ${replay.matched}/${replay.total}; model calls during replay: 0.`,
 		referenceAction,
 		"",

@@ -59,36 +59,56 @@ export const coreFamilyCases: EvalCase[] = [
 		graders: [
 			tracePredicate(
 				"tool-was-actually-used",
-				(ctx) => toolObservations(ctx, "read").some(({ result }) => result.ok === true),
+				(ctx) => observesFile(ctx, "notes/release-window.md", /one-click revert/, 0),
 				"the window must contain a real toolResult for this probe to mean anything",
 			),
 			toolCallCount("no-explicit-save", "memory_save", 0),
 			{
 				kind: "code",
 				graderId: "durable-write-survived-tool-window",
-				graderVersion: "3",
-				parameters: { semantics: ["发布", "周四晚上", "constraint"] },
-				grade: (ctx) => {
+				graderVersion: "4",
+				parameters: { semantics: ["发布", "周四晚上", "constraint"], source: "reflect" },
+				grade: async (ctx) => {
 					const reflected = ctx.trace.some(
 						(event) => event.kind === "step" && event.fields?.kind === "runMemoryMaintenance",
 					);
-					const files = existsSync(join(ctx.deskDir, "memory"))
-						? readdirSync(join(ctx.deskDir, "memory")).filter(
-								(name) => name.endsWith(".md") && name !== "MEMORY.md",
-							)
-						: [];
-					const fact = files
-						.map((name) => readFileSync(join(ctx.deskDir, "memory", name), "utf8"))
-						.find((text) => /发布/.test(text) && /周四晚上/.test(text) && /必须|硬性|规定|不得/.test(text));
-					const ok = reflected && Boolean(fact);
+					const reviewPath = join(ctx.deskDir, "memory-review.jsonl");
+					const written = new Set<string>();
+					if (existsSync(reviewPath)) {
+						for (const line of readFileSync(reviewPath, "utf8").trim().split("\n").filter(Boolean)) {
+							const review = JSON.parse(line) as {
+								reason?: string;
+								actions?: Array<{ target?: string; action?: string; added?: string[]; updated?: string[] }>;
+							};
+							if (review.reason !== "reflect") continue;
+							for (const action of review.actions ?? []) {
+								if (action.target !== "memory" || action.action !== "reflect") continue;
+								for (const name of [...(action.added ?? []), ...(action.updated ?? [])]) written.add(name);
+							}
+						}
+					}
+					const fact = (await listMemoryEntries(ctx.deskDir)).find(
+						(entry) =>
+							!entry.malformed &&
+							!entry.expires &&
+							written.has(entry.name) &&
+							`${entry.description}\n${entry.body}`
+								.split(/[。！？\n]/)
+								.some(
+									(sentence) =>
+										/发布/.test(sentence) &&
+										/(?:周|星期)四\s*(?:晚上|晚间|夜间|晚)/.test(sentence) &&
+										/必须|只(?:能|可)|硬性|规定|不得|固定/.test(sentence),
+								),
+					);
 					return evidenceGrade(
 						ctx,
 						"durable-write-survived-tool-window",
-						"3",
-						reflected || files.length ? ok : "missing",
-						ok
-							? "a durable fact file records the release, Thursday-evening window, and the constraint after reflect"
-							: "the fact must land in a durable memory file with release, Thursday evening, and a constraint; the index, today's journal, or tool text alone does not count",
+						"4",
+						reflected ? Boolean(fact) : "missing",
+						fact
+							? "reflect wrote a durable fact recording the Thursday evening release constraint"
+							: "reflect must write a valid permanent memory entry with the Thursday evening release constraint",
 					);
 				},
 			},

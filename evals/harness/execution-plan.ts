@@ -1,128 +1,127 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 import { allCases } from "../cases/index.js";
 import { caseHash } from "./cases.js";
+import { executionFingerprint } from "./execution-state.js";
+import { canonicalJson } from "./fingerprint.js";
 import { trialSeed } from "./fixture-seed.js";
 import { oracleFingerprint } from "./oracle-checks.js";
-import type { CaseSelection } from "./selection.js";
-import { option, selectCases } from "./selection.js";
+import type { EvalCase, ExecutionSlot, FrozenExecutionPlan } from "./schema.js";
+import { option, profiles, selectCases } from "./selection.js";
 import { hash } from "./util.js";
 
-export interface ExecutionSlot {
-	caseId: string;
-	trial: number;
-	seed: string;
-}
-
-export interface FrozenExecutionPlan {
-	schemaVersion: 1;
-	profile: string;
-	trials: number;
-	concurrency: number;
-	judgeConcurrency: number;
-	reasons: Record<string, string[]>;
-	uncovered: string[];
-	unknownPaths: string[];
-	emptyReason?: string;
-	slots: ExecutionSlot[];
-	budgets: {
-		maxCostUsd: number;
-		maxWallMinutes: number;
-		maxTokens?: number;
-		maxElapsedMinutes?: number;
-		unknownUsage: "stop";
-	};
-	identity: { cases: string; oracles: string };
-}
-
-function positive(args: string[], flag: string): number | undefined {
+function positive(args: string[], flag: string, fallback?: number): number | undefined {
 	const raw = option(args, flag);
-	if (raw === undefined) return;
+	if (raw === undefined) return fallback;
 	const value = Number(raw);
 	if (!Number.isFinite(value) || value <= 0) throw new Error(`${flag} must be a positive finite number.`);
 	return value;
 }
 
-export function planIdentity(caseIds: string[], root = process.cwd()): { cases: string; oracles: string } {
-	const cases = caseIds.map((id) => {
-		const item = allCases.find((candidate) => candidate.id === id);
-		if (!item) throw new Error(`Plan case ${id} is not in the current catalog. Rebuild the plan. Model requests: 0.`);
-		return `${id}:${caseHash(item, root)}`;
-	});
-	const oracles = caseIds.map((id) => {
-		const item = allCases.find((candidate) => candidate.id === id);
-		if (!item) throw new Error(`Plan case ${id} is not in the current catalog. Rebuild the plan. Model requests: 0.`);
-		return `${id}:${oracleFingerprint(item, root)}`;
-	});
-	return { cases: hash(cases.join("\n")), oracles: hash(oracles.join("\n")) };
+export function planEnvelope(cases: EvalCase[], trials: number) {
+	return {
+		agentCeilingUsd: cases.reduce((sum, item) => sum + (item.budget?.maxCostUsd ?? 0.5) * trials, 0),
+		// Reserve watchdog grace and grading for each trial.
+		wallCeilingMs: cases.reduce((sum, item) => sum + ((item.budget?.maxWallMs ?? 180_000) + 15_000) * trials, 0),
+	};
+}
+
+export function assertPlanEnvelope(cases: EvalCase[], trials: number, budgets: FrozenExecutionPlan["budgets"]) {
+	const { agentCeilingUsd, wallCeilingMs } = planEnvelope(cases, trials);
+	const { maxCostUsd, maxWallMinutes } = budgets;
+	const maxWallMs = maxWallMinutes * 60_000;
+	if (agentCeilingUsd > maxCostUsd || wallCeilingMs > maxWallMs)
+		throw new Error(
+			`Eval plan exceeds its envelope ($${agentCeilingUsd.toFixed(2)} / ${(wallCeilingMs / 60_000).toFixed(1)} serial minutes). Reduce cases/trials or set explicit --max-cost-usd and --max-wall-minutes. Model requests: 0.`,
+		);
+	return { maxCostUsd, maxWallMs, agentCeilingUsd, wallCeilingMs };
+}
+
+export function executionCases(plan: FrozenExecutionPlan): EvalCase[] {
+	const ids = new Set(plan.slots.map((slot) => slot.caseId));
+	return allCases.filter((item) => ids.has(item.id));
+}
+
+function planIdentity(cases: EvalCase[], root: string): FrozenExecutionPlan["identity"] {
+	return {
+		cases: hash(cases.map((item) => `${item.id}:${caseHash(item, root)}`).join("\n")),
+		oracles: hash(cases.map((item) => `${item.id}:${oracleFingerprint(item, root)}`).join("\n")),
+		execution: executionFingerprint(root),
+	};
+}
+
+function executionSlots(cases: EvalCase[], trials: number): ExecutionSlot[] {
+	return cases.flatMap((item) =>
+		Array.from({ length: trials }, (_, index) => ({
+			caseId: item.id,
+			trial: index + 1,
+			seed: trialSeed(item.id, index + 1),
+		})),
+	);
 }
 
 export function buildExecutionPlan(args: string[], root = process.cwd()): FrozenExecutionPlan {
-	const selection: CaseSelection = selectCases(args, false, root);
-	const slots: ExecutionSlot[] = [];
-	for (const item of selection.cases)
-		for (let trial = 1; trial <= selection.trials; trial++)
-			slots.push({ caseId: item.id, trial, seed: trialSeed(item.id, trial) });
-	const maxCostUsd =
-		positive(args, "--max-cost-usd") ??
-		selection.cases.reduce((sum, item) => sum + (item.budget?.maxCostUsd ?? 0.5) * selection.trials, 0);
-	const maxWallMinutes =
-		positive(args, "--max-wall-minutes") ??
-		selection.cases.reduce((sum, item) => sum + ((item.budget?.maxWallMs ?? 180_000) * selection.trials) / 60_000, 0);
+	const { cases, ...selection } = selectCases(args, false, root);
+	const budgets: FrozenExecutionPlan["budgets"] = {
+		maxCostUsd: positive(args, "--max-cost-usd", 25)!,
+		maxWallMinutes: positive(args, "--max-wall-minutes", 180)!,
+		maxTokens: positive(args, "--max-tokens"),
+		maxElapsedMinutes: positive(args, "--max-elapsed-minutes"),
+		unknownUsage: "stop",
+	};
+	assertPlanEnvelope(cases, selection.trials, budgets);
 	return {
-		schemaVersion: 1,
-		profile: selection.profile,
-		trials: selection.trials,
-		concurrency: selection.concurrency,
-		judgeConcurrency: selection.judgeConcurrency,
-		reasons: selection.reasons,
-		uncovered: selection.uncovered,
-		unknownPaths: selection.unknownPaths,
-		emptyReason: selection.emptyReason,
-		slots,
-		budgets: {
-			maxCostUsd,
-			maxWallMinutes,
-			maxTokens: positive(args, "--max-tokens"),
-			maxElapsedMinutes: positive(args, "--max-elapsed-minutes"),
-			unknownUsage: "stop",
-		},
-		identity: planIdentity(
-			selection.cases.map((item) => item.id),
-			root,
-		),
+		schemaVersion: 2,
+		...selection,
+		slots: executionSlots(cases, selection.trials),
+		budgets,
+		identity: planIdentity(cases, root),
 	};
 }
 
 export function loadExecutionPlan(path: string): FrozenExecutionPlan {
 	const plan = JSON.parse(readFileSync(path, "utf8")) as FrozenExecutionPlan;
-	if (plan.schemaVersion !== 1 || !Array.isArray(plan.slots))
+	if (plan?.schemaVersion !== 2)
 		throw new Error(`Unsupported execution plan ${path}. Rebuild it with eval plan --output. Model requests: 0.`);
 	return plan;
 }
 
 /** Refuse to start model calls when the frozen plan no longer matches the checkout. */
 export function assertPlanIdentity(plan: FrozenExecutionPlan, root = process.cwd()): void {
-	const ids = [...new Set(plan.slots.map((slot) => slot.caseId))];
-	const identity = planIdentity(ids, root);
-	if (identity.cases !== plan.identity.cases || identity.oracles !== plan.identity.oracles)
-		throw new Error(
-			"Execution plan identity is stale (case, oracle, or fixture changed). Rebuild it with eval plan --output before running. Model requests: 0.",
-		);
-	for (const slot of plan.slots)
-		if (trialSeed(slot.caseId, slot.trial) !== slot.seed)
-			throw new Error(
-				`Execution plan seed for ${slot.caseId}#${slot.trial} does not match the current fixture seed. Rebuild the plan. Model requests: 0.`,
-			);
+	const fail = (reason: string): never => {
+		throw new Error(`Execution plan ${reason}. Rebuild it with eval plan --output. Model requests: 0.`);
+	};
+	const budget = plan.budgets;
+	const positive = (value: unknown): value is number =>
+		typeof value === "number" && Number.isFinite(value) && value > 0;
+	if (
+		!Object.hasOwn(profiles, plan.profile) ||
+		![plan.trials, plan.concurrency, plan.judgeConcurrency].every(
+			(value) => Number.isSafeInteger(value) && value > 0,
+		) ||
+		typeof plan.judgeEnabled !== "boolean" ||
+		!budget ||
+		!positive(budget.maxCostUsd) ||
+		!positive(budget.maxWallMinutes) ||
+		(budget.maxTokens !== undefined && !positive(budget.maxTokens)) ||
+		(budget.maxElapsedMinutes !== undefined && !positive(budget.maxElapsedMinutes)) ||
+		budget.unknownUsage !== "stop" ||
+		!Array.isArray(plan.slots) ||
+		plan.slots.some((slot) => !slot || typeof slot.caseId !== "string")
+	)
+		fail("contains invalid scheduling or budget fields");
+	const cases = executionCases(plan);
+	if (
+		plan.slots.length !== cases.length * plan.trials ||
+		canonicalJson(plan.slots) !== canonicalJson(executionSlots(cases, plan.trials))
+	)
+		fail("has a different slot list, order, or fixture seed");
+	const identity = planIdentity(cases, root);
+	if (canonicalJson(identity) !== canonicalJson(plan.identity))
+		fail("identity is stale (case, oracle, fixture, compiled runtime, or gate changed)");
+	assertPlanEnvelope(cases, plan.trials, plan.budgets);
 }
 
 export function planPath(path: string, root = process.cwd()): string {
-	return path.startsWith("/") ? path : join(root, path);
-}
-
-export function applyRunBudget(env: NodeJS.ProcessEnv, budgets: FrozenExecutionPlan["budgets"]): void {
-	delete env.EVAL_MAX_TOKENS;
-	delete env.EVAL_MAX_ELAPSED_MINUTES;
-	if (budgets.maxTokens !== undefined) env.EVAL_MAX_TOKENS = String(budgets.maxTokens);
-	if (budgets.maxElapsedMinutes !== undefined) env.EVAL_MAX_ELAPSED_MINUTES = String(budgets.maxElapsedMinutes);
+	return resolve(root, path);
 }

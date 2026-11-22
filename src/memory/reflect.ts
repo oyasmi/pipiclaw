@@ -71,6 +71,7 @@ ${MEMORY_INPUT_SAFETY_RULES}
   - "feedback": corrections about how to work, and lessons learned from a mistake.
   - "project": stable facts, decisions, and constraints about what you're working on.
   - "reference": pointers — paths, URLs, commands, contacts, ids.
+- An explicit standing rule from the user is a high-necessity project constraint when future work must follow it. Extract it even if it was mentioned alongside a one-off request, tool output, or unrelated chat.
 - Never write in-progress task state, transient debugging notes, or anything with a natural end date as memory — that belongs in "journal", or the user should be told to use a task if it needs tracking. If the whole window is just progress on something, "ops" should be empty.
 - Prefer "update" over adding a near-duplicate of an existing entry (the index is given to you in full below); prefer "delete" over leaving a fact that the conversation shows is no longer true.
 - "touch" lists the names of existing entries this window's conversation depended on or confirmed — do this whenever relevant, it costs nothing and is how a probationary entry becomes permanent.

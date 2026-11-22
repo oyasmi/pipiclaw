@@ -22,7 +22,7 @@ npm run eval -- cycle --changed-since master   # 按变更选择场景
 npm run eval -- list --domain memory           # 查看目录
 ```
 
-`plan`、`selftest`、`run`、`cycle` 共用选择规则。没有显式过滤或 profile 时，`--changed-since` 每个受影响家族只留一个代表，最多 3 个，并列出被名额挡住的家族。显式 `--profile core` 仍跑全部 12 个核心代表。空 diff 和只改文档、测试或非 playbook Markdown 的变更生成 0 次请求的空计划。无法映射的产品路径会记下来，并在剩余名额内补代表。`plan --output FILE` 写出带版本的执行清单；`cycle --plan FILE` 在任何模型请求前核对 case、fixture、oracle 和执行身份，对不上就停止。`run` 和 `cycle` 共用这份预算。执行默认排除 retired/quarantine/draft，显式 `--case` 或 `--lifecycle` 可以选中隔离场景。`--all` 用于有意识的全量探索。
+`plan`、`selftest`、`run`、`cycle` 共用选择规则。没有显式过滤或 profile 时，`--changed-since` 每个受影响家族只留一个代表，最多 3 个，并列出被名额挡住的家族。显式 `--profile core` 仍跑全部 12 个核心代表。空 diff 和只改文档、测试或非 playbook Markdown 的变更生成 0 次请求的空计划。无法映射的产品路径会记下来，并在剩余名额内补代表。`plan --output FILE` 写出带版本的执行清单。`cycle --plan FILE` 在任何模型请求前核对槽位顺序、seed、case、fixture、oracle、编译产物和 gate，并重新核算预算包络。旧版清单需要重新生成。`run` 和 `cycle` 共用这份预算。执行默认排除 retired/quarantine/draft，显式 `--case` 或 `--lifecycle` 可以选中隔离场景。`--all` 用于有意识的全量探索。
 
 ## 评分如何自动成立
 
@@ -32,7 +32,7 @@ npm run eval -- list --domain memory           # 查看目录
 - `failed`：控制失败，正式运行停止，模型请求为 0；查看 `oracle-checks/oracle-checks.json` 定位评分器或样本。
 - `uncovered`：尚未具备自动验收控制。可以探索，但整体结论为 `INCONCLUSIVE`，不能自动建立基线。
 
-目录现有 43 个场景：12 个核心、29 个活跃扩展、1 个仍可读取但不再进入默认计划的退役场景（`M-quality-recall-03`，由 `M-abstain-01` 接替）和 1 个隔离探针。活跃场景配备自动可执行正/负/等价控制。新增场景同样必须在合入时同步提供三类控制并通过 `selftest`。核心 gate 仍是原来的 12 项；`C-existing-01` 和 `I-inbound-context-01` 只记为替换候选，要各自有同身份、可重放的 3/3 之后才更换。
+目录现有 43 个场景：12 个核心、29 个活跃扩展、1 个仍可读取但不再进入默认计划的退役场景（`M-quality-recall-03`，由 `M-abstain-01` 接替）和 1 个隔离探针。活跃场景配备自动可执行正/负/等价控制。新增场景同样必须在合入时同步提供三类控制并通过 `selftest`。核心 gate 仍有 12 项。`C-existing-01` 和 `I-inbound-context-01` 各取得同身份、可重放的 3/3 后，分别接替 `C-test-proof-01` 和 `D-merge-01`。原用例仍可按 ID 执行。
 
 客观验收依据实际文件、独立计算结果、相关联的工具调用与成功结果、持久化运行记录、指定步骤的最终交付。分页验证器在可信评测代码中执行，检查 36 组边界输入和输入不被修改；候选不能通过改弱公开测试或提前退出冒充成功。关键记忆事实、作业和委派结果使用冻结 seed；相同 case/trial 可复现，不同 trial 不总是同一个答案。异步生产者由 fixture 明确释放，替代固定等待 15 秒。
 
@@ -56,14 +56,14 @@ npm run eval -- run --case C-research-01 --judge advisory
 
 显式过滤器覆盖 profile 的默认范围。`--trials N`、`--concurrency N` 控制样本和并发。主体模型、thinking 和 endpoint 从本机配置精确解析；缺失或不匹配不静默换模型。`plan.json` 冻结 case/oracle、控制资格、seed、预算、并发和选择原因。`execution-state.json` 另记录编译 runtime/评测代码、playbook、fixture 与 lockfile 的指纹；在付费 worker 启动前和结束后检查。运行途中重建或更换输入会停止后续调用，并将结果标为不可判定，禁止建立参照。日常开发可在隔离 checkout 运行，避免改动中的代码污染长评测。
 
-`cycle` 默认接受最多 $25 的主体预算合计和 180 分钟的串行预算合计。它在调用模型前检查所有计划 trial 的预算之和，超过即停止，减少场景/次数或显式设定投入：
+`run` 和 `cycle` 默认接受最多 $25 的主体预算合计和 180 分钟的串行预算合计。它在调用模型前检查所有计划 trial 的预算之和，超过即停止，减少场景/次数或显式设定投入：
 
 ```bash
 npm run eval -- cycle --profile candidate --concurrency 2 \
   --max-cost-usd 60 --max-wall-minutes 600
 ```
 
-这些数值是已有逐 trial 预算的保守包络，不是耗时预测或服务商账单硬限额。`--max-tokens` 和 `--max-elapsed-minutes` 是运行中的停止线：并发槽位拿到之后、临时目录和 worker 启动之前检查。已经开始的槽位按原有 watchdog 跑完，并记下真实超出。token 来自去重后的账本；没有模型调用的本地生产者记 0。设了 token 上限时，无法估算的用量会停掉后续槽位。resume 沿用同一份冻结计划和已累计用量；旧用量补不齐就拒绝续跑。报告给出已知费用、未知用量、每次验证成功分摊的 token 和费用，以及槽位级的双方不一致。外部执行器费用仍可能未知。周期不会无限重试、为了通过而追加样本或覆盖失败。SDK 记录了 token 分项却漏报合计时，工具从已知分项推导合计并标注次数，保留原始账本不变。model judge 在独立 `run --judge advisory` 中使用自己的 watchdog，费用不计入主体包络。
+这些数值是已有逐 trial 预算的保守包络，不是耗时预测或服务商账单硬限额。`--max-tokens` 和 `--max-elapsed-minutes` 是运行中的停止线：并发槽位拿到之后、临时目录和 worker 启动之前检查。已经开始的槽位按原有 watchdog 跑完，并记下真实超出。token 来自去重后的账本。夹具声明的纯本地生产者按 0 模型 token 计，外部总费用仍可能未知。有 token 停止线时，模型用量不全会停掉后续槽位。续跑继续使用冻结计划、从原始启动时刻累计经过时间，并从封存记录恢复 token。已开始但没有可用结算的槽位会阻止带 token 停止线的续跑。同一 run 同时只能由一个进程运行。报告给出已知费用、未知用量、每次验证成功分摊的 token 和费用，以及槽位级的双方不一致。周期不会无限重试、为了通过而追加样本或覆盖失败。SDK 记录了 token 分项却漏报合计时，工具从已知分项推导合计并标注次数，保留原始账本不变。model judge 在独立 `run --judge advisory` 中使用自己的 watchdog，费用不计入主体包络。
 
 ## 看哪份结果
 
@@ -95,7 +95,7 @@ npm run eval -- cycle --profile core --experiment model --concurrency 2
 npm run eval -- compare <runA> <runB> --experiment runtime
 ```
 
-case、oracle、控制、seed、trial、预算与实际配置必须仍匹配；混杂条件为 `N/A`。oracle 或场景改动后建立新参照，不能把新旧分数变化冒充 runtime 提升。样本小或区间重叠时只提供描述性差值，不声明统计显著。自动诊断定位故障层和反例，不会自动修改产品代码或放宽 gate。
+case、oracle、控制、seed、trial、预算与实际配置必须仍匹配，混杂条件显示 `N/A`。与 spec 071 的核心周期使用同一预算时，指定 `--concurrency 2 --max-tokens 2400000 --max-elapsed-minutes 15`。oracle 或场景改动后建立新参照，不能把新旧分数变化冒充 runtime 提升。样本小或区间重叠时只提供描述性差值，不声明统计显著。自动诊断定位故障层和反例，不会自动修改产品代码或放宽 gate。
 
 低层命令仍可用于排错：
 
@@ -122,4 +122,4 @@ npm run eval:prune -- --keep=20 --yes
 
 新结果与自动参照是 gitignored；仓库已有历史 baseline 元数据继续保留。清理默认保留最近 10 次结果、3 次手动 baseline、3 次自动参照，并保护各自 latest 指针指向的参照。
 
-设计与本轮实测见 [spec 057](specs/057-autonomous-evals/design.md) 和[验收记录](specs/057-autonomous-evals/acceptance.md)。[spec 056](specs/056-eval-workflow/design.md) 保留首批改进历史，其中人工校准流程已被 057 替代。
+本轮证据、预算和核心用例的验收见 [spec 071](specs/071-eval-reliability-and-budget/acceptance.md)，自动周期的原始设计见 [spec 057](specs/057-autonomous-evals/design.md)。[spec 056](specs/056-eval-workflow/design.md) 保留首批改进历史，其中人工校准流程已被 057 替代。

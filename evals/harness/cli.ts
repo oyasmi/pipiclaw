@@ -8,7 +8,7 @@ import { validateCases } from "./cases.js";
 import { runCycle } from "./cycle.js";
 import { renderDiagnostics } from "./diagnostics.js";
 import { compareRuns, type Experiment } from "./diff.js";
-import { applyRunBudget, buildExecutionPlan, planPath } from "./execution-plan.js";
+import { buildExecutionPlan, planEnvelope, planPath } from "./execution-plan.js";
 import { checkOracles, renderOracleChecks } from "./oracle-checks.js";
 import { promoteRun } from "./promote.js";
 import { regradeRun } from "./regrade.js";
@@ -105,8 +105,7 @@ export function renderPlan(args: string[]): string {
 	const selection = selectCases(args);
 	const { profile: profileName, trials } = selection;
 	const total = selection.cases.length * trials;
-	const maxCost = selection.cases.reduce((sum, item) => sum + (item.budget?.maxCostUsd ?? 0.5) * trials, 0);
-	const maxWall = selection.cases.reduce((sum, item) => sum + (item.budget?.maxWallMs ?? 180_000) * trials, 0);
+	const { agentCeilingUsd: maxCost, wallCeilingMs: maxWall } = planEnvelope(selection.cases, trials);
 	const familyCount = new Set(selection.cases.map((item) => metadata(item).family)).size;
 	const executionArgs = args.filter(
 		(arg, index) =>
@@ -146,7 +145,7 @@ export function renderPlan(args: string[]): string {
 }
 
 function usage(): string {
-	return `Usage:\n  npm run eval -- cycle [selection] [--plan FILE] [--max-cost-usd 25] [--max-wall-minutes 180] [--max-tokens N] [--max-elapsed-minutes N] [--experiment none|runtime|model]\n  npm run eval -- list [--domain memory|--family ID|--tag core]\n  npm run eval -- selftest [selection]\n  npm run eval -- doctor\n  npm run eval -- plan [--changed-since REF|--case ID|--family ID] [--profile dev|core|candidate|explore|external] [--output FILE]\n  npm run eval -- run [selection|--all] [--trials N] [--concurrency N] [--max-tokens N] [--max-elapsed-minutes N]\n  npm run eval -- report <runId> [--verbose]\n  npm run eval -- resume <runId>\n  npm run eval -- regrade <runId> [--grader ID]\n  npm run eval -- diagnose <runId>\n  npm run eval -- compare <runA> <runB|baseline> --experiment none|runtime|model\n  npm run eval -- baseline promote <runId>`;
+	return `Usage:\n  npm run eval -- cycle [selection] [--plan FILE] [--max-cost-usd 25] [--max-wall-minutes 180] [--max-tokens N] [--max-elapsed-minutes N] [--experiment none|runtime|model]\n  npm run eval -- list [--domain memory|--family ID|--tag core]\n  npm run eval -- selftest [selection]\n  npm run eval -- doctor\n  npm run eval -- plan [--changed-since REF|--case ID|--family ID] [--profile dev|core|candidate|explore|external] [--output FILE]\n  npm run eval -- run [selection|--all] [--trials N] [--concurrency N] [--max-cost-usd 25] [--max-wall-minutes 180] [--max-tokens N] [--max-elapsed-minutes N]\n  npm run eval -- report <runId> [--verbose]\n  npm run eval -- resume <runId>\n  npm run eval -- regrade <runId> [--grader ID]\n  npm run eval -- diagnose <runId>\n  npm run eval -- compare <runA> <runB|baseline> --experiment none|runtime|model\n  npm run eval -- baseline promote <runId>`;
 }
 
 export function setSelectedCasesEnvironment(caseIds: string[], env: NodeJS.ProcessEnv = process.env): void {
@@ -164,7 +163,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 	const command = args[0];
 	if (!command) return void process.stdout.write(`${renderPlan([])}\n`);
 	if (command === "help" || command === "--help") return void process.stdout.write(`${usage()}\n`);
-	if (command === "cycle") return runCycle(args.slice(1), setSelectedCasesEnvironment);
+	if (command === "cycle") return runCycle(args.slice(1));
 	if (command === "list") return void process.stdout.write(`${renderList(args.slice(1))}\n`);
 	if (command === "doctor") {
 		const result = doctor(args.slice(1));
@@ -223,25 +222,12 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 		return;
 	}
 	if (command === "run") {
-		const selection = selectCases(args.slice(1));
-		setSelectedCasesEnvironment(
-			selection.cases.map((item) => item.id),
-			process.env,
-		);
-		delete process.env.EVAL_RESUME;
-		process.env.EVAL_TRIALS = String(selection.trials);
-		process.env.EVAL_CONCURRENCY = String(selection.concurrency);
-		process.env.EVAL_JUDGE_CONCURRENCY = String(selection.judgeConcurrency);
-		applyRunBudget(process.env, buildExecutionPlan(args.slice(1)).budgets);
-		if (!selection.cases.length) {
-			process.stdout.write(`Eval plan is empty (${selection.emptyReason ?? "no cases"}). Model requests: 0.\n`);
+		const plan = buildExecutionPlan(args.slice(1));
+		if (!plan.slots.length) {
+			process.stdout.write(`Eval plan is empty (${plan.emptyReason ?? "no cases"}). Model requests: 0.\n`);
 			return;
 		}
-		await runMain([], {
-			profile: selection.profile,
-			reasons: selection.reasons,
-			judgeEnabled: selection.judgeEnabled,
-		});
+		await runMain([], plan);
 		return;
 	}
 	throw new Error(`Unknown eval command '${command}'.\n${usage()}`);

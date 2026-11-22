@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { allCases } from "../../evals/cases/index.js";
 import { atomicJson, captureArtifacts, sealArtifactIndex, verifyArtifacts } from "../../evals/harness/artifacts.js";
-import { setSelectedCasesEnvironment } from "../../evals/harness/cli.js";
 import { runCycle } from "../../evals/harness/cycle.js";
+import { buildExecutionPlan } from "../../evals/harness/execution-plan.js";
 import { fileContains } from "../../evals/harness/graders.js";
 import { runJudgeProcess } from "../../evals/harness/judge-process.js";
 import { EvalPool } from "../../evals/harness/pool.js";
 import { regradeTrial } from "../../evals/harness/regrade.js";
 import { readResourceLedger, summarizeResources } from "../../evals/harness/resources.js";
 import { completedTrial, preserveInterruptedAttempt } from "../../evals/harness/resume.js";
-import { runWorkerSegment } from "../../evals/harness/run.js";
+import { runMain, runWorkerSegment } from "../../evals/harness/run.js";
 import type {
 	CapturedDelivery,
 	CaseDescriptor,
@@ -20,6 +20,7 @@ import type {
 	TraceEvent,
 	TrialRecord,
 } from "../../evals/harness/schema.js";
+import { acquireFileLock } from "../../src/shared/file-lock.js";
 import type { UsageLedgerEntry } from "../../src/usage/ledger.js";
 import { reply } from "../support/mock-provider/script.js";
 import { startMockProvider } from "../support/mock-provider/server.js";
@@ -166,7 +167,10 @@ describe("eval supervision and evidence", () => {
 				when: (request) => request.tools.includes("task_ask"),
 				respond: [
 					reply.toolCall("task_ask", { question: "Environment and window?" }),
-					reply.toolCall("write", { path: join(deskDir, "release-plan.txt"), content: "staging\n周四 22:00\n" }),
+					reply.toolCall("write", {
+						path: join(deskDir, "release-plan.txt"),
+						content: "staging\n2026-12-03 22:00–23:00 北京时间\n",
+					}),
 					reply.toolCall("edit", {
 						path: join(deskDir, "tasks/release-plan.md"),
 						oldText: "- [ ]",
@@ -181,7 +185,7 @@ describe("eval supervision and evidence", () => {
 				when: (request) => request.isMainTurn && request.tools.includes("task_message"),
 				respond: [
 					reply.text("收到。"),
-					reply.toolCall("task_message", { id: "release-plan", text: "staging 周四 22:00" }),
+					reply.toolCall("task_message", { id: "release-plan", text: "staging 2026-12-03 22:00–23:00 北京时间" }),
 					reply.text("已转达。"),
 				],
 			});
@@ -200,7 +204,9 @@ describe("eval supervision and evidence", () => {
 			});
 			expect(taskResult.kind).toBe("complete");
 			expect(existsSync(join(deskDir, "tasks/archive/release-plan.md"))).toBe(true);
-			expect(readFileSync(join(deskDir, "release-plan.txt"), "utf8")).toBe("staging\n周四 22:00\n");
+			expect(readFileSync(join(deskDir, "release-plan.txt"), "utf8")).toBe(
+				"staging\n2026-12-03 22:00–23:00 北京时间\n",
+			);
 
 			// P2-4: step.inbound routes file attachment + ASR voice + repliedText through parseInboundMessage
 			// and runtime.ingress.receive so desk inbox attachments and quote headers reach the real turn.
@@ -272,7 +278,13 @@ describe("eval supervision and evidence", () => {
 		try {
 			for (const key of Object.keys(process.env))
 				if (key.startsWith("EVAL_") || key.startsWith("PIPICLAW_E2E_")) delete process.env[key];
-			work = runCycle(["--case", "S-inject-core-01"], setSelectedCasesEnvironment);
+			const frozenFile = join(temp(), "frozen-plan.json");
+			const frozen = buildExecutionPlan(["--case", "S-inject-core-01"]);
+			atomicJson(frozenFile, { ...frozen, budgets: { ...frozen.budgets, maxCostUsd: 0.01 } });
+			await expect(runCycle(["--plan", frozenFile])).rejects.toThrow(/Model requests: 0/);
+			expect(provider.requests).toHaveLength(0);
+			atomicJson(frozenFile, frozen);
+			work = runCycle(["--plan", frozenFile]);
 			await hold.arrived;
 			writeFileSync(changed, "export const changedDuringExecution=true;\n");
 			hold.release();
@@ -299,6 +311,80 @@ describe("eval supervision and evidence", () => {
 					if (previousEnv[key] === undefined) delete process.env[key];
 					else process.env[key] = previousEnv[key];
 				}
+			await provider.close();
+		}
+	}, 20_000);
+
+	it("reuses the token stop line and prior usage when resuming a real worker batch", async () => {
+		const provider = await startMockProvider();
+		provider.script.route({
+			name: "token-budget",
+			when: (request) => request.isMainTurn,
+			respond: [
+				{ ...reply.text("DOCUMENT-LABEL-7"), usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 } },
+			],
+			repeat: true,
+		});
+		const availability = vi.spyOn(setup, "canRunE2E").mockReturnValue(true);
+		const home = vi
+			.spyOn(setup, "createE2ETestHome")
+			.mockImplementation((options) =>
+				createDeterministicHome({ homeDir: options?.homeDir, mockBaseUrl: provider.baseUrl }),
+			);
+		const previousExit = process.exitCode;
+		try {
+			const plan = buildExecutionPlan([
+				"--case",
+				"S-inject-core-01",
+				"--trials",
+				"2",
+				"--concurrency",
+				"1",
+				"--max-tokens",
+				"1",
+			]);
+			const first = await runMain([], plan);
+			roots.push(first.resultDir);
+			expect(first.exitCode).toBe(2);
+			expect(JSON.parse(readFileSync(join(first.resultDir, "summary.json"), "utf8")).cases[0].started).toBe(1);
+			expect(provider.requests.filter((request) => request.isMainTurn)).toHaveLength(1);
+			const budgetPath = join(first.resultDir, "budget.json");
+			const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
+			expect(budget.spentTokens).toBeGreaterThan(1);
+			expect(budget.notStarted).toEqual([{ caseId: "S-inject-core-01", trial: 2, reason: "tokens" }]);
+
+			const resumed = await runMain(["--resume", first.runId]);
+			expect(resumed.exitCode).toBe(2);
+			expect(provider.requests.filter((request) => request.isMainTurn)).toHaveLength(1);
+			const after = JSON.parse(readFileSync(budgetPath, "utf8"));
+			expect(after.spentTokens).toBe(budget.spentTokens);
+			expect(after.notStarted).toEqual(budget.notStarted);
+
+			const lock = await acquireFileLock(join(first.resultDir, ".run.lock"));
+			if (lock.kind !== "acquired") throw new Error("Expected the completed run to release its lock");
+			try {
+				await expect(runMain(["--resume", first.runId])).rejects.toThrow(/active in another process/);
+			} finally {
+				await lock.handle.release();
+			}
+
+			const planPath = join(first.resultDir, "plan.json");
+			const originalPlan = readFileSync(planPath, "utf8");
+			const changedPlan = JSON.parse(originalPlan);
+			changedPlan.executionPlan.budgets.maxTokens = 9999;
+			atomicJson(planPath, changedPlan);
+			await expect(runMain(["--resume", first.runId])).rejects.toThrow(/saved run plan changed/);
+			writeFileSync(planPath, originalPlan);
+
+			const skipped = join(first.resultDir, "trials", "S-inject-core-01-2");
+			rmSync(join(skipped, "record.json"));
+			writeFileSync(join(skipped, "started.json"), "{}");
+			await expect(runMain(["--resume", first.runId])).rejects.toThrow(/prior usage is incomplete/);
+			expect(provider.requests.filter((request) => request.isMainTurn)).toHaveLength(1);
+		} finally {
+			process.exitCode = previousExit;
+			availability.mockRestore();
+			home.mockRestore();
 			await provider.close();
 		}
 	}, 20_000);

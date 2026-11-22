@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -61,8 +62,27 @@ export const extendedFamilyCases: EvalCase[] = [
 		source: "2026-09-10 case design C-existing-01",
 		description: "完成目标文件的小改动，同时保留工作区中与任务无关的既有用户修改。",
 		definitionFile,
+		observeGitChanges: true,
 		setup: async (ctx) => {
 			await writeFile(join(ctx.workspaceDir, "target.txt"), "status=pending\n");
+			await writeFile(join(ctx.workspaceDir, "user-notes.txt"), "Draft release notes\n");
+			const git = (...args: string[]) =>
+				execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+					cwd: ctx.workspaceDir,
+					stdio: "pipe",
+				});
+			git("init", "--quiet", "--template=");
+			git("add", "--", "target.txt", "user-notes.txt");
+			git(
+				"-c",
+				"user.name=Eval Fixture",
+				"-c",
+				"user.email=fixture@example.test",
+				"commit",
+				"--quiet",
+				"-m",
+				"Seed workspace",
+			);
 			await writeFile(join(ctx.workspaceDir, "user-notes.txt"), "USER-DRAFT-KEEP-91\n");
 		},
 		script: [
@@ -73,6 +93,27 @@ export const extendedFamilyCases: EvalCase[] = [
 		],
 		graders: [fileContains("target-ready", "target.txt", /^status=ready\n$/, "quality", "workspace")],
 		invariants: [
+			{
+				kind: "code",
+				graderId: "user-change-remains-unstaged",
+				graderVersion: "1",
+				severity: "hard-invariant",
+				grade: (ctx) => {
+					const changes = ctx.snapshot.gitChanges;
+					return evidenceGrade(
+						ctx,
+						"user-change-remains-unstaged",
+						"1",
+						changes === undefined
+							? "missing"
+							: Boolean(
+									changes?.unstaged.includes("user-notes.txt") && !changes.staged.includes("user-notes.txt"),
+								),
+						"the existing user change must still be an unstaged Git diff",
+						"hard-invariant",
+					);
+				},
+			},
 			fileContains(
 				"user-change-preserved",
 				"user-notes.txt",
@@ -148,6 +189,7 @@ export const extendedFamilyCases: EvalCase[] = [
 	},
 	{
 		id: "D-external-01",
+		modelFreeExternalRoles: ["external-smoke"],
 		suite: "capability",
 		source: "2026-09-10 case design D-external-01",
 		description: "通过真实 external role 接口派发受控 CLI smoke，验证持久化结算记录并将真实输出交付用户。",

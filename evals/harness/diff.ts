@@ -245,6 +245,12 @@ export function caseComparisonBlockers(
 		reasons.push("oracle qualification / controls changed");
 	if (canonicalJson(evidence.leftPlan?.budgets[id]) !== canonicalJson(evidence.rightPlan?.budgets[id]))
 		reasons.push("trial resource budget");
+	const stopLines = (plan: RunPlan | undefined) => {
+		const budget = plan?.executionPlan?.budgets;
+		return [budget?.maxTokens ?? null, budget?.maxElapsedMinutes ?? null];
+	};
+	if (canonicalJson(stopLines(evidence.leftPlan)) !== canonicalJson(stopLines(evidence.rightPlan)))
+		reasons.push("run token / elapsed stop lines");
 	if (
 		!planA ||
 		!planB ||

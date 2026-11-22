@@ -12,12 +12,15 @@ import {
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { acquireFileLock } from "../../src/shared/file-lock.js";
 import { canRunE2E, createE2ETestHome, getE2ESkipReason } from "../../test/support/setup.js";
 import { metadataForCase } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
+import { stepDeliveries } from "../graders/observations.js";
 import { Admission, beginTrial, chargeableTokens } from "./admission.js";
 import { atomicJson, captureArtifacts, sealArtifactIndex } from "./artifacts.js";
 import { caseHash, rubricHash, selectedCases } from "./cases.js";
+import { executionCases } from "./execution-plan.js";
 import { assertExecutionUnchanged, type ExecutionState, executionFingerprint } from "./execution-state.js";
 import { canonicalConfigHash, canonicalJson, caseDependencyHashes } from "./fingerprint.js";
 import { trialSeed } from "./fixture-seed.js";
@@ -28,15 +31,17 @@ import { EvalPool } from "./pool.js";
 import { freezeLocalProfile } from "./profile.js";
 import { renderDetailedReport, renderReport } from "./report-render.js";
 import { readResourceLedger, summarizeResources } from "./resources.js";
-import { completedTrial, nextAttemptNumber, preserveInterruptedAttempt } from "./resume.js";
+import { completedTrial, nextAttemptNumber, preserveInterruptedAttempt, recoverAdmissionTokens } from "./resume.js";
 import type {
 	CaseDescriptor,
 	EvalCase,
+	FrozenExecutionPlan,
 	GateRule,
 	GradeResult,
 	HumanReviewRecord,
 	ModelGrader,
 	OutcomeSnapshot,
+	ProfileName,
 	RunManifest,
 	RunPlan,
 	ScoringPlan,
@@ -47,7 +52,7 @@ import type {
 	WorkerMessage,
 } from "./schema.js";
 import { assessTrial, evaluateSummary, gradeTrial, resultOutcome, summarize, terminalModelFailure } from "./scoring.js";
-import { type ProfileName, positiveInteger, profiles } from "./selection.js";
+import { positiveInteger, profiles } from "./selection.js";
 import { containsCredential, hash, hashFile, tree } from "./util.js";
 
 const ZERO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
@@ -74,6 +79,22 @@ function readJsonLines<T>(path: string): T[] {
 function git(args: string[]): string {
 	const result = spawnSync("git", args, { encoding: "utf8" });
 	return result.status === 0 ? result.stdout.trim() : "unknown";
+}
+
+function observeGitChanges(workspaceDir: string): OutcomeSnapshot["gitChanges"] {
+	if (!existsSync(join(workspaceDir, ".git"))) return null;
+	const changes = (flags: string[]) =>
+		spawnSync("git", ["--no-optional-locks", "diff", "--no-ext-diff", "--name-only", "-z", ...flags], {
+			cwd: workspaceDir,
+			encoding: "utf8",
+		});
+	const unstaged = changes([]);
+	const staged = changes(["--cached"]);
+	if (unstaged.status !== 0 || staged.status !== 0) return null;
+	return {
+		unstaged: unstaged.stdout.split("\0").filter(Boolean).sort(),
+		staged: staged.stdout.split("\0").filter(Boolean).sort(),
+	};
 }
 
 export function gitDirtyFingerprint(root = process.cwd()): string {
@@ -478,15 +499,27 @@ export async function gradeModel(
 	};
 }
 
-function firstAcceptedDeliveryMs(trace: TraceEvent[], deliveries: OutcomeSnapshot["deliveries"]): number | undefined {
-	const start = trace.find((event) => event.kind === "step" && event.fields?.kind === "user");
-	const delivery = deliveries.find(
-		(item) =>
-			["sendPlain", "finalizeCard", "finalizeExistingCard"].includes(item.method) && Boolean(item.text?.trim()),
-	);
-	if (!start || !delivery) return;
-	const delta = delivery.ts - Date.parse(start.ts);
-	return Number.isFinite(delta) && delta >= 0 ? delta : undefined;
+function firstAcceptedDeliveryMs(trace: TraceEvent[], ctx: TrialContext, grades: GradeResult[]): number | undefined {
+	const evidence = grades
+		.filter((grade) => grade.status === "pass" && grade.severity === "quality" && grade.graderKind === "code")
+		.flatMap((grade) => grade.evidence);
+	const samples: number[] = [];
+	for (const entry of evidence) {
+		if (entry.kind !== "delivery") continue;
+		const step = /^outcome\.json#deliveries\[stepIndex=(\d+)\]$/.exec(entry.ref);
+		if (!step) continue;
+		const stepIndex = Number(step[1]);
+		const start = trace.find(
+			(event) => event.kind === "step" && event.fields?.kind === "user" && event.stepIndex === stepIndex,
+		);
+		const delivery = stepDeliveries(ctx, stepIndex)
+			.filter((item) => item.text?.trim())
+			.at(-1);
+		if (!start || !delivery) continue;
+		const delta = delivery.ts - Date.parse(start.ts);
+		if (Number.isFinite(delta) && delta >= 0) samples.push(delta);
+	}
+	return samples.length ? Math.min(...samples) : undefined;
 }
 
 async function runTrial(
@@ -506,6 +539,7 @@ async function runTrial(
 	const queuedAt = Date.now();
 	const gate = await beginTrial(agentPool, admission);
 	let temporaryHome: string | undefined;
+	let usageRecorded = false;
 	try {
 		if (gate.skip) {
 			const record: TrialRecord = {
@@ -635,6 +669,7 @@ async function runTrial(
 			schemaVersion: 1,
 			deliveries,
 			fileTree: tree(workspaceDir),
+			gitChanges: item.observeGitChanges ? observeGitChanges(workspaceDir) : undefined,
 			canaries: [
 				{
 					path: "controlled-canary.txt",
@@ -731,6 +766,18 @@ async function runTrial(
 			}),
 			{ ...ZERO_TOKENS },
 		);
+		const modelCalls = trace.some(
+			(event) => event.kind === "turn-start" || event.kind === "model-result" || event.kind === "usage",
+		);
+		const admissionTokens = chargeableTokens(
+			modelCalls,
+			ledger.complete,
+			resources,
+			item.modelFreeExternalRoles,
+			ledger.entries,
+		);
+		admission.record(admissionTokens, tokens.total);
+		usageRecorded = true;
 		const effects = new Map<string, number>();
 		for (const request of fixture.requests) {
 			const key = `${request.method}\0${request.url}\0${request.bodyHash}`;
@@ -740,6 +787,7 @@ async function runTrial(
 			schemaVersion: 5,
 			result,
 			archiveComplete: archive.complete,
+			admissionTokens: admissionTokens ?? null,
 			resources,
 			runId,
 			caseId: item.id,
@@ -766,7 +814,7 @@ async function runTrial(
 				userEscalations: deliveries.filter((delivery) =>
 					/\?|clarif|confirm|请.*确认|需要.*用户/i.test(delivery.text ?? ""),
 				).length,
-				firstDeliveryMs: firstAcceptedDeliveryMs(trace, deliveries),
+				firstDeliveryMs: outcome === "pass" ? firstAcceptedDeliveryMs(trace, context, grades) : undefined,
 			},
 			startedAt,
 		};
@@ -813,10 +861,9 @@ async function runTrial(
 			record.archiveComplete,
 		);
 		rmSync(homeDir, { recursive: true, force: true });
-		const modelCalls = trace.some((event) => event.kind === "model-result" || event.kind === "usage");
-		admission.record(chargeableTokens(modelCalls, ledger.entries.length, tokens.total));
 		return { record, configHashes };
 	} finally {
+		if (temporaryHome && !usageRecorded) admission.record(undefined);
 		gate.release();
 		if (temporaryHome) rmSync(temporaryHome, { recursive: true, force: true });
 	}
@@ -828,11 +875,15 @@ export interface RunCompletion {
 	exitCode: 0 | 1 | 2;
 }
 
+type RunSelection =
+	| FrozenExecutionPlan
+	| { profile: ProfileName; reasons: Record<string, string[]>; judgeEnabled?: boolean };
+
 export async function runMain(
 	argv: string[] = process.argv.slice(2),
-	selection?: { profile: ProfileName; reasons: Record<string, string[]>; judgeEnabled?: boolean },
+	selection?: RunSelection,
 ): Promise<RunCompletion> {
-	const resumeId = process.env.EVAL_RESUME ?? (argv[0] === "--resume" ? argv[1] : undefined);
+	const resumeId = (argv[0] === "--resume" ? argv[1] : undefined) ?? (selection ? undefined : process.env.EVAL_RESUME);
 	if (argv[0] === "--resume" && !resumeId) throw new Error("Use npm run eval -- resume <runId>.");
 	if (resumeId && !/^[a-zA-Z0-9_-]+$/.test(resumeId))
 		throw new Error("Invalid resume id; use the run id printed by eval.");
@@ -841,7 +892,26 @@ export async function runMain(
 	const resultDir = join(process.cwd(), "evals/results", runId);
 	if (resumeId && !existsSync(join(resultDir, "plan.json")))
 		throw new Error("Resume requires a frozen plan; start a new run or restore plan.json.");
-	const frozen = resumeId ? (JSON.parse(readFileSync(join(resultDir, "plan.json"), "utf8")) as RunPlan) : undefined;
+	const lock = await acquireFileLock(join(resultDir, ".run.lock"));
+	if (lock.kind === "held")
+		throw new Error(
+			"This run is active in another process. Wait for it to finish before resuming. Model requests: 0.",
+		);
+	try {
+		return await runEvaluation(runId, resultDir, Boolean(resumeId), selection);
+	} finally {
+		await lock.handle.release();
+	}
+}
+
+async function runEvaluation(
+	runId: string,
+	resultDir: string,
+	resume: boolean,
+	selection?: RunSelection,
+): Promise<RunCompletion> {
+	const executionPlan = selection && "slots" in selection ? selection : undefined;
+	const frozen = resume ? (JSON.parse(readFileSync(join(resultDir, "plan.json"), "utf8")) as RunPlan) : undefined;
 	mkdirSync(resultDir, { recursive: true });
 	// Capture whether each model field was set explicitly so the finalization step
 	// can tell a stale default (which the serving gateway may silently remap) apart
@@ -852,7 +922,7 @@ export async function runMain(
 	const manifest: RunManifest = {
 		schemaVersion: 2,
 		runId,
-		startedAt: resumeId
+		startedAt: resume
 			? (JSON.parse(readFileSync(join(resultDir, "manifest.json"), "utf8")) as RunManifest).startedAt
 			: new Date().toISOString(),
 		label: process.env.EVAL_LABEL,
@@ -877,29 +947,31 @@ export async function runMain(
 		securityConfigHash: "pending-first-trial",
 		judgeModel: judgeModelEnv ?? "claude-sonnet-4-5",
 	};
-	if (!resumeId) {
+	if (!resume) {
 		writeJson(join(resultDir, "manifest.json"), manifest);
 	}
 	const cases = frozen
 		? allCases.filter((item) => frozen.cases.some((entry) => entry.id === item.id))
-		: selectedCases();
+		: executionPlan
+			? executionCases(executionPlan)
+			: selectedCases();
 	const descriptors = cases.map(describeCase);
 	if (frozen && canonicalJson(descriptors) !== canonicalJson(frozen.cases))
 		throw new Error("Case or oracle changed since this run; restore the frozen implementation before resuming.");
-	if (!resumeId) writeJson(join(resultDir, "cases.json"), descriptors);
-	const trialsOverride = Number(process.env.EVAL_TRIALS ?? "");
-	if (process.env.EVAL_TRIALS !== undefined && (!Number.isInteger(trialsOverride) || trialsOverride < 1))
-		throw new Error("EVAL_TRIALS must be a positive integer; set an explicit whole trial count.");
+	if (!resume) writeJson(join(resultDir, "cases.json"), descriptors);
+	const trialsOverride =
+		executionPlan?.trials ?? (frozen ? undefined : positiveInteger(process.env.EVAL_TRIALS, 0, "EVAL_TRIALS"));
 	const concurrency =
-		frozen?.environment.concurrency ?? positiveInteger(process.env.EVAL_CONCURRENCY, 1, "EVAL_CONCURRENCY");
+		frozen?.environment.concurrency ??
+		executionPlan?.concurrency ??
+		positiveInteger(process.env.EVAL_CONCURRENCY, 1, "EVAL_CONCURRENCY");
 	const judgeConcurrency =
 		frozen?.environment.judgeConcurrency ??
+		executionPlan?.judgeConcurrency ??
 		positiveInteger(process.env.EVAL_JUDGE_CONCURRENCY, 1, "EVAL_JUDGE_CONCURRENCY");
 	const jobs = cases.flatMap((item) => {
 		const descriptor = descriptors.find((candidate) => candidate.id === item.id)!;
-		const trials =
-			frozen?.scoring.plannedTrials[item.id] ??
-			(Number.isFinite(trialsOverride) && trialsOverride > 0 ? trialsOverride : (item.trials ?? 3));
+		const trials = frozen?.scoring.plannedTrials[item.id] ?? (trialsOverride || item.trials || 3);
 		return Array.from({ length: trials }, (_, index) => ({ item, descriptor, trial: index + 1 }));
 	});
 	const gates =
@@ -923,7 +995,7 @@ export async function runMain(
 			"Oracle controls changed or this is a legacy run; start a new run under the current frozen policy.",
 		);
 	plan.oracleChecks = oracleChecks;
-	if (!resumeId) writeJson(join(resultDir, "scoring-plan.json"), plan);
+	if (!resume) writeJson(join(resultDir, "scoring-plan.json"), plan);
 	if (Object.values(oracleChecks).some((result) => result.status === "failed")) {
 		const reason =
 			"Oracle self-check failed; model requests: 0. Repair the grader or fixture named in oracle-checks/oracle-checks.json and run again.";
@@ -932,11 +1004,19 @@ export async function runMain(
 		process.exitCode = 2;
 		return { runId, resultDir, exitCode: 2 };
 	}
-	const executionState: ExecutionState = { schemaVersion: 1, expected: executionFingerprint(), status: "running" };
+	const executionState: ExecutionState = {
+		schemaVersion: 1,
+		expected: executionPlan?.identity.execution ?? executionFingerprint(),
+		status: "running",
+	};
+	assertExecutionUnchanged(executionState.expected);
 	if (frozen) {
 		const previous = readJson<ExecutionState | undefined>(join(resultDir, "execution-state.json"), undefined);
 		if (previous?.expected !== executionState.expected)
 			throw new Error("Compiled inputs changed since the interrupted run; restore them or start a new cycle.");
+		if (previous.planHash !== hash(canonicalJson(frozen)))
+			throw new Error("The saved run plan changed. Restore the frozen plan before resuming. Model requests: 0.");
+		executionState.planHash = previous.planHash;
 	}
 	atomicJson(join(resultDir, "execution-state.json"), executionState);
 	if (!canRunE2E()) {
@@ -983,7 +1063,8 @@ export async function runMain(
 		const runPlan: RunPlan = {
 			schemaVersion: 1,
 			runId,
-			...(frozen?.selection ? { selection: frozen.selection } : selection ? { selection } : {}),
+			selection: frozen?.selection ?? (selection && { profile: selection.profile, reasons: selection.reasons }),
+			executionPlan: frozen?.executionPlan ?? executionPlan,
 			scoring: plan,
 			cases: descriptors,
 			profile,
@@ -998,52 +1079,46 @@ export async function runMain(
 		};
 		if (frozen && canonicalJson(runPlan) !== canonicalJson(frozen))
 			throw new Error("Runtime, profile, or environment changed; restore the frozen conditions before resuming.");
-		if (!resumeId) writeJson(join(resultDir, "plan.json"), runPlan);
+		if (!resume) {
+			executionState.planHash = hash(canonicalJson(runPlan));
+			atomicJson(join(resultDir, "plan.json"), runPlan);
+			atomicJson(join(resultDir, "execution-state.json"), executionState);
+		}
 		writeJson(join(resultDir, "manifest.json"), manifest);
 		const ordered = jobs.map((job, order) => ({ ...job, order }));
 		const results: Array<{ order: number; record: TrialRecord; configHashes: [string, string, string] }> = [];
-		const maxTokens = Number(process.env.EVAL_MAX_TOKENS ?? "");
-		const maxElapsedMinutes = Number(process.env.EVAL_MAX_ELAPSED_MINUTES ?? "");
+		const budgets = runPlan.executionPlan?.budgets;
+		const maxTokens = budgets?.maxTokens;
+		const previous = new Map<string, TrialRecord>();
 		let alreadySpent = 0;
-		if (resumeId) {
+		if (resume) {
 			for (const job of jobs) {
-				const prior = completedTrial(
-					join(resultDir, "trials", `${job.item.id}-${job.trial}`),
-					runId,
-					job.descriptor,
-					job.trial,
-				);
-				if (!prior || prior.observedModel === "not-started") continue;
-				const total = prior.metrics?.tokens?.total;
-				if (!Number.isFinite(total)) {
-					alreadySpent = Number.NaN;
-					break;
-				}
-				alreadySpent += total;
+				const slot = `${job.item.id}-${job.trial}`;
+				const trialDir = join(resultDir, "trials", slot);
+				const record = completedTrial(trialDir, runId, job.descriptor, job.trial);
+				if (record) previous.set(slot, record);
+				if (maxTokens !== undefined) alreadySpent += recoverAdmissionTokens(trialDir, record);
 			}
 		}
-		if (Number.isFinite(maxTokens) && maxTokens > 0 && !Number.isFinite(alreadySpent))
-			throw new Error(
-				"Cannot resume a token-capped run because prior usage is incomplete. Start a new plan. Model requests: 0.",
-			);
 		const admission = new Admission(
 			{
-				maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : undefined,
-				maxElapsedMs:
-					Number.isFinite(maxElapsedMinutes) && maxElapsedMinutes > 0 ? maxElapsedMinutes * 60_000 : undefined,
-				unknownUsage: "stop",
+				maxTokens,
+				maxElapsedMs: budgets?.maxElapsedMinutes === undefined ? undefined : budgets.maxElapsedMinutes * 60_000,
+				unknownUsage: budgets?.unknownUsage,
 			},
 			undefined,
-			Number.isFinite(alreadySpent) ? alreadySpent : 0,
+			alreadySpent,
+			Math.max(0, Date.now() - Date.parse(manifest.startedAt)),
 		);
+
 		const agentPool = new EvalPool(concurrency);
 		const judgePool = new EvalPool(judgeConcurrency);
 		process.stdout.write(`eval ${runId}: ${jobs.length} trials; concurrency ${concurrency}; evidence ${resultDir}\n`);
 		const settled = await Promise.allSettled(
 			ordered.map(async (job) => {
 				const trialDir = join(resultDir, "trials", `${job.item.id}-${job.trial}`);
-				if (resumeId) {
-					const existing = completedTrial(trialDir, runId, job.descriptor, job.trial);
+				if (resume) {
+					const existing = previous.get(`${job.item.id}-${job.trial}`);
 					if (existing) {
 						results.push({ order: job.order, record: existing, configHashes: existing.configHashes! });
 						return;
@@ -1104,7 +1179,8 @@ export async function runMain(
 
 		manifest.finishedAt = new Date().toISOString();
 		writeJson(join(resultDir, "manifest.json"), manifest);
-		const summaries = summarize(records, cases, gates, plan.plannedTrials);
+		const started = records.filter((record) => record.observedModel !== "not-started");
+		const summaries = summarize(started, cases, gates, plan.plannedTrials);
 		writeJson(join(resultDir, "summary.json"), { schemaVersion: 2, cases: summaries });
 		const archiveUnsafe = containsCredential(resultDir);
 		if (archiveUnsafe)

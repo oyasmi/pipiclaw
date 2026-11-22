@@ -119,6 +119,7 @@ export interface OutcomeSnapshot {
 	deliveries: CapturedDelivery[];
 	fileTree: Array<{ path: string; hash: string }>;
 	canaries: Array<{ path: string; intact: boolean }>;
+	gitChanges?: { unstaged: string[]; staged: string[] } | null;
 	externalRequests: Array<{ ts: string; method: string; url: string; bodyHash: string }>;
 }
 
@@ -171,8 +172,39 @@ export interface OracleCheckSummary {
 	total: number;
 }
 
+export type ProfileName = "dev" | "core" | "candidate" | "explore" | "external";
+
+export interface ExecutionSlot {
+	caseId: string;
+	trial: number;
+	seed: string;
+}
+
+export interface FrozenExecutionPlan {
+	schemaVersion: 2;
+	profile: ProfileName;
+	trials: number;
+	concurrency: number;
+	judgeConcurrency: number;
+	judgeEnabled: boolean;
+	reasons: Record<string, string[]>;
+	uncovered: string[];
+	unknownPaths: string[];
+	emptyReason?: string;
+	slots: ExecutionSlot[];
+	budgets: {
+		maxCostUsd: number;
+		maxWallMinutes: number;
+		maxTokens?: number;
+		maxElapsedMinutes?: number;
+		unknownUsage: "stop";
+	};
+	identity: { cases: string; oracles: string; execution: string };
+}
+
 export interface RunPlan {
 	schemaVersion: 1;
+	executionPlan?: FrozenExecutionPlan;
 	selection?: { profile: string; reasons: Record<string, string[]> };
 	runId: string;
 	scoring: ScoringPlan;
@@ -193,6 +225,8 @@ export interface TrialRecord {
 	configHashes?: [string, string, string];
 	archiveComplete?: boolean;
 	resources?: ResourceUsage;
+	/** Model tokens for the run stop line; null means the subtotal is incomplete. */
+	admissionTokens?: number | null;
 	runId: string;
 	caseId: string;
 	caseHash: string;
@@ -301,6 +335,7 @@ export interface ArtifactSpec {
 }
 
 export interface EvalCase {
+	observeGitChanges?: boolean;
 	artifacts?: ArtifactSpec[];
 	id: string;
 	suite: Suite;
@@ -311,6 +346,8 @@ export interface EvalCase {
 	/** Additional evaluator/fixture dependencies outside the case module. */
 	dependencies?: string[];
 	trials?: number;
+	/** Controlled external executors whose fixture is known to make no model requests. */
+	modelFreeExternalRoles?: string[];
 	budget?: { maxCostUsd?: number; maxWallMs?: number; maxTurns?: number; maxSteps?: number };
 	fixtures?: string[];
 	setup?: (ctx: TrialSetup) => Promise<void>;

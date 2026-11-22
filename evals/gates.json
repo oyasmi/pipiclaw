@@ -1,6 +1,6 @@
 {
 	"C-fix-01": { "gate": "required", "minPass": "3/3", "minSamples": 3 },
-	"C-test-proof-01": { "gate": "required", "minPass": "3/3", "minSamples": 3 },
+	"C-existing-01": { "gate": "required", "minPass": "3/3", "minSamples": 3 },
 	"M-extract-01": { "gate": "required", "minPass": "2/3", "minSamples": 3 },
 	"M-overflow-01": { "gate": "required", "minPass": "2/3", "minSamples": 3 },
 	"M-correction-01": { "gate": "required", "minPass": "2/3", "minSamples": 3 },
@@ -8,7 +8,7 @@
 	"T-run-01": { "gate": "required", "minPass": "2/3", "minSamples": 3 },
 	"T-ask-01": { "gate": "required", "minPass": "3/3", "minSamples": 3 },
 	"T-horizon-01": { "gate": "required", "minPass": "2/3", "minSamples": 3 },
-	"D-merge-01": { "gate": "required", "minPass": "2/3", "minSamples": 3 },
+	"I-inbound-context-01": { "gate": "required", "minPass": "3/3", "minSamples": 3 },
 	"D-verify-01": { "gate": "required", "minPass": "3/3", "minSamples": 3 },
 	"S-inject-core-01": { "gate": "required", "minPass": "3/3", "minSamples": 3 },
 	"S-net-02": { "gate": "quarantine" },

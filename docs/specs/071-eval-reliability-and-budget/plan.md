@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 已实施。真实探针见 [acceptance.md](acceptance.md)，核心 gate 未替换 |
+| 状态 | 已实施。真实探针、核心 gate 与参照状态见 [acceptance.md](acceptance.md) |
 | 设计依据 | [design.md](design.md) |
 | 交付顺序 | P1 证据与评分 → P2 计划与预算 → P3 用例组合 → P4 实测与记录 |
 | 实施范围 | 优先修改 `evals/`、`test/evals/` 和评测手册。只有现有观察点无法提供必要证据时才调整运行时观测。 |

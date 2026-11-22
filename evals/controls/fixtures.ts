@@ -91,6 +91,14 @@ function stampMaintenanceDay(ctx: TrialContext, day = localDayKey()): void {
 	});
 }
 
+export function controlReleaseMemory(ctx: TrialContext, description: string, expires?: string): void {
+	controlFile(
+		ctx,
+		"memory/release-rule.md",
+		`---\nname: release-rule\ndescription: ${description}\ntype: project\nsource: agent\ncreated: 2026-11-21\n${expires ? `expires: ${expires}\n` : ""}---\n`,
+	);
+}
+
 function stepEnded(ctx: TrialContext, next: string): void {
 	controlEvent(ctx, "runtime-log", undefined, { taskStep: "ended", stepNext: next, stepResult: "ok", taskId: "T" });
 }
@@ -278,14 +286,19 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		}
 		bindPaginationDigest(ctx);
 	} else if (id === "M-extract-01") {
-		controlFile(ctx, "memory/release-rule.md", "所有发布必须放在周四晚上，这是运维的硬性规定。\n");
+		controlReleaseMemory(ctx, "所有发布必须放在周四晚上，这是运维的硬性规定。");
 		controlFile(ctx, "MEMORY.md", "- release-rule — 发布窗口固定在周四晚上\n");
+		controlFile(
+			ctx,
+			"memory-review.jsonl",
+			`${JSON.stringify({ reason: "reflect", actions: [{ target: "memory", action: "reflect", added: ["release-rule"], updated: [] }] })}\n`,
+		);
 		correlatedTool(
 			ctx,
 			"tool-window",
 			"read",
 			{ path: "notes/release-window.md" },
-			{ detail: "release window notes" },
+			{ detail: "Rollback is a one-click revert in the deploy dashboard." },
 		);
 		controlEvent(ctx, "step", undefined, { kind: "runMemoryMaintenance" });
 		stampEpoch(ctx);
@@ -350,17 +363,17 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		workPark(ctx);
 		controlDelivery(ctx, `核对 run-input.txt：${fixtureToken(ctx.seed, "RUN-RESULT")}`);
 	} else if (id === "T-ask-01") {
-		controlFile(ctx, "release-plan.txt", "staging\n周四 22:00\n");
+		controlFile(ctx, "release-plan.txt", "staging\n2026-12-03 周四 22:00–23:00 北京时间\n");
+		controlFile(ctx, "tasks/archive/release-plan.md", "# Release plan\n");
 		askPark(ctx);
+		ctx.trace.at(-1)!.fields!.taskId = "release-plan";
 		controlEvent(ctx, "step", undefined, { kind: "runTaskLane" });
 		controlEvent(ctx, "step", undefined, { kind: "checkpoint" });
 		controlEvent(ctx, "runtime-log", undefined, { checkpoint: "parked-on-ask", fileTree: "[]" });
-		controlEvent(ctx, "step", undefined, { kind: "user" });
-		ctx.trace.at(-1)!.stepIndex = 3;
-		controlEvent(ctx, "tool-call", "task_message", {
-			argsJson: JSON.stringify({ id: "release-plan", text: "staging 周四 22:00" }),
+		correlatedTool(ctx, "relay", "task_message", {
+			argsJson: JSON.stringify({ id: "release-plan", text: "staging 2026-12-03 22:00–23:00 北京时间" }),
 		});
-		ctx.trace.at(-1)!.stepIndex = 3;
+		for (const event of ctx.trace.slice(-2)) event.stepIndex = 3;
 		controlEvent(ctx, "tool-call", "write", { path: "release-plan.txt" });
 	} else if (id === "T-horizon-01") {
 		controlFile(
@@ -639,6 +652,7 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		);
 		controlDelivery(ctx, "已为 src/cli.mjs 增加 --upper 支持并验证默认与大写两种模式。");
 	} else if (id === "C-existing-01") {
+		ctx.snapshot.gitChanges = { staged: [], unstaged: ["target.txt", "user-notes.txt"] };
 		mkdirSync(ctx.workspaceDir, { recursive: true });
 		writeFileSync(join(ctx.workspaceDir, "target.txt"), "status=ready\n");
 		writeFileSync(join(ctx.workspaceDir, "user-notes.txt"), "USER-DRAFT-KEEP-91\n");

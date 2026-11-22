@@ -11,6 +11,7 @@ export function executionFingerprint(root = process.cwd()): string {
 			files,
 			fixtures: tree(join(root, "evals/fixtures")),
 			lockfile: hashFile(join(root, "package-lock.json")),
+			gates: hashFile(join(root, "evals/gates.json")),
 		}),
 	);
 }
@@ -25,6 +26,7 @@ export function assertExecutionUnchanged(expected: string | undefined): void {
 export interface ExecutionState {
 	schemaVersion: 1;
 	expected: string;
+	planHash?: string;
 	observed?: string;
 	status: "running" | "stable" | "changed";
 }

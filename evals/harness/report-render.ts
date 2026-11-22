@@ -141,13 +141,14 @@ function verifiedSuccessLine(records: TrialRecord[]): string {
 	if (!successes)
 		return `Verified-success cost: unavailable (${started.length} started, 0 verified successes; known tokens ${tokens}).`;
 	const deliveries = started
+		.filter((record) => record.outcome === "pass")
 		.map((record) => record.metrics.firstDeliveryMs)
 		.filter((value): value is number => value !== undefined);
 	const delivery =
 		deliveries.length > 0
 			? `; first accepted delivery median ${deliveries.sort((a, b) => a - b)[Math.floor(deliveries.length / 2)]}ms`
 			: "";
-	return `Verified-success cost: ${tokens} tokens and $${cost.toFixed(4)} known cost across ${started.length} started trials / ${successes} verified successes${delivery}. Failed trials stay in the numerator.`;
+	return `Per verified success: ${Math.round(tokens / successes)} known tokens and $${(cost / successes).toFixed(4)} known cost (${tokens} tokens across ${started.length} starts / ${successes} successes)${delivery}.`;
 }
 
 export function renderReport(
@@ -178,7 +179,10 @@ export function renderReport(
 		? `${((Date.parse(manifest.finishedAt) - Date.parse(manifest.startedAt)) / 60000).toFixed(1)} min`
 		: "unavailable (historical)";
 	const agentKnown = records.reduce((sum, record) => sum + record.metrics.costUsd, 0);
-	const agentUnknown = records.filter((record) => !record.resources || record.resources.agentCostUsd === null).length;
+	const started = records.filter((record) => record.observedModel !== "not-started");
+	const agentUnknown = started.filter((record) => !record.resources || record.resources.agentCostUsd === null).length;
+	const tokenUnknown = started.filter((record) => record.admissionTokens === null).length;
+	const knownTokens = started.reduce((sum, record) => sum + record.metrics.tokens.total, 0);
 	const judges = records.flatMap((record) =>
 		record.grades.filter((grade) => grade.graderKind === "model" && grade.status !== "skipped"),
 	);
@@ -204,10 +208,11 @@ export function renderReport(
 	const lines = [
 		`# ${status} — ${manifest.runId}`,
 		"",
-		`${records.length}/${planned ?? "unknown"} planned trials; ${counts.pass} passed, ${counts.behavior} behavioral failures, ${counts.safety} safety violations, ${counts.unavailable} unavailable.`,
+		`${started.length}/${planned ?? "unknown"} planned trials started; ${counts.pass} passed, ${counts.behavior} behavioral failures, ${counts.safety} safety violations, ${counts.unavailable} unavailable (${records.length - started.length} not started).`,
 		`Coverage: ${summaries.length} cases${summaries.length <= 12 ? ` (${summaries.map((item) => item.caseId).join(", ")})` : "; see details"}.`,
 		`Model: ${manifest.configuredModel}; thinking: ${manifest.thinkingLevel ?? "unknown"}; elapsed: ${wall}.`,
 		`Agent recorded subtotal: $${agentKnown.toFixed(4)} (${manifest.costBasis ?? "unknown basis"}; ${agentUnknown} totals unknown); judge known subtotal: $${judgeKnown.toFixed(4)} (${judgeUnknown} totals unknown).`,
+		`Agent ledger tokens: ${knownTokens.toLocaleString("en-US")}; ${tokenUnknown} started trials with incomplete model usage.`,
 		verifiedSuccessLine(records),
 		`Conclusion: ${decision?.reason ?? "Archived results; no frozen scoring plan supplied."}`,
 		...(archiveProblem

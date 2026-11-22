@@ -7,7 +7,9 @@ import { Admission, beginTrial, chargeableTokens } from "../../evals/harness/adm
 import { locateWithinRoots } from "../../evals/harness/evidence.js";
 import { assertPlanIdentity, buildExecutionPlan } from "../../evals/harness/execution-plan.js";
 import { EvalPool } from "../../evals/harness/pool.js";
+import { summarizeResources } from "../../evals/harness/resources.js";
 import type { TrialContext } from "../../evals/harness/schema.js";
+import type { UsageLedgerEntry } from "../../src/usage/ledger.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -82,6 +84,12 @@ describe("spec 071 evidence and admission", () => {
 		const blocked = await beginTrial(pool, admission);
 		expect(blocked.skip).toBe("unknown-usage");
 		blocked.release();
+		let now = 100;
+		const resumed = new Admission({ maxElapsedMs: 15 }, () => now, 7, 10);
+		expect(resumed.snapshot().spentTokens).toBe(7);
+		expect(resumed.blockReason()).toBeUndefined();
+		now += 5;
+		expect(resumed.blockReason()).toBe("elapsed");
 		const local = new Admission({ maxTokens: 10 });
 		local.record(0);
 		expect(local.snapshot().unknown).toBe(false);
@@ -89,15 +97,36 @@ describe("spec 071 evidence and admission", () => {
 	});
 
 	it("counts a stopped trial's ledger and leaves a missing ledger unknown", () => {
-		expect(chargeableTokens(false, 0, 0)).toBe(0);
-		expect(chargeableTokens(true, 2, 37729)).toBe(37729);
-		expect(chargeableTokens(true, 0, 0)).toBeUndefined();
+		const row: UsageLedgerEntry = {
+			ts: "2026-11-22T00:00:00Z",
+			channelId: "eval",
+			kind: "turn",
+			model: "fixture",
+			usage: { input: 37700, output: 29, cacheRead: 0, cacheWrite: 0, total: 37729 },
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const local = { ...row, kind: "subagent" as const, usageKnown: false, label: "fixture-role: produce" };
+		const rows = [row, local];
+		const resources = summarizeResources(rows, false);
+		expect(chargeableTokens(false, true, summarizeResources([]), [], [])).toBe(0);
+		expect(chargeableTokens(true, true, resources, ["fixture-role"], rows)).toBe(37729);
+		expect(chargeableTokens(true, true, resources, [], rows)).toBeUndefined();
+		expect(chargeableTokens(true, false, resources, ["fixture-role"], rows)).toBeUndefined();
+		expect(chargeableTokens(true, true, summarizeResources([]), [], [])).toBeUndefined();
 	});
 
 	it("refuses a stale execution plan before any model request", () => {
 		const plan = buildExecutionPlan(["--case", "U-path-01"]);
-		plan.identity.cases = "stale";
-		expect(() => assertPlanIdentity(plan)).toThrow(/Model requests: 0/);
+		assertPlanIdentity(plan);
+		const stale = structuredClone(plan);
+		stale.identity.execution = "stale";
+		expect(() => assertPlanIdentity(stale)).toThrow(/compiled runtime/);
+		const skipped = structuredClone(plan);
+		skipped.slots[0]!.trial++;
+		expect(() => assertPlanIdentity(skipped)).toThrow(/slot list/);
+		const underfunded = structuredClone(plan);
+		underfunded.budgets.maxCostUsd = 0.01;
+		expect(() => assertPlanIdentity(underfunded)).toThrow(/exceeds its envelope/);
 		expect(plan.slots).toHaveLength(1);
 	});
 });

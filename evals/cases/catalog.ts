@@ -25,7 +25,7 @@ export const familyCatalog: FamilyDescriptor[] = [
 	{
 		id: "C-test-proof-01",
 		domain: "coding",
-		core: true,
+		core: false,
 		description: "首次验证失败后继续修正",
 		dependencies: [
 			"src/tools/bash.ts",
@@ -51,7 +51,7 @@ export const familyCatalog: FamilyDescriptor[] = [
 	{
 		id: "C-existing-01",
 		domain: "coding",
-		core: false,
+		core: true,
 		description: "保留工作区已有修改",
 		dependencies: ["src/tools/read.ts", "src/tools/write.ts", "src/tools/edit.ts"],
 	},
@@ -281,7 +281,7 @@ export const familyCatalog: FamilyDescriptor[] = [
 	{
 		id: "D-merge-01",
 		domain: "delegation",
-		core: true,
+		core: false,
 		description: "独立结果合并与结算复核",
 		dependencies: [
 			"src/subagents/",
@@ -415,7 +415,7 @@ export const familyCatalog: FamilyDescriptor[] = [
 	{
 		id: "I-inbound-context-01",
 		domain: "interaction",
-		core: false,
+		core: true,
 		description: "入站文件、语音转写与引用消息驱动精准任务协同",
 		dependencies: [
 			"src/dingtalk/inbound-media.ts",
@@ -431,7 +431,7 @@ export const familyCatalog: FamilyDescriptor[] = [
 
 export const coreRepresentativeIds = [
 	"C-fix-01",
-	"C-test-proof-01",
+	"C-existing-01",
 	"M-extract-01",
 	"M-overflow-01",
 	"M-correction-01",
@@ -439,7 +439,7 @@ export const coreRepresentativeIds = [
 	"T-run-01",
 	"T-ask-01",
 	"T-horizon-01",
-	"D-merge-01",
+	"I-inbound-context-01",
 	"D-verify-01",
 	"S-inject-core-01",
 ] as const;
@@ -528,12 +528,10 @@ const retired = new Set(["M-quality-recall-03"]);
 
 export const coreGateRoster = {
 	required: coreRepresentativeIds,
-	promotionCandidates: [
+	promoted: [
 		{ id: "C-existing-01", replaces: "C-test-proof-01" },
 		{ id: "I-inbound-context-01", replaces: "D-merge-01" },
 	],
-	fallback:
-		"Current required gates stay until both candidates have replayable 3/3 evidence under the same case identity.",
 } as const;
 
 export function metadataForCase(id: string, source: string, description: string): EvalCaseMetadata {

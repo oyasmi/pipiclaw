@@ -8,6 +8,7 @@ import {
 	observedTestFailure,
 	sourceMutation,
 	taskParkObservations,
+	toolObservations,
 	verificationBoundToSource,
 } from "../graders/observations.js";
 import { publicPaginationTest } from "../graders/pagination-fixture.js";
@@ -148,7 +149,7 @@ export const coreRenovatedCases: EvalCase[] = [
 		setup: (ctx) =>
 			writeTask(ctx, "release-plan", {
 				started: true,
-				body: `# Task\n\n## Goal\nCreate ${join(ctx.deskDir, "release-plan.txt")} only after the user supplies the environment and release window. These values cannot be guessed.\n\n## DoD\n- [ ] release-plan.txt records the user's latest environment and window\n`,
+				body: `# Task\n\n## Goal\nCreate ${join(ctx.deskDir, "release-plan.txt")} only after the user supplies the environment and release window. Record the user's confirmed date, time range, and time zone as supplied. This file is a handoff note.\n\n## DoD\n- [ ] release-plan.txt records the staging or production environment and the latest window supplied by the user\n`,
 			}),
 		script: [
 			{ kind: "runTaskLane" },
@@ -156,28 +157,33 @@ export const coreRenovatedCases: EvalCase[] = [
 			{ kind: "checkpoint", id: "parked-on-ask" },
 			{
 				kind: "user",
-				text: "帮我告诉 release-plan：环境用 staging。窗口我刚才说周三，改成周四 22:00，以这句为准。",
+				text: "帮我告诉 release-plan，环境用 staging。我前面说的周三取消，改到 12 月 3 日周四，2026 年，北京时间 22:00 到 23:00。以这条为准。",
 			},
 			{
 				kind: "waitFor",
 				timeoutMs: 60_000,
 				failureCategory: "runtime",
-				predicate: (ctx) => existsSync(join(ctx.deskDir, "tasks/archive/release-plan.md")),
+				predicate: (ctx) =>
+					existsSync(join(ctx.deskDir, "tasks/archive/release-plan.md")) ||
+					taskParkObservations(ctx, "ask").some(
+						(event) => event.fields?.taskId === "release-plan" && (event.stepIndex ?? -1) >= 3,
+					),
 			},
 		],
 		graders: [
 			tracePredicate(
 				"chat-relays-answer",
 				(ctx) =>
-					ctx.trace.some(
-						(event) =>
-							event.kind === "tool-call" &&
-							event.tool === "task_message" &&
-							event.stepIndex === 3 &&
-							/release-plan/.test(event.fields?.argsJson ?? "") &&
-							/staging/.test(event.fields?.argsJson ?? "") &&
-							/22:00/.test(event.fields?.argsJson ?? ""),
-					),
+					toolObservations(ctx, "task_message").some(({ call, result }) => {
+						if (!result.ok || call.stepIndex !== 3) return false;
+						const args = JSON.parse(call.fields?.argsJson ?? "{}") as { id?: string; text?: string };
+						return (
+							args.id === "release-plan" &&
+							/staging/i.test(args.text ?? "") &&
+							/22:00/.test(args.text ?? "") &&
+							/23:00/.test(args.text ?? "")
+						);
+					}),
 				"the chat must pass the user's answer to the task",
 			),
 			tracePredicate(
@@ -186,19 +192,33 @@ export const coreRenovatedCases: EvalCase[] = [
 					!ctx.trace.some(
 						(event) =>
 							event.stepIndex === 1 &&
-							event.kind === "tool-call" &&
-							["task_message", "task_resume", "task_create", "subagent", "subagent_inline"].includes(
-								event.tool ?? "",
-							),
+							(event.fields?.taskStep === "started" ||
+								(event.kind === "tool-call" &&
+									["task_message", "task_resume", "task_create", "subagent", "subagent_inline"].includes(
+										event.tool ?? "",
+									))),
 					),
 				"an unrelated acknowledgement does not dispatch or advance the task",
 			),
 			fileContains("environment-written", "release-plan.txt", /staging/i),
-			fileContains("latest-window-written", "release-plan.txt", /周四|Thursday/i),
-			fileContains("latest-time-written", "release-plan.txt", /22:00/i),
+			fileContains(
+				"latest-window-written",
+				"release-plan.txt",
+				/12\s*(?:月|[-/.])\s*0?3(?!\d)|(?:Dec(?:ember)?\s+0?3)(?!\d)/i,
+			),
+			fileContains("latest-time-written", "release-plan.txt", /22:00[^\n]*23:00/),
+			fileContains("time-zone-written", "release-plan.txt", /北京时间|Asia\/Shanghai|(?:UTC|GMT)\s*\+0?8|\+08:00/i),
+			tracePredicate(
+				"plan-task-archived",
+				(ctx) => existsSync(join(ctx.deskDir, "tasks/archive/release-plan.md")),
+				"the task must complete after receiving the full window",
+			),
 			tracePredicate(
 				"ask-ticket-recorded",
-				(ctx) => taskParkObservations(ctx, "ask").length > 0,
+				(ctx) =>
+					taskParkObservations(ctx, "ask").some(
+						(event) => event.stepIndex === 0 && event.fields?.taskId === "release-plan",
+					),
 				"a task step ended waiting for the user",
 			),
 		],
@@ -212,6 +232,7 @@ export const coreRenovatedCases: EvalCase[] = [
 	},
 	{
 		id: "T-run-01",
+		modelFreeExternalRoles: ["run-reader"],
 		suite: "capability",
 		source: "2026-09-10 case design T-run-01",
 		description: "task 派发真实 external run，派发后结束这一步等待结算，再从运行证据交付未知值。",

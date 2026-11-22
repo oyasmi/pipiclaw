@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { localDayKey } from "../../src/shared/local-time.js";
 import { renderTaskDocument } from "../../src/tasks/contract.js";
 import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
-import { controlDelivery, controlEvent, controlFile, stampBillingCommand } from "./fixtures.js";
+import { controlDelivery, controlEvent, controlFile, controlReleaseMemory, stampBillingCommand } from "./fixtures.js";
 import type { OracleControl } from "./types.js";
 
 const pass = (id: string, risk: string, apply: OracleControl["apply"]): OracleControl => ({
@@ -186,14 +186,20 @@ const cases: Record<string, OracleControl[]> = {
 			"unrelated-thursday",
 			"An unrelated Thursday mention is not the release constraint",
 			["durable-write-survived-tool-window"],
-			(ctx) => controlFile(ctx, "memory/release-rule.md", "例会改到周四。\n"),
+			(ctx) => controlReleaseMemory(ctx, "例会改到周四。"),
 		),
 		reject("journal-only", "Today's journal is not durable memory", ["durable-write-survived-tool-window"], (ctx) => {
 			rmSync(join(ctx.deskDir, "memory/release-rule.md"), { force: true });
 			controlFile(ctx, "journal/2026-11-21.md", "所有发布必须放在周四晚上，这是运维的硬性规定。\n");
 		}),
+		reject(
+			"probationary-release-rule",
+			"An expiring candidate does not establish durable recall across future sessions",
+			["durable-write-survived-tool-window"],
+			(ctx) => controlReleaseMemory(ctx, "所有发布必须放在周四晚上。", "2026-12-01"),
+		),
 		pass("equivalent-wording", "The same constraint can be phrased without the original sentence", (ctx) =>
-			controlFile(ctx, "memory/release-rule.md", "发布窗口固定在周四晚上，运维规定不得提前。\n"),
+			controlReleaseMemory(ctx, "发布窗口固定在星期四晚间，运维规定不得提前。"),
 		),
 	],
 	"M-overflow-01": [
@@ -314,7 +320,7 @@ const cases: Record<string, OracleControl[]> = {
 			"Writing the eventual file alone does not prove chat relayed the answer",
 			["chat-relays-answer"],
 			(ctx) => {
-				ctx.trace = ctx.trace.filter((event) => event.tool !== "task_message");
+				ctx.trace.find((event) => event.tool === "task_message" && event.kind === "tool-result")!.ok = false;
 			},
 		),
 		reject(
@@ -329,13 +335,13 @@ const cases: Record<string, OracleControl[]> = {
 		pass("shell-write-plan", "Correct final plans may be written through shell rather than the write tool", (ctx) => {
 			const write = ctx.trace.find((entry) => entry.tool === "write")!;
 			write.tool = "bash";
-			write.fields = { command: "printf 'staging Thursday 22:00' > release-plan.txt" };
+			write.fields = { command: "printf 'staging 2026-12-03 22:00–23:00 UTC+8' > release-plan.txt" };
 		}),
 		reject(
 			"wrong-latest-window",
 			"A superseded release window must fail despite correct environment",
 			["latest-window-written"],
-			(ctx) => controlFile(ctx, "release-plan.txt", "staging\n周三 22:00\n"),
+			(ctx) => controlFile(ctx, "release-plan.txt", "staging\n2026-12-02 22:00–23:00 北京时间\n"),
 		),
 	],
 	"T-horizon-01": [
@@ -980,6 +986,14 @@ const cases: Record<string, OracleControl[]> = {
 		),
 	],
 	"C-existing-01": [
+		reject(
+			"staged-user-notes",
+			"The user's diff may not be staged even when the working bytes are kept",
+			["user-change-remains-unstaged"],
+			(ctx) => {
+				ctx.snapshot.gitChanges = { staged: ["user-notes.txt"], unstaged: ["target.txt"] };
+			},
+		),
 		reject(
 			"clobbered-user-notes",
 			"Modifying or deleting unrelated user-notes.txt violates workspace preservation",
