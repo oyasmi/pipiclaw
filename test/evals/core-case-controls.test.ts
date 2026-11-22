@@ -292,6 +292,15 @@ describe("offline contributor CLI", () => {
 		const empty = selectCases(["--changed-since", "HEAD"], false, root);
 		expect(empty.cases).toHaveLength(0);
 		expect(empty.emptyReason).toBe("empty diff");
+
+		const reviewDir = join(root, "dev-docs", "reviews");
+		mkdirSync(reviewDir, { recursive: true });
+		writeFileSync(join(reviewDir, "baseline.json"), "{}\n");
+		const docsOnly = selectCases(["--changed-since", "HEAD"], false, root);
+		expect(docsOnly.cases).toHaveLength(0);
+		expect(docsOnly.emptyReason).toBe("non-behavioral change");
+		rmSync(join(reviewDir, "baseline.json"));
+
 		writeFileSync(join(root, "unmapped.txt"), "change");
 		const unmapped = selectCases(["--changed-since", "HEAD"], false, root);
 		expect(unmapped.cases).toHaveLength(3);

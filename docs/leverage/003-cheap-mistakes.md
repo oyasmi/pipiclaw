@@ -3,7 +3,7 @@
 > **一句话**：[001](./001-from-wrench-to-lathe.md) 讲**出口**（可机检），[002](./002-context-ownership.md) 讲**入口**（可写清）。这篇讲最后一步——两样都齐了，你为什么还是不敢撒手，以及该往哪投钱把手撒开。
 >
 > **读者**：已经能把活交待清楚、也能验收，但仍然每次都想盯一眼的人。
-> **前置**：[安全指南](../security.md)、[智能体委派](../sub-agents.md)、[设计哲学](../design-philosophy.md)。
+> **前置**：[安全指南](../security.md)、[智能体委派](../sub-agents.md)、[设计哲学](../../dev-docs/design-philosophy.md)。
 
 ## 不敢放手是对的，但归因通常是错的
 
@@ -66,7 +66,7 @@
 
 这条单独拎出来，因为它是自治系统和人工操作最本质的差别。
 
-事件和任务的投递语义是 **at-least-once**：进程在动作执行中退出，重启后 runtime 会重新投递租约过期的记录；错过的 one-shot 会补执行。这是刻意选的——真实的 exactly-once 是虚构的（见 [设计哲学第 3 条](../design-philosophy.md)）。
+事件和任务的投递语义是 **at-least-once**：进程在动作执行中退出，重启后 runtime 会重新投递租约过期的记录；错过的 one-shot 会补执行。这是刻意选的——真实的 exactly-once 是虚构的（见 [设计哲学第 3 条](../../dev-docs/design-philosophy.md)）。
 
 代价是：
 

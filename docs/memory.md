@@ -3,7 +3,7 @@
 > **读者**：想知道"它到底记住了什么、能不能让它忘掉、为什么忘了我说过的话"的使用者与管理员。
 > **前置**：已完成 [README](../README.md) 的安装与配置。
 > **读完你能**：说出记忆分几块、每块存什么、如何让某件事被记住或被遗忘、以及记忆出问题时先看哪个文件/命令。
-> 想看实现（存储格式、反思 pass、迁移）请转 [architecture.md](./architecture.md) 的“记忆子系统”；想调参数请转 [configuration.md](./configuration.md)。
+> 想看实现（存储格式、反思 pass、迁移）请转 [architecture.md](../dev-docs/architecture.md) 的“记忆子系统”；想调参数请转 [configuration.md](./configuration.md)。
 
 Pipiclaw 的记忆是**三件东西**：工位记忆库（一条事实一个文件）、按天的日志（journal）、以及所有工位共享的 workspace 背景。规模是个人/小团队自托管的量级——几十到几百条——所以不在每回合检索打分挑选注入内容：会话开始时把索引整份给模型看，之后靠 `memory_search` 按需补查。
 
@@ -84,8 +84,8 @@ Pipiclaw 不会自动把工位记忆升格到这里。通用文件工具能否�
 
 ## 相关文档
 
-- 实现结构、存储格式、反思 pass、迁移细节：[architecture.md](./architecture.md) 的“记忆子系统”
+- 实现结构、存储格式、反思 pass、迁移细节：[architecture.md](../dev-docs/architecture.md) 的“记忆子系统”
 - 记忆相关的可配开关与已退役字段：[configuration.md](./configuration.md)
 - 后台整理机制与触发条件：[runtime-mechanisms.md](./runtime-mechanisms.md#记忆何时整理)
 - 记忆相关工具：[tools.md](./tools.md#记忆与知识类)
-- agent 侧"该写到哪一层"的纪律：[runtime-playbooks.md](./runtime-playbooks.md)
+- agent 侧"该写到哪一层"的纪律：[runtime-playbooks.md](../dev-docs/runtime-playbooks.md)

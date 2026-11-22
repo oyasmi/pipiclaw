@@ -51,7 +51,7 @@ import {
 /**
  * The run: one abstraction level for delegation, whether it executes as an in-process sub-agent
  * or (from spec 040 phase 2 onward) a short-lived external CLI process. See
- * `docs/archive/specs/040-async-delegation-and-external-agents/design.md`, D1.
+ * `dev-docs/specs/archive/040-async-delegation-and-external-agents/design.md`, D1.
  *
  * State machine vocabulary is borrowed from `jobs/manager.ts`'s `JobStatus` rather than inventing
  * a second one. Only three facts are persisted as idempotent markers (D1/P5) because only three

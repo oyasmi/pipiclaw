@@ -217,7 +217,7 @@ for (const file of r4Files) {
 }
 
 // R5: file references in docs
-const DOCS = ["AGENTS.md", "CLAUDE.md", "docs/architecture.md"];
+const DOCS = ["AGENTS.md", "CLAUDE.md", "dev-docs/architecture.md"];
 const testFiles = walkFiles(ROOT, "test", (f) => f.endsWith(".ts"));
 const allFiles = [...srcFiles, ...testFiles];
 const baseNames = new Set(allFiles.map((f) => f.slice(f.lastIndexOf("/") + 1)));

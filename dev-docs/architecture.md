@@ -1,0 +1,475 @@
+# Pipiclaw 架构
+
+> **读者**：要改这份代码的人。
+> **前置**：能跑起来项目；域边界与工程规则见 [../AGENTS.md](../AGENTS.md)。
+> **读完你能**：定位任一子系统的代码位置，并说清一条消息从收到到回复经过了什么。
+>
+> 本文按当前源码整理。各子系统的历史取舍见[设计记录](./specs/README.md)与[历史规格归档](./specs/archive/README.md)，配置细节见[配置速查](../docs/configuration.md)。版本行为变化后应同步更新本文。
+
+## 1. 定位与总体形态
+
+Pipiclaw 是一个**钉钉优先、可长期运行的 AI coding assistant runtime**，个人和团队都可以使用。它包装 `@earendil-works/pi-coding-agent` SDK（`@mariozechner/pi-coding-agent` 的 fork），把一个 coding agent 挂到钉钉（DingTalk Stream 模式）上，并补齐长期运行所需的外围系统——工位（默认工位 `default` 自动初始化，需要分开项目时再创建其他工位；频道只是绑定到工位的地址）、定时事件、持久任务、子代理、安全护栏、用量账本。钉钉与 Web API 是两个渠道，终端 TUI 通过 Web API 连接同一运行时。
+
+```
+pipiclaw            # 默认：长驻钉钉 daemon（等价 pipiclaw run）
+pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客户端；没有 daemon 时内嵌运行时，无需钉钉凭据
+```
+
+核心设计取向（从实现中反推出来的一致性原则）：
+
+| 原则 | 体现 |
+|---|---|
+| **工位组织共享工作，频道保留独立对话** | desk 拥有记忆、任务、事件和工作文件；每个频道（`<渠道>:<渠道内地址>`）保留独立的 ChannelRunner、AgentSession 和串行队列。自定义 cwd 与外部绝对路径不会自动按工位隔离 |
+| **一切串行化都显式建模** | 消息队列、投递队列、记忆写队列各司其职（见 §5），共享文件用 write-temp-then-rename 原子写 |
+| **传输层与 agent 层解耦** | 渠道（钉钉、Web API）实现 `Transport`，把入站消息交给 `runtime/ingress.ts` 这一条入口；Runner 只通过 `ChannelContext` 的结构化回合输出（`emit(TurnEvent)` / `finish(TurnOutcome)`）说话，不知道有哪些渠道；终端是 Web API 的客户端，不是渠道 |
+| **状态全部落在仓库外** | 配置、工作区、记忆、任务、日志都在 `APP_HOME_DIR`（`~/.pipiclaw`，可用 `PIPICLAW_HOME` 覆盖） |
+| **后台工作是"扫描 + 门控"** | 记忆维护、任务驱动都是定时 tick + 确定性 gate，LLM 只在 gate 放行后才被调用 |
+
+## 2. 源码地图
+
+目录按依赖层级从低到高排列：下层不会 import 上层，同层之间互不 import。完整的规则表（每个模块可以 import 什么）在 [../AGENTS.md](../AGENTS.md)，由 `npm run arch`（`scripts/check-architecture.mjs`）在 `npm run check` 里强制检查。
+
+| 层 | 目录 | 职责 | 关键文件 |
+|---|---|---|---|
+| 0 | `src/shared/` | 串行队列、原子写、JSONL appender 等不含领域知识的基础件 | `serial-queue.ts`、`atomic-file.ts`、`jsonl-appender.ts` |
+| 0 | `src/commands/`（`catalog.ts`、`reply-limits.ts`） | 全产品斜杠命令目录与共享回复预算；零 import | `catalog.ts`、`reply-limits.ts` |
+| 1 | `src/`（根目录 7 个文件） | 进程级基础设施：日志、路径，以及 `Executor`/`FileStore` 两个宿主 I/O 端口（spec 044） | `log.ts`、`paths.ts`、`executor.ts`、`file-store.ts` |
+| 2 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
+| 2 | `src/usage/` | 用量/成本账本（JSONL）与渲染 | `ledger.ts`、`render.ts`、`totals.ts` |
+| 2 | `src/tasks/` | 持久任务：任务说明、状态推导、任务记录、预算、可靠消息投递、可恢复归档、`/tasks`，以及聊天侧控制端口 `TaskControl`。调度与执行在 `runtime/task-lane*.ts`，这样本目录保持叶子 | `contract.ts`、`state.ts`、`control.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`delivery.ts`、`archive.ts`、`commands.ts` |
+| 2 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
+| 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-id.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts` |
+| 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、执行阶段追踪、工具名单 | `details.ts`、`presentation.ts`、`execution-trace.ts`、`names.ts` |
+| 4 | `src/config/` | `settings.json`、`tools.json` 的加载与校验 | `settings.ts`、`tools.ts` |
+| 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
+| 5 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts`、`client.ts` |
+| 5 | `src/skills/` | 工作区与用户共享技能的发现、过滤、名称合并及 `/skills`（spec 063） | `loader.ts`、`catalog.ts`、`roots.ts`、`types.ts`、`commands.ts` |
+| 6 | `src/memory/` | 一条事实一文件的工位记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
+| 6 | `src/events/` | 定时/传感器事件：定义、校验、文件监视器、`/events` | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
+| 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`probe.ts`、`kill.ts`、`record.ts` |
+| 7 | `src/subagents/` | 角色发现、调用期解析、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`resolve.ts`、`types.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`cursor-cli.ts`、`antigravity-cli.ts`、`role-warnings.ts`、`exec.ts`） |
+| 8 | `src/tools/` | 交给 agent 的工具集（适配层），单一声明式注册表 | `registry.ts`（唯一事实源）、`subagent.ts`、`job.ts`、`memory-manage.ts`、各 `create*Tool` |
+| 9 | `src/agent/` | 单频道 agent 编排：SDK 会话、一轮对话、提示词、内置会话命令 | `channel-runner.ts`（门面）、`session/`（`session-host.ts`、`model-selection.ts`、`session-events.ts`、`command-extension.ts`）、`turn/`（`turn-pipeline.ts`、`turn-finish.ts`、`turn-state.ts`、`run-queue.ts`）、`prompt/`（system prompt 流水线）、`builtin-commands.ts` |
+| 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |
+| 10 | `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
+| 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `transport.ts`（`Transport` 实现）、`bot.ts`（门面）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（回合输出口） |
+| 11 | `src/webapi/` | Web API 渠道：OpenAI Responses 形状的 HTTP / WebSocket 服务（本机 socket + 可选 TCP）、key、会话与 Response 的存储（`state/webapi/`）、`pipiclaw webapi key` 命令 | `transport.ts`、`server.ts`、`service.ts`、`response-state.ts`、`store.ts`、`routes/` |
+| 11 | `src/tui/` | 终端：Web API 本地 socket 的客户端（官方 SDK）、前端与渲染 | `cli.ts`、`client.ts`、`session.ts`、`render.ts`、`frontend.ts` |
+| 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`ingress.ts`、`transports.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-lane.ts` |
+| — | `src/main.ts`、`src/index.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理；公共库出口（spec 035） | — |
+
+## 3. 运行时拓扑
+
+`bootstrap()`（`src/runtime/bootstrap.ts`）是装配根：加载配置、取得运行时锁、构造共享服务，再启动已启用的渠道。钉钉与 Web API 共用 Ingress；终端连接 Web API，本身不持有 agent 或工位写入逻辑。
+
+```mermaid
+flowchart TB
+    DT[DingTalk 云端] <--> DTT
+    TUI[终端 TUI] <--> API
+    CLIENT[脚本与其他客户端] <--> API
+
+    subgraph daemon [Pipiclaw 运行时]
+        DTT[DingTalk Transport]
+        API[Web API Transport]
+        DTT --> I[Ingress：绑定、准入、命令与忙时路由]
+        API --> I
+        I --> Q[ChannelQueue：每频道串行]
+        Q --> R[ChannelRunner：聊天会话]
+        R --> S[SDK AgentSession：每个 runner 独立]
+        TL[TaskLane：独立任务 runner] --> S
+        S --> TOOLS[工具与领域服务]
+        TOOLS --> GUARD[文件、命令与网络守卫]
+        S --> OUT[结构化 TurnEvent / TurnOutcome]
+        OUT --> DTT
+        OUT --> API
+        EW[EventsWatcher：每激活工位] --> DD[DurableDispatch：持久投递与重试]
+        DD --> I
+        EW -->|任务模板| TL
+        WORK[委派与作业管理器] -->|聊天完成唤醒| DD
+        WORK -->|任务结果落盘与通知| TL
+        TL -->|汇报与回执| PUSH[Transport.push]
+        PUSH --> DTT
+        PUSH --> API
+        MM[记忆维护：空闲与边界反思]
+    end
+
+    S <--> LLM[模型供应商]
+    MM --> LLM
+    TOOLS --> FS[工位文件与 app state]
+    MM <--> FS
+    DD <--> FS
+```
+
+- **先解析绑定，再路由消息**：`DeskRuntime` 管理绑定、激活与休眠。获准的钉钉真实入站消息为缺少绑定的频道接入 `default`，再处理附件与命令；已有绑定及故障保持原样。读取和合成唤醒不创建绑定，合成事件还须核对其工位归属。
+- **Ingress 拥有频道队列**：报告命令和停止等控制操作可直接处理，普通回合按频道排队。渠道只接收入站并呈现输出，不维护另一份命令路由或队列。Web API 独立请求通过请求执行入口运行，详见下节。
+- **聊天与任务各有会话**：频道 runner 缓存在运行时并按空闲 LRU 回收；`runner-factory.ts` 只构造实例。TaskLane 为执行中的任务建立独立 runner，任务步骤不进入频道队列。
+- **结果先持久化，再通知消费者**：聊天级完成唤醒和文本事件经 `DurableDispatchService` 写入 `state/dispatch/`，再交 Ingress，语义为 at-least-once。任务绑定的结果直接写入任务记录并通知车道；报告与回执由 `tasks/delivery.ts`、`tasks/receipts.ts` 支持持久重试。
+- **后台执行独立于聊天回合**：`SubAgentRunManager` 管理委派的结算、用量与写锁。外部 detached 进程的执行权限由目标 CLI 和宿主环境决定，不经过 Pipiclaw 工具守卫。无绑定的工位停止事件、任务和记忆调度，在途 run/job 仍可结算。
+- **执行阶段可关联**：`agent/session/execution-trace.ts` 关联 runner generation、任务步、session、模型请求和工具批次；`tools/contract/execution-trace.ts` 记录真实工具入口、出口与耗时。SDK 准备事件单独记录，阶段日志不写参数、结果正文或凭据。
+
+## 4.0 渠道层（spec 061）
+
+渠道是消息的来源与去处。`channel/` 定义契约，`runtime/` 只通过契约使用渠道，渠道互不 import：
+
+- **`Transport`**（`channel/transport.ts`）：一个渠道的实现——`start/stop`、`openTurn(turn)` 返回本回合的 `ChannelContext`、`push`（回合之外说话）、`sendMedia`、`describe`、`conversationKindOf`，以及 `policy`（忙碌时排队还是并入、文本形式的 `/stop` 等是不是控制命令）。现有两个：`dingtalk/transport.ts` 和 `webapi/transport.ts`。
+- **`Ingress`**（`channel/ingress.ts`，实现在 `runtime/ingress.ts`）：渠道把每条入站消息交给它，绑定、命令解析、忙碌判断、排队、取消和 steer 只在这里决定；渠道代码不按命令名分支，也不持有频道队列。
+- **频道 id** 是 `<渠道>:<渠道内地址>`；运行时把后半部分当作不透明字符串，只有对应的渠道解释它。
+- **回合输出**是结构化事件：agent 调用 `ctx.emit(TurnEvent)`（工具开始/结束、推理、说明、最终答案…）和 `ctx.finish(TurnOutcome)`，由渠道决定怎么呈现——钉钉渲染成 AI Card 与纯文本，Web API 映射成 Responses 的 item 与流式事件。
+- **启用**：`channel.json` 的 `dingtalk` / `webapi` 段各有 `enabled`；`runtime/transports.ts` 只在对应渠道打开时才动态加载它的代码。频道所属的渠道没有启用时，该频道不可达：任务驱动和事件跳过它，待投递记录保留。
+- **终端**不是渠道：它是 Web API 本地 socket 的客户端（`src/tui/`）；没有 daemon 时由 `bootstrapEmbedded` 在本进程里起一个只开 socket 的运行时。
+
+Web API 的独立生成通过 `runtime/request-execution.ts` 复用 runner，以内存会话执行，不创建频道绑定或聊天归档。结构化历史由 `channel/turn-context.ts` 传递；显式会话继续走原有队列。响应保存与上下文选择独立，见 spec 062。
+
+Web API 的协议、字段策略和安全默认值见 [webapi.md](../docs/webapi.md)。
+
+## 4. 一条消息的生命周期
+
+```mermaid
+sequenceDiagram
+    participant U as 用户(钉钉)
+    participant B as DingTalkBot
+    participant Q as ChannelQueue
+    participant H as Handler
+    participant R as ChannelRunner
+    participant S as AgentSession
+    participant D as DeliveryController
+
+    U->>B: Stream 下行消息
+    B->>B: ACK + 去重(messageId/msgId)<br/>allowFrom 校验 → channelId
+    alt 频道正忙 (isRunning)
+        B->>H: handleBusyMessage
+        Note over H,S: 默认 steer：session.steer() 注入当前轮<br/>/followup：requeue 到 ChannelQueue 作为下一轮
+    else 空闲
+        B->>Q: enqueueStreamMessage (上限 20 条)
+    end
+    Q->>H: handleEvent（每频道严格串行）
+    H->>H: 真实消息先自动绑定 default（若未绑定）；合成事件须仍属本工位，否则丢弃
+    H->>H: /desk 在准入前执行；归档到会话区 log.jsonl；内建命令(/status /tasks /events /usage…)直接短路
+    H->>R: runner.run(ctx, store)
+    R->>R: 组装 prompt：<br/>① 首轮才有：memory_bootstrap(workspace MEMORY.md+工位记忆索引+当天 journal)<br/>② 任务摘要 task digest<br/>③ 用户消息
+    R->>R: 后台压缩准备/采用（只有达到硬预算才等待）
+    R->>S: session.prompt()（带模型 fallback 链）
+    loop agent 循环
+        S->>S: LLM ↔ 工具调用（经安全护栏）
+        S-->>R: 会话事件
+        R->>D: session-events 翻译为进度条目
+        D-->>U: AI Card 窗口逐步增长（达到字节上限时收缩）
+    end
+    S-->>R: 结束
+    R->>D: 最终文本 replaceMessage / [SILENT] 静默收尾
+    D-->>U: finalize 卡片或 plain 消息
+    R->>R: 记账（usage ledger）、记忆活动打点
+```
+
+细节补充：
+
+- **忙时语义**：报告命令直接处理；钉钉普通消息按 `dingtalk.busyMessageDefault` 注入当前聊天或排队。`/stop` 中止聊天、丢弃后续排队消息并取消相关 durable-dispatch 租约，不暂停后台任务或取消委派。任务用 `/tasks pause <id>`，委派用 `/subagents cancel <runId>`。`/new` 绕过旧队列建立新会话边界；`/model`、`/compact`、`/session` 等需聊天空闲。
+- **未知斜杠命令在分发处拒绝**（`isKnownSlashCommand`），避免 `/modle` 这类笔误消耗一整轮 LLM。
+- **模型 fallback**（`models/fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
+- **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到会话区的 `last_prompt.json`。
+
+**会话压缩与停止恢复**
+
+`agent/session/compaction.ts` 管理后台候选：有效窗口减去输出预留及 4096 tokens 误差余量，剩余输入预算的 70% 启动准备；主会话继续使用原投影，仅到硬预算才等待现有候选的剩余期限。新请求前和工具批次结束时检查，主会话追加消息不会取消候选。
+
+`compaction-snapshot.ts` 从 SDK 公开的 canonical projection 选取工具调用/结果完整的切点，固定 session/manager、模型、已有 compaction、覆盖边界和整个历史前缀哈希。采用前重新验证，允许追加尾部，拒绝 context_edit、分支、模型、会话或压缩变化。只在 idle 或工具批次结束调用公开 appendCompaction + refreshContext，保留新增尾部；预览收益不足或仍高于准备阈值则丢弃并冷却。落盘失败隔离当前 session，禁止继续使用 SDK 已改变但可能未持久化的索引。重绑、/stop、/new 和退休都会取消候选。
+
+`compaction-summary.ts` 复用独立摘要执行：鉴权、快照和全部分段/重试共享 60 秒总期限，20 秒无有效输出取消，off thinking，每次最多 4096 输出 tokens。`compaction-input.ts` 只在摘要请求中缩减大工具载荷，保留头尾、哈希与原 JSONL 引用；普通长历史按完整覆盖、带重叠的片段递进摘要，最多四段，不任意删除中段。空、截断、超预算摘要保留原状态。手动 /compact 和 SDK 阈值/溢出仍有同样的受限恢复路径，现有后台候选可被 SDK 采用；扩展失败显式返回 cancel。自动失败/取消冷却 30 秒，slash command 和 steer 入队不启动额外前台压缩，自动入口遵守 compaction.enabled。
+
+`agent/stop-watchdog.ts` 由所有渠道共用（经 `runtime/ingress.ts`）：停止超过 3 秒未收敛时，宿主退休旧 runner 并更换队列/执行引用，保留活动会话文件。旧 SDK 订阅和投递关闭，迟到的回合不再改变新代次或结算通知；`/new` 仍表示显式新建会话。
+
+### 投递层（ChannelContext）
+
+`channel/channel-context.ts` 定义传输无关的投递契约；Runner 与 session-events 只依赖这个接口。
+
+| responseMode（channel.json） | 进度展示 | 最终回复 |
+|---|---|---|
+| `full_progress_then_plain_final`（默认） | 当前周期内累积全部进度，不限制行数；达到约 2.9KB 正文预算时保留最新思考和最近两条活动，再继续累积。正常增长只发增量，进度帧之间至少间隔 800ms | 普通 Markdown 消息；卡片收成一行摘要 |
+| `rolling_progress_then_plain_final` | 固定显示最近五条进度，包含思考和活动；随新进度滚动，不经历周期性扩展与收缩 | 同上 |
+| `final_card_only` | 无进度 | 仅最终卡片 |
+
+两种 `*_then_plain_final` 下，进度有新内容才推送；首次进度替换等待文案，正常增长用 `isFull: false` 只发送尚未确认的新增完整列表行。单条最多 180 字节，每帧不超过 1KB。默认模式不限制行数，当前周期正文达到约 2.9KB 后，真正移除旧条目，只保留最新思考和最近两条活动；短快照替换成功后，其正文与周期编号成为新的增量基线。滚动模式始终只留最近五条进度，移除旧条目时替换窗口快照。顶部用时与工具次数在周期内固定，替换时刷新，以免修改前缀迫使全文重发。每次请求结束后至少等 800ms 再发下一帧；同周期积压按完整行分帧发送，收缩时淘汰旧周期积压，在途旧请求的确认不能恢复旧周期。增量失败后用新周期短快照重建基线，不直接重试结果不确定的增量；模板不支持增量时才降为每次不超过 1KB 的完整快照。最终答复与收尾不等待节流计时器。思考里的代码围栏和成对强调符会先拆掉，截断也不会留下未闭合的 Markdown。用户对话回合开始时通过同一个串行同步循环立即异步创建非空等待卡，同时开始模型处理，不等待建卡完成；不再根据响应耗时跳过卡片。用时从回合开始计算，包含等待模型首次输出的时间。若等待卡直到答复时仍没有进度，答复直接写进这张卡，不再另发 plain 消息（`delivery.ts` `sendFinal`）。有进度时，正式答案先作为普通消息发出，卡片再收成一行摘要；静默收成「已处理，无需答复。」，停止收成「处理已结束。」。
+
+聊天侧后台唤醒（JOB / SUBAGENT / EVENT）不受上表约束；TASK_STEP 默认静音，只投递显式通知和运行时回执。对聊天侧后台唤醒，`handleEvent` 给它们的 `ChannelContext` 传 `progressStyle: "none"`，因此不建卡、不推思考流、`[SILENT]` 收尾也没有卡片要删；最终答案仍按 `finalDelivery` 正常投递。用户消息不受影响。
+
+`ChannelDeliveryController` 维护 revision 计数的同步循环：进度更新合并、卡片预热（`primeCard`）、进度连续失败两次后停止更新（最终答复仍会发出，卡片失败时改走普通消息）、`flush()` 有 60s 兜底死线保证 `run()` 的 finally 不会永久挂起频道。
+
+## 5. 并发模型：谁在串行化什么
+
+这是跨文件的关键不变量，改动任何一处前先对照此表。
+
+| 队列 | 位置 | 串行化对象 | 粒度 |
+|---|---|---|---|
+| `ChannelQueue` | `runtime/channel-queue.ts`（由 `Ingress` 独占） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
+| `RunQueue`（`createRunQueue`） | `agent/turn/run-queue.ts` | **一轮之内的出站投递调用**：进度/通知按序发往钉钉 API，错误只记日志不打断轮次 | 每轮 |
+| `DeskMemoryQueue` | `memory/desk-memory-queue.ts` | **同一工位的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`memory_save`、`/memory` 命令共用**进程级单例**，按工位名排队并持有 `.locks/memory.lock`（与 TUI 进程互斥），绝不能各自内联或按频道排队，否则同一工位的几个频道会争写同一批记忆文件（spec 058 INV-8） | 每工位（跨子系统、跨进程共享） |
+| `ChannelStore.writeQueue` | `channel/store.ts` | 会话区 `log.jsonl` 追加与轮转 | 每频道 |
+| 跨进程短锁 | `shared/file-lock.ts` | `desk-<name>/.locks/` 下的 `memory.lock`（记忆写）、`task-<id>.lock`（任务修改）、`desk-json.lock`（`desk.json` 读改写）。一个 app home 同时只有一个运行时进程（`state/daemon.lock`），同一个工位的多个频道、多个进程内的写入靠的就是这些锁 | 每工位 / 每会话区（跨进程） |
+| `DurableDispatchService.queue` | `runtime/durable-dispatch.ts` | 外发箱记录的读写 | 每记录 id |
+| `SubAgentRunManager.queue` | `subagents/runs.ts` | 一个 run 的 register/settle/cancel：保证结算、记账、唤醒各只发生一次（三个幂等标记见下） | 每 runId（manager 本身每工位一个单例） |
+| `writeFileAtomically` | `shared/atomic-file.ts` | 配置/状态文件：写临时文件再 rename | 每次写 |
+
+另外两个互斥点：`SessionResourceGate`（`agent/session/session-resource-gate.ts`）让"资源热重载"与"prompt 进行中"互斥；`DingTalkBot` 内卡片创建和 access token 刷新都做了 singleflight 合并；`subagents/workspace-lease.ts` 是进程级的排他写锁（不是队列，没有等待语义），只有 `mutates: write` 的委派 run 会取它，key 是工作目录的 realpath，父子目录也算冲突——第二个写入者直接被拒绝，不是排队。
+
+**委派 run 的生命周期不受 `ChannelQueue`/轮次状态机约束**：聊天内置委派超过共享 10 秒窗口（task 内和外部委派一开始）就从"这一轮的一部分"变成"跨轮存活的后台工作"，由 `SubAgentRunManager` 统一管理，通过 `DurableDispatchService` 完成时唤醒频道——与后台 job 是同一条唤醒管线，`/stop` 不再连带终止它（需要 `subagent_run op=cancel` 或 `/subagents cancel`）。
+
+**忙态的单一所有者是 Runner 的轮次状态机**（`agent/types.ts` 的 `TurnPhase`：`idle → dispatching → preparing → streaming → finishing`）。传输层在派发消息的同一 tick 内同步调用 `runner.beginTurn()`、结束后 `endTurn()`；钉钉的忙时路由、TUI 的轮次控制、调度器的 `isChannelActive`、`/status` 全部从 `runner.isBusy()/getTurnStatus()` 派生，不再各持一份 flag。steer 窗口判断也单点化在 runner 的 `assertBusyWindowOpen`。
+
+## 6. 记忆子系统（`src/memory/`，spec 050）
+
+三件东西，每件只有一个真相：工位记忆（一条事实一个文件，工位的所有频道共享）、按天的日志、以及由管理员拥有的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不在每轮检索打分挑选注入内容——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
+
+### 6.1 每个工位的记忆文件
+
+| 文件 | 内容 | 写入者 | 是否预载入上下文 |
+|---|---|---|---|
+| `memory/<name>.md` | 一条记忆一个文件；frontmatter 是唯一元数据（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），正文可选 | `memory_save` / 后台反思 pass / 人手编辑 | 否，`read` 单条打开 |
+| `MEMORY.md` | 从 `memory/*.md` **生成**的索引，人也能直接看 | `store.ts` 每次写入后重建；启动时若缺失也重建（按 mtime 缓存） | 会话首轮（含 `/new` 之后、压缩之后）整份注入，超预算按类型分层 |
+| `journal/YYYY-MM-DD.md` | 按天追加的工作记录（发生了什么、定了什么、卡在哪） | 只有后台反思 pass 写 | 首轮注入当天尾部 |
+| `memory/.tombstones.jsonl` | 已遗忘记忆的 name + 内容哈希（不含原文），防止反思把同一件事又写回来 | `memory_forget` / `/memory forget` / reflect | 否 |
+| `conversations/*/log.jsonl` / 会话 JSONL | 冷存储：各频道的完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 跨本工位的所有会话区检索 |
+| `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（含 actions/skipped/error；重复的相同跳过原因去重） | `review-log.ts` | 否，人工排查用 |
+
+工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于 path guard，因此“管理员拥有”不是 OS 级只读保证。工位 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
+
+### 6.2 记忆的进与出
+
+```mermaid
+flowchart LR
+    subgraph turn [首轮 / 压缩后首轮]
+        BOOT["agent/turn/turn-context.ts<br/>store.listMemoryEntries + index-budget<br/>+ 当天 journal 尾部 → render.ts"]
+    end
+
+    subgraph tools [显式工具，当回合生效]
+        SAVE["memory_save / memory_forget<br/>tools/memory-manage.ts"]
+    end
+
+    subgraph boundary [会话边界]
+        LC["lifecycle.ts<br/>SDK 扩展钩子"]
+    end
+
+    subgraph sched [后台调度（60s tick，逐频道轮转）]
+        GATES["maintenance-gates.ts<br/>shouldRunReflect：dirty/空闲/间隔/素材"]
+        JOB["reflect-job.ts<br/>增量窗口 → reflect.ts"]
+        STATE["maintenance-state.ts<br/>state/memory/&lt;channel&gt;.json"]
+    end
+
+    REFLECT["reflect.ts<br/>journal 行 + memory ops(add/update/delete/touch)<br/>档位/上限/user-source 保护/name 解析在这里做"]
+    STORE["store.ts<br/>applyMemoryOps → 写文件 → 重建索引"]
+    SIDE["sidecar-worker.ts<br/>独立 LLM 调用：超时+重试+记账"]
+
+    BOOT -->|注入 memory_bootstrap| PROMPT[本轮 prompt]
+    SAVE --> STORE
+    LC -->|compact / new 前仅落盘| BW["boundary-work.ts<br/>.memory-work/&lt;conversation&gt;/&lt;id&gt;.json"]
+    BW -->|压缩结束 / 启动恢复 / 调度器| REFLECT
+    LC -->|shutdown：没有旧工作时| REFLECT
+    GATES --> JOB --> REFLECT
+    REFLECT --> STORE
+    REFLECT --> SIDE
+    LC -->|活动事件| STATE --> GATES
+```
+
+- **入口（读）**只有一条：会话首轮（`firstTurnMemoryBootstrapPending`，压缩后重新置位）把 `store.listMemoryEntries` 的结果交给 `index-budget.ts` 分层，和 workspace `MEMORY.md`、当天 journal 尾部一起用 `render.ts` 包成 `<memory_bootstrap>`。之后整个会话都不再重复注入——同一份索引反复出现在历史里既浪费 token 也会干扰模型读历史。中途新增/更新的记忆要到下一次首轮才可见，这是刻意接受的延迟：模型怀疑"以前可能记过"时用 `memory_search`。
+- **索引超预算时的分层**（`index-budget.ts`，装不下才触发，约 70–100 条以后）：`user`/`feedback` 类型永远全给（它们决定行为，条数天然少），`project`/`reference` 按 `updated` 降序填充直到预算，末尾补一行"还有 N 条，用 memory_search"。**没有相关性排序**——首轮的用户消息往往只是一句问候，拿它给几十条记忆打分没有意义。
+- **`memory_save` 的冲突检测**：写入前用 `search.ts` 的 Jaccard 相似度（`descriptionSimilarity`，阈值 0.6）在内存里比一遍频道已有记忆的 description；命中就报 `RecoverableToolError` 列出候选 `name`，要求模型带上 `replaces`（目标 name 或 `"none"`）重新调用。带 `replaces` 可越过相似性提示，成功替换后 source 提升为 user；目标不存在、疑似凭据等其他校验仍可能拒绝写入。`memory_forget` 按 `name` 精确删除，不再做模糊文本匹配。
+- **反思是记忆模块唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。压缩和冷热 `/new` 切换前先持久化待整理的原始消息范围，不等待记忆队列、会话初始化或模型；`boundary-work.ts` 在压缩结束后异步整理，并由启动和调度器恢复未完成工作，关闭空闲维护也不取消已持久化的边界工作。关机 flush 和空闲 tick 仍调用同一个 `reflect.ts`；同会话的旧边界工作未完成时，不先反思新会话。
+- **试用期转正信号从"被召回"改成"被 touch"**：v1 靠每轮召回记录使用次数；v2 索引首轮整份给出，"被注入"不再是有效信号。改为反思 pass 输出里的 `touch: [names]`——模型读窗口时判断"这段对话依赖或印证了哪些既有记忆"，被 touch 一次即转正（清除 `expires`）。观察期到期后仍未转正的条目，在下一次反思前由 `store.expireProbationaryEntries`（反思开始前的确定性前置步骤）删除——不留墓碑，之后仍可被重新学到；到期本身不构成读取 TTL。
+- **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。新增/更新先执行；有任何内容写入被拒绝、未落盘或与删除目标冲突时，本次自动删除全部延后。
+- **调度器**（`scheduler.ts`）每 tick 轮转选取一个不活跃且到期的频道，单一 job（`reflect-job.ts`）先过确定性 gate（`shouldRunReflect`：`dirty`、空闲时长、距上次反思间隔、增量窗口是否有实质对话），gate 不放行则零 LLM 成本。频道上下文的取法不变：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的磁盘冷上下文。
+- **分批与恢复**：`source-window.ts` 按清洗后的实际序列化体积选择连续的完整交流前缀（28,000 chars），每次调度处理一批，游标只提交已选范围。未完成增量不刷新 `lastReflectAt`，让后续 tick 继续；孤立用户输入等回答，已关闭边界中的用户事实可单独整理。单个超大交流仍采样，审查日志只记范围和大小，不复制全文。
+- **边界工作进度**：`.memory-work` 沿用相同字段，稳定 id 对应最初快照，部分完成后原子保存剩余 entryIds/messages；初次快照用临时文件加独占发布，重复入队不能覆盖进度。全局游标已属于其他范围时保留它，旧快照靠自身剩余素材继续；完成后写 `.done` 再删除素材。
+- **有限重放保护**：store 对后台 add 的归一化 description、type、正文全相同的条目跳过新增，不修改来源、日期或观察期；显式允许并存的保存不受此限制。自动 add/update 都检查精确遗忘哈希，只有显式用户写入成功后才能撤销对应阻挡。审计错误单独告警，不回退已提交进度；这不是跨文件事务，也不保证不同措辞的重试不重复。
+- **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、最多 2 次尝试、JSON 解析校验、用量记入账本（kind=`sidecar`）。反思的 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次结果。
+- **子代理的 `memory: index`**（spec 050 D12）注入与主 agent 首轮相同的三段（workspace 背景 + 工位记忆索引 + 当天 journal），预算减半，不做每次调用的 LLM 召回；旧的 `memory: session|relevant` 仍可加载，discovery 时映射为 `index` 并给出警告。
+
+## 7. 持久任务与定时事件
+
+两套互补机制，都以文件为事实源；事件经 durable-dispatch 唤醒频道，任务由车道在频道之外执行：
+
+| | 定时事件 Events | 持久任务 Tasks |
+|---|---|---|
+| 事实源 | `desk-<name>/events/<name>.json`（`channelId` 是投递频道） | `desk-<name>/tasks/<id>.md`（frontmatter 契约，`channel` 是投递频道） |
+| 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库）；交付一段聊天 `text`，或一份**任务模板** `task` | 一次性项目：`queued / running / waiting / paused` 四态，`waiting` 带 `work / user / time` 描述，均由运行时按事实写；归档记录 `completed / cancelled` |
+| 驱动者 | 每个激活的工位一个 `EventsWatcher`：fs.watch + 防抖，cron 到点触发；投递频道未绑定在本工位上时跳过（`channel_not_bound`） | `TaskLane`：自适应 timer + 通知扫描各激活工位的台账，按执行槽（每工位 3、全局 5）接纳任务，每个执行中的任务一个 runner；汇报频道未绑定在本工位上的任务冻结 |
+| 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | 无；等待由运行时按在途委派/作业、问题和约定时刻推导 |
+| 治理 | 事件历史 `state/events/history.jsonl`；模板事件上一实例未结束时跳过并回执 | 两维预算（steps/usd，含绑定委派成本）、空转/单步超时/连续出错守护；触发后写 `paused` 并直接通知 |
+| Agent 侧工具 | `event_manage` | 聊天：`task_create`/`task_list`/`task_log`/`task_close`/`task_message`/`task_pause`/`task_resume`；任务会话：`task_log`/`task_close`/`task_report`/`task_ask`/`task_wait`；配合 `task-lead` playbook |
+| 用户命令 | `/events` | `/tasks`（msg/pause/resume/cancel/doctor 等零 LLM 成本控制） |
+
+**任务不进频道队列**（spec 064）。`TaskLane`（`runtime/task-lane.ts`）是任务执行的唯一入口：扫描各激活工位的任务文件，按事实维护状态（到时的等待、有新输入的等待、超预算的暂停），把排队中的任务接纳进执行槽，并为每个执行中的任务建一个 `task` profile 的 runner，使用 `tasks/.sessions/<id>.jsonl` 这个固定会话。一步（`task-step.ts`）就是该会话里的一次回合：写 `step` 记录、构建 brief（会话里已有当前契约则只带增量）、运行、写 `step_end` 并按事实推导下一状态。聊天回合从不等任务步骤，任务步骤也不等聊天。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
+
+绑定任务的委派与作业结算时，run / job 管理器在同一个结算锁内把 `settle` 记录写进任务记录并通知车道（`onTaskInput`），不再构造完成唤醒；任务已不存在时才退回聊天唤醒。聊天通过 `TaskControl` 端口（`tasks/control.ts`，车道实现，`task-control.ts`）查看实时活动、对任务说话（步骤进行中直接 `queueSteer` 注入）、暂停、恢复与取消。
+
+spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不读写任务文件，只通过注入的回调生成实例。
+
+任务由三样东西构成：**契约**（`tasks/<id>.md`，首步及契约改动后完整注入）、**任务记录**（`tasks/<id>.jsonl`，append-only，"新输入"的唯一定义——最后一条 `step` 记录之后的结算、卡顿、用户消息和恢复）和**文件头里运行时写的状态**。等待是运行时看得见的事实，不由模型声明：本任务在途的委派和作业各有硬截止时间，你的提问就是在等你，约定的时刻就是在等那个时刻。
+
+## 8. 工具层与子代理
+
+`tools/registry.ts` 的 `TOOL_REGISTRY` 是**叶子工具的唯一事实源**：主工具集、子代理工具集、系统提示词里的工具索引都从它生成。
+
+| 工具 | 子代理可用 | 配置门 (`tools.json`) |
+|---|---|---|
+| `read` / `bash` / `edit` / `write` / `grep` / `glob` | ✅ | 恒开，无开关 |
+| `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；支持四种搜索 provider 与 Readability/Jina 抓取，支持代理） |
+| `session_search` / `memory_save` / `memory_search` / `memory_forget` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
+| `send_media` | ❌ | 无配置开关；由传输能力决定——仅当驱动的 transport 提供了 `MediaSender`（目前只有钉钉）时才构建并进入工具索引 |
+| `task_list`/`task_create`/`task_close`/`task_log`/`task_message`/`task_pause`/`task_resume`/`task_report`/`task_ask`/`task_wait` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控任务车道开新步骤与每回合任务摘要；聊天与任务会话各注册其中一套 |
+| `subagent` / `subagent_list` / `subagent_run` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
+| `subagent_inline` | ❌（防递归） | 注册表之外追加，`tools.subagentInline.enabled`（默认开） |
+
+工具的调用面按 payload 形状切分：**形状不同就拆，形状相同就合**（spec 046/047）。`op` 枚举的路由散文把每条分支各讲一遍，是真正的 token 成本——所以任务族是十个单一形状的工具而非一个 `action` 分发工具，记忆是 `memory_save` / `memory_search` / `memory_forget`，委派控制是 `subagent_list` + `subagent_run`；而 `event_manage` 的 `create` / `update` 参数集完全相同，合在一个工具里。
+
+增强类开关：`tools.rtk`（token 优化改写，默认关）、`tools.bashInterceptor`（把裸 `cat`/递归 grep/`sed -i` 导向专用工具，默认开）。
+
+持久聊天、任务步骤、一次性 Web API 请求和内置 worker 从同一注册表构建对应的工具集。一次性请求在构建时按 allowlist 选工具，`bash` 使用前台 Schema。委派的 `item` 字段由任务绑定决定。可恢复拒单经 `withToolDetails` 回传模型，Web API 将该工具调用标为失败，人侧进度保持静默。
+
+**`FileStore` 与 `Executor`** 并列提供宿主 I/O。文件内容工具走 `FileStore` 和 `node:fs`，命令工具走 `Executor`。实际 I/O 使用路径守卫返回的地址，`edit` 核对读写守卫对同一路径的解析结果一致。每份工具集共享有界文件观察表，`write` 和 `edit` 在成功回执中附带相关提示。`edit` 对同一原始快照定位各块并原子写入，大文件支持单块流式编辑。
+
+`grep` 按 `Executor` 实例缓存 ripgrep 探测结果。它将目录排除规则传给搜索命令，使用明确的文件名分隔符解析输出，再按文件应用读策略。运行时提示词引导把独立的只读探查放在同一批次，把 `bash`、`edit`、`write` 放在后续批次，以使用官方 SDK 的并行调度。
+
+**子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 区分 `internal` 与 `external`，也可通过 `subagent_inline` 按次定义 internal 执行者；命名角色统一走 `subagent` 的路由字段，inline 才接受模型、工具和预算覆盖。Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置默认限额为 32 turns / 96 tool calls / 600s；外部角色只有 `maxWallTimeSec`（默认 3600s）。
+
+`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——聊天共享 10 秒快速窗口内结算完直接内联返回（`agent/session/session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成异步返回；task 内置委派和外部角色确认启动后一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器移除 write/edit，bash 描述提示只执行只读检查和测试。声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
+
+## 9. 安全层（`src/security/`）
+
+Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦截写入审计日志（`security/logger.ts`）。事件 `preAction` 与 bash 工具共用同一 command-guard。
+
+| 守卫 | 默认 | 机制 |
+|---|---|---|
+| `command-guard` | 开 | 规范化（去 null、NFKC、去注释）、按 shell 链拆分、分类规则匹配（危险命令、提权、防绕过） |
+| `path-guard` | 开 | 拒绝敏感路径：私钥/凭据文件、`~/.ssh` `~/.aws` 等目录、系统目录写入、shell rc 文件写入、`/proc/*/mem` |
+| `network-guard` | 初始化模板关闭；内置默认开启 | web 工具的 SSRF 防护：DNS 解析后校验，拦截 localhost/链路本地/私网 CIDR/云 metadata，重定向逐跳复查 |
+
+其它硬化：六个可能含密钥的配置文件（`channel/auth/models/settings/tools/security.json`）创建即 0600，启动时对已存在的宽权限文件收紧；系统提示词层面还有"任务 scope 内的外部动作须遵守能力配置、幂等与审计"等常驻不变量（`agent/prompt/sections.ts`）。
+
+外部智能体不使用上述工具实现，因此 command/path/network guard 不覆盖它。角色文件是授权面；`external/run.ts` 在 spawn 前严格写入 `external-agent` 审计事件，目标 CLI 的 sandbox 和宿主运行账号才是强隔离边界。`workspace/sub-agents/` 对模型的 write/edit 工具拒写，避免模型自行创建高权限角色，但通用 bash 仍是已知逃逸面。
+
+## 10. 模型与用量
+
+- **模型解析**：`models.json`（供应商/模型定义）+ `auth.json`（密钥）→ SDK `ModelRegistry`；启动时取 `settings.json` 保存的默认模型，否则第一个可用模型。`/model` 切换会重定义"主模型"并清空 fallback 状态。
+- **用量账本**（`usage/ledger.ts`）：JSONL 落在 `state/usage/`，条目分 `turn`（主轮，只记 assistant 用量）/ `subagent`（内置外部委派 run，由 `subagents/runs.ts` 统一写入，只在结算时写一次）/ `sidecar` 三类，保证 Σ(条目) = 真实开销、无重复计数。条目带 `usageKnown`/`costKnown` 标记——`codex-cli` 与 `antigravity-cli` 不报成本、`cursor-cli` 与 `exec` 连 token 和 cost 都不报，`/usage` 展示"未知"而不是 0。`/usage` 命令渲染汇总。
+- **上下文预算**（`agent/turn/context-budget.ts`）：对"已组装完成的完整 prompt"（含记忆索引/任务摘要/引导）估算 token，投影超过阈值先做预防性 compact，而不是等 SDK 撞墙。
+
+## 11. 磁盘布局（`src/paths.ts` 集中定义）
+
+```
+~/.pipiclaw/                       # APP_HOME_DIR（PIPICLAW_HOME 可覆盖）
+├── channel.json                   # 渠道开关：dingtalk（凭据、busyMessageDefault、responseMode）与 webapi（监听、keys）（0600）
+├── auth.json / models.json        # 模型密钥 / 模型定义（0600）
+├── settings.json                  # 运行时设置：模型、fallback、模块开关、日志级别（0600）
+├── tools.json / security.json     # 工具开关 / 守卫开关（0600）
+├── workspace/
+│   ├── SOUL.md                    # 身份与语气（注入系统提示词最前）
+│   ├── AGENTS.md                  # 用户/团队操作规则（经 SDK agentsFiles 注入）
+│   ├── MEMORY.md / ENVIRONMENT.md # 管理员维护的共享背景 / 机器事实
+│   ├── CHANNELS.md                # runtime 维护的频道索引（ID / 名称 / 工位 / 最近消息 / 主题）
+│   ├── skills/  sub-agents/
+│   ├── desk-bindings.json          # 频道 id → 工位，绑定的唯一记录
+│   └── desk-<name>/                 # 默认 default；其他按需创建（agent 的 cwd）
+│       ├── desk.json               # 名字 + 各频道的会话区登记
+│       ├── memory/<name>.md       # 一条记忆一个文件（frontmatter 元数据）
+│       ├── memory/.tombstones.jsonl # 已遗忘记忆的 name + 内容哈希
+│       ├── MEMORY.md              # 生成的记忆索引（勿手改，写入后自动重建）
+│       ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，只由反思 pass 写
+│       ├── memory-review.jsonl    # 反思/工具写入的动作与拒绝原因审计
+│       ├── conversations/<kind>-<n>/ # 每个与本工位对话过的频道一个会话区（dm-1、group-1、webapi-1…）
+│       │   ├── log.jsonl  context.jsonl  last_prompt.json
+│       │   ├── active-session.json # 当前聊天 session 指针；无指针时用 context.jsonl
+│       │   └── <session>.jsonl     # /new 等操作创建的聊天会话
+│       ├── events/                 # 本工位的定时事件
+│       ├── .locks/                 # 跨进程短锁
+│       ├── subagent-runs.jsonl     # 委派执行摘要
+│       ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
+│       └── tasks/
+│           ├── <id>.md / <id>.jsonl # 契约 / 循环日志
+│           ├── .sessions/          # 每个任务独立会话
+│           ├── .steer/             # 用户指示与待发送的通知
+│           └── archive/            # 已关闭契约与日志
+└── state/
+    ├── auth/identity.json         # OpenAI OAuth 安装身份（首次登录创建）
+    ├── daemon.lock                # 一个 app home 同时只有一个运行时进程
+    ├── dingtalk/conversations.json # 各频道的钉钉路由元数据
+    ├── webapi/                    # Web API：api.sock（0600）、conversations/<conv_id>/（会话与 Response 快照）、standalone.jsonl（独立响应快照）
+    ├── tui/conversations.json     # 终端客户端：工位 → 上次用的 Web API 会话
+    ├── dispatch/                  # durable-dispatch 外发箱
+    ├── events/history.jsonl       # 事件审计
+    ├── jobs/<name>/                # 后台作业状态与输出索引
+    ├── subagent-runs/<name>/       # 委派权威状态、pid、argv、幂等标记
+    ├── memory/<name>/<会话区>.json # 反思调度打点状态（单 job）
+    ├── logs/runtime.jsonl         # 结构化运行日志
+    └── usage/                     # 用量账本
+```
+
+pi 1.2.0 的 SessionManager 投影是 provider、上下文预览和压缩的权威来源。
+Agent 初始工具为空，AgentSession 通过 Pipiclaw 的 baseToolsOverride 和
+initialActiveToolNames 持久化提示/工具声明。资源重载更新当前工具实例与活动名称。
+备用重试在同一资源保护窗口内按本次 raw entry ID 检查副作用、追加 branch-local
+context_edit，再 refresh 并提交一次；停止、旧 turn/runner、会话/分支变动使计划失效。
+
+raw branch 保留原始失败消息、工具证据和 usage：恢复判定、反思/source window、
+session_search 和结算不能把投影省略误认为事实消失。任意重试上下文写入或 refresh
+失败都会隔离该 SDK 实例；后续 prompt 拒绝，资源重载失败仍保持隔离，只有磁盘重建
+或新的 runtime 才可恢复。/new 与只读报告保持可用，不自动重放失败备用请求。
+
+## 11.1 System prompt 流水线（spec 025 + 026 瘦身）
+
+system prompt 由 Pipiclaw 自己拥有：`agent/session/session-host.ts` 通过 pi 的 `systemPromptOverride` 注入 `src/agent/prompt/` 构建的结果，pi 的默认基础提示词（身份段、文档索引、失真的工具列表）不再发送。
+
+组装顺序：
+
+```text
+runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(task_close + (task_create 或 task_report))
+→ playbooks(按工具过滤) → subagents(需 subagent) → SOUL.md → AGENTS.md
+→ [pi 追加] <available_skills> + cwd
+→ [before_agent_start 追加] runtime.boundary footer
+```
+
+- **section 化**：每段声明 `order`/`authority`/`cacheClass`/`requiresTools`/预算/溢出策略（`prompt/types.ts`、`prompt/sections.ts`），builder 负责过滤、排序、预算和 fingerprint（`prompt/builder.ts`）。runtime 段超字符预算会产出 error 诊断（测试直接失败）。
+- **瘦身与内容责任（spec 026）**。工具的能力和参数由 tool schema 声明。Playbook 目录列出文件名和一句触发条件，在头部给出绝对 `PLAYBOOKS_DIR`。无配置角色时委派段提供交接要求与可用入口。当前体量可用 `/context` 和 `npm run playbooks:measure` 查看。
+- **prompt units 预算**：预算以 `countPromptUnits`（`shared/prompt-units.ts`：CJK 每字 1、非 CJK 单词 1、标点空白 0）度量。runtime-authored 段合计目标 ≤ 700 units、硬上限 1,200 units（`builder.ts`），超标分别 warning/error。已删除旧的 32k 全局字符池与「依次收缩 subagents/playbooks/AGENTS/SOUL」策略，用户文件不再因总量竞争被裁。`HARD_TOTAL_BUDGET_CHARS`/`SOFT_TOTAL_BUDGET_CHARS` 公共导出随之移除（beta API 变更）。
+- **SOUL / AGENTS 独立预算**：两者互不挤压，各有 units + chars 双上限（SOUL 3,000 units / 24,000 chars，AGENTS 6,000 units / 48,000 chars，见 `prompt/resources.ts`）。只有真正超大的文件才 head/tail 截断；正文裁剪发生在 resources 层，section 层只保证 wrapper 完整。
+- **缓存稳定**。工位目录、实际 cwd 和频道资料由每轮的 `<runtime_turn_context>` 提供。System prompt 中的 SDK cwd 段、技能和工具目录按实际环境生成。同一会话复用 SDK 会话 ID，`/new` 和 fork 使用新 ID。内置子代理以 run ID 复用连接，结束时释放资源。Codex 按会话跟踪模型、端点与请求头，变化时释放该会话的旧连接（`models/requests.ts`）。一次性记忆 sidecar 单请求关闭缓存写入。
+- **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
+- **skills 目录由 Pipiclaw 管理，渲染与展开交给 pi（spec 063）**：`skillsOverride` 只提供两个正式来源中可解析、可读取且路径允许的技能，有效工作区版本优先；`<available_skills>` 索引与 `/skill:name` 命令同源。技能正文不做关键词准入扫描，加载不代表安全认证或额外授权。Pipiclaw 不设 skills 预算、不产生超限 warning；`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
+- **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/parse.ts`/`events/watcher.ts`），普通对话不再长期携带。TASK_STEP 的准确 task 文件与 playbook 路径由 `tasks/brief.ts` 构建的步骤 brief 给出。
+- **自动 turn context 预算（spec 026 §5.3）**。任务摘要上限 600 units，优先显示本频道待答问题，其他频道只显示任务 ID 和投递地址。完整进度、用量和历史按需取。共享背景 500 units、工位记忆索引目标 1,400 units、当天日记尾部 400 units。发送前采用压缩时，按需在本次补入记忆与缺失的任务契约，并重新检查输入预算（`agent/turn/turn-pipeline.ts`）。
+- **可观测**。`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地报告提示词预算、工具定义、skills、上一轮自动上下文，以及当前会话已读缓存占总输入的比例。有缓存写入时也显示其用量。`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录 system prompt 和 manifest。`fingerprint` 覆盖 Pipiclaw 自有段落，`finalPromptSha256` 还包含 SDK 尾部。
+
+playbook 正文不进提示词，agent 触发时用 `read` 按需加载。
+
+## 12. 启动与关闭
+
+**启动**（`bootstrap()`）：解析参数 → 初始化 app home（缺失文件按模板生成；首次生成 `channel.json` 模板则提示填写后退出）→ 读取 `channel.json` 并加载打开的渠道（`dingtalk` / `webapi`，关闭的渠道不加载代码）→ 获取 `state/daemon.lock` → 加载 settings/tools/security 并输出诊断 → `createRuntimeContext` 装配全部组件 → 启动四个后台服务和 bot 连接。
+
+**关闭**（SIGINT/SIGTERM/manual，幂等）：
+
+```mermaid
+flowchart LR
+    A[停调度与新请求准入<br/>保留出站投递] --> B[等活跃轮次<br/>≤15s] --> C[超时则 abort<br/>再等 ≤5s] --> D[释放空闲 runner<br/>记忆整理 ≤45s] --> E[关闭渠道连接<br/>刷新存储和日志] --> F[释放运行时锁]
+```
+
+关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
+
+**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/app/auth-command.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器，也不读写工位——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `dev-docs/specs/archive/039-provider-login-cli/design.md`。
+
+## 12.1 公共 API 面（`src/index.ts`，spec 035）
+
+Pipiclaw 的产品是 CLI/runtime，不是 SDK。`src/index.ts` 因此只支持**一种**用法——把 daemon 嵌进别的进程——并且只为这一种承诺稳定：`bootstrap` 及其选项/结果类型、`DingTalkBot` 与其配置类型、`ChannelContext` 投递契约、`paths.ts` 的路径常量、`PipiclawSettings` 类型。
+
+其余全部是内部实现，从各自模块导入并且随时可能移动。这条界线有具体的工程理由：`src/index.ts` 是 `knip.json` 的 entry point，**每个从这里导出的名字都是一处死代码检测盲区**。0.8.11 之前 barrel 有约 90 个名字，`npm run deadcode` 对其中大部分形同虚设。同理，`prompt` 预算常量的公共导出此前也已移除（beta API 变更）。
+
+## 13. 测试与质量门
+
+- `npm run check` = Biome lint + `tsc --noEmit` + 架构检查 + knip 死代码 + Vitest 单测；`npm run test:e2e` 用脚本化 mock provider 跑经过真实 bootstrap 的确定性端到端套件。
+- unit 验证领域分支与契约，确定性 e2e 验证跨模块时序、持久化和恢复，真实模型 eval 验证行为质量；详细准入规则见 `AGENTS.md`。
+- 领域边界与工程规则见 [AGENTS.md](../AGENTS.md)，各子系统的设计脉络见[设计记录](./specs/README.md)。
+
+### 执行完成的及时观察（spec 067 A）
+
+- `subagents/external/recovery.ts` 仅调度接管 run 的 10 秒观察，`external/reconciliation.ts` 提供三态进程核实；manager 仍独占必要结算、用量和写锁释放。正常 close 不等待版本诊断。
+- `jobs/completion-observer.ts` 通过同一 FileStore 的可选目录观察接收提示，manager 通过批量 probe 和逐 job 队列决定终态；`jobs/runtime.ts` 装配每工位 manager。完成提交的 revision 唤醒 poll，10 秒扫描保留。
+- ingress 绑定 ChannelQueue 实例的容量回调，durable dispatch 只重试索引中的记录并复核磁盘、lease 与退避。停止和队列重置不发容量通知。
+- `runtime/task-input.ts` 合并所属任务的结果；submitted 集合只防止同一步骤重复提交，`input_ack` 仍以真实 transcript 为准。步骤结束等待提交收敛并清空旧步骤未消费队列，下一步骤从持久日志重放。
+- 工具调度遵循官方发布的 SDK 整批策略；批次中存在串行工具时整批串行。

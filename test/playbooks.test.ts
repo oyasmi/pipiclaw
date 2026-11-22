@@ -68,7 +68,9 @@ describe("runtime playbook catalog", () => {
 			expect(names).toEqual(expected);
 		}
 		const documented = [
-			...readFileSync("docs/runtime-playbooks.md", "utf8").matchAll(/^\| `([^`]+\.md)` \| (\d+) \| ([^|]+) \|/gm),
+			...readFileSync("dev-docs/runtime-playbooks.md", "utf8").matchAll(
+				/^\| `([^`]+\.md)` \| (\d+) \| ([^|]+) \|/gm,
+			),
 		].map(([, filename, order, tools]) => ({
 			filename,
 			order: Number(order),

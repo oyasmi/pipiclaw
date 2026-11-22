@@ -6,7 +6,7 @@ Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-wor
 
 ## Core Structure
 
-A module is a path under `src/`. Dependencies run strictly downward through the layers below: a module may import only what its "May import" column names (same-layer modules never import each other, and `import type` counts). `scripts/check-architecture.mjs` (`npm run arch`, part of `npm run check`) enforces this table together with file-level cycles, a 800-line file budget, dangling relative paths and file references in this document, `CLAUDE.md` and `docs/architecture.md`. If this table and the script disagree, the script wins — fix this table in the same commit.
+A module is a path under `src/`. Dependencies run strictly downward through the layers below: a module may import only what its "May import" column names (same-layer modules never import each other, and `import type` counts). `scripts/check-architecture.mjs` (`npm run arch`, part of `npm run check`) enforces this table together with file-level cycles, a 800-line file budget, dangling relative paths and file references in this document, `CLAUDE.md` and `dev-docs/architecture.md`. If this table and the script disagree, the script wins — fix this table in the same commit.
 
 | Layer | Module | Path | Owns | May import | Typical files |
 |---|---|---|---|---|---|
@@ -83,7 +83,7 @@ Three layers, each with a distinct job. Putting an assertion in the wrong layer 
 
 When changing model-facing prompts/playbooks, tool guidance, memory recall strategy, or task/delegation decisions, plan the affected behavior probes (`npm run eval -- plan --changed-since <ref>`) and run the relevant dev cases with the configured local model when credentials are available. Record the run id, failures and their attribution; unavailable credentials or execution are not a quality pass. A pure code move does not require paid probes. Changes to `evals/` require `npm run test:evals`.
 
-Use the six-case dev set for daily feedback, core for periodic/release regression, and paired candidate runs for model or major prompt decisions. Smoke is not a baseline. Preserve failed evidence and distinguish product failures from fixture/oracle/provider problems; correcting an oracle creates a separate assessment or run, never overwrites the failure. Every paid run first checks executable positive, negative and equivalence controls; failed controls stop before model calls and uncovered cases remain inconclusive. Use `cycle` for automatic diagnostics, sealed-evidence replay and compatible immutable references. Model judges are optional advisory opinions, off by default; human labels or approval are never prerequisites. New automatic references live in ignored `evals/results/references/` so they cannot alter the checkout fingerprint. See [the evaluation guide](docs/evals.md) for commands and limits.
+Use the six-case dev set for daily feedback, core for periodic/release regression, and paired candidate runs for model or major prompt decisions. Smoke is not a baseline. Preserve failed evidence and distinguish product failures from fixture/oracle/provider problems; correcting an oracle creates a separate assessment or run, never overwrites the failure. Every paid run first checks executable positive, negative and equivalence controls; failed controls stop before model calls and uncovered cases remain inconclusive. Use `cycle` for automatic diagnostics, sealed-evidence replay and compatible immutable references. Model judges are optional advisory opinions, off by default; human labels or approval are never prerequisites. New automatic references live in ignored `evals/results/references/` so they cannot alter the checkout fingerprint. See [the evaluation guide](dev-docs/evals.md) for commands and limits.
 
 ### Unit-test admission and size control
 
@@ -93,7 +93,7 @@ Before adding a case, identify a plausible incorrect implementation that would m
 
 Do not test a constant against a copied constant, a getter/setter with no domain decision, a forwarding adapter against an echoing mock, or third-party behavior recreated by a test-owned setup. Do not mirror the same input/output matrix at the domain, adapter, and runtime layers. Keep the matrix in its owning domain; use only distinct wiring/guard tests above it, with full-stack mechanism in deterministic e2e. Exact text is warranted for machine-consumed protocols, persisted data, escaping, and actionable identifiers — ordinary copy is covered structurally by the shared user-copy suite.
 
-Keep concurrency, recovery, persistence integrity, accounting/idempotency, security boundaries, and meaningful parser/budget edge cases even when they are small or expensive. Pruning removes low-value cases and unused fixtures rather than skipping tests, reducing discovery scope, increasing timeouts, or weakening required checks. The [test quality review](docs/reviews/test-quality.md) records this cleanup and its retained coverage.
+Keep concurrency, recovery, persistence integrity, accounting/idempotency, security boundaries, and meaningful parser/budget edge cases even when they are small or expensive. Pruning removes low-value cases and unused fixtures rather than skipping tests, reducing discovery scope, increasing timeouts, or weakening required checks. The [test quality review](dev-docs/reviews/test-quality.md) records this cleanup and its retained coverage.
 
 e2e hard rules:
 
@@ -104,7 +104,7 @@ e2e hard rules:
 5. **Cheap enough to run every time.** The deterministic layer must pass offline with no credentials; a case that needs the network is in the wrong layer.
 6. **Mutation check on the way in.** Before a new deterministic case merges, break the code it guards once, confirm the case goes red, and record that in the case's comment. A case that stays green when its target is broken is not a safety net.
 
-**E2E admission and size control.** Existing features default to no net growth in deterministic cases too: replace a weaker scenario or extend the relevant chain first. Any growth must name a cross-module failure that existing unit/e2e cases cannot catch, explain its impact, report the case-count delta, and include a mutation check. A direct domain call with fake wake/notify proves domain behavior, not bootstrap wiring; test the real producer → runtime → consumer path for that claim. Same-process `restart()` proves graceful runtime reinitialization; a process/crash claim requires a separate daemon whose old callbacks are gone. Wait for persistence/settlement completion, not just provider arrival or a state value that was already true before the action. Keep deterministic fixtures offline for their whole lifetime, including lazily created registries and shutdown maintenance. `npm run test:e2e` builds first so the process fixture runs current code. The [test quality review](docs/reviews/test-quality.md#历史数据及限制) summarizes the 55-case audit.
+**E2E admission and size control.** Existing features default to no net growth in deterministic cases too: replace a weaker scenario or extend the relevant chain first. Any growth must name a cross-module failure that existing unit/e2e cases cannot catch, explain its impact, report the case-count delta, and include a mutation check. A direct domain call with fake wake/notify proves domain behavior, not bootstrap wiring; test the real producer → runtime → consumer path for that claim. Same-process `restart()` proves graceful runtime reinitialization; a process/crash claim requires a separate daemon whose old callbacks are gone. Wait for persistence/settlement completion, not just provider arrival or a state value that was already true before the action. Keep deterministic fixtures offline for their whole lifetime, including lazily created registries and shutdown maintenance. `npm run test:e2e` builds first so the process fixture runs current code. The [test quality review](dev-docs/reviews/test-quality.md#历史数据及限制) summarizes the 55-case audit.
 
 ## Engineering Rules
 
@@ -130,7 +130,7 @@ e2e hard rules:
 
 ## User-Facing Copy Conventions
 
-Everything the runtime says to a person follows these rules — slash-command replies, runtime pushes (task receipts, delegation notices, wake failures, busy hints), progress cards, error bubbles and the terminal. They come from the 2026-08-24 command review and were widened to all user copy by [spec 053](docs/specs/053-user-facing-copy/design.md), whose §D4 glossary is the single source of interface terms (等待条件, 最晚检查时间, 任务说明, 工作项, 任务记录, 观察期, 工作日记, 工具调用 …). Design words (等待票, 兜底, 契约, 结算, 墓碑化) stay in specs and model-facing text only.
+Everything the runtime says to a person follows these rules — slash-command replies, runtime pushes (task receipts, delegation notices, wake failures, busy hints), progress cards, error bubbles and the terminal. They come from the 2026-08-24 command review and were widened to all user copy by [spec 053](dev-docs/specs/053-user-facing-copy/design.md), whose §D4 glossary is the single source of interface terms (等待条件, 最晚检查时间, 任务说明, 工作项, 任务记录, 观察期, 工作日记, 工具调用 …). Design words (等待票, 兜底, 契约, 结算, 墓碑化) stay in specs and model-facing text only.
 
 **Audiences and language.** Three audiences, one language each: users (DingTalk, TUI) read Chinese, keeping only identifiers they type or see in files in English (command names, ids, model refs, paths, frontmatter keys — introduced by a Chinese label, e.g. `类型（type）`); deployers and operators (CLI stdout/stderr, runtime logs) read English, deliberately; the model's text (prompts, tool `content`, step briefs, wake text) is out of scope here.
 
@@ -152,6 +152,7 @@ Shape rules:
 
 ## Practical Notes
 
+- User and operator guides live in [docs/](docs/README.md). Architecture, evaluation, design records, and reviews live in [dev-docs/](dev-docs/README.md). Archive retired specs in `dev-docs/specs/archive/`.
 - Node.js target is `>= 22.19.0`
 - A slash command has three parts, each in a fixed place: the catalog entry in `commands/catalog.ts`, the handler in the domain that owns the state (`<domain>/commands.ts`), and — for a stateless report — one case in `commands/router.ts`, which both transports share. Session commands (`/model`, `/compact`, …) live in `agent/session/command-extension.ts`. Adding a `/foo` report means touching exactly those three files
 - Event administration commands (`/events list|show|delete|history`, `events/commands.ts`) must stay path-confined to the desk's `events/` and event history

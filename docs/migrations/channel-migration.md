@@ -69,4 +69,4 @@
 
 ## 6. 演练记录
 
-本版本的演练过程与结果见 [acceptance.md](../specs/061-channel-plane/acceptance.md)。
+本版本的演练过程与结果见 [acceptance.md](../../dev-docs/specs/061-channel-plane/acceptance.md)。

@@ -388,7 +388,7 @@ Explore the full user guides in **[docs/README.md](https://github.com/oyasmi/pip
 | 🧠 Manage long-term memory, journals, probation & forgetting | [Memory Guide](https://github.com/oyasmi/pipiclaw/blob/master/docs/memory.md) |
 | 🧩 Package reusable personal or project workflows as Skills | [Skills Guide](https://github.com/oyasmi/pipiclaw/blob/master/docs/skills.md) · [Built-In Tools](https://github.com/oyasmi/pipiclaw/blob/master/docs/tools.md) |
 | 🔌 Connect Python/JS scripts or custom UIs via OpenAI SDK | [Web API Guide](https://github.com/oyasmi/pipiclaw/blob/master/docs/webapi.md) |
-| 💡 Best practices for high-leverage autonomous delivery | [Leverage Notes](https://github.com/oyasmi/pipiclaw/blob/master/docs/leverage/README.md) · [Design Philosophy](https://github.com/oyasmi/pipiclaw/blob/master/docs/design-philosophy.md) |
+| 💡 Best practices for high-leverage autonomous delivery | [Leverage Notes](https://github.com/oyasmi/pipiclaw/blob/master/docs/leverage/README.md) |
 | 🚀 Host 24/7 with systemd/pm2, review guards & troubleshoot | [Deployment & Operations](https://github.com/oyasmi/pipiclaw/blob/master/docs/deployment-and-operations.md) · [Security Guide](https://github.com/oyasmi/pipiclaw/blob/master/docs/security.md) · [Scaling & Concurrency](https://github.com/oyasmi/pipiclaw/blob/master/docs/scaling-and-concurrency.md) |
 
 ---
@@ -403,7 +403,7 @@ cd pipiclaw
 npm install && npm run build && npm run check
 ```
 
-For module boundaries, runtime internals, and engineering conventions, see [Architecture](https://github.com/oyasmi/pipiclaw/blob/master/docs/architecture.md), [Runtime Mechanisms](https://github.com/oyasmi/pipiclaw/blob/master/docs/runtime-mechanisms.md), and [AGENTS.md](https://github.com/oyasmi/pipiclaw/blob/master/AGENTS.md). Issues and Pull Requests are welcome!
+Find the architecture, engineering conventions, behavior evaluation guide, and design records in the [project development docs](https://github.com/oyasmi/pipiclaw/blob/master/dev-docs/README.md). Issues and Pull Requests are welcome!
 
 ---
 

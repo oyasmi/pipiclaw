@@ -82,7 +82,13 @@ const DIRECTED_CAP = 3;
 
 function isNonBehavioral(file: string): boolean {
 	if (file.startsWith("src/playbooks/") || file.startsWith("evals/")) return false;
-	return file.startsWith("docs/") || file.startsWith("test/") || file.startsWith("scripts/") || file.endsWith(".md");
+	return (
+		file.startsWith("docs/") ||
+		file.startsWith("dev-docs/") ||
+		file.startsWith("test/") ||
+		file.startsWith("scripts/") ||
+		file.endsWith(".md")
+	);
 }
 
 function matchesProfile(profile: ProfileName, id: string, source: string, description: string): boolean {

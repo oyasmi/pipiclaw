@@ -385,7 +385,7 @@ Pipiclaw 本身不收取任何中转费用，它直接调用你本机已安装�
 | 🧠 管理长期记忆、工作日记、观察期与彻底遗忘 | [记忆管理](https://github.com/oyasmi/pipiclaw/blob/master/docs/memory.md) |
 | 🧩 把常用研发流程打包成可复用的个人/项目技能 | [Skills 指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/skills.md) · [内置工具总览](https://github.com/oyasmi/pipiclaw/blob/master/docs/tools.md) |
 | 🔌 用官方 OpenAI SDK 从外部脚本或自定义前端接入 | [Web API 手册](https://github.com/oyasmi/pipiclaw/blob/master/docs/webapi.md) |
-| 💡 进阶实践：如何真正把 AI 助手从“扳手”用成“车床” | [使用杠杆（Leverage）](https://github.com/oyasmi/pipiclaw/blob/master/docs/leverage/README.md) · [设计哲学](https://github.com/oyasmi/pipiclaw/blob/master/docs/design-philosophy.md) |
+| 💡 进阶实践：如何真正把 AI 助手从“扳手”用成“车床” | [使用杠杆（Leverage）](https://github.com/oyasmi/pipiclaw/blob/master/docs/leverage/README.md) |
 | 🚀 24 小时后台托管、备份迁移、权限守卫与故障排查 | [部署与运维](https://github.com/oyasmi/pipiclaw/blob/master/docs/deployment-and-operations.md) · [安全指南](https://github.com/oyasmi/pipiclaw/blob/master/docs/security.md) · [并发与容量](https://github.com/oyasmi/pipiclaw/blob/master/docs/scaling-and-concurrency.md) |
 
 ---
@@ -400,7 +400,7 @@ cd pipiclaw
 npm install && npm run build && npm run check
 ```
 
-了解模块架构、运行机制与开发规范，请阅读[架构文档](https://github.com/oyasmi/pipiclaw/blob/master/docs/architecture.md)、[运行机制](https://github.com/oyasmi/pipiclaw/blob/master/docs/runtime-mechanisms.md)与 [AGENTS.md](https://github.com/oyasmi/pipiclaw/blob/master/AGENTS.md)。欢迎提交 Issue 与 Pull Request！
+源码架构、工程规范、行为评测和设计记录见[项目开发文档](https://github.com/oyasmi/pipiclaw/blob/master/dev-docs/README.md)。欢迎提交 Issue 与 Pull Request！
 
 ---
 

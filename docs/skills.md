@@ -87,4 +87,4 @@ Skill 的错误或截断结果会提供下一步，例如缩小读取范围或�
 - 工具能力与 `skill`：[tools.md](./tools.md)
 - 规则、记忆和工作区文件：[configuration-reference.md](./configuration-reference.md)
 - 智能体角色与委派：[sub-agents.md](./sub-agents.md)
-- Runtime playbook 的知识边界：[runtime-playbooks.md](./runtime-playbooks.md)
+- Runtime playbook 的知识边界：[runtime-playbooks.md](../dev-docs/runtime-playbooks.md)

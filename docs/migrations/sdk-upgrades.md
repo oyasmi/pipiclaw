@@ -11,10 +11,10 @@
 - **旧网关的空工具列表**：OpenAI Chat Completions 请求没有当前工具、但历史中含工具调用时，新版默认省略 `tools` 字段。若旧版 LiteLLM 等网关要求 `tools: []`，在 `models.json` 中为对应模型设置 `compat.requiresToolsWithToolHistory: true`。有当前工具的正常回合不受这个变化影响。
 - **核对内置模型引用**：检查默认、备用、内部代理及角色配置。目录移除了部分旧模型，例如 `openrouter/inception/mercury-2`、`openrouter/inception/mercury-3`、`openrouter/minimax/minimax-m2` 和部分 Fireworks 条目。外部 Coding CLI 的模型名仍由对应 CLI 决定。
 - **极长输出的预算**：共享 SDK 算法为输入计数误差预留更多空间，部分长上下文请求的单次输出上限会降低；影响范围不限 OpenRouter。经常生成极长代码时，用实际模型定向验证。
-- **完整认证**：聊天、内部代理、记忆和摘要现已统一通过 SDK 解析请求认证，`models.json` 配置的额外请求头会实际传到网关。关闭时等待已开始的 OAuth 凭据写入；超时则记录错误并保留进程锁，直到进程退出。无需改写认证文件。实现与验证见[接入验收](../reviews/pi-sdk-integration.md#完整认证与关闭)。
+- **完整认证**：聊天、内部代理、记忆和摘要现已统一通过 SDK 解析请求认证，`models.json` 配置的额外请求头会实际传到网关。关闭时等待已开始的 OAuth 凭据写入；超时则记录错误并保留进程锁，直到进程退出。无需改写认证文件。实现与验证见[接入验收](../../dev-docs/reviews/pi-sdk-integration.md#完整认证与关闭)。
 - **消息线程与缓存保温**：后续已接入会话身份，具体端点的消息线程行为仍待验证。空闲缓存保温需要单独接入。
 
-上游详情见 [Pi 1.5.1 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.1)、[Pi 1.5.2 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.2) 与[升级评估](../reviews/pi-sdk-integration.md#升级时查整条请求链)。
+上游详情见 [Pi 1.5.1 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.1)、[Pi 1.5.2 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.2) 与[升级评估](../../dev-docs/reviews/pi-sdk-integration.md#升级时查整条请求链)。
 
 ---
 
@@ -26,7 +26,7 @@
 - **OpenRouter Claude 别名协议变更**：OpenRouter 的 `~anthropic/claude-*-latest` 别名改走 Anthropic Messages 协议以保留工具调用间的 thinking。若你在 `models.json` 中覆盖了 `baseUrl` 或 `api`，请确认代理网关支持对应协议与路由。
 - **OpenRouter 计费展示**：OpenRouter 返回完整计费信息时，总费用采用供应商实报金额；输入/输出/缓存分项仍可能来自目录估算，分项之和不一定严格等于合计。
 
-上游详情见 [Pi 1.5.0 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.0) 与[升级评估](../reviews/pi-sdk-integration.md#升级时查整条请求链)。
+上游详情见 [Pi 1.5.0 Release](https://github.com/earendil-works/pi/releases/tag/v1.5.0) 与[升级评估](../../dev-docs/reviews/pi-sdk-integration.md#升级时查整条请求链)。
 
 ---
 

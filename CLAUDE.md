@@ -77,4 +77,4 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 
 ## Docs
 
-`docs/README.md` is the user-documentation map. Top-level guides and `docs/architecture.md` describe current behavior; `docs/specs/NNN-*` and `docs/archive/specs/NNN-*` are historical design records that explain earlier decisions but may contain retired paths or contracts. For behavior changes, verify code and tests first, update the relevant top-level guide, and preserve specs as history unless writing a new design record.
+Use [the user documentation](docs/README.md) for setup, configuration, and operations and [the development documentation](dev-docs/README.md) for architecture, engineering conventions, and evaluation. User guides and [the architecture](dev-docs/architecture.md) describe current behavior. Design records under `dev-docs/specs/` and `dev-docs/specs/archive/` explain earlier decisions and may contain retired paths or contracts. For behavior changes, verify code and tests first, then update the relevant current guide.

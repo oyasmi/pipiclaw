@@ -124,4 +124,4 @@
 - 守卫默认策略与放行方式：[security.md](./security.md)
 - 记忆分层：[memory.md](./memory.md)
 - 事件与任务：[events-and-tasks.md](./events-and-tasks.md)
-- agent 侧的使用纪律（随包发布，非用户可编辑）：[runtime-playbooks.md](./runtime-playbooks.md)
+- agent 侧的使用纪律（随包发布，非用户可编辑）：[runtime-playbooks.md](../dev-docs/runtime-playbooks.md)
