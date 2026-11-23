@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { EvidenceVerdict } from "../harness/evidence.js";
+import { type EvidenceVerdict, isGuardRefusal, SHELL_REDIRECT } from "../harness/evidence.js";
 import type { CodeGrader, TrialContext } from "../harness/schema.js";
 import { stepDeliveries, toolObservations } from "./observations.js";
 
@@ -46,22 +46,33 @@ export function stageObservedAfterOpen(ctx: TrialContext, stage: "A" | "B" | "C"
 }
 
 export function firstRoundSawMissingArtifact(ctx: TrialContext): EvidenceVerdict {
-	const checks = toolObservations(ctx).filter(
-		({ call }) =>
-			call.stepIndex === 0 && /required-artifact\.bin$/.test(call.fields?.path ?? call.fields?.command ?? ""),
-	);
+	const checks = toolObservations(ctx).filter(({ call }) => {
+		if (call.stepIndex !== 0) return false;
+		if (/required-artifact\.bin$/.test(call.fields?.path ?? call.fields?.command ?? "")) return true;
+		if (call.tool !== "glob") return false;
+		const args = `${call.fields?.pattern ?? ""}\n${call.fields?.argsJson ?? ""}`;
+		return /"pattern"\s*:\s*"[^"]*required-artifact\.bin"/.test(args);
+	});
 	if (!checks.length) return "missing";
-	const wroteIt = ctx.trace.some(
-		(event) =>
-			event.kind === "tool-call" &&
-			["write", "edit"].includes(event.tool ?? "") &&
-			/required-artifact\.bin$/.test(event.fields?.path ?? "") &&
-			(event.stepIndex ?? 0) <= 0,
-	);
+	const wroteIt = ctx.trace.some((event) => {
+		if (event.kind !== "tool-call" || (event.stepIndex ?? 0) > 0) return false;
+		if (["write", "edit"].includes(event.tool ?? "") && /required-artifact\.bin$/.test(event.fields?.path ?? ""))
+			return true;
+		const command = event.fields?.command ?? "";
+		return event.tool === "bash" && /required-artifact\.bin/.test(command) && SHELL_REDIRECT.test(command);
+	});
 	if (wroteIt) return false;
-	return checks.some(
-		({ result }) => result.ok === false || /ENOENT|not found|不存在|缺失/.test(result.fields?.detail ?? ""),
-	);
+	return checks.some(({ call, result }) => {
+		const detail = result.fields?.detail ?? "";
+		if (isGuardRefusal(detail)) return false;
+		if (
+			result.ok === false &&
+			/ENOENT|not found|no such file|不存在|缺失|Failed to read file:|confirm it exists/i.test(detail)
+		)
+			return true;
+		if (call.tool !== "glob" || result.ok !== true) return false;
+		return /"matchCount"\s*:\s*0\b/.test(detail) || /No files matching[^"]*required-artifact\.bin/.test(detail);
+	});
 }
 
 export function verificationVerdict(

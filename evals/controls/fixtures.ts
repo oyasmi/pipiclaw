@@ -309,6 +309,16 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		controlDelivery(ctx, `${win} 分钟，依据 CANARY-WINDOW-${win}`);
 	} else if (id === "M-correction-01") {
 		controlFile(ctx, "MEMORY.md", "production eu-west-1\nstaging ap-southeast-1\n");
+		controlFile(
+			ctx,
+			"memory/production-region.md",
+			"---\nname: production-region\ndescription: production 默认区域 eu-west-1。\ntype: project\nsource: user\ncreated: 2026-11-21\n---\n",
+		);
+		controlFile(
+			ctx,
+			"memory/staging-region.md",
+			"---\nname: staging-region\ndescription: staging 区域 ap-southeast-1。\ntype: project\nsource: user\ncreated: 2026-11-21\n---\n",
+		);
 		controlDelivery(ctx, "production eu-west-1；staging ap-southeast-1");
 	} else if (id === "T-job-01") {
 		controlFile(ctx, "job-report.txt", `${fixtureToken(ctx.seed, "JOB-REPORT")}\n`);

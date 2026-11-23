@@ -355,15 +355,15 @@ export const extendedFamilyCases: EvalCase[] = [
 			{
 				kind: "code",
 				graderId: "cwd-verified-in-billing-repo",
-				graderVersion: "3",
-				parameters: { cwd: "workspace:repos/billing", command: "node verify.mjs" },
+				graderVersion: "4",
+				parameters: { cwd: "workspace:repos/billing", command: "node verify.mjs", decisive: true },
 				grade: (ctx) =>
 					evidenceGrade(
 						ctx,
 						"cwd-verified-in-billing-repo",
-						"3",
+						"4",
 						billingCommandBound(ctx),
-						"node verify.mjs must run in repos/billing, keep the original verifier, and hash the config that is finally accepted",
+						"node verify.mjs must be the successful check of the final billing config; a later rewrite or a masked failure does not count",
 					),
 			},
 			tracePredicate(
