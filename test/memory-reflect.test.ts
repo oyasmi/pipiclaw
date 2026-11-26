@@ -434,10 +434,13 @@ describe("reflect — user-source protection", () => {
 	it("never deletes a user-saved entry, regardless of confidence", async () => {
 		const deskDir = createTempDir();
 		await applyMemoryOps(deskDir, [{ op: "add", name: "u", description: "initial agent fact", source: "agent" }]);
-		await createMemorySaveTool({ desk: "news", deskDir, workspaceDir: deskDir, channelId: "dingtalk:dm:1" }).execute(
-			"save",
-			{ content: "user fact", replaces: "u" },
-		);
+		await createMemorySaveTool({
+			appHomeDir: deskDir,
+			desk: "news",
+			deskDir,
+			workspaceDir: deskDir,
+			channelId: "dingtalk:dm:1",
+		}).execute("save", { content: "user fact", replaces: "u" });
 		scripted({
 			journal: [],
 			ops: [{ op: "delete", name: "u", confidence: 0.99, reason: "seems wrong now" }],

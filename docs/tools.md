@@ -23,7 +23,7 @@
 | `send_media` | 把本地文件作为附件发进当前会话 | 随前端 | 传输层是否支持（钉钉支持，Web API 含终端不支持） | 否 |
 | `job` | 查看/等待/取消 `bash async` 后台作业 | 恒开 | — | 否 |
 | `session_search` | 检索本工位所有频道的冷存储历史对话 | 恒开 | — | 否 |
-| `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
+| `memory_save` / `memory_search` / `memory_forget` | 保存或遗忘长期记忆，按需检索记忆、工作日记与共享背景 | 恒开 | — | 否 |
 | `skill` | 只读列出/加载工作区与 `~/.agents/skills/` 的可复用流程，有效工作区同名版本优先 | 恒开 | — | 否 |
 | `event_manage` | 列出/查看/创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_list` | 列出本工位的活跃任务，含状态、等待条件、正在执行的步骤和在途委派（聊天） | 开 | `tools.tasks.enabled` | 否 |

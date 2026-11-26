@@ -128,6 +128,7 @@ function fileToolOptions(ctx: ToolBuildContext) {
 
 function memoryToolOptions(ctx: ToolBuildContext) {
 	return {
+		appHomeDir: req(ctx.securityContext.appHomeDir, "appHomeDir"),
 		channelId: ctx.channelId,
 		desk: req(ctx.desk, "desk"),
 		deskDir: ctx.deskDir,

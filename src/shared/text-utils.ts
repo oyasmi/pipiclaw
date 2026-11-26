@@ -31,8 +31,6 @@ export function truncate(text: string, maxLen: number): string {
 	return `${text.substring(0, maxLen - 3)}...`;
 }
 
-export const HAN_REGEX = /\p{Script=Han}/u;
-
 /** Append a trailing `/` unless the path already has one — the shared prefix-match building
  * block so `/repo-ab` is never mistaken for a path within `/repo-a`. */
 export function withTrailingSlash(path: string): string {

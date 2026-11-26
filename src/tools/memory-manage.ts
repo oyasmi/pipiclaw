@@ -1,12 +1,10 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import * as log from "../log.js";
 import { type DeskMemoryQueue, getDeskMemoryQueue } from "../memory/desk-memory-queue.js";
-import { readJournalForSearch } from "../memory/journal.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { findNearDuplicateEntries, searchMemory } from "../memory/search.js";
+import { SearchIndexUnavailableError } from "../memory/search-index-db.js";
 import { containsSecret } from "../memory/secret-redaction.js";
 import {
 	applyMemoryOps,
@@ -68,6 +66,7 @@ const memoryForgetSchema = Type.Object({
 });
 
 export interface MemoryManageToolOptions {
+	appHomeDir: string;
 	channelId: string;
 	/** The desk's name: the memory queue's key (spec 058, INV-8). */
 	desk: string;
@@ -78,14 +77,6 @@ export interface MemoryManageToolOptions {
 
 function textResult(text: string, details: Record<string, unknown>) {
 	return { content: [{ type: "text" as const, text }], details };
-}
-
-async function readWorkspaceMemory(workspaceDir: string): Promise<string> {
-	try {
-		return await readFile(join(workspaceDir, "MEMORY.md"), "utf-8");
-	} catch {
-		return "";
-	}
 }
 
 interface MemoryToolClosures {
@@ -229,19 +220,16 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		if (!trimmed) {
 			throw new RecoverableToolError("memory_search requires a non-empty query.");
 		}
-		const [entries, workspaceMemory, journal] = await Promise.all([
-			listMemoryEntries(options.deskDir),
-			readWorkspaceMemory(options.workspaceDir),
-			readJournalForSearch(options.deskDir),
-		]);
-		const hits = searchMemory({ query: trimmed, entries, workspaceMemory, journal: journal.days });
-		const scopeHint =
-			journal.omittedDays > 0 || journal.truncatedDates.length > 0
-				? `\nJournal search omitted ${journal.omittedDays} older day files and older text in ${journal.truncatedDates.length} large files. Use grep in ${join(options.deskDir, "journal")} or read a dated file to search the omitted history.`
-				: "";
+		const hits = await searchMemory({ ...options, query: trimmed }).catch((error: unknown) => {
+			if (!(error instanceof SearchIndexUnavailableError)) throw error;
+			throw new Error(
+				`Memory search index unavailable (${error.message}). Use grep in the desk's memory/ and journal/ or read workspace MEMORY.md.`,
+				{ cause: error },
+			);
+		});
 		if (hits.length === 0) {
 			return textResult(
-				`No stored memory matched "${trimmed}". Try a broader query; no match does not prove the fact was never recorded.${scopeHint}`,
+				`No stored memory matched "${trimmed}". Try a broader query; no match does not prove the fact was never recorded.`,
 				{
 					resultCount: 0,
 				},
@@ -259,7 +247,7 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 			})
 			.join("\n");
 		return textResult(
-			`Found ${hits.length} match${hits.length === 1 ? "" : "es"}:\n\n${rendered}${scopeHint}\nResults are excerpts. Read a cited file for full context; narrow the query for more specific matches.`,
+			`Found ${hits.length} match${hits.length === 1 ? "" : "es"}:\n\n${rendered}\nResults are excerpts. Read a cited file for full context; narrow the query for more specific matches.`,
 			{
 				resultCount: hits.length,
 			},
@@ -322,7 +310,7 @@ export function createMemorySearchTool(options: MemoryManageToolOptions): AgentT
 		name: "memory_search",
 		label: "memory_search",
 		description:
-			"Search this desk's stored memory, recent journal, and the workspace MEMORY.md on demand. The memory index is only " +
+			"Search this desk's stored memory, all journal dates, and the workspace MEMORY.md on demand. The memory index is only " +
 			"injected at the start of a session, so use this when you suspect something was recorded since.",
 		parameters: memorySearchSchema,
 		execute: async (_toolCallId: string, args) => search(args),

@@ -1,8 +1,7 @@
-import { readdir } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
 import { getConversationsDir, SUBAGENT_RUNS_LOG_FILENAME } from "../desk/paths.js";
-import { isNodeError } from "../shared/os.js";
 import { isRecord } from "../shared/type-guards.js";
+import { listIndexSourceEntries } from "./search-index-files.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { stripInjectedMemoryContext } from "./transcript.js";
 
@@ -128,15 +127,6 @@ export function dedupKey(text: string): string {
 		.join(" ")
 		.replace(/\s+/g, " ")
 		.trim();
-}
-
-export async function listIndexSourceEntries(dir: string) {
-	try {
-		return await readdir(dir, { withFileTypes: true });
-	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") return [];
-		throw error;
-	}
 }
 
 export async function listDeskTranscriptSources(deskDir: string): Promise<TranscriptSourceFile[]> {

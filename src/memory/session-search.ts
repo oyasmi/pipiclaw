@@ -2,7 +2,6 @@ import { basename } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DESK_DIR_PREFIX, deriveDeskNameFromPath, isDeskName } from "../desk/paths.js";
 import type { ModelRequests } from "../models/requests.js";
-import { recencyBoostByAge } from "./search.js";
 import { getSearchIndexPath, type SearchIndexHandle, withSearchIndex } from "./search-index-db.js";
 import { type SyncStats, syncTranscriptSources } from "./search-index-sync.js";
 import {
@@ -12,6 +11,7 @@ import {
 	enoughMatches,
 	matchedTerms,
 	type QueryTerms,
+	windowAroundDensestMatch,
 } from "./search-terms.js";
 import type { SessionSearchRole } from "./session-corpus.js";
 import { runSidecarTask } from "./sidecar-worker.js";
@@ -102,6 +102,15 @@ const RELEVANCE_WEIGHT = 3;
 const EXACT_BONUS = 1;
 const RECENCY = { day: 0.5, week: 0.25, month: 0.1 };
 
+function recencyBoostByAge(timestamp: number | null): number {
+	if (timestamp === null) return 0;
+	const days = (Date.now() - timestamp) / 86_400_000;
+	if (days <= 1) return RECENCY.day;
+	if (days <= 7) return RECENCY.week;
+	if (days <= 30) return RECENCY.month;
+	return 0;
+}
+
 interface Hit {
 	hash: string;
 	role: SessionSearchRole;
@@ -142,7 +151,7 @@ function selectHits(db: SearchIndexHandle["db"], query: string, terms: QueryTerm
 			...candidates,
 			hits: rows.map((row) => ({
 				row,
-				score: recencyBoostByAge(row.ts ?? undefined, RECENCY),
+				score: recencyBoostByAge(row.ts_ms),
 				matches: [] as string[],
 			})),
 		};
@@ -178,7 +187,7 @@ function selectHits(db: SearchIndexHandle["db"], query: string, terms: QueryTerm
 				RELEVANCE_WEIGHT * (row.rank / minRank) * ROLE_WEIGHT[row.role] +
 				Math.min(1, units / effective) +
 				(exact ? EXACT_BONUS : 0) +
-				recencyBoostByAge(row.ts ?? undefined, RECENCY);
+				recencyBoostByAge(row.ts_ms);
 			return [{ row, score, matches: [...matched.latin, ...matched.cjk] }];
 		})
 		.sort(
@@ -189,47 +198,6 @@ function selectHits(db: SearchIndexHandle["db"], query: string, terms: QueryTerm
 		)
 		.slice(0, limit);
 	return { ...candidates, hits };
-}
-
-function windowAroundDensestMatch(text: string, matches: string[], maxChars: number): string {
-	if (text.length <= maxChars) return text;
-	const lower = text.toLowerCase();
-	const cursors = matches.map((word) => ({ word, offset: lower.indexOf(word) })).filter((item) => item.offset >= 0);
-	const positions: Array<{ word: string; offset: number }> = [];
-	// Take occurrences in rounds so a frequently repeated word cannot exhaust the whole budget.
-	while (cursors.length && positions.length < 400) {
-		for (let i = cursors.length - 1; i >= 0 && positions.length < 400; i--) {
-			const { word, offset } = cursors[i];
-			positions.push({ word, offset });
-			const next = lower.indexOf(word, offset + 1);
-			if (next < 0) cursors.splice(i, 1);
-			else cursors[i].offset = next;
-		}
-	}
-	positions.sort((a, b) => a.offset - b.offset || a.word.length - b.word.length);
-	const counts = new Map<string, number>();
-	let left = 0;
-	let bestCount = 0;
-	let bestStart = 0;
-	let bestEnd = 0;
-	for (const { word, offset } of positions) {
-		const end = offset + Math.min(word.length, maxChars);
-		counts.set(word, (counts.get(word) ?? 0) + 1);
-		while (end - positions[left].offset > maxChars) {
-			const leaving = positions[left++].word;
-			const count = (counts.get(leaving) ?? 1) - 1;
-			if (count) counts.set(leaving, count);
-			else counts.delete(leaving);
-		}
-		if (counts.size > bestCount) {
-			bestCount = counts.size;
-			bestStart = positions[left].offset;
-			bestEnd = end;
-		}
-	}
-	const start = Math.min(text.length - maxChars, Math.max(0, Math.floor((bestStart + bestEnd - maxChars) / 2)));
-	const end = start + maxChars;
-	return `${start > 0 ? "[...]\n" : ""}${text.slice(start, end)}${end < text.length ? "\n[...]" : ""}`;
 }
 
 export async function searchDeskSessions(request: SearchDeskSessionsRequest): Promise<SessionSearchResponse> {

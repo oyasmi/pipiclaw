@@ -1,4 +1,4 @@
-import { mkdir, open, readdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { localDayKey } from "../shared/local-time.js";
@@ -33,62 +33,6 @@ export async function listJournalDates(deskDir: string): Promise<string[]> {
 		if (isNodeError(error) && error.code === "ENOENT") return [];
 		throw error;
 	}
-}
-
-/** Search stays bounded even after years of journals, or one unusually busy day. */
-export const JOURNAL_SEARCH_MAX_DAYS = 365;
-export const JOURNAL_SEARCH_DAY_BYTES = 64 * 1024;
-export const JOURNAL_SEARCH_MAX_TOTAL_BYTES = 1_024 * 1_024;
-
-export interface JournalSearchWindow {
-	days: Array<{ date: string; content: string }>;
-	omittedDays: number;
-	truncatedDates: string[];
-}
-
-/** Newest day files first; retain only whole lines when a day's older bytes are omitted. */
-export async function readJournalForSearch(deskDir: string): Promise<JournalSearchWindow> {
-	const dates = (await listJournalDates(deskDir)).reverse();
-	const capped = dates.slice(0, JOURNAL_SEARCH_MAX_DAYS);
-	const window: JournalSearchWindow = {
-		days: [],
-		omittedDays: Math.max(0, dates.length - capped.length),
-		truncatedDates: [],
-	};
-	let totalBytes = 0;
-	for (let i = 0; i < capped.length; i++) {
-		const date = capped[i];
-		const remainingTotal = JOURNAL_SEARCH_MAX_TOTAL_BYTES - totalBytes;
-		if (remainingTotal <= 0) {
-			window.omittedDays += capped.length - i;
-			break;
-		}
-		try {
-			const file = await open(getJournalPath(deskDir, date), "r");
-			try {
-				const stat = await file.stat();
-				if (!stat.isFile()) continue;
-				const maxBytes = Math.min(JOURNAL_SEARCH_DAY_BYTES, remainingTotal);
-				const start = Math.max(0, stat.size - maxBytes);
-				const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
-				const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
-				totalBytes += bytesRead;
-				let content = buffer.subarray(0, bytesRead).toString("utf-8");
-				if (start > 0) {
-					window.truncatedDates.push(date);
-					const newline = content.indexOf("\n");
-					content = newline < 0 ? "" : content.slice(newline + 1);
-				}
-				window.days.push({ date, content });
-			} finally {
-				await file.close();
-			}
-		} catch (error) {
-			// A day can disappear between listing and opening; real IO failures must stay visible.
-			if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-		}
-	}
-	return window;
 }
 
 /** Read today's journal and, when present, the most recent earlier day for morning backfill (B2). */

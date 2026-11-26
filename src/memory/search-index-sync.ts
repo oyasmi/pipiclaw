@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
-import { type FileHandle, open, stat } from "node:fs/promises";
+import { type FileHandle, open } from "node:fs/promises";
 import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { DESK_DIR_PREFIX, isDeskEntry, isDeskName } from "../desk/paths.js";
 import * as log from "../log.js";
@@ -15,12 +15,12 @@ import {
 	transaction,
 	withSearchIndex,
 } from "./search-index-db.js";
+import { listIndexSourceEntries, sameIndexSourceStat, statIndexSource } from "./search-index-files.js";
 import { searchTextFor } from "./search-terms.js";
 import {
 	archivedTaskDoc,
 	dedupKey,
 	listDeskTranscriptSources,
-	listIndexSourceEntries,
 	parseJsonLine,
 	parseTranscriptLine,
 	type TranscriptDoc,
@@ -158,10 +158,6 @@ async function readRange(file: FileHandle, start: number, end: number): Promise<
 	return buffer.subarray(0, offset);
 }
 
-function sameStat(previous: FileProgress, current: Stats): boolean {
-	return previous.ino === current.ino && previous.size === current.size && previous.mtime_ms === current.mtimeMs;
-}
-
 async function syncJsonl(
 	db: SearchIndexHandle["db"],
 	writer: Writer,
@@ -170,7 +166,7 @@ async function syncJsonl(
 	stats: SyncStats,
 	listed: Stats,
 ): Promise<void> {
-	if (previous && previous.indexed_bytes === listed.size && sameStat(previous, listed)) return;
+	if (previous && previous.indexed_bytes === listed.size && sameIndexSourceStat(previous, listed)) return;
 	const file = await open(source.path, "r");
 	try {
 		const current = await file.stat();
@@ -223,15 +219,6 @@ async function syncJsonl(
 	}
 }
 
-async function optionalStat(path: string): Promise<Stats | undefined> {
-	try {
-		return await stat(path);
-	} catch (error) {
-		if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-		return undefined;
-	}
-}
-
 async function syncTask(
 	db: SearchIndexHandle["db"],
 	writer: Writer,
@@ -241,13 +228,16 @@ async function syncTask(
 	md: Stats,
 ): Promise<void> {
 	const jsonlPath = source.path.replace(/\.md$/, ".jsonl");
-	const jsonl = await optionalStat(jsonlPath);
+	const jsonl = await statIndexSource(jsonlPath);
 	const mtimeMs = Math.max(md.mtimeMs, jsonl?.mtimeMs ?? 0);
 	const size = md.size + (jsonl?.size ?? 0);
 	// Keep each member's fingerprint: max mtime and total bytes alone can hide a replaced sibling.
 	const fingerprint = sha1(JSON.stringify([md.ino, md.mtimeMs, md.size, jsonl?.ino, jsonl?.mtimeMs, jsonl?.size]));
 	if (previous?.head_hash === fingerprint) return;
-	const [markdown, notes] = await Promise.all([readOptionalTextFile(source.path), readOptionalTextFile(jsonlPath)]);
+	const [markdown, notes] = await Promise.all([
+		readOptionalTextFile(source.path),
+		jsonl ? readOptionalTextFile(jsonlPath) : "",
+	]);
 	const doc = archivedTaskDoc(source.path, markdown, notes, md.mtimeMs);
 	measureTransaction(db, stats, () => {
 		if (previous) writer.remove(source.relPath);
@@ -287,7 +277,7 @@ export async function syncTranscriptSources(handle: SearchIndexHandle, deskDir: 
 	// Batch metadata reads while keeping SQLite writes serialized and bounding outstanding I/O.
 	for (let i = 0; i < sources.length; i += 64) {
 		const batch = sources.slice(i, i + 64);
-		const metadata = await Promise.allSettled(batch.map((source) => optionalStat(source.path)));
+		const metadata = await Promise.allSettled(batch.map((source) => statIndexSource(source.path)));
 		for (const [index, source] of batch.entries()) {
 			const state = previous.get(source.relPath);
 			previous.delete(source.relPath);

@@ -29,8 +29,8 @@ order: 20
 
 ## 找回与应用
 
-先用当前上下文和首轮索引，相关 `(+)` 才读正文。索引不逐轮刷新，中途怀疑记过用 memory_search，查工位 memory、workspace MEMORY、近期 journal；只需旧对话用 session_search，一次可给出中英文名称、别称和标识符。用频道和发言人确认出处。
+先用当前上下文和首轮索引，相关 `(+)` 才读正文。索引不逐轮刷新，中途怀疑记过用 memory_search，查工位 memory、workspace MEMORY、全部 journal；只需旧对话用 session_search，一次可给出中英文名称、别称和标识符。用频道和发言人确认出处。
 
-journal 搜索最多最近 365 个日文件（总量上限 1 MiB，每份末尾 64 KiB）；不足按工具给的路径 grep 或按日期 read，原始对话仍走 session_search。无命中不等于不存在。
+无命中不等于不存在。换个说法或用确切标识符再查，已知日期时可直接读取日记。
 
 将适用偏好落实到执行与验收的同一要求；永久保存不代表永久有效。跨工位背景是用户维护的 workspace MEMORY.md，仅应明确要求修改，不自动搬运工位记忆。需要了解自动保留期限或创作 skill 时再读 [后台学习与技能创作](learning-and-skills.md)。

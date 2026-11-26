@@ -1,14 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import {
-	appendJournalEntries,
-	getJournalPath,
-	JOURNAL_SEARCH_DAY_BYTES,
-	JOURNAL_SEARCH_MAX_DAYS,
-	listJournalDates,
-	readJournalDay,
-	readJournalForSearch,
-} from "../src/memory/journal.js";
+import { appendJournalEntries, getJournalPath, listJournalDates, readJournalDay } from "../src/memory/journal.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-memory-journal-");
@@ -45,38 +37,6 @@ describe("journal", () => {
 		const deskDir = createTempDir();
 		expect(await readJournalDay(deskDir, "2026-01-01")).toBe("");
 		expect(await listJournalDates(deskDir)).toEqual([]);
-	});
-
-	it("bounds search by newest files and whole tail lines, including oversized UTF-8 entries", async () => {
-		const deskDir = createTempDir();
-		await mkdir(`${deskDir}/journal`);
-		const dates: string[] = [];
-		for (let i = 0; i < JOURNAL_SEARCH_MAX_DAYS + 1; i++) {
-			const date = new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10);
-			dates.push(date);
-			await writeFile(getJournalPath(deskDir, date), `- day ${i}\n`);
-		}
-		const newest = dates.at(-1)!;
-		const secondOldest = dates[1];
-		await writeFile(
-			getJournalPath(deskDir, newest),
-			`- old evidence\n- ${"汉".repeat(JOURNAL_SEARCH_DAY_BYTES)}\n- newest evidence\n`,
-		);
-		await writeFile(`${deskDir}/journal/unrelated.txt`, "not a journal");
-		const result = await readJournalForSearch(deskDir);
-		expect(result.days).toHaveLength(JOURNAL_SEARCH_MAX_DAYS);
-		expect(result.omittedDays).toBe(1);
-		expect(result.truncatedDates).toEqual([newest]);
-		expect(result.days[0]).toEqual({ date: newest, content: "- newest evidence\n" });
-		expect(result.days.at(-1)?.date).toBe(secondOldest);
-		expect(result.days.every((day) => Buffer.byteLength(day.content) <= JOURNAL_SEARCH_DAY_BYTES)).toBe(true);
-	});
-
-	it("does not hide a broken journal directory as an empty search", async () => {
-		const deskDir = createTempDir();
-		await writeFile(`${deskDir}/journal`, "not a directory");
-		await expect(readJournalForSearch(deskDir)).rejects.toMatchObject({ code: "ENOTDIR" });
-		expect(await readJournalForSearch(createTempDir())).toEqual({ days: [], omittedDays: 0, truncatedDates: [] });
 	});
 
 	it("no-ops on an empty or all-duplicate batch", async () => {

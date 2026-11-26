@@ -1,4 +1,4 @@
-export const LATIN_STOP_WORDS = new Set([
+const LATIN_STOP_WORDS = new Set([
 	"a",
 	"an",
 	"and",
@@ -152,4 +152,48 @@ export function countMatchedUnits(text: string, terms: QueryTerms): number {
 
 export function enoughMatches(units: number, effective: number): boolean {
 	return effective < 5 || units >= 2;
+}
+
+export function windowAroundDensestMatch(text: string, matches: string[], limit: number, omission = "[...]"): string {
+	if (text.length <= limit) return text;
+	const inline = omission === "…";
+	const maxChars = Math.max(1, limit - (inline ? 2 * omission.length : 0));
+	const lower = text.toLowerCase();
+	const cursors = matches.map((word) => ({ word, offset: lower.indexOf(word) })).filter((item) => item.offset >= 0);
+	const positions: Array<{ word: string; offset: number }> = [];
+	// Take occurrences in rounds so a frequently repeated word cannot exhaust the whole budget.
+	while (cursors.length && positions.length < 400) {
+		for (let i = cursors.length - 1; i >= 0 && positions.length < 400; i--) {
+			const { word, offset } = cursors[i];
+			positions.push({ word, offset });
+			const next = lower.indexOf(word, offset + 1);
+			if (next < 0) cursors.splice(i, 1);
+			else cursors[i].offset = next;
+		}
+	}
+	positions.sort((a, b) => a.offset - b.offset || a.word.length - b.word.length);
+	const counts = new Map<string, number>();
+	let left = 0;
+	let bestCount = 0;
+	let bestStart = 0;
+	let bestEnd = 0;
+	for (const { word, offset } of positions) {
+		const end = offset + Math.min(word.length, maxChars);
+		counts.set(word, (counts.get(word) ?? 0) + 1);
+		while (end - positions[left].offset > maxChars) {
+			const leaving = positions[left++].word;
+			const count = (counts.get(leaving) ?? 1) - 1;
+			if (count) counts.set(leaving, count);
+			else counts.delete(leaving);
+		}
+		if (counts.size > bestCount) {
+			bestCount = counts.size;
+			bestStart = positions[left].offset;
+			bestEnd = end;
+		}
+	}
+	const start = Math.min(text.length - maxChars, Math.max(0, Math.floor((bestStart + bestEnd - maxChars) / 2)));
+	const end = start + maxChars;
+	const separator = inline ? "" : "\n";
+	return `${start > 0 ? omission + separator : ""}${text.slice(start, end)}${end < text.length ? separator + omission : ""}`;
 }

@@ -9,7 +9,7 @@ import { isRecord } from "../shared/type-guards.js";
 
 type Sqlite = typeof import("node:sqlite");
 type Database = InstanceType<Sqlite["DatabaseSync"]>;
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE files (
@@ -58,6 +58,31 @@ END;
 CREATE TRIGGER docs_au AFTER UPDATE ON docs BEGIN
 	INSERT INTO docs_fts(docs_fts, rowid, text) VALUES ('delete', old.id, coalesce(old.search_text, old.text));
 	INSERT INTO docs_fts(rowid, text) VALUES (new.id, coalesce(new.search_text, new.text));
+END;
+CREATE TABLE notes (
+	id INTEGER PRIMARY KEY,
+	path TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	label TEXT NOT NULL,
+	date TEXT,
+	expires TEXT,
+	text TEXT NOT NULL,
+	search_text TEXT
+);
+CREATE INDEX notes_path ON notes(path);
+CREATE VIEW notes_search AS SELECT id AS rid, coalesce(search_text, text) AS text FROM notes;
+CREATE VIRTUAL TABLE notes_fts USING fts5(
+	text, content='notes_search', content_rowid='rid', tokenize='unicode61'
+);
+CREATE TRIGGER notes_ai AFTER INSERT ON notes BEGIN
+	INSERT INTO notes_fts(rowid, text) VALUES (new.id, coalesce(new.search_text, new.text));
+END;
+CREATE TRIGGER notes_ad AFTER DELETE ON notes BEGIN
+	INSERT INTO notes_fts(notes_fts, rowid, text) VALUES ('delete', old.id, coalesce(old.search_text, old.text));
+END;
+CREATE TRIGGER notes_au AFTER UPDATE ON notes BEGIN
+	INSERT INTO notes_fts(notes_fts, rowid, text) VALUES ('delete', old.id, coalesce(old.search_text, old.text));
+	INSERT INTO notes_fts(rowid, text) VALUES (new.id, coalesce(new.search_text, new.text));
 END;
 `;
 
@@ -151,10 +176,8 @@ function statIndex(path: string) {
 async function ensureOpen(path: string): Promise<SearchIndexHandle> {
 	const stats = statIndex(path);
 	const cached = handles.get(path);
-	if (cached) {
-		if (stats && stats.ino === cached.ino) return cached;
-		removeIndexSidecars(path);
-	}
+	if (cached && stats?.ino === cached.ino) return cached;
+	if (cached || !stats) removeIndexSidecars(path);
 	const { DatabaseSync } = await loadSqlite();
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const db = new DatabaseSync(path);
@@ -184,10 +207,10 @@ function removeIndexSidecars(path: string): void {
 }
 
 function rebuildable(error: unknown): boolean {
-	return (
-		error instanceof IndexVersionMismatch ||
-		(isRecord(error) && error.code === "ERR_SQLITE_ERROR" && (error.errcode === 11 || error.errcode === 26))
-	);
+	if (error instanceof IndexVersionMismatch) return true;
+	if (!isRecord(error) || error.code !== "ERR_SQLITE_ERROR" || typeof error.errcode !== "number") return false;
+	const primaryCode = error.errcode & 0xff;
+	return primaryCode === 11 || primaryCode === 26;
 }
 
 function unavailable(path: string, error: unknown): SearchIndexUnavailableError {
