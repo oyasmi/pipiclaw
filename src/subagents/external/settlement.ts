@@ -4,6 +4,7 @@ import type { RunHarness, RunMutates, SettleInput } from "../run-record.js";
 import { resolveVerificationVerdict } from "../verification-outcome.js";
 import { changedPathsSummary, type WorkspaceBaseline } from "../workspace-summary.js";
 import { settleManagedWorktree } from "../worktree.js";
+import { classifyExternalFailure, isPreExecutionFailure } from "./failure-classify.js";
 import { classifyExternalOutcome, type ExternalOutcome } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
 
@@ -38,14 +39,38 @@ export function buildExternalSettleInput(input: BuildExternalSettleInputInput): 
 	const cancelled = input.terminationReason === "cancelled";
 	const timedOut = input.terminationReason === "timeout";
 	const status: SettleInput["status"] = cancelled ? "cancelled" : timedOut ? "failed" : classification.status;
+	const requiresProtocolTerminal = harness?.requiresProtocolTerminal ?? input.harnessId !== "exec";
+	const outcome = input.outcome;
 	const failureReason = cancelled
 		? "Cancelled by request."
 		: timedOut
 			? `Wall time budget exceeded (${input.maxWallTimeSec}s)`
-			: classification.failureReason;
+			: (outcome.errorMessage ?? classification.failureReason);
+	const failureKind =
+		status === "failed"
+			? timedOut
+				? "timeout"
+				: (outcome.failureKind ??
+					classifyExternalFailure({
+						terminationReason: input.terminationReason,
+						requiresProtocolTerminal,
+						protocolStatus: outcome.protocolStatus,
+						exitCode: outcome.exitCode,
+						errorMessage: outcome.errorMessage,
+						stderrTail: outcome.stderrTail,
+						resumeMismatch: outcome.resumeMismatch,
+						authRefused: outcome.authRefused,
+						quotaRefused: outcome.quotaRefused,
+					}))
+			: undefined;
 	return {
 		status,
-		failureReason,
+		failureReason: status === "completed" ? undefined : failureReason,
+		failureKind,
+		failurePreExecution:
+			status === "failed"
+				? isPreExecutionFailure(outcome, status, failureKind, requiresProtocolTerminal)
+				: undefined,
 		usage: {
 			input: input.outcome.usage?.input ?? 0,
 			output: input.outcome.usage?.output ?? 0,
@@ -100,11 +125,11 @@ export async function finalizeExternalRun(
 	const harness = getExternalHarness(input.harnessId);
 	const eventsPath = join(input.artifactDir, "events.jsonl");
 	const stderrPath = join(input.artifactDir, "stderr.log");
-	const eventsText = await readFile(eventsPath, "utf-8").catch(() => "");
+	const eventsText = await readFile(eventsPath, "utf-8").catch(() => undefined);
 	const stderrTail = (await readFile(stderrPath, "utf-8").catch(() => "")).slice(-STDERR_TAIL_CHARS);
 	const outcome: ExternalOutcome = harness
 		? harness.parseOutcome({
-				eventsText,
+				eventsText: eventsText ?? "",
 				exitCode: input.exitCode,
 				stderrTail,
 				expectedResumeSessionId: input.expectedResumeSessionId,
@@ -118,6 +143,7 @@ export async function finalizeExternalRun(
 				stderrTail,
 				errorMessage: `Unknown harness "${input.harnessId}"; cannot judge this run.`,
 			};
+	if (eventsText === undefined) outcome.observedExecutionActivity = undefined;
 
 	let settleInput = buildExternalSettleInput({
 		harnessId: input.harnessId,

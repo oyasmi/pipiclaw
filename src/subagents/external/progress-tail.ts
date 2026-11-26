@@ -1,5 +1,6 @@
-import { readFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { sampleProcessGroupCpuMs } from "../../shared/host-process.js";
 import type { RunHarness } from "../run-record.js";
 import { getExternalHarness } from "./registry.js";
 
@@ -10,14 +11,8 @@ import { getExternalHarness } from "./registry.js";
  * catching every write, so a missed tick just costs one extra poll interval of staleness, and one
  * timer per run stays far simpler than a filesystem watcher per run.
  *
- * Deliberately re-reads the whole file each tick instead of tracking a byte offset: an offset read
- * has to handle a half-written trailing line, this doesn't, and a run's artifact file is small
- * enough (single-digit MB even for a long run) that re-reading it every `POLL_MS` costs nothing a
- * background process needs to care about.
- *
- * The same poll also watches for a stall: a process that is alive but has written nothing to
- * either output file for `STALL_THRESHOLD_MS` gets one "needs attention" signal — it is not killed,
- * since a long silent build or test run is legitimate; only its wall-time budget ends it.
+ * A fixed tail bounds the cost of a progress lookup. On prolonged silence we check whether the
+ * process group is still using CPU before reporting a stall. Only the wall-time budget ends it.
  */
 
 const POLL_MS = 15_000;
@@ -33,6 +28,9 @@ const MAX_NOTICES = 6;
 export const STALL_THRESHOLD_MS = 10 * 60_000;
 /** A run that keeps stalling and recovering stops being reported after this many stall notices. */
 const MAX_STALL_NOTICES = 3;
+const PROGRESS_TAIL_BYTES = 65_536;
+const CPU_ACTIVE_DELTA_MS = 50;
+const CPU_RECHECK_INTERVAL_MS = 120_000;
 
 const OUTPUT_FILENAMES = ["events.jsonl", "stderr.log"] as const;
 
@@ -87,6 +85,9 @@ export interface ExternalProgressTailInput {
 	/** Process start time, so the "don't bother for a short run" window is measured from when the
 	 *  run actually started producing output, not from registration. */
 	startedAt: number;
+	pid?: number;
+	sampleCpuMs?: (pgid: number) => Promise<number | undefined>;
+	onActivityState?: (active: boolean) => void;
 	onProgress: (label: string) => void;
 	/** Called once per stall (re-armed when output resumes) with how long the run has been silent. */
 	onStall?: (silentMs: number) => void;
@@ -94,6 +95,23 @@ export interface ExternalProgressTailInput {
 
 export interface ExternalProgressTail {
 	stop(): void;
+	isStalled(): boolean;
+}
+
+async function readProgressTail(eventsPath: string): Promise<string> {
+	const file = await open(eventsPath, "r");
+	try {
+		const { size } = await file.stat();
+		const offset = Math.max(0, size - PROGRESS_TAIL_BYTES);
+		const buffer = Buffer.alloc(size - offset);
+		const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
+		const tail = buffer.subarray(0, bytesRead);
+		const newline = offset > 0 ? tail.indexOf(10) : -1;
+		if (offset > 0 && newline === -1) return "";
+		return tail.toString("utf8", newline + 1);
+	} finally {
+		await file.close();
+	}
 }
 
 /** Starts polling; returns a handle whose `stop()` is idempotent and always safe to call. */
@@ -103,28 +121,67 @@ export function startExternalProgressTail(input: ExternalProgressTailInput): Ext
 	const toProgressLabel = harness?.toProgressLabel;
 	const eventsPath = join(input.artifactDir, "events.jsonl");
 	const pacer = createProgressPacer(input.startedAt, input.onProgress);
+	const sampleCpuMs = input.sampleCpuMs ?? sampleProcessGroupCpuMs;
+	let lastTickAt = Date.now();
+	let accumulatedSleepMs = 0;
+	let sleepBaseOutputAt = input.startedAt;
+	let pendingCpuMs: number | undefined;
+	let cpuRecheckAt = 0;
+	let cpuActive = false;
 	let stopped = false;
+	let ticking = false;
 	/** Output time the current stall was reported against; a newer write re-arms detection. */
 	let stalledSince: number | undefined;
 	let stallCount = 0;
 
 	const checkStall = async (now: number): Promise<void> => {
-		if (!input.onStall || stallCount >= MAX_STALL_NOTICES) return;
+		if (!input.onStall && !input.onActivityState) return;
 		const lastOutputAt = (await readLastOutputAt(input.artifactDir)) ?? input.startedAt;
-		if (stalledSince !== undefined && lastOutputAt > stalledSince) stalledSince = undefined;
-		if (stalledSince !== undefined || stopped) return;
-		const silentMs = now - lastOutputAt;
+		if (stopped) return;
+		if (lastOutputAt > sleepBaseOutputAt) {
+			sleepBaseOutputAt = lastOutputAt;
+			accumulatedSleepMs = 0;
+			stalledSince = undefined;
+			pendingCpuMs = undefined;
+			cpuRecheckAt = 0;
+			if (cpuActive) {
+				cpuActive = false;
+				input.onActivityState?.(false);
+			}
+		}
+		if (stalledSince !== undefined) return;
+		const silentMs = Math.max(0, now - lastOutputAt - accumulatedSleepMs);
 		if (silentMs < STALL_THRESHOLD_MS) return;
+
+		if (input.pid !== undefined) {
+			if (now < cpuRecheckAt) return;
+			const cpuMs = await sampleCpuMs(input.pid).catch(() => undefined);
+			if (stopped) return;
+			const previous = pendingCpuMs;
+			pendingCpuMs = undefined;
+			if (cpuMs !== undefined && previous === undefined) {
+				pendingCpuMs = cpuMs;
+				return;
+			}
+			cpuActive = cpuMs !== undefined && previous !== undefined && cpuMs - previous >= CPU_ACTIVE_DELTA_MS;
+			input.onActivityState?.(cpuActive);
+			if (cpuActive) {
+				cpuRecheckAt = now + CPU_RECHECK_INTERVAL_MS;
+				return;
+			}
+		}
 		stalledSince = lastOutputAt;
-		stallCount++;
-		input.onStall(silentMs);
+		if (stallCount < MAX_STALL_NOTICES) {
+			stallCount++;
+			input.onStall?.(silentMs);
+		}
 	};
 
 	const checkProgress = async (now: number): Promise<void> => {
 		if (!toProgressLabel || !pacer.ready(now)) return;
 		let text: string;
 		try {
-			text = await readFile(eventsPath, "utf-8");
+			text = await readProgressTail(eventsPath);
 		} catch {
 			return; // Not written yet, or already cleaned up — try again next tick.
 		}
@@ -148,10 +205,21 @@ export function startExternalProgressTail(input: ExternalProgressTailInput): Ext
 	};
 
 	const tick = async (): Promise<void> => {
-		if (stopped) return;
+		if (stopped || ticking) return;
+		ticking = true;
 		const now = Date.now();
-		await checkStall(now);
-		await checkProgress(now);
+		const gap = now - lastTickAt;
+		lastTickAt = now;
+		if (gap > 3 * POLL_MS) {
+			accumulatedSleepMs += gap - POLL_MS;
+			pendingCpuMs = undefined;
+		}
+		try {
+			await checkStall(now);
+			if (!stopped) await checkProgress(now);
+		} finally {
+			ticking = false;
+		}
 	};
 
 	// `tick` is async and its result is discarded: a rejection here (a throwing `onProgress`
@@ -162,6 +230,7 @@ export function startExternalProgressTail(input: ExternalProgressTailInput): Ext
 	}, POLL_MS);
 	timer.unref?.();
 	return {
+		isStalled: () => stalledSince !== undefined,
 		stop() {
 			stopped = true;
 			clearInterval(timer);

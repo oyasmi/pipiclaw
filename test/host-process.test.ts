@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { isProcessGroupAlive, killProcessGroup, reapProcessGroup } from "../src/shared/host-process.js";
+import {
+	isProcessGroupAlive,
+	killProcessGroup,
+	parsePsElapsedCpuMs,
+	reapProcessGroup,
+	sampleProcessGroupCpuMs,
+} from "../src/shared/host-process.js";
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,9 +45,17 @@ describe.skipIf(process.platform !== "linux")("host-process (Linux process-group
 		await new Promise((resolve) => leader.once("exit", resolve));
 		await sleep(30);
 		expect(isProcessGroupAlive(pgid)).toBe(true);
+		expect(await sampleProcessGroupCpuMs(pgid)).toBeGreaterThanOrEqual(0);
 
 		await reapProcessGroup(pgid); // resolves only after its own 300ms grace on this branch
 		await sleep(30);
 		expect(isProcessGroupAlive(pgid)).toBe(false);
 	}, 10_000);
+});
+
+it("converts Linux and macOS ps CPU times to milliseconds, keeping fractions", () => {
+	expect(parsePsElapsedCpuMs("02:15.05")).toBe(135_050);
+	expect(parsePsElapsedCpuMs("01:02:03")).toBe(3_723_000);
+	expect(parsePsElapsedCpuMs("2-03:04:05.67")).toBe(183_845_670);
+	expect(parsePsElapsedCpuMs("02:60")).toBeUndefined();
 });

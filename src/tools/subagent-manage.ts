@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { dispatchExternalFollowUp } from "../subagents/external/dispatch.js";
+import { blocksExternalFollowUp, formatFailureGuidance } from "../subagents/external/failure-classify.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "../subagents/external/progress-tail.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
 import { validateSubAgentTask } from "../subagents/resolve.js";
@@ -76,12 +77,18 @@ function formatRunLine(record: RunRecord, here: string): string {
  * to see at all — it could only guess at a failed external run's cause or re-dispatch blindly
  * (review 2026-08-23 §3.4).
  */
-async function formatRunShow(record: RunRecord): Promise<string> {
+async function formatRunShow(record: RunRecord, manager: SubAgentRunManager): Promise<string> {
 	const lines = [
 		`Run ${record.runId}: ${record.agent} (${harnessLabel(record)}, ${record.source}) — ${record.status} (${formatRunDuration(record)})`,
 		`purpose=${record.purpose}, workingDirectory=${record.workingDirectory}, artifactDir=${record.artifactDir}`,
 	];
 	if (record.failureReason) lines.push(`failureReason: ${record.failureReason}`);
+	if (record.failureKind) {
+		const phase = record.failurePreExecution ? " (pre-execution, no side effects observed)" : "";
+		lines.push(`failureKind: ${record.failureKind}${phase}`);
+		const guidance = formatFailureGuidance(record.failureKind, record.failurePreExecution);
+		if (guidance) lines.push(guidance);
+	}
 	if (record.verificationVerdict) {
 		lines.push(`verification: ${record.verificationVerdict.toUpperCase()}`);
 	}
@@ -110,13 +117,23 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 	if (record.invocationWarnings?.length) {
 		lines.push("dispatch warnings:", ...record.invocationWarnings.map((warning) => `- ${warning}`));
 	}
-	if (record.sessionId) lines.push(`sessionId: ${record.sessionId} (usable with subagent_run op=follow_up)`);
+	if (record.sessionId) {
+		const resumeHint = blocksExternalFollowUp(record.failureKind) ? "" : " (usable with subagent_run op=follow_up)";
+		lines.push(`sessionId: ${record.sessionId}${resumeHint}`);
+	}
 	if (record.runtime === "external" && record.status === "running") {
 		// The one signal that tells a long, busy run apart from a stuck one without reading its logs.
 		const lastOutputAt = await readLastOutputAt(record.artifactDir);
 		const silentMs = Date.now() - (lastOutputAt ?? record.processStartedAt ?? record.startedAt);
-		const stalled = silentMs >= STALL_THRESHOLD_MS ? " — possibly stalled; cancel if it should have progressed" : "";
-		lines.push(`last output: ${Math.round(silentMs / 1000)}s ago${stalled}`);
+		let observation = "";
+		if (silentMs >= STALL_THRESHOLD_MS) {
+			if (manager.isExternalCpuActive(record.runId)) {
+				observation = " (process group CPU active — likely running a long build or test)";
+			} else if (manager.isExternalStalled(record.runId)) {
+				observation = " — possibly stalled; cancel if it should have progressed";
+			}
+		}
+		lines.push(`last output: ${Math.round(silentMs / 1000)}s ago${observation}`);
 	}
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
@@ -189,7 +206,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			const resolvedRunId = resolution.record.runId;
 
 			if (op === "show") {
-				const text = await formatRunShow(resolution.record);
+				const text = await formatRunShow(resolution.record, manager);
 				return {
 					content: [{ type: "text", text }],
 					details: { op, runId: resolvedRunId },

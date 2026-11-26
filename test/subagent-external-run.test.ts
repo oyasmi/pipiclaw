@@ -183,7 +183,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		// Spec 042, D12: persisted at launch so a later failure is diagnosable as "adapter is stale"
 		// vs. "the agent failed". `cliVersion` is best-effort (the fake "codex" executable does not
 		// really exist in the test environment) — only that the probe does not crash the dispatch.
-		expect(manager.get("run-ext-1")?.parserVersion).toBe(1);
+		expect(manager.get("run-ext-1")?.parserVersion).toBe(2);
 
 		// D8.1/T5: the dispatch is audited once argv/cwd/role/mutates/model/runId are all final,
 		// unconditionally (not gated on `audit.logBlocked`).
@@ -380,7 +380,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");
 	});
 
-	it("drops only pipiclaw's own LLM/DingTalk env vars, keeps others, and records what was dropped (fix plan §4.3)", async () => {
+	it("isolates inherited CLI environment and applies the role's overrides after harness defaults", async () => {
 		const workspaceDir = createTempWorkspace();
 		const deskDir = join(workspaceDir, "dingtalk:dm:ext");
 		const artifactDir = join(deskDir, "subagent-artifacts", "run-ext-env");
@@ -388,11 +388,15 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 5151 });
 
-		const originalAnthropic = process.env.ANTHROPIC_API_KEY;
-		const originalDingtalk = process.env.DINGTALK_APP_KEY;
-		process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
-		process.env.DINGTALK_APP_KEY = "dt-should-not-leak";
-		process.env.GITHUB_TOKEN = "gh-should-be-kept";
+		const probeCliVersionFn = vi.fn(async (_executable: string, _env?: NodeJS.ProcessEnv) => "test-cli");
+		vi.stubEnv("ANTHROPIC_API_KEY", "sk-should-not-leak");
+		vi.stubEnv("DINGTALK_APP_KEY", "dt-should-not-leak");
+		vi.stubEnv("GITHUB_TOKEN", "gh-should-be-kept");
+		vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-should-not-leak");
+		vi.stubEnv("ANTHROPIC_BASE_URL", "inherited-route");
+		vi.stubEnv("CLAUDECODE", "nested-daemon");
+		vi.stubEnv("CLAUDE_CODE_ENTRYPOINT", "nested-entrypoint");
+		vi.stubEnv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0");
 		try {
 			await launchExternalRun({
 				...testManagers("dingtalk:dm:ext"),
@@ -401,8 +405,13 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 				label: "build",
 				agent: "builder",
 				source: "predefined",
-				harness: "codex-cli",
-				command: "codex exec",
+				harness: "claude-code",
+				command: "claude",
+				env: {
+					ANTHROPIC_BASE_URL: "role-route",
+					CLAUDE_CODE_DISABLE_CRON: "0",
+					CLAUDE_CODE_ENTRYPOINT: "role-entrypoint",
+				},
 				maxWallTimeSec: 60,
 				systemPrompt: "You are a builder.",
 				task: "Implement the thing.",
@@ -413,27 +422,42 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 				workspaceDir,
 				securityConfig: DEFAULT_SECURITY_CONFIG,
 				spawnFn: spawnFnForInput,
+				probeCliVersionFn,
 			});
 		} finally {
-			if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
-			else process.env.ANTHROPIC_API_KEY = originalAnthropic;
-			if (originalDingtalk === undefined) delete process.env.DINGTALK_APP_KEY;
-			else process.env.DINGTALK_APP_KEY = originalDingtalk;
-			delete process.env.GITHUB_TOKEN;
+			vi.unstubAllEnvs();
 		}
 
 		expect(spawnFn).toHaveBeenCalledTimes(1);
-		const spawnOptions = spawnFn.mock.calls[0]?.[2] as { env?: Record<string, string | undefined> };
-		expect(spawnOptions.env?.ANTHROPIC_API_KEY).toBeUndefined();
-		expect(spawnOptions.env?.DINGTALK_APP_KEY).toBeUndefined();
-		expect(spawnOptions.env?.GITHUB_TOKEN).toBe("gh-should-be-kept");
+		const { env } = spawnFn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+		expect(env).toMatchObject({
+			GITHUB_TOKEN: "gh-should-be-kept",
+			ANTHROPIC_BASE_URL: "role-route",
+			CLAUDE_CODE_ENTRYPOINT: "role-entrypoint",
+			CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+			CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+			CLAUDE_CODE_DISABLE_CRON: "0",
+		});
+		for (const key of ["ANTHROPIC_API_KEY", "DINGTALK_APP_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDECODE"]) {
+			expect(env).not.toHaveProperty(key);
+		}
 
 		const manager = getSubAgentRunManager("dingtalk:dm:ext");
-		await waitFor(() => manager.get("run-ext-env")?.pid !== undefined);
-		const warnings = manager.get("run-ext-env")?.invocationWarnings ?? [];
-		expect(warnings.some((w) => w.includes("ANTHROPIC_API_KEY"))).toBe(true);
-		expect(warnings.some((w) => w.includes("DINGTALK_APP_KEY"))).toBe(true);
-		expect(warnings.some((w) => w.includes("GITHUB_TOKEN"))).toBe(false);
+		await waitFor(() => manager.get("run-ext-env")?.cliVersion === "test-cli");
+		expect(probeCliVersionFn).toHaveBeenCalledExactlyOnceWith("claude", env);
+		const warnings = manager.get("run-ext-env")?.invocationWarnings?.join("\n") ?? "";
+		for (const key of ["ANTHROPIC_API_KEY", "DINGTALK_APP_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL"]) {
+			expect(warnings).toContain(key);
+		}
+		for (const value of [
+			"GITHUB_TOKEN",
+			"CLAUDECODE",
+			"CLAUDE_CODE_ENTRYPOINT",
+			"oauth-should-not-leak",
+			"inherited-route",
+		]) {
+			expect(warnings).not.toContain(value);
+		}
 
 		child.emit("close", 0);
 	});

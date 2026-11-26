@@ -14,6 +14,15 @@ export type SubAgentThinkingLevel = (typeof ALLOWED_THINKING_LEVELS)[number];
 export const EXTERNAL_HARNESS_IDS = ["claude-code", "codex-cli", "cursor-cli", "antigravity-cli", "exec"] as const;
 export type RunHarness = (typeof EXTERNAL_HARNESS_IDS)[number];
 export type RunMutates = "read" | "write";
+export type ExternalFailureKind =
+	| "auth_required"
+	| "quota_exceeded"
+	| "invalid_model"
+	| "resume_rejected"
+	| "transient_upstream"
+	| "schema_drift"
+	| "timeout"
+	| "runtime_error";
 
 export type RunResolution =
 	| { kind: "found"; record: RunRecord }
@@ -35,6 +44,8 @@ export interface ManagedWorktreeSummary {
 export interface PendingSettlement {
 	status: SettleInput["status"];
 	failureReason?: string;
+	failureKind?: ExternalFailureKind;
+	failurePreExecution?: boolean;
 	usage: UsageTotals;
 	usageKnown: boolean;
 	costKnown: boolean;
@@ -71,6 +82,7 @@ export interface RunRecord extends RunUsage {
 	model?: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	taskDigest?: string;
 	/** The task's Work Items id this run was dispatched for (spec 052, D4). */
 	item?: string;
 	workingDirectory: string;
@@ -80,6 +92,8 @@ export interface RunRecord extends RunUsage {
 	finishedAt?: number;
 	durationMs?: number;
 	failureReason?: string;
+	failureKind?: ExternalFailureKind;
+	failurePreExecution?: boolean;
 	turns?: number;
 	toolCalls?: number;
 	/** The checker's declared `VERDICT:` for a `purpose=verify` run (spec 052, D6): information for the leader, not a gate. */
@@ -194,6 +208,7 @@ export interface RegisterRunInput {
 	model?: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	taskDigest?: string;
 	item?: string;
 	workingDirectory: string;
 	artifactDir: string;
@@ -210,6 +225,8 @@ export interface RegisterRunInput {
 export interface SettleInput {
 	status: "completed" | "failed" | "cancelled" | "lost";
 	failureReason?: string;
+	failureKind?: ExternalFailureKind;
+	failurePreExecution?: boolean;
 	usage: UsageTotals;
 	usageKnown: boolean;
 	costKnown: boolean;
@@ -310,6 +327,8 @@ export function createPendingSettlement(input: SettleInput, finishedAt: number, 
 	return {
 		status: input.status,
 		failureReason: input.failureReason,
+		failureKind: input.failureKind,
+		failurePreExecution: input.failurePreExecution,
 		usage: input.usage,
 		usageKnown: input.usageKnown,
 		costKnown: input.costKnown,
@@ -330,6 +349,8 @@ export function createPendingSettlement(input: SettleInput, finishedAt: number, 
 export function applyPendingSettlement(record: RunRecord, pending: PendingSettlement): void {
 	record.status = pending.status;
 	record.failureReason = pending.failureReason;
+	record.failureKind = pending.failureKind;
+	record.failurePreExecution = pending.failurePreExecution;
 	record.usage = pending.usage;
 	record.usageKnown = pending.usageKnown;
 	record.costKnown = pending.costKnown;

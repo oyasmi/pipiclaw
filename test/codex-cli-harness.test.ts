@@ -96,7 +96,7 @@ describe("codex-cli harness: parseOutcome", () => {
 				{ type: "thread.started", thread_id: "thread-1" },
 				{ type: "item.completed", item: { type: "agent_message", text: "partial" } },
 				{ type: "item.completed", item: { type: "agent_message", text: "Final answer." } },
-				{ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 20 } },
+				{ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 20, cached_input_tokens: 40 } },
 			),
 			exitCode: 0,
 		});
@@ -105,18 +105,30 @@ describe("codex-cli harness: parseOutcome", () => {
 		expect(outcome.protocolStatus).toBe("completed");
 		expect(outcome.sessionId).toBe("thread-1");
 		expect(outcome.usageKnown).toBe(true);
-		expect(outcome.usage).toMatchObject({ input: 100, output: 20, total: 120 });
+		expect(outcome.usage).toMatchObject({ input: 60, output: 20, cacheRead: 40, total: 120 });
+		expect(outcome.observedExecutionActivity).toBe(true);
+		const capped = codexCliHarness.parseOutcome({
+			eventsText: ndjson({
+				type: "turn.completed",
+				usage: { input_tokens: 10, output_tokens: 5, cached_input_tokens: 100 },
+			}),
+		});
+		expect(capped.usage).toMatchObject({ input: 0, output: 5, cacheRead: 10, total: 15 });
 		expect(outcome.costKnown).toBe(false); // codex-cli never reports cost (D4).
 	});
 
 	it("reports failed with the harness's own error message on turn.failed", () => {
 		const outcome = codexCliHarness.parseOutcome({
-			eventsText: ndjson({ type: "turn.failed", error: { message: "model overloaded" } }),
+			eventsText: ndjson(
+				{ type: "item.started", item: { type: "command_execution", command: "npm run build" } },
+				{ type: "turn.failed", error: { message: "model overloaded" } },
+			),
 			exitCode: 1,
 		});
 		expect(outcome.terminalSeen).toBe(true);
 		expect(outcome.protocolStatus).toBe("failed");
 		expect(outcome.errorMessage).toBe("model overloaded");
+		expect(outcome.observedExecutionActivity).toBe(true);
 	});
 });
 

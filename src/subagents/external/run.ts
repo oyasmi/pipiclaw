@@ -32,8 +32,8 @@ import { finalizeExternalRun } from "./settlement.js";
  * `_PASSWORD` suffix regex both over-blocks (a role that shells out to `gh`/`npm` loses
  * `GITHUB_TOKEN`/`NPM_TOKEN` with zero explanation) and under-blocks (`AWS_SECRET_ACCESS_KEY`,
  * `GOOGLE_APPLICATION_CREDENTIALS`, `SSH_AUTH_SOCK` do not match the suffix at all). This list is
- * therefore deliberately narrow: only the env vars pipiclaw's own LLM calls and DingTalk transport
- * read (`src/models/requests.ts`, the `pi-ai` provider registry). It is a courtesy against
+ * therefore deliberately narrow: the daemon's own credentials plus known CLI routing and
+ * authentication overrides. It is a courtesy against
  * accidental inheritance, not a security boundary — the real boundary is the role's own command,
  * CLI sandbox, and host account (AGENTS.md).
  */
@@ -65,7 +65,18 @@ const SENSITIVE_ENV_VAR_NAMES = new Set([
 	"OPENCODE_API_KEY",
 	"CLOUDFLARE_API_KEY",
 	"AI_GATEWAY_API_KEY",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+	"CLAUDE_CODE_OAUTH_SCOPES",
+	"CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+	"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+	"ANTHROPIC_BASE_URL",
+	"ANTHROPIC_CUSTOM_HEADERS",
+	"CLAUDE_CODE_USE_BEDROCK",
+	"CLAUDE_CODE_USE_VERTEX",
+	"CLAUDE_CODE_USE_FOUNDRY",
 ]);
+const NESTING_ENV_VAR_NAMES = new Set(["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"]);
 
 /** Filters an external process's inherited env, returning the keys it actually dropped so the
  *  caller can surface them in `invocationWarnings` — silently dropping `GITHUB_TOKEN` or
@@ -74,6 +85,7 @@ function filterSensitiveEnv(env: NodeJS.ProcessEnv): { filtered: NodeJS.ProcessE
 	const filtered: NodeJS.ProcessEnv = {};
 	const dropped: string[] = [];
 	for (const [key, value] of Object.entries(env)) {
+		if (NESTING_ENV_VAR_NAMES.has(key)) continue;
 		if (SENSITIVE_ENV_VAR_NAMES.has(key) || key.startsWith("DINGTALK_")) {
 			dropped.push(key);
 			continue;
@@ -87,7 +99,7 @@ function filterSensitiveEnv(env: NodeJS.ProcessEnv): { filtered: NodeJS.ProcessE
  *  had `GITHUB_TOKEN` set in the first place gets no noise about it. */
 function mergeInvocationWarnings(warnings: string[] | undefined, droppedEnvVars: string[]): string[] | undefined {
 	if (droppedEnvVars.length === 0) return warnings;
-	const envWarning = `Dropped from this process's environment (add back via the role's env: if needed): ${droppedEnvVars.join(", ")}`;
+	const envWarning = `已移除继承的环境变量 ${droppedEnvVars.join(", ")}。如该角色需要，请在角色的 env: 中显式配置。`;
 	return warnings ? [...warnings, envWarning] : [envWarning];
 }
 
@@ -138,6 +150,7 @@ export interface LaunchExternalRunInput {
 	artifactDir: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	taskDigest?: string;
 	/** The Work Items id this run was dispatched for (spec 052, D4). */
 	item?: string;
 	leaseKey?: string;
@@ -241,6 +254,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		model: input.externalModelRef,
 		purpose: input.purpose,
 		taskId: input.taskId,
+		taskDigest: input.taskDigest,
 		item: input.item,
 		workingDirectory: input.workingDirectory,
 		artifactDir: input.artifactDir,
@@ -303,13 +317,14 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	}
 
 	const envFilterResult = filterSensitiveEnv(process.env);
+	const env = { ...envFilterResult.filtered, ...invocation.defaultEnv, ...input.env };
 	const spawnFn = input.spawnFn ?? nodeSpawn;
 	let child: ChildProcess;
 	try {
 		child = spawnFn(invocation.executable, invocation.args, {
 			detached: true,
 			cwd: input.workingDirectory,
-			env: { ...envFilterResult.filtered, ...input.env },
+			env,
 			// stdout/stderr point straight at the artifact files (P0-1): the child writes them
 			// itself, so they land on disk even if this daemon disappears before it exits.
 			stdio: ["pipe", eventsFd, stderrFd],
@@ -430,7 +445,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	// alongside the D12 CLI-version probe — neither depends on the other, and both are best-effort.
 	const probes: Array<() => Promise<{ pidStartedAt?: string; cliVersion?: string }>> = [
 		async () => ({ pidStartedAt: await (input.readProcessStartTimeFn ?? readProcessStartTime)(pid) }),
-		async () => ({ cliVersion: await (input.probeCliVersionFn ?? probeCliVersion)(invocation.executable) }),
+		async () => ({ cliVersion: await (input.probeCliVersionFn ?? probeCliVersion)(invocation.executable, env) }),
 	];
 	for (const probe of probes) {
 		void Promise.resolve()

@@ -4,6 +4,7 @@
 import { join } from "node:path";
 import type { WakeEvent } from "../channel/channel-event.js";
 import { formatDuration } from "../shared/format.js";
+import { formatFailureGuidance } from "./external/failure-classify.js";
 import type { RunRecord } from "./run-record.js";
 
 /** Chars of the reply text carried inline in the completion wake. P2-1: `output.md` bodies are
@@ -70,6 +71,10 @@ export function buildRunCompletionWake(input: {
 		record.verificationVerdict !== undefined
 			? `\nVerdict: ${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}`
 			: "";
+	const guidance =
+		record.status === "failed" && record.failureKind
+			? formatFailureGuidance(record.failureKind, record.failurePreExecution)
+			: undefined;
 	return {
 		source: "wake",
 		channelId: record.channelId,
@@ -77,6 +82,7 @@ export function buildRunCompletionWake(input: {
 		text:
 			`[SUBAGENT:${record.runId}] Delegation "${record.label}" -> ${record.agent} (${harnessLabel}) finished: ` +
 			`${record.status} (${record.durationEstimated ? "≈" : ""}${formatDuration(record.durationMs ?? 0)}).${belongsTo}${verdictLine}\n` +
+			(guidance ? `Failure classification: ${record.failureKind}. ${guidance}\n` : "") +
 			// The agent's own output is untrusted data, not an instruction — a fence plus an
 			// explicit label so the wake reads correctly even in a turn that never loaded
 			// agent-delegation.md, which states this rule but is loaded only on demand (review

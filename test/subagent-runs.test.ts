@@ -5,11 +5,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { WakeEvent } from "../src/channel/channel-event.js";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
 import * as hostProcess from "../src/shared/host-process.js";
+import { assertSubAgentInvariants } from "../src/subagents/invariants.js";
 import type { SettleInput } from "../src/subagents/run-record.js";
-import { MAX_RUNNING_SUBAGENT_RUNS_PER_HOST } from "../src/subagents/run-record.js";
+import { MAX_RUNNING_SUBAGENT_RUNS_PER_HOST, parseRunRecord } from "../src/subagents/run-record.js";
 import { createSubAgentRuntime } from "../src/subagents/run-registry.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
-import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
+import {
+	acquireWorkspaceLease,
+	releaseWorkspaceLease,
+	snapshotWorkspaceLeases,
+} from "../src/subagents/workspace-lease.js";
 import { createUsage } from "../src/tasks/budget.js";
 import { renderTaskDocument } from "../src/tasks/contract.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
@@ -282,15 +287,30 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 			{ desk: "news", deskDir },
 			{ dispatch, onTaskInput, isBoundTo: () => false },
 		);
-		await register(manager, { taskId: "T-8" });
+		await register(manager, { taskId: "T-8", runtime: "external", harness: "codex-cli" });
 
-		await manager.settle("run-1", baseSettleInput({ outputText: "done and dusted" }), { announce: true });
+		await manager.settle(
+			"run-1",
+			baseSettleInput({
+				status: "failed",
+				failureKind: "transient_upstream",
+				failurePreExecution: true,
+				outputText: "partial diagnostics",
+			}),
+			{ announce: true },
+		);
 
 		expect(events).toHaveLength(0);
 		expect(onTaskInput).toHaveBeenCalledWith("news", "T-8");
 		expect(manager.get("run-1")?.wakeEnqueued).toBe(true);
 		const settle = (await readTaskLog(deskDir, "T-8")).find((record) => record.kind === "settle");
-		expect(settle).toMatchObject({ ref: "run-1", status: "completed", tail: "done and dusted" });
+		expect(settle).toMatchObject({
+			ref: "run-1",
+			status: "failed",
+			failureKind: "transient_upstream",
+			failurePreExecution: true,
+			tail: "partial diagnostics",
+		});
 		expect(settle).not.toHaveProperty("inline");
 		await resetTaskLogAppenders();
 	});
@@ -620,7 +640,9 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		const recordPath = join(stateDir, "news", "run-pending.json");
 		const persisted = JSON.parse(readFileSync(recordPath, "utf-8"));
 		persisted.settlementPending = {
-			status: "completed",
+			status: "failed",
+			failureKind: "quota_exceeded",
+			failurePreExecution: true,
 			usage: emptyUsage(),
 			usageKnown: true,
 			costKnown: true,
@@ -643,9 +665,22 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		await restored.restore();
 
 		expect(restored.get("run-pending")).toMatchObject({
-			status: "completed",
+			status: "failed",
+			failureKind: "quota_exceeded",
+			failurePreExecution: true,
 			leaseKey: undefined,
 			settlementPending: undefined,
+		});
+		expect(JSON.parse(readFileSync(recordPath, "utf-8"))).toMatchObject({
+			status: "failed",
+			failureKind: "quota_exceeded",
+			failurePreExecution: true,
+		});
+		const diskRecord = parseRunRecord(readFileSync(recordPath, "utf-8"))!;
+		assertSubAgentInvariants({
+			records: restored.list(),
+			activeLeases: snapshotWorkspaceLeases(),
+			diskRecords: new Map([[diskRecord.runId, diskRecord]]),
 		});
 		expect(
 			acquireWorkspaceLease({ runId: "third-writer", channelId: "third", workingDirectory: workspaceDir }).ok,

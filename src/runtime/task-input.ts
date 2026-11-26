@@ -1,6 +1,7 @@
 import { MAX_USER_MESSAGE_CHARS } from "../agent/types.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { formatFailureGuidance } from "../subagents/external/failure-classify.js";
 import { isTaskArchiving } from "../tasks/archive.js";
 import { BRIEF_INPUT_LIMIT, renderTaskInputs } from "../tasks/brief.js";
 import { pendingTaskClose } from "../tasks/completion.js";
@@ -121,11 +122,11 @@ export class TaskInputDelivery {
 				)
 				.slice(0, BRIEF_INPUT_LIMIT);
 			if (!inputs.length || !eligible(this.ctx, live, step)) return;
-			let text = renderTaskInputs(records, inputs);
+			let text = renderTaskInputs(records, inputs, formatFailureGuidance);
 			// Preserve complete result blocks and receipt ids instead of clipping the middle of a burst.
 			while (inputs.length > 1 && text && text.length + 32 > MAX_USER_MESSAGE_CHARS) {
 				inputs.pop();
-				text = renderTaskInputs(records, inputs);
+				text = renderTaskInputs(records, inputs, formatFailureGuidance);
 			}
 			if (
 				text &&

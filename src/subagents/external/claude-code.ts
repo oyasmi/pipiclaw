@@ -7,6 +7,7 @@ import {
 	type ExternalInvocationInput,
 	type ExternalOutcome,
 	expandPlaceholders,
+	finiteNonNegative,
 	formatDroppedPlaceholderWarnings,
 	type ParseOutcomeInput,
 	parseJsonObjectLines,
@@ -45,10 +46,7 @@ function toClaudeEffort(level: string | undefined): string | undefined {
 
 export const claudeCodeHarness: ExternalHarness = {
 	id: "claude-code",
-	// 2: parseOutcome now falls back to the last streamed `assistant` message's text/usage when a
-	// `result` event never arrives (timeout/cancel kill the process before claude-code emits one) —
-	// `op=show` can use this to distinguish "adapter is stale" from "the agent itself crashed".
-	parserVersion: 2,
+	parserVersion: 3,
 	resumable: true,
 	requiresProtocolTerminal: true,
 	supportsImplicitVerifyThinking: true,
@@ -98,6 +96,11 @@ export const claudeCodeHarness: ExternalHarness = {
 			executable,
 			args,
 			resumable: true,
+			defaultEnv: {
+				CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+				CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+				CLAUDE_CODE_DISABLE_CRON: "1",
+			},
 			presetSessionId,
 			warnings: dropped.length > 0 ? formatDroppedPlaceholderWarnings(dropped) : undefined,
 		};
@@ -118,9 +121,20 @@ export const claudeCodeHarness: ExternalHarness = {
 		// of these ever sets `terminalSeen`/`protocolStatus` — only a real `result` event may do that;
 		// streamed text is not proof the run finished.
 		let lastAssistantText = "";
-		let streamedUsage: { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined;
+		let syntheticError: string | undefined;
+		let observedExecutionActivity = false;
+		let observedNonZeroUsage = false;
+		let resultFallback: string | undefined;
+		let streamedUsage: ReturnType<typeof parseClaudeUsage> | undefined;
 
-		const records = parseJsonObjectLines(input.eventsText);
+		const { records, complete } = parseJsonObjectLines(
+			input.eventsText,
+			(record) =>
+				(record.type === "system" && record.subtype === "init") ||
+				record.type === "result" ||
+				record.type === "rate_limit_event" ||
+				(record.type === "assistant" && isRecord(record.message) && Array.isArray(record.message.content)),
+		);
 		const parsedAnyLine = records.length > 0;
 		for (const record of records) {
 			const sid = record.session_id;
@@ -132,34 +146,31 @@ export const claudeCodeHarness: ExternalHarness = {
 				protocolStatus = isError ? "failed" : "completed";
 				if (typeof record.result === "string") finalText = record.result;
 				if (isError) {
+					const errors = Array.isArray(record.errors)
+						? record.errors.flatMap((entry: unknown) =>
+								typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
+							)
+						: [];
 					errorMessage =
-						typeof record.result === "string" && record.result
-							? record.result
-							: typeof record.subtype === "string"
-								? `claude-code reported ${record.subtype}`
-								: "claude-code reported an error result";
+						errors.join("; ") || (typeof record.result === "string" ? record.result.trim() : "") || undefined;
+					resultFallback =
+						typeof record.subtype === "string" && record.subtype.trim()
+							? `claude-code reported ${record.subtype}`
+							: "claude-code reported an error result";
+				} else {
+					errorMessage = undefined;
+					resultFallback = undefined;
+					if (finalText.trim()) observedExecutionActivity = true;
 				}
 				const cost = record.total_cost_usd;
-				if (typeof cost === "number") {
+				if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
 					costTotal = cost;
 					costKnown = true;
+					observedNonZeroUsage ||= cost > 0;
 				}
-				const rawUsage = record.usage as Record<string, unknown> | undefined;
-				if (rawUsage) {
-					const inputTokens = Number(rawUsage.input_tokens ?? 0);
-					const outputTokens = Number(rawUsage.output_tokens ?? 0);
-					const cacheRead = Number(rawUsage.cache_read_input_tokens ?? 0);
-					const cacheWrite = Number(rawUsage.cache_creation_input_tokens ?? 0);
-					usage = {
-						input: inputTokens || 0,
-						output: outputTokens || 0,
-						cacheRead: cacheRead || 0,
-						cacheWrite: cacheWrite || 0,
-						total: (inputTokens || 0) + (outputTokens || 0) + (cacheRead || 0) + (cacheWrite || 0),
-						...(costTotal !== undefined
-							? { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costTotal } }
-							: {}),
-					};
+				if (isRecord(record.usage)) {
+					usage = parseClaudeUsage(record.usage);
+					observedNonZeroUsage ||= (usage.total ?? 0) > 0;
 					usageKnown = true;
 				}
 			}
@@ -175,17 +186,25 @@ export const claudeCodeHarness: ExternalHarness = {
 						)
 						.map((part) => part.text)
 						.join("");
-					if (text.trim()) lastAssistantText = text;
-
 					const rawUsage = message.usage;
 					if (isRecord(rawUsage)) {
-						streamedUsage = {
-							input: Number(rawUsage.input_tokens ?? 0) || 0,
-							output: Number(rawUsage.output_tokens ?? 0) || 0,
-							cacheRead: Number(rawUsage.cache_read_input_tokens ?? 0) || 0,
-							cacheWrite: Number(rawUsage.cache_creation_input_tokens ?? 0) || 0,
-						};
+						streamedUsage = parseClaudeUsage(rawUsage);
+						observedNonZeroUsage ||= streamedUsage.total > 0;
 					}
+					if (record.is_api_error_message === true || message.model === "<synthetic>") {
+						if (text.trim()) syntheticError = text.trim();
+					} else {
+						if (text.trim()) {
+							lastAssistantText = text;
+							observedExecutionActivity = true;
+						}
+					}
+					// A tool block is evidence even if an error frame also carries it.
+					observedExecutionActivity ||= parts.some(
+						(part) =>
+							isRecord(part) &&
+							(part.type === "tool_use" || part.type === "thinking" || part.type === "redacted_thinking"),
+					);
 				}
 			}
 		}
@@ -195,11 +214,14 @@ export const claudeCodeHarness: ExternalHarness = {
 		}
 
 		if (!terminalSeen && !usageKnown && streamedUsage) {
-			usage = {
-				...streamedUsage,
-				total: streamedUsage.input + streamedUsage.output + streamedUsage.cacheRead + streamedUsage.cacheWrite,
-			};
+			usage = streamedUsage;
 			usageKnown = true;
+		}
+		if (costTotal !== undefined) {
+			usage = { ...usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costTotal } };
+		}
+		if (protocolStatus !== "completed") {
+			errorMessage ??= syntheticError ?? resultFallback ?? (input.stderrTail?.trim() || undefined);
 		}
 
 		return {
@@ -213,6 +235,9 @@ export const claudeCodeHarness: ExternalHarness = {
 			costKnown,
 			stderrTail: input.stderrTail,
 			errorMessage,
+			observedExecutionActivity:
+				observedExecutionActivity || (parsedAnyLine && complete && errorMessage ? false : undefined),
+			observedNonZeroUsage,
 		};
 	},
 
@@ -235,6 +260,14 @@ export const claudeCodeHarness: ExternalHarness = {
 		return undefined;
 	},
 };
+
+function parseClaudeUsage(raw: Record<string, unknown>) {
+	const input = finiteNonNegative(raw.input_tokens);
+	const output = finiteNonNegative(raw.output_tokens);
+	const cacheRead = finiteNonNegative(raw.cache_read_input_tokens);
+	const cacheWrite = finiteNonNegative(raw.cache_creation_input_tokens);
+	return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
+}
 
 const PROGRESS_LABEL_MAX_CHARS = 80;
 /** The one input field that says what a claude-code tool call is acting on, in priority order. */

@@ -8,13 +8,18 @@ import { isProcessAlive, killProcessGroup } from "../shared/host-process.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { logTaskDispatch, logTaskStall } from "../tasks/bound-work.js";
+import { logTaskDispatch } from "../tasks/bound-work.js";
 import type { RetainedWorktreeInfo } from "../tasks/control.js";
 import { readStoredTask } from "../tasks/store.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { createEmptyUsageTotals } from "../usage/totals.js";
 import { buildRunCompletionWake, countWakeSiblings } from "./completion-wake.js";
-import { createProgressPacer, type ProgressPacer, startExternalProgressTail } from "./external/progress-tail.js";
+import {
+	createProgressPacer,
+	type ExternalProgressTail,
+	type ProgressPacer,
+	startExternalProgressTail,
+} from "./external/progress-tail.js";
 import { processIdentity, reconcileExternalRun } from "./external/reconciliation.js";
 import { AdoptedRunObserver } from "./external/recovery.js";
 import { runArchiveEntry, runLedgerEntry } from "./run-archive.js";
@@ -39,7 +44,7 @@ import {
 	randomRunIdSuffix,
 	type SettleInput,
 } from "./run-record.js";
-import { creditTaskForRun } from "./task-settlement.js";
+import { creditTaskForRun, notifyTaskRunStall } from "./task-settlement.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
 import {
 	reclaimManagedWorktree,
@@ -113,11 +118,9 @@ export class SubAgentRunManager {
 	private readonly externalLaunches = new Map<string, { cancelRequested: boolean }>();
 	private readonly recovery: AdoptedRunObserver;
 	private readonly recoveryQueue = createSerialQueue<string>();
-	/** Live external runs' tail-the-artifact-file progress pollers (P1a). Never persisted or
-	 *  reconstructed on restore — an adopted run has no fresher information to poll for than
-	 *  restart reconciliation already reads once from the finished process's own output. */
 	private stopped = false;
-	private readonly externalProgressTails = new Map<string, { stop(): void }>();
+	private readonly externalProgressTails = new Map<string, ExternalProgressTail>();
+	private readonly externalCpuActive = new Map<string, boolean>();
 	/** Internal runs that went async report their steps in-process; this paces them exactly like the
 	 *  external tail does. Created on first report, dropped at settlement. */
 	private readonly internalProgressPacers = new Map<string, ProgressPacer>();
@@ -224,6 +227,8 @@ export class SubAgentRunManager {
 			artifactDir: record.artifactDir,
 			harnessId: record.harness,
 			startedAt: record.processStartedAt ?? record.startedAt,
+			pid: record.pid,
+			onActivityState: (active) => this.externalCpuActive.set(record.runId, active),
 			onProgress: (step) => {
 				this.emitNotice(record, {
 					kind: "progress",
@@ -241,29 +246,14 @@ export class SubAgentRunManager {
 					durationMs: Date.now() - (record.processStartedAt ?? record.startedAt),
 					silentMs,
 				});
-				this.noteTaskStall(record, silentMs);
+				const taskId = record.taskId;
+				if (taskId)
+					void notifyTaskRunStall(this.target.deskDir, taskId, record.runId, silentMs, () => {
+						if (!this.stopped) this.options.onTaskInput?.(this.target.desk, taskId);
+					});
 			},
 		});
 		this.externalProgressTails.set(record.runId, tail);
-	}
-
-	/** Tell a task-bound run's task that the run has gone quiet: it is the leader's call what to do (spec 064, D16). */
-	private noteTaskStall(record: RunRecord, silentMs: number): void {
-		const taskId = record.taskId;
-		if (!taskId || this.stopped) return;
-		void logTaskStall(this.target.deskDir, taskId, {
-			ref: record.runId,
-			silentMinutes: Math.max(1, Math.round(silentMs / 60_000)),
-		})
-			.then((logged) => {
-				if (logged) this.options.onTaskInput?.(this.target.desk, taskId);
-			})
-			.catch((error) =>
-				log.logWarn("subagent.task_stall.log_failed", "Task stall record for run failed", {
-					reason: errorMessage(error),
-					fields: { runId: record.runId, taskId },
-				}),
-			);
 	}
 
 	/**
@@ -292,10 +282,17 @@ export class SubAgentRunManager {
 	}
 
 	private stopExternalProgressTail(runId: string): void {
-		const tail = this.externalProgressTails.get(runId);
-		if (!tail) return;
-		tail.stop();
+		this.externalProgressTails.get(runId)?.stop();
 		this.externalProgressTails.delete(runId);
+		this.externalCpuActive.delete(runId);
+	}
+
+	isExternalCpuActive(runId: string): boolean {
+		return this.externalCpuActive.get(runId) === true;
+	}
+
+	isExternalStalled(runId: string): boolean {
+		return this.externalProgressTails.get(runId)?.isStalled() === true;
 	}
 
 	private async forget(record: RunRecord): Promise<void> {
@@ -927,7 +924,10 @@ export class SubAgentRunManager {
 						fields: { runId: record?.runId },
 					});
 				});
-				if (record.status === "running") this.recovery.add(record.runId);
+				if (record.status === "running") {
+					this.recovery.add(record.runId);
+					this.startExternalProgressTail(record);
+				}
 			}
 			if (isTerminal(record.status) && record.settledAt) {
 				// A settled-but-unwoken record means the wake was lost between settlement and

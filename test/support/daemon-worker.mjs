@@ -8,6 +8,7 @@ import { ChannelRunner } from "../../dist/agent/channel-runner.js";
 import { DingTalkBot } from "../../dist/dingtalk/bot.js";
 import { DingTalkTransport } from "../../dist/dingtalk/transport.js";
 import { createRuntimeContext } from "../../dist/runtime/bootstrap.js";
+import { snapshotWorkspaceLeases } from "../../dist/subagents/workspace-lease.js";
 import { beginStep } from "../../dist/tasks/store.js";
 import { readTaskDeliveries } from "../../dist/tasks/delivery.js";
 
@@ -206,6 +207,8 @@ process.on("message", async ({ action, text, channelId, runId, taskId, mode, kin
 		} else if (action === "record") {
 			// Runs are owned per desk (spec 058, D15); the record keeps its originating channel.
 			value = runtime.runs.get(desk).get(runId) ?? null;
+		} else if (action === "run-snapshot") {
+			value = { records: runtime.runs.get(desk).list(), activeLeases: snapshotWorkspaceLeases() };
 		} else {
 			throw new Error(`Unknown worker action: ${action}`);
 		}

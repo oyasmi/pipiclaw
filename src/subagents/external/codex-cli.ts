@@ -6,6 +6,7 @@ import {
 	type ExternalInvocationInput,
 	type ExternalOutcome,
 	expandPlaceholders,
+	finiteNonNegative,
 	formatDroppedPlaceholderWarnings,
 	type ParseOutcomeInput,
 	parseJsonObjectLines,
@@ -42,7 +43,7 @@ function toCodexEffort(level: string | undefined): string | undefined {
 
 export const codexCliHarness: ExternalHarness = {
 	id: "codex-cli",
-	parserVersion: 1,
+	parserVersion: 2,
 	resumable: true,
 	requiresProtocolTerminal: true,
 	supportsImplicitVerifyThinking: true,
@@ -97,44 +98,57 @@ export const codexCliHarness: ExternalHarness = {
 		let usage: ExternalOutcome["usage"];
 		let usageKnown = false;
 
-		const records = parseJsonObjectLines(input.eventsText);
+		let observedExecutionActivity = false;
+		let observedNonZeroUsage = false;
+		const { records, complete } = parseJsonObjectLines(
+			input.eventsText,
+			(record) =>
+				record.type === "thread.started" ||
+				record.type === "turn.started" ||
+				record.type === "turn.completed" ||
+				record.type === "turn.failed" ||
+				record.type === "error" ||
+				(typeof record.type === "string" && record.type.startsWith("item.") && isRecord(record.item)),
+		);
 		const parsedAnyLine = records.length > 0;
 		for (const record of records) {
 			const threadId = record.thread_id ?? (record.thread as Record<string, unknown> | undefined)?.id;
 			if (typeof threadId === "string") sessionId = threadId;
 
-			if (record.type === "item.completed") {
-				const item = record.item as Record<string, unknown> | undefined;
-				if (item?.type === "agent_message" && typeof item.text === "string") {
+			if (typeof record.type === "string" && record.type.startsWith("item.") && isRecord(record.item)) {
+				const item = record.item;
+				// Future item types can also execute work. Only an explicit error item is diagnostic.
+				observedExecutionActivity ||= item.type !== "error";
+				if (record.type === "item.completed" && item.type === "agent_message" && typeof item.text === "string") {
 					finalText = item.text;
 				}
 			}
 
-			if (record.type === "turn.completed") {
+			if (record.type === "turn.completed" || record.type === "turn.failed") {
 				terminalSeen = true;
-				protocolStatus = "completed";
-				const rawUsage = record.usage as Record<string, unknown> | undefined;
-				if (rawUsage) {
-					const input_ = Number(rawUsage.input_tokens ?? 0);
-					const output_ = Number(rawUsage.output_tokens ?? 0);
-					if (Number.isFinite(input_) || Number.isFinite(output_)) {
-						usage = { input: input_ || 0, output: output_ || 0, total: (input_ || 0) + (output_ || 0) };
-						usageKnown = true;
-					}
+				protocolStatus = record.type === "turn.completed" ? "completed" : "failed";
+				if (record.type === "turn.failed") {
+					errorMessage = codexError(record.error) ?? errorMessage ?? "codex-cli reported turn.failed";
 				}
-			}
-
-			if (record.type === "turn.failed") {
-				terminalSeen = true;
-				protocolStatus = "failed";
-				const error = record.error as Record<string, unknown> | undefined;
-				errorMessage = typeof error?.message === "string" ? error.message : "codex-cli reported turn.failed";
+				if (isRecord(record.usage)) {
+					const rawInput = finiteNonNegative(record.usage.input_tokens);
+					const output = finiteNonNegative(record.usage.output_tokens);
+					const cachedInput = finiteNonNegative(record.usage.cached_input_tokens);
+					const cacheRead = Math.min(rawInput, cachedInput);
+					usage = { input: rawInput - cacheRead, output, cacheRead, total: rawInput + output };
+					observedNonZeroUsage ||= rawInput > 0 || output > 0 || cachedInput > 0;
+					usageKnown = true;
+				}
+			} else if (record.type === "error" && !terminalSeen) {
+				errorMessage = codexError(record) ?? errorMessage;
 			}
 		}
 
 		if (!parsedAnyLine && input.eventsText.trim()) {
 			protocolStatus = "unparsable";
 		}
+		if (protocolStatus === "completed") errorMessage = undefined;
+		else errorMessage ??= input.stderrTail?.trim() || undefined;
 
 		return {
 			finalText,
@@ -147,6 +161,9 @@ export const codexCliHarness: ExternalHarness = {
 			costKnown: false, // codex-cli never reports a cost field (D4).
 			stderrTail: input.stderrTail,
 			errorMessage,
+			observedExecutionActivity:
+				observedExecutionActivity || (parsedAnyLine && complete && errorMessage ? false : undefined),
+			observedNonZeroUsage,
 		};
 	},
 
@@ -178,3 +195,10 @@ export const codexCliHarness: ExternalHarness = {
 		return undefined;
 	},
 };
+
+function codexError(value: unknown): string | undefined {
+	if (!isRecord(value)) return undefined;
+	const message = typeof value.message === "string" ? value.message.trim() : "";
+	const code = typeof value.code === "string" || typeof value.code === "number" ? String(value.code) : "";
+	return [code, message].filter(Boolean).join(": ") || undefined;
+}

@@ -3,6 +3,7 @@
  * (working directory, artifact directory), admit it (verify rules, workspace write
  * lease), then fork to the internal or external runtime.
  */
+import { createHash } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -13,6 +14,7 @@ import { findTaskItem, parseTaskItems } from "../tasks/contract.js";
 import { readStoredTask } from "../tasks/store.js";
 import { dispatchExternalRun } from "./external/dispatch.js";
 import { dispatchInternalRun } from "./internal/run.js";
+import type { SubAgentRunManager } from "./runs.js";
 import { assertVerifyAdmissible } from "./task-envelope.js";
 import type {
 	DelegationParams,
@@ -28,17 +30,6 @@ import { cleanupManagedWorktreeIfUnchanged, prepareManagedWorktree } from "./wor
 
 function safeRunSegment(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 48) || "run";
-}
-
-function getSubAgentArtifactsRoot(deskDir: string): string {
-	return getSubAgentArtifactsDir(deskDir);
-}
-
-/** Every run gets its own artifact directory (spec 032 D4), independent of `returns` mode. */
-async function prepareArtifactDir(deskDir: string, runId: string): Promise<string> {
-	const artifactDir = join(getSubAgentArtifactsRoot(deskDir), safeRunSegment(runId));
-	await mkdir(artifactDir, { recursive: true });
-	return artifactDir;
 }
 
 /**
@@ -78,7 +69,7 @@ function resolveRunWorkingDirectory(requested: string | undefined, options: SubA
 
 async function prepareRunContext(
 	runId: string,
-	params: Pick<DelegationParams, "purpose" | "item" | "workingDirectory">,
+	params: DelegationParams,
 	options: SubAgentToolOptions,
 ): Promise<SubAgentRunContext> {
 	const purpose = params.purpose ?? "work";
@@ -107,9 +98,57 @@ async function prepareRunContext(
 			);
 		}
 	}
-	const artifactDir = await prepareArtifactDir(options.deskDir, runId);
+	const artifactDir = join(getSubAgentArtifactsDir(options.deskDir), safeRunSegment(runId));
 	const workingDirectory = resolveRunWorkingDirectory(params.workingDirectory, options);
-	return { runId, purpose, taskId, item, workingDirectory, artifactDir };
+	const taskDigest = createHash("sha256").update(params.task.trim()).digest("hex").slice(0, 16);
+	return { runId, purpose, taskId, taskDigest, item, workingDirectory, artifactDir };
+}
+
+// A second call can arrive while the first is doing setup I/O and has no RunRecord yet.
+const pendingDelegations = new WeakMap<SubAgentRunManager, Map<string, string>>();
+
+function reserveDelegation(
+	manager: SubAgentRunManager,
+	agent: string,
+	channelId: string,
+	context: SubAgentRunContext,
+): () => void {
+	const { taskId, purpose, workingDirectory, taskDigest, runId } = context;
+	const existing = manager
+		.list()
+		.find(
+			(run) =>
+				run.status === "running" &&
+				run.taskId === taskId &&
+				(taskId !== undefined || run.channelId === channelId) &&
+				run.agent === agent &&
+				run.purpose === purpose &&
+				run.workingDirectory === workingDirectory &&
+				run.taskDigest === taskDigest,
+		);
+	const key = JSON.stringify([
+		taskId === undefined ? ["channel", channelId] : ["task", taskId],
+		agent,
+		purpose,
+		workingDirectory,
+		taskDigest,
+	]);
+	let pending = pendingDelegations.get(manager);
+	if (!pending) {
+		pending = new Map();
+		pendingDelegations.set(manager, pending);
+	}
+	const pendingId = pending.get(key);
+	const duplicateId = existing?.runId ?? (pendingId && !manager.get(pendingId) ? pendingId : undefined);
+	if (duplicateId) {
+		throw new RecoverableToolError(
+			`An identical delegation to "${agent}" is already running (runId=${duplicateId}). Wait for it to finish, inspect it with subagent_run op=show, or adjust the task or workingDirectory if you intended separate work.`,
+		);
+	}
+	pending.set(key, runId);
+	return () => {
+		if (pending.get(key) === runId) pending.delete(key);
+	};
 }
 
 /**
@@ -144,51 +183,52 @@ export async function dispatchSubAgentRun(
 	// A short, human-typeable id (spec 041) — never the dispatching tool call's own id, which
 	// on some providers is a long `call_<id>|fc_<id>` composite unreadable in a chat UI.
 	const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
-
-	if (params.worktree) {
-		if (runContext.purpose === "verify" || config.mutates !== "write") {
-			throw new RecoverableToolError(
-				'worktree=true is only valid for write delegations (mutates="write" and purpose="work"); omit worktree for read-only or verification runs.',
-			);
-		}
-		const prepared = await prepareManagedWorktree(
-			runContext.workingDirectory,
-			runContext.artifactDir,
-			runContext.runId,
-		);
-		runContext.workingDirectory = prepared.workingDirectory;
-		runContext.managedWorktree = {
-			path: prepared.worktreeRoot,
-			baseDir: prepared.baseDir,
-			branch: prepared.branch,
-			baseHead: prepared.baseHead,
-		};
-	}
-
-	// D9: an independent verifier checks against a target that isn't moving under it — shared
-	// with `subagent_run op=follow_up` (spec 042 D7) so a verify run's admission rules
-	// cannot drift between the two dispatch paths.
-	assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
-
-	// Every run pins its directory against cleanup; only writers and verifiers exclude mutations.
-	const lease = acquireWorkspaceLease({
-		runId: runContext.runId,
-		channelId: options.runtimeContext.channelId,
-		workingDirectory: runContext.workingDirectory,
-		mode: config.mutates === "write" ? "write" : runContext.purpose === "verify" ? "read" : "use",
-	});
-	if (!lease.ok) {
-		if (runContext.managedWorktree) {
-			await cleanupManagedWorktreeIfUnchanged(runContext.artifactDir).catch(() => undefined);
-		}
-		throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
-	}
-	const leaseKey = lease.leaseKey;
-	// Taken under the lease, before the run can write: what "already dirty" means for this run.
-	const workspaceBaseline =
-		config.mutates === "write" ? await snapshotWorkspace(runContext.workingDirectory) : undefined;
+	const releaseReservation = params.worktree
+		? undefined
+		: reserveDelegation(runManager, config.name, options.runtimeContext.channelId, runContext);
 
 	try {
+		await mkdir(runContext.artifactDir, { recursive: true });
+		if (params.worktree) {
+			if (runContext.purpose === "verify" || config.mutates !== "write") {
+				throw new RecoverableToolError(
+					'worktree=true is only valid for write delegations (mutates="write" and purpose="work"); omit worktree for read-only or verification runs.',
+				);
+			}
+			const prepared = await prepareManagedWorktree(
+				runContext.workingDirectory,
+				runContext.artifactDir,
+				runContext.runId,
+			);
+			runContext.workingDirectory = prepared.workingDirectory;
+			runContext.managedWorktree = {
+				path: prepared.worktreeRoot,
+				baseDir: prepared.baseDir,
+				branch: prepared.branch,
+				baseHead: prepared.baseHead,
+			};
+		}
+
+		// D9: an independent verifier checks against a target that isn't moving under it — shared
+		// with `subagent_run op=follow_up` (spec 042 D7) so a verify run's admission rules
+		// cannot drift between the two dispatch paths.
+		assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
+
+		// Every run pins its directory against cleanup; only writers and verifiers exclude mutations.
+		const lease = acquireWorkspaceLease({
+			runId: runContext.runId,
+			channelId: options.runtimeContext.channelId,
+			workingDirectory: runContext.workingDirectory,
+			mode: config.mutates === "write" ? "write" : runContext.purpose === "verify" ? "read" : "use",
+		});
+		if (!lease.ok) {
+			throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
+		}
+		const leaseKey = lease.leaseKey;
+		// Taken under the lease, before the run can write: what "already dirty" means for this run.
+		const workspaceBaseline =
+			config.mutates === "write" ? await snapshotWorkspace(runContext.workingDirectory) : undefined;
+
 		if (config.runtime === "external") {
 			return await dispatchExternalRun({
 				options,
@@ -222,5 +262,7 @@ export async function dispatchSubAgentRun(
 			await cleanupManagedWorktreeIfUnchanged(runContext.artifactDir).catch(() => undefined);
 		}
 		throw error;
+	} finally {
+		releaseReservation?.();
 	}
 }

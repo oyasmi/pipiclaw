@@ -92,6 +92,8 @@ export interface TaskSettleRecord {
 	ref: string;
 	item?: string;
 	status: string;
+	failureKind?: string;
+	failurePreExecution?: boolean;
 	/** `purpose=verify` runs only: the checker's declared verdict. */
 	verdict?: "pass" | "fail";
 	usd?: number;
@@ -489,7 +491,7 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 		case "dispatch":
 			return `- ${at} 派发 ${record.ref}${record.item ? ` → ${record.item}` : ""}${record.agent ? ` (${record.agent}${record.purpose === "verify" ? ", verify" : ""})` : ""}`;
 		case "settle":
-			return `- ${at} 结算 ${record.ref}: ${record.status}${record.verdict ? ` VERDICT ${record.verdict.toUpperCase()}` : ""}${record.exitCode !== undefined ? ` exit ${record.exitCode}` : ""}${record.worktree && !record.worktree.cleaned ? ` · worktree ${record.worktree.branch ?? record.worktree.headSha.slice(0, 8)} (${record.worktree.changedFiles.length} files)` : ""}${record.output ? ` · ${record.output}` : ""}`;
+			return `- ${at} 结算 ${record.ref}: ${record.status}${record.failureKind ? ` · ${record.failureKind}${record.failurePreExecution ? "（未进入执行）" : ""}` : ""}${record.verdict ? ` VERDICT ${record.verdict.toUpperCase()}` : ""}${record.exitCode !== undefined ? ` exit ${record.exitCode}` : ""}${record.worktree && !record.worktree.cleaned ? ` · worktree ${record.worktree.branch ?? record.worktree.headSha.slice(0, 8)} (${record.worktree.changedFiles.length} files)` : ""}${record.output ? ` · ${record.output}` : ""}`;
 		case "stall":
 			return `- ${at} 卡顿 ${record.ref}: 已 ${record.silentMinutes} 分钟没有输出`;
 		case "message":

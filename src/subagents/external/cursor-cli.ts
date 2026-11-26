@@ -128,7 +128,6 @@ function labelFromToolPayload(payload: Record<string, unknown>): string | undefi
 }
 
 function assistantText(record: Record<string, unknown>): string | undefined {
-	if ("timestamp_ms" in record || "model_call_id" in record) return undefined;
 	const message = record.message;
 	if (!isPlainObject(message) || !Array.isArray(message.content)) return undefined;
 	const text = message.content
@@ -235,16 +234,29 @@ export const cursorCliHarness: ExternalHarness = {
 		let errorMessage: string | undefined;
 		let assistantCandidate: string | undefined;
 		let resultText: string | undefined;
+		let observedExecutionActivity = false;
 
-		const events = parseJsonObjectLines(input.eventsText);
+		const { records: events, complete } = parseJsonObjectLines(
+			input.eventsText,
+			(event) =>
+				(event.type === "system" && event.subtype === "init") ||
+				event.type === "user" ||
+				event.type === "result" ||
+				event.type === "error" ||
+				event.type === "tool_call" ||
+				(event.type === "assistant" && isPlainObject(event.message) && Array.isArray(event.message.content)),
+		);
 		const parsedAnyObject = events.length > 0;
 		for (const event of events) {
 			if (typeof event.session_id === "string") sessionId = event.session_id;
 
 			if (event.type === "assistant") {
 				const text = assistantText(event);
-				if (text) assistantCandidate = text;
+				observedExecutionActivity ||= Boolean(text);
+				if (text && !("timestamp_ms" in event || "model_call_id" in event)) assistantCandidate = text;
 			}
+			observedExecutionActivity ||= event.type === "tool_call";
+			if (event.type === "error" && typeof event.message === "string") errorMessage = event.message.trim();
 
 			if (event.type === "result") {
 				terminalSeen = true;
@@ -258,6 +270,7 @@ export const cursorCliHarness: ExternalHarness = {
 						resultMessage || (subtype ? `cursor-cli reported ${subtype}` : "cursor-cli reported an error");
 				} else {
 					errorMessage = undefined;
+					observedExecutionActivity ||= Boolean(resultText?.trim());
 				}
 			}
 		}
@@ -265,7 +278,7 @@ export const cursorCliHarness: ExternalHarness = {
 		if (!parsedAnyObject && input.eventsText.trim()) protocolStatus = "unparsable";
 
 		const stderr = input.stderrTail?.trim();
-		if (!terminalSeen && stderr) errorMessage = stderr;
+		if (!terminalSeen && !errorMessage && stderr) errorMessage = stderr;
 
 		const fallback = resultText?.trim() ? resultText : "";
 		return {
@@ -278,6 +291,8 @@ export const cursorCliHarness: ExternalHarness = {
 			costKnown: false,
 			stderrTail: input.stderrTail,
 			errorMessage,
+			observedExecutionActivity:
+				observedExecutionActivity || (parsedAnyObject && complete && errorMessage ? false : undefined),
 		};
 	},
 

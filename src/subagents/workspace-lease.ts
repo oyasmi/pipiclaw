@@ -24,6 +24,12 @@ export interface WorkspaceLeaseHolder {
 	mode?: WorkspaceLeaseMode;
 }
 
+export interface ActiveWorkspaceLease {
+	runId: string;
+	leaseKey: string;
+	mode: WorkspaceLeaseMode;
+}
+
 const leases = new Map<string, Map<string, WorkspaceLeaseHolder>>();
 const cleanups = new Map<string, WorkspaceLeaseHolder>();
 
@@ -58,13 +64,24 @@ function crossesIsolatedBoundary(parent: string, child: string): boolean {
 	);
 }
 
-function pathsConflict(a: string, b: string): boolean {
+export function workspaceLeasePathsConflict(a: string, b: string): boolean {
 	if (a === b) return true;
 	const aSlash = withTrailingSlash(a);
 	const bSlash = withTrailingSlash(b);
 	if (b.startsWith(aSlash)) return !crossesIsolatedBoundary(a, b);
 	if (a.startsWith(bSlash)) return !crossesIsolatedBoundary(b, a);
 	return false;
+}
+
+export function workspaceLeaseModesConflict(a: WorkspaceLeaseMode, b: WorkspaceLeaseMode): boolean {
+	return a !== "use" && b !== "use" && (a === "write" || b === "write");
+}
+
+/** Detached snapshot for diagnostics and tests. Cleanup exclusions are not run leases. */
+export function snapshotWorkspaceLeases(): ActiveWorkspaceLease[] {
+	return Array.from(leases).flatMap(([leaseKey, holders]) =>
+		Array.from(holders.values(), (holder) => ({ runId: holder.runId, leaseKey, mode: holderMode(holder) })),
+	);
 }
 
 /**
@@ -113,17 +130,13 @@ function findConflict(
 	excludeRunId?: string,
 ): WorkspaceLeaseHolder | undefined {
 	for (const [key, holder] of cleanups) {
-		if (pathsConflict(key, leaseKey)) return holder;
+		if (workspaceLeasePathsConflict(key, leaseKey)) return holder;
 	}
 	for (const [key, holders] of leases) {
-		if (!pathsConflict(key, leaseKey)) continue;
+		if (!workspaceLeasePathsConflict(key, leaseKey)) continue;
 		for (const holder of holders.values()) {
 			if (excludeRunId && holder.runId === excludeRunId) continue;
-			const mode = holderMode(holder);
-			if (
-				requestedMode === "cleanup" ||
-				(requestedMode !== "use" && mode !== "use" && (requestedMode === "write" || mode === "write"))
-			) {
+			if (requestedMode === "cleanup" || workspaceLeaseModesConflict(requestedMode, holderMode(holder))) {
 				return holder;
 			}
 		}

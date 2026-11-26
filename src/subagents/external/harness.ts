@@ -1,6 +1,6 @@
 import { isPlainObject } from "../../shared/type-guards.js";
 import type { UsageTotals } from "../../usage/totals.js";
-import type { RunHarness, SubAgentThinkingLevel } from "../run-record.js";
+import type { ExternalFailureKind, RunHarness, SubAgentThinkingLevel } from "../run-record.js";
 
 /**
  * The harness adapter seam (spec 040, D4). Every external run is reduced to the same process
@@ -32,6 +32,8 @@ export interface BuildInvocationResult {
 	args: string[];
 	/** Whether this harness can be continued later via `resumeSessionId`. */
 	resumable: boolean;
+	/** Harness defaults override the inherited environment. Explicit role values take precedence. */
+	defaultEnv?: Record<string, string>;
 	/**
 	 * claude-code only (D4): a session id it picked and passed via `--session-id` *before* running,
 	 * so `resume` does not depend on first successfully parsing a `result` event out of a run that
@@ -62,6 +64,14 @@ export interface ExternalOutcome {
 	costKnown: boolean;
 	stderrTail?: string;
 	errorMessage?: string;
+	observedExecutionActivity?: boolean;
+	/** Usage in an intermediate frame can prove activity even when it is excluded from accounting. */
+	observedNonZeroUsage?: boolean;
+	failureKind?: ExternalFailureKind;
+	preExecution?: boolean;
+	resumeMismatch?: boolean;
+	authRefused?: boolean;
+	quotaRefused?: boolean;
 }
 
 export interface ParseOutcomeInput {
@@ -219,8 +229,12 @@ export function outputFormatConflicts(argv: readonly string[], expected = "strea
  * Parse NDJSON lines into plain JSON objects, tolerating blank, torn, or non-object lines.
  * Returning an array keeps each adapter's loop imperative so TypeScript tracks state narrowing.
  */
-export function parseJsonObjectLines(eventsText: string): Record<string, unknown>[] {
+export function parseJsonObjectLines(
+	eventsText: string,
+	isKnownFrame: (record: Record<string, unknown>) => boolean,
+): { records: Record<string, unknown>[]; complete: boolean } {
 	const records: Record<string, unknown>[] = [];
+	let complete = true;
 	for (const line of eventsText.split("\n")) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
@@ -228,11 +242,22 @@ export function parseJsonObjectLines(eventsText: string): Record<string, unknown
 		try {
 			event = JSON.parse(trimmed);
 		} catch {
+			complete = false;
 			continue;
 		}
-		if (isPlainObject(event)) records.push(event);
+		if (isPlainObject(event)) {
+			records.push(event);
+			if (!isKnownFrame(event)) complete = false;
+		} else {
+			complete = false;
+		}
 	}
-	return records;
+	return { records, complete };
+}
+
+export function finiteNonNegative(value: unknown): number {
+	const number = typeof value === "number" || typeof value === "string" ? Number(value) : 0;
+	return Number.isFinite(number) && number >= 0 ? number : 0;
 }
 
 const PLACEHOLDERS = ["$MODEL", "$EFFORT", "$PROMPT_FILE", "$SYSTEM_PROMPT_FILE"] as const;

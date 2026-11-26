@@ -65,7 +65,7 @@ cp "$PIPICLAW_PKG"/examples/sub-agents/{claude-main,codex-review}.md \
 |---|---|
 | `/subagents` | 查看当前运行中的委派、最近结束的记录与角色目录概览 |
 | `/subagents list [running\|failed\|all]` | 按状态筛选本工位的委派运行记录 |
-| `/subagents show <runId>` | 查看完整诊断详情：实际拼装的 `argv`、工作目录、PID、耗时与 `stderr` 尾部 |
+| `/subagents show <runId>` | 查看运行详情，包括实际命令行、工作目录、失败分类和 `stderr` 尾部 |
 | `/subagents output <runId>` | 查看该次委派产出的正文尾部（完整文件位于工位 `subagent-artifacts/<runId>/output.md`） |
 | `/subagents cancel <runId\|all>` | **立即强杀外部进程组或中止内置子代理**（`all` 终止本工位全部在途委派） |
 | `/subagents roles [name]` | 列出全部已加载角色（格式：`runtime, mutates, model, thinking`）；带 `name` 查看完整配置与告警 |
@@ -80,11 +80,27 @@ cp "$PIPICLAW_PKG"/examples/sub-agents/{claude-main,codex-review}.md \
   - 聊天中调用**内置角色**共享 **10 秒**快速窗口：10 秒内完成直接内联返回，超时自动转为后台运行并返回 `runId`；
   - **外部角色**及**任务步骤内的所有委派**在启动确认后立即异步返回 `runId`；
   - 后台委派结束时自动唤醒原发起频道（多个结果在频道忙碌期间陆续完成会自动合并进同一唤醒回合，单回合最多合并 6 条；若频道已换绑到其他工位则抑制唤醒，结果仍保留在记录中）。收到“仍在运行”提示后**切勿轮询或重复派发**。
-- **旁路进度播报（`delegation.notices`）**：默认 `"live"` 模式下，长耗时委派会在聊天旁路稀疏推送当前命令/步骤与完成回执；外部进程连续 **10 分钟无输出**会推送一次“可能卡住了”提醒（不占模型上下文，也不自动强杀）。`mutates: write` 的委派结算时还会对比派发前快照，附带本次实际修改的文件摘要。
+- **旁路进度播报（`delegation.notices`）**。默认 `"live"` 模式下，长耗时委派会在聊天中推送当前步骤和完成回执。外部进程静默满 **10 分钟**后，服务会检查整个进程组是否仍在消耗 CPU。编译或测试继续占用 CPU 时会推迟提醒，宿主机休眠也从静默时长中扣除。若系统无法提供 CPU 数据，服务会根据输出文件的静默时长提醒。运行时限照常生效。`mutates: write` 的委派结算时会与派发前的快照比较，附带本次实际修改的文件摘要。
+- **在途重复委派**。同一个任务内，或同一个频道的聊天委派中，角色、用途、工作目录和任务正文相同的委派只允许同时运行一次。可以等待当前委派结束后重跑，或为并行写入使用各自的隔离工作树。
 - **内置瞬时容错**：内置子代理遇到供应商 429 / 5xx / 网络闪断会自动原地退避重试（最多 3 次：2s / 4s / 8s），仍失败且配了 `fallbackModel` 时自动切换备用模型重试。
 - **外部会话多轮续接（`subagent_run op=follow_up`）**：
   - `claude-code`、`codex-cli`、`cursor-cli` 与 `antigravity-cli` 支持在已结束的外部 run 基础上追加指令。新 run 用独立 `runId` 和产物目录，标准输入携带增量指令。Claude 继续通过 `--append-system-prompt-file` 接收角色正文。
   - 修改角色的 `command`、`model` 或 `shell` 后需要重新派发。Codex、Cursor 和 Antigravity 的续接会使用原会话已有的角色正文，需应用正文改动时请发起新委派。
+  - 会话失效后，请发消息说明要继续的工作，助手会带上必要的上下文重新委派。登录、额度或模型配置问题需要先解决，再发起新委派。
+
+### 外部委派失败怎么处理
+
+`/subagents show <runId>` 会给出失败原因和下一步。任务车道也会把失败分类和建议交给任务负责人。
+
+| 失败分类 | 下一步 |
+|---|---|
+| 需要重新登录、额度已用尽或模型配置无效 | 在服务所在机器重新登录、等待额度恢复或修正角色的模型配置，再发起新委派 |
+| 会话无法继续 | 发起新委派，带上所需上下文和已有产物 |
+| 上游服务暂时异常 | 如果显示“未进入执行”，可以重试一次。其他情况先检查产物和工作目录 |
+| CLI 输出协议不匹配 | 核对 CLI 和适配器版本，检查产物目录里的 `events.jsonl` |
+| 超过运行时限或运行出错 | 查看部分产物与 `stderr.log`，再决定继续、拆分或重试 |
+
+“未进入执行”表示结构化输出中未观察到模型文本、工具活动或非零用量。输出损坏、无法识别或使用 `exec` 时，运行时会按已有执行活动处理重试风险。
 
 ---
 
@@ -186,6 +202,12 @@ maxWallTimeSec: 600
 | `cursor-cli` | `agent` | `--model <m>[effort=<lvl>]` | 折入模型 ID（`off`/`minimal` 夹为 `low`） | 正文与任务合并走 `stdin` | `--resume <id>`，自动补 `-p --output-format stream-json --trust` |
 | `antigravity-cli` | `agy` | `--model <m>` | `--effort <lvl>`（`off`/`minimal` 夹为 `low`） | 正文与任务合并走 `stdin`（或 `--agent` 且正文留空） | `--conversation <id>`，仅补 `--output-format stream-json`（**严禁加 `-p`**） |
 | `exec` | 任意脚本/程序 | 不追加 | 不追加 | 正文与任务合并走 `stdin` | 无会话续接、无结构化事件（不可用于 `purpose=verify`） |
+
+**Claude Code 的环境与隔离**。默认将 `CLAUDE_CODE_DISABLE_AUTO_MEMORY`、`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` 和 `CLAUDE_CODE_DISABLE_CRON` 设为 `1`。服务会静默清除继承的 `CLAUDECODE` 和 `CLAUDE_CODE_ENTRYPOINT`，并在委派详情标明清除的 OAuth、API 凭据和路由变量名，例如 `ANTHROPIC_BASE_URL`。角色的 `env:` 可以覆盖默认值或显式恢复需要的变量。
+
+需要更多隔离的角色可以在 `command` 中显式配置 `--strict-mcp-config`、`--setting-sources project` 或 `--disallowedTools`。先确认所用 Claude CLI 版本支持对应选项，并检查角色需要的 MCP 服务器和工具。
+
+**Codex CLI 的用量**。缓存命中的输入单独计入缓存读取。输入总量由新增输入和缓存读取组成，每个 token 计入总量一次。
 
 **`cursor-cli`（`agent`）与 `antigravity-cli`（`agy`）特别注意**：
 - **Cursor CLI（`agent`）**：无头 print 模式下若未传 `--force`（或 `-f` / `--yolo`），CLI 只提议修改而不落盘；因此写入角色推荐 `command: agent --force`，只读角色推荐 `command: agent --mode ask`。请勿在 `command` 中加 `--worktree`（会写到 `~/.cursor/worktrees/` 绕过目录写锁）。

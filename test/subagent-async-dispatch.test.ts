@@ -2,10 +2,11 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WakeEvent } from "../src/channel/channel-event.js";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
+import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/tools/subagent.js";
 import {
 	configureSubAgentRuntime,
@@ -103,6 +104,12 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			systemPrompt: "Explore the codebase.",
 			task: "Find where the entrypoint is.",
 		});
+		// Compete before the first call gets a durable RunRecord.
+		const duplicate = tool.execute("dispatch-call-duplicate", {
+			systemPrompt: "Explore the codebase.",
+			task: "  Find where the entrypoint is.  ",
+		});
+		await expect(duplicate).rejects.toBeInstanceOf(RecoverableToolError);
 
 		// The grace window elapses before the fake worker ever resolves its prompt.
 		const result = (await resultPromise) as {
@@ -119,6 +126,13 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 
 		const run = getSubAgentRunManager("dingtalk:dm:123").get(runId);
 		expect(run?.status).toBe("running");
+		expect(run?.taskDigest).toMatch(/^[a-f0-9]{16}$/);
+		await expect(
+			tool.execute("dispatch-call-running", {
+				systemPrompt: "Explore the codebase.",
+				task: "Find where the entrypoint is.",
+			}),
+		).rejects.toThrow(runId);
 
 		// The run keeps executing in the background; let it finish now.
 		expect(releasePrompt).toBeDefined();
@@ -133,5 +147,13 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		expect(dispatched[0]?.dispatchId).toBe(`subagent:${testDesk("dingtalk:dm:123")}:${runId}:done`);
 		expect(dispatched[0]?.text).toContain(`[SUBAGENT:${runId}]`);
 		expect(getSubAgentRunManager("dingtalk:dm:123").get(runId)?.status).toBe("completed");
+
+		const rerun = await tool.execute("dispatch-call-rerun", {
+			systemPrompt: "Explore the codebase.",
+			task: "Find where the entrypoint is.",
+		});
+		expect(rerun.details.runId).not.toBe(runId);
+		releasePrompt?.();
+		await vi.waitFor(() => expect(dispatched).toHaveLength(2));
 	});
 });

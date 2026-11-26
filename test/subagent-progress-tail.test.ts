@@ -1,15 +1,29 @@
-import { readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as hostProcess from "../src/shared/host-process.js";
 import { startExternalProgressTail } from "../src/subagents/external/progress-tail.js";
+import { SubAgentRunManager } from "../src/subagents/runs.js";
+import { createSubAgentRunTool } from "../src/tools/subagent-manage.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 // Pacing is the subject here. Keep real file contents and mtimes, but resolve the fs port
 // in the microtask queue so advancing a fake timer also finishes its read. The old fixture
 // waited 50 real milliseconds after every clock advance and still depended on host I/O load.
+const { reads } = vi.hoisted(() => ({ reads: vi.fn() }));
 vi.mock("node:fs/promises", async (importOriginal) => ({
 	...(await importOriginal<typeof import("node:fs/promises")>()),
-	readFile: async (path: string, encoding: BufferEncoding) => readFileSync(path, encoding),
+	open: async (path: string, mode: string) => {
+		const fd = openSync(path, mode);
+		return {
+			stat: async () => fstatSync(fd),
+			read: async (buffer: Buffer, offset: number, length: number, position: number) => {
+				reads(length, position);
+				return { bytesRead: readSync(fd, buffer, offset, length, position) };
+			},
+			close: async () => closeSync(fd),
+		};
+	},
 	stat: async (path: string) => statSync(path),
 }));
 
@@ -28,6 +42,7 @@ function codexLine(command: string): string {
 
 beforeEach(() => {
 	vi.useFakeTimers();
+	reads.mockClear();
 });
 
 afterEach(() => {
@@ -38,7 +53,9 @@ describe("startExternalProgressTail", () => {
 	it("waits out the first-notice delay, then reports a changed label at most once per gap", async () => {
 		const artifactDir = tempDir();
 		const eventsPath = join(artifactDir, "events.jsonl");
-		writeFileSync(eventsPath, `${codexLine("npm run build")}\n`);
+		const newest = `${codexLine("npm run build")}\n{"torn"`;
+		// The tail starts inside this older row. Only the complete progress row should be offered.
+		writeFileSync(eventsPath, `${"x".repeat(128 * 1024)}\n${newest}`);
 
 		const startedAt = Date.now();
 		const labels: string[] = [];
@@ -56,6 +73,7 @@ describe("startExternalProgressTail", () => {
 		// Crosses the window; the next poll picks up the current label.
 		await advance(30_000);
 		expect(labels).toEqual(["npm run build"]);
+		expect(reads).toHaveBeenCalledExactlyOnceWith(65_536, statSync(eventsPath).size - 65_536);
 
 		// A new label inside the minimum-gap window is not reported yet.
 		writeFileSync(eventsPath, `${codexLine("npm run build")}\n${codexLine("npm test")}\n`);
@@ -194,5 +212,76 @@ describe("startExternalProgressTail", () => {
 		await advance(600_000);
 		expect(progress).not.toHaveBeenCalled();
 		tail.stop();
+	});
+
+	it("discounts host sleep and confirms a quiet process group's CPU activity before warning", async () => {
+		const artifactDir = tempDir();
+		const sampleCpuMs = vi
+			.spyOn(hostProcess, "sampleProcessGroupCpuMs")
+			.mockResolvedValueOnce(1200)
+			.mockResolvedValueOnce(1250)
+			.mockResolvedValue(1250);
+		const notify = vi.fn();
+		const runId = "run_silent";
+		const channelId = "dingtalk:dm:tail";
+		const runManager = new SubAgentRunManager({ desk: "tail", deskDir: artifactDir }, { notify });
+		const tool = createSubAgentRunTool({
+			runManager,
+			channelId,
+			workspaceDir: artifactDir,
+			desk: "tail",
+			deskDir: artifactDir,
+		});
+		try {
+			await runManager.register({
+				runId,
+				channelId,
+				artifactDir,
+				runtime: "external",
+				harness: "exec",
+				agent: "builder",
+				label: "build",
+				source: "predefined",
+				tools: [],
+				purpose: "work",
+				workingDirectory: artifactDir,
+			});
+			const startedAt = Date.now();
+			await runManager.setLaunched(runId, {
+				pid: 42,
+				argv: ["fixture"],
+				deadlineAt: startedAt + 3_600_000,
+				processStartedAt: startedAt,
+			});
+			await advance(9 * 60_000 + 30_000);
+			vi.setSystemTime(Date.now() + 60_000);
+			await advance(15_000);
+			expect(sampleCpuMs).not.toHaveBeenCalled();
+			expect(notify).not.toHaveBeenCalled();
+			await advance(15_000);
+			expect(sampleCpuMs).toHaveBeenCalledExactlyOnceWith(42);
+			expect(notify).not.toHaveBeenCalled();
+			await advance(15_000);
+			expect(runManager.isExternalCpuActive(runId)).toBe(true);
+			const active = await tool.execute("show-active", { op: "show", runId });
+			expect(active.content).toContainEqual(
+				expect.objectContaining({ text: expect.stringContaining("process group CPU active") }),
+			);
+			expect(JSON.stringify(active.content)).not.toContain("possibly stalled");
+			await advance(105_000);
+			expect(sampleCpuMs).toHaveBeenCalledTimes(2);
+			await advance(30_000);
+			expect(sampleCpuMs).toHaveBeenCalledTimes(4);
+			expect(runManager.isExternalCpuActive(runId)).toBe(false);
+			expect(runManager.isExternalStalled(runId)).toBe(true);
+			expect(notify).toHaveBeenCalledExactlyOnceWith(
+				"tail",
+				channelId,
+				expect.objectContaining({ kind: "stalled", silentMs: 750_000 }),
+			);
+		} finally {
+			runManager.stop();
+			sampleCpuMs.mockRestore();
+		}
 	});
 });

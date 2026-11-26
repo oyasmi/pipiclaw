@@ -361,10 +361,13 @@ export const antigravityCliHarness: ExternalHarness = {
 		let terminalSeen = false;
 		let protocolStatus: ExternalOutcome["protocolStatus"] = "absent";
 		let errorMessage: string | undefined;
+		let observedExecutionActivity = false;
+		let observedNonZeroUsage = false;
 
 		const expectedResumeId = input.expectedResumeSessionId?.trim() || undefined;
 		let matchedExpectedSession = false;
 		let mismatchedSessionId: string | undefined;
+		let resumeMismatch = false;
 
 		const stepTexts = new Map<number, string>();
 		const stepUsages = new Map<number, ParsedUsageSnapshot>();
@@ -389,7 +392,17 @@ export const antigravityCliHarness: ExternalHarness = {
 			}
 		};
 
-		const events = parseJsonObjectLines(input.eventsText);
+		const { records: events, complete } = parseJsonObjectLines(
+			input.eventsText,
+			(event) =>
+				event.event === "init" ||
+				(event.event === "result" && isPlainObject(event.result)) ||
+				(event.event === "step_update" &&
+					isPlainObject(event.step_update) &&
+					(event.step_update.step_type === "user_input" ||
+						event.step_update.step_type === "agent_response" ||
+						event.step_update.step_type === "tool")),
+		);
 		const parsedAnyObject = events.length > 0;
 		for (const event of events) {
 			recordParentConversationId(event.conversation_id);
@@ -397,6 +410,14 @@ export const antigravityCliHarness: ExternalHarness = {
 			if (event.event === "step_update" && isPlainObject(event.step_update)) {
 				const step = event.step_update;
 				recordParentConversationId(step.conversation_id);
+				observedExecutionActivity ||=
+					step.step_type === "tool" ||
+					Boolean(step.tool_name || step.tool_info || step.subagent_info) ||
+					(step.step_type === "agent_response" &&
+						typeof step.text_delta === "string" &&
+						Boolean(step.text_delta.trim()));
+				const stepUsage = parseUsageSnapshot(step.usage);
+				observedNonZeroUsage ||= stepUsage !== undefined && isNonZeroUsage(stepUsage);
 
 				const stepIndex =
 					typeof step.step_index === "number" && Number.isInteger(step.step_index) && step.step_index >= 0
@@ -415,7 +436,6 @@ export const antigravityCliHarness: ExternalHarness = {
 						const prev = stepTexts.get(stepIndex) ?? "";
 						stepTexts.set(stepIndex, prev + step.text_delta);
 					}
-					const stepUsage = parseUsageSnapshot(step.usage);
 					if (stepUsage !== undefined) {
 						const existing = stepUsages.get(stepIndex);
 						if (!existing || isNonZeroUsage(stepUsage)) {
@@ -439,6 +459,9 @@ export const antigravityCliHarness: ExternalHarness = {
 				resultStructuredOutput = res.structured_output;
 				resultDeniedActions = extractDeniedActions(res.denied_actions);
 				resultUsage = parseUsageSnapshot(res.usage);
+				observedNonZeroUsage ||= resultUsage !== undefined && isNonZeroUsage(resultUsage);
+				observedExecutionActivity ||=
+					Boolean(resultResponse?.trim()) || resultStructuredOutput != null || resultDeniedActions.length > 0;
 
 				if (!isSuccess) {
 					const rawError = typeof res.error === "string" ? res.error.trim() : "";
@@ -497,12 +520,14 @@ export const antigravityCliHarness: ExternalHarness = {
 		// D8: verify resumed conversation identity against parent-session events.
 		if (expectedResumeId) {
 			if (mismatchedSessionId !== undefined) {
+				resumeMismatch = true;
 				protocolStatus = "failed";
 				sessionId = undefined;
 				errorMessage = `antigravity-cli session mismatch: expected conversation "${expectedResumeId}" but CLI reported "${mismatchedSessionId}". Inspect events.jsonl/stderr.log and start a new delegation with full context.`;
 			} else if (!matchedExpectedSession) {
 				sessionId = undefined;
 				if (parsedAnyObject || terminalSeen) {
+					resumeMismatch = protocolStatus === "completed";
 					protocolStatus = "failed";
 					const missingReason = `antigravity-cli session verification failed: expected conversation "${expectedResumeId}" was not confirmed in stream events. Inspect events.jsonl/stderr.log and start a new delegation with full context.`;
 					errorMessage = errorMessage ? `${errorMessage}; ${missingReason}` : missingReason;
@@ -551,6 +576,10 @@ export const antigravityCliHarness: ExternalHarness = {
 			costKnown: false,
 			stderrTail: input.stderrTail,
 			errorMessage,
+			observedExecutionActivity:
+				observedExecutionActivity || (parsedAnyObject && complete && errorMessage ? false : undefined),
+			observedNonZeroUsage,
+			resumeMismatch,
 		};
 	},
 

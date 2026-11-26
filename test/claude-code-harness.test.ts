@@ -144,6 +144,25 @@ describe("claude-code harness: parseOutcome", () => {
 		expect(outcome.terminalSeen).toBe(true);
 		expect(outcome.protocolStatus).toBe("failed");
 		expect(outcome.errorMessage).toContain("error_max_turns");
+		const rejected = claudeCodeHarness.parseOutcome({
+			eventsText: streamJson(
+				{
+					type: "assistant",
+					message: { model: "<synthetic>", content: [{ type: "text", text: "diagnostic only" }] },
+				},
+				{
+					type: "result",
+					subtype: "error_during_execution",
+					is_error: true,
+					result: "",
+					errors: [" No conversation found with session ID: a ", "", 1, " log in "],
+				},
+			),
+			exitCode: 1,
+		});
+		expect(rejected.errorMessage).toBe("No conversation found with session ID: a; log in");
+		expect(rejected.finalText).toBe("");
+		expect(rejected.observedExecutionActivity).toBe(false);
 	});
 
 	it("falls back to the last streamed assistant text/usage when killed before a result event (§1.2), preferring a real result event when present", () => {
@@ -170,6 +189,7 @@ describe("claude-code harness: parseOutcome", () => {
 			exitCode: undefined,
 		});
 		expect(outcome.finalText).toBe("Partial progress before the kill.");
+		expect(outcome.observedExecutionActivity).toBe(true);
 		expect(outcome.usageKnown).toBe(true);
 		expect(outcome.usage?.input).toBe(80);
 		expect(outcome.usage?.output).toBe(25);

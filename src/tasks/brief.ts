@@ -53,6 +53,7 @@ export interface TaskBriefInput {
 	/** True when the session does not hold the current contract: first step, compaction, or an edited contract. */
 	full: boolean;
 	pending: readonly PendingWorkView[];
+	formatFailureGuidance?: (kind: string, preExecution?: boolean) => string | undefined;
 	now?: number;
 }
 
@@ -106,9 +107,18 @@ async function findPreviousOccurrence(
 	return undefined;
 }
 
-function renderSettleInput(settle: TaskSettleRecord): string {
+function renderSettleInput(
+	settle: TaskSettleRecord,
+	formatFailureGuidance: TaskBriefInput["formatFailureGuidance"],
+): string {
 	const head = [settle.ref, settle.item, describeSettlement(settle)].filter(Boolean).join(" · ");
 	const lines = [`[结果 ${head}]`];
+	if (settle.failureKind) {
+		const phase = settle.failurePreExecution ? "（未进入执行）" : "";
+		lines.push(`失败分类：${settle.failureKind}${phase}`);
+		const guidance = formatFailureGuidance?.(settle.failureKind, settle.failurePreExecution);
+		if (guidance) lines.push(guidance);
+	}
 	if (settle.output) lines.push(`完整输出：${settle.output}`);
 	if (settle.worktree) {
 		if (settle.worktree.cleaned) {
@@ -128,10 +138,10 @@ function renderSettleInput(settle: TaskSettleRecord): string {
 	return lines.join("\n");
 }
 
-function renderInput(input: TaskInputRecord): string {
+function renderInput(input: TaskInputRecord, formatFailureGuidance: TaskBriefInput["formatFailureGuidance"]): string {
 	switch (input.kind) {
 		case "settle":
-			return renderSettleInput(input);
+			return renderSettleInput(input, formatFailureGuidance);
 		case "stall":
 			return `[卡顿 ${input.ref}] 已 ${input.silentMinutes} 分钟没有任何输出。用 subagent_run op=show 看上次输出与 stderr，再决定继续等还是取消重派。`;
 		case "message":
@@ -160,6 +170,7 @@ function previousStepProblem(records: readonly TaskLogRecord[]): string | undefi
 export function renderTaskInputs(
 	records: readonly TaskLogRecord[],
 	inputs: readonly TaskInputRecord[],
+	formatFailureGuidance?: TaskBriefInput["formatFailureGuidance"],
 ): string | undefined {
 	const shown = inputs.slice(-BRIEF_INPUT_LIMIT);
 	const parts: string[] = [];
@@ -169,7 +180,10 @@ export function renderTaskInputs(
 		parts.push(`（另有 ${inputs.length - shown.length} 条较早的输入未列出，用 task_log 查看。）`);
 	}
 	parts.push(
-		...shown.map((input) => (input.id ? `${renderInput(input)}\n${taskInputTag(input.id)}` : renderInput(input))),
+		...shown.map((input) => {
+			const text = renderInput(input, formatFailureGuidance);
+			return input.id ? `${text}\n${taskInputTag(input.id)}` : text;
+		}),
 	);
 	if (parts.length === 0) return undefined;
 	const hasSettle = shown.some((input) => input.kind === "settle");
@@ -232,7 +246,7 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<TaskBri
 		}
 	}
 
-	const inputs = renderTaskInputs(records, input.inputs);
+	const inputs = renderTaskInputs(records, input.inputs, input.formatFailureGuidance);
 	if (inputs) blocks.push(`<task_inputs>\n${inputs}\n</task_inputs>`);
 	const board = buildTaskBoard(records, document.body);
 	if (board) blocks.push(`<task_board>\n${renderTaskBoard(board, now)}\n</task_board>`);

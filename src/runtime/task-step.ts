@@ -5,6 +5,7 @@ import type { TurnInfo } from "../channel/transport.js";
 import * as log from "../log.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { formatFailureGuidance } from "../subagents/external/failure-classify.js";
 import {
 	BRIEF_INPUT_LIMIT,
 	buildTaskStepBrief,
@@ -204,6 +205,7 @@ export async function executeStep(ctx: LaneContext, live: LiveTask): Promise<Ste
 		inputs: begun.inputs,
 		full,
 		pending,
+		formatFailureGuidance,
 		now,
 	});
 

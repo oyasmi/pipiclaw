@@ -30,6 +30,7 @@ import type {
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "../workspace-lease.js";
 import { snapshotWorkspace, type WorkspaceBaseline } from "../workspace-summary.js";
 import { copyManagedWorktreeMeta } from "../worktree.js";
+import { blocksExternalFollowUp, formatFailureGuidance } from "./failure-classify.js";
 import { getExternalHarness } from "./registry.js";
 import { type ExternalLaunchResult, launchExternalRun } from "./run.js";
 
@@ -104,6 +105,7 @@ export async function dispatchExternalRun(input: {
 			artifactDir: runContext.artifactDir,
 			purpose: runContext.purpose,
 			taskId: runContext.taskId,
+			taskDigest: runContext.taskDigest,
 			item: runContext.item,
 			leaseKey,
 			mutates: config.mutates,
@@ -187,6 +189,13 @@ export async function dispatchExternalFollowUp(input: {
 		throw new RecoverableToolError(
 			`Run "${resolvedRunId}" never reported a session id (it likely failed before producing one); it cannot be resumed. Delegate a new run instead.`,
 		);
+	}
+	if (record.failureKind && blocksExternalFollowUp(record.failureKind)) {
+		const guidance =
+			record.failureKind === "resume_rejected"
+				? formatFailureGuidance(record.failureKind)
+				: "Ask the user to resolve the account, quota, or model configuration issue before starting a fresh delegation.";
+		throw new RecoverableToolError(`Run "${resolvedRunId}" cannot be resumed (${record.failureKind}). ${guidance}`);
 	}
 	const role = input.discovery?.agents.find(
 		(agent): agent is ExternalSubAgentConfig => agent.name === record.agent && agent.runtime === "external",

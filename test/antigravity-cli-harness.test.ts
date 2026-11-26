@@ -632,6 +632,8 @@ describe("antigravity-cli harness: parseOutcome", () => {
 		expect(mismatched.sessionId).toBeUndefined();
 		expect(mismatched.finalText).toBe("FALLBACK_NEW");
 		expect(mismatched.usageKnown).toBe(true);
+		expect(mismatched.resumeMismatch).toBe(true);
+		expect(mismatched.observedExecutionActivity).toBe(true);
 		expect(mismatched.errorMessage).toContain("00000000-0000-0000-0000-000000000000");
 		expect(mismatched.errorMessage).toContain("be457dbe-9e08-4f66-9a38-7f65bbbe1d32");
 		expect(classifyExternalOutcome("antigravity-cli", mismatched).status).toBe("failed");
@@ -680,6 +682,8 @@ describe("antigravity-cli harness: parseOutcome", () => {
 		expect(matchedInitThenEmptyError.protocolStatus).toBe("failed");
 		expect(matchedInitThenEmptyError.sessionId).toBe("conv-valid-1");
 		expect(matchedInitThenEmptyError.errorMessage).toBe("transient network error");
+		expect(matchedInitThenEmptyError.resumeMismatch).toBe(false);
+		expect(matchedInitThenEmptyError.observedExecutionActivity).toBe(false);
 	});
 });
 

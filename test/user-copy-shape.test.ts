@@ -266,6 +266,8 @@ function fakeRunManager(records: RunRecord[]): SubAgentRunManager {
 			return record ? { kind: "found", record } : { kind: "not_found" };
 		},
 		cancel: async () => "running",
+		isExternalCpuActive: () => true,
+		isExternalStalled: () => false,
 	} as unknown as SubAgentRunManager;
 }
 
@@ -301,12 +303,13 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		const artifactDir = tempDir();
 		writeFileSync(join(artifactDir, "stderr.log"), "  indented stderr line\n".repeat(200));
 		writeFileSync(join(artifactDir, "output.md"), "# Output\n\n  indented output\n".repeat(400));
-		records[9] = { ...runRecord(9), artifactDir };
+		records[9] = { ...runRecord(9), artifactDir, failureKind: "auth_required", failurePreExecution: true };
 		for (const args of [
 			"",
 			"list running",
 			"list failed",
 			"list all",
+			`show ${records[0].runId}`,
 			`show ${records[9].runId}`,
 			`output ${records[9].runId}`,
 			"show run_nope",
@@ -317,6 +320,13 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 				await handleSubagentsCommand({ args, runManager, channelId: "dingtalk:dm:1" }),
 			);
 		}
+		const failure = await handleSubagentsCommand({
+			args: `show ${records[9].runId}`,
+			runManager,
+			channelId: "dingtalk:dm:1",
+		});
+		expect(failure).toContain("未进入执行");
+		expect(failure).not.toContain("auth_required");
 	});
 
 	it("keeps /memory, /events, /skills and /desk in shape", async () => {

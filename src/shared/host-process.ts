@@ -27,6 +27,38 @@ export async function readProcessStartTime(pid: number): Promise<string | undefi
 	}
 }
 
+/** `ps time` on Linux and macOS: [[dd-]hh:]mm:ss[.cc]. */
+export function parsePsElapsedCpuMs(time: string): number | undefined {
+	const match = /^(?:(?:(\d+)-)?(\d+):)?(\d+):([0-5]\d)(?:\.(\d+))?$/.exec(time);
+	if (!match) return undefined;
+	const [, days = "0", hours = "0", minutes, seconds, fraction = "0"] = match;
+	const ms =
+		((Number(days) * 24 + Number(hours)) * 3600 + Number(minutes) * 60 + Number(seconds)) * 1000 +
+		Number(`0.${fraction}`) * 1000;
+	return Number.isFinite(ms) ? Math.round(ms) : undefined;
+}
+
+export async function sampleProcessGroupCpuMs(pgid: number): Promise<number | undefined> {
+	if (!Number.isSafeInteger(pgid) || pgid <= 0) return undefined;
+	try {
+		const { stdout } = await execFileAsync("ps", ["-eo", "pgid=,time="], {
+			timeout: 1_000,
+			env: { ...process.env, LC_ALL: "C" },
+		});
+		let total: number | undefined;
+		for (const line of stdout.split("\n")) {
+			const [group, time] = line.trim().split(/\s+/);
+			if (Number(group) !== pgid) continue;
+			const ms = time === undefined ? undefined : parsePsElapsedCpuMs(time);
+			if (ms === undefined) return undefined;
+			total = (total ?? 0) + ms;
+		}
+		return total;
+	} catch {
+		return undefined;
+	}
+}
+
 const CLI_VERSION_PROBE_TIMEOUT_MS = 1_000;
 const CLI_VERSION_MAX_CHARS = 200;
 const CLI_VERSION_CACHE_TTL_MS = 10 * 60_000;
@@ -38,7 +70,7 @@ const cliVersionCache = new Map<string, { value: string | undefined; at: number 
  * diagnosis. `undefined` on any failure or timeout; this must never block or fail a dispatch over
  * a CLI that does not support `--version`, is slow to start, or fails outright.
  */
-export async function probeCliVersion(executable: string): Promise<string | undefined> {
+export async function probeCliVersion(executable: string, env?: NodeJS.ProcessEnv): Promise<string | undefined> {
 	// A CLI's version changes only when someone upgrades it, while a busy channel dispatches the
 	// same executable many times an hour — re-spawning `<cli> --version` (a cold Node start for
 	// claude/codex) per dispatch bought nothing. A short TTL keeps an upgrade visible soon after.
@@ -46,7 +78,7 @@ export async function probeCliVersion(executable: string): Promise<string | unde
 	if (cached && Date.now() - cached.at < CLI_VERSION_CACHE_TTL_MS) return cached.value;
 	let value: string | undefined;
 	try {
-		const { stdout } = await execFileAsync(executable, ["--version"], { timeout: CLI_VERSION_PROBE_TIMEOUT_MS });
+		const { stdout } = await execFileAsync(executable, ["--version"], { timeout: CLI_VERSION_PROBE_TIMEOUT_MS, env });
 		value = stdout.trim().split("\n")[0]?.slice(0, CLI_VERSION_MAX_CHARS) || undefined;
 	} catch {
 		value = undefined;

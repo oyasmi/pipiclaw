@@ -4,6 +4,7 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage, truncate } from "../shared/text-utils.js";
+import { blocksExternalFollowUp, formatFailureGuidanceZh, formatFailureKindZh } from "./external/failure-classify.js";
 import { readLastOutputAt, STALL_THRESHOLD_MS } from "./external/progress-tail.js";
 import { elapsedMs, formatCost, harnessLabel } from "./format.js";
 import type { RunNotice, RunRecord, RunResolution } from "./run-record.js";
@@ -233,6 +234,12 @@ async function showRun(manager: SubAgentRunManager, ref: string): Promise<string
 		`- 标签：${record.label}`,
 		`- 状态：${statusLabel(record.status)}（耗时 ${runDuration(record)}）`,
 	];
+	if (record.failureKind) {
+		const phase = record.failurePreExecution ? "（未进入执行）" : "";
+		lines.push(
+			`- 失败分类：${formatFailureKindZh(record.failureKind)}${phase}。${formatFailureGuidanceZh(record.failureKind, record.failurePreExecution)}`,
+		);
+	}
 	if (record.failureReason) lines.push(`- 失败原因：${truncate(record.failureReason.replace(/\s+/g, " "), 300)}`);
 	if (record.verificationVerdict) {
 		lines.push(`- 验收结论：${record.verificationVerdict === "pass" ? "通过" : "未通过"}`);
@@ -271,17 +278,21 @@ async function showRun(manager: SubAgentRunManager, ref: string): Promise<string
 	}
 	for (const warning of record.invocationWarnings ?? []) lines.push(`- ⚠️ 启动时的警告：${warning}`);
 	if (record.sessionId) {
-		lines.push(`- 会话（sessionId）：\`${record.sessionId}\`，可以让我在这个会话上继续追问`);
+		const next = !blocksExternalFollowUp(record.failureKind) ? "，可以让我在这个会话上继续追问" : "";
+		lines.push(`- 会话（sessionId）：\`${record.sessionId}\`${next}`);
 	}
 
 	if (record.runtime === "external" && record.status === "running") {
 		const lastOutputAt = await readLastOutputAt(record.artifactDir);
 		const silentMs = Date.now() - (lastOutputAt ?? record.processStartedAt ?? record.startedAt);
-		lines.push(
-			silentMs >= STALL_THRESHOLD_MS
-				? `- ⚠️ 最近输出：${formatElapsedZh(silentMs)}前，可能卡住了；需要时用 \`/subagents cancel ${record.runId}\` 取消`
-				: `- 最近输出：${formatElapsedZh(silentMs)}前`,
-		);
+		const lastOutput = `最近输出：${formatElapsedZh(silentMs)}前`;
+		if (silentMs >= STALL_THRESHOLD_MS && manager.isExternalCpuActive(record.runId)) {
+			lines.push(`- ${lastOutput}，子进程仍在计算，可能正在编译或运行测试`);
+		} else if (silentMs >= STALL_THRESHOLD_MS && manager.isExternalStalled(record.runId)) {
+			lines.push(`- ⚠️ ${lastOutput}，可能卡住了。需要时用 \`/subagents cancel ${record.runId}\` 取消`);
+		} else {
+			lines.push(`- ${lastOutput}`);
+		}
 	}
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")

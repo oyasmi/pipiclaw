@@ -148,6 +148,7 @@ export interface SubAgentRunContext {
 	runId: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	taskDigest?: string;
 	item?: string;
 	workingDirectory: string;
 	artifactDir: string;

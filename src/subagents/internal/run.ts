@@ -83,6 +83,7 @@ export async function dispatchInternalRun(input: InternalRunInput): Promise<Dele
 			model: formatModelReference(config.model),
 			purpose: runContext.purpose,
 			taskId: runContext.taskId,
+			taskDigest: runContext.taskDigest,
 			item: runContext.item,
 			workingDirectory: runContext.workingDirectory,
 			artifactDir: runContext.artifactDir,
