@@ -56,9 +56,10 @@ interface FileProgress {
 }
 
 const HEAD_BYTES = 4096;
-const SLICE_ROWS = 2_000;
+const SLICE_ROWS = 1_000;
+const SLICE_BYTES = 256 * 1024;
 // Leave room for SQLite commit and the final row (individual transcript lines vary in size).
-const SLICE_WORK_MS = 22;
+const SLICE_WORK_MS = 12;
 
 function sha1(value: string | Buffer): string {
 	return createHash("sha1").update(value).digest("hex");
@@ -198,6 +199,7 @@ async function syncJsonl(
 			measureTransaction(db, stats, (started) => {
 				if (cursor === 0 && replaced) writer.remove(source.relPath);
 				let rows = 0;
+				const sliceStart = cursor;
 				while (cursor < consumed) {
 					const end = data.indexOf(0x0a, cursor);
 					const doc = parseTranscriptLine(source.source, parseJsonLine(data.toString("utf8", cursor, end)));
@@ -205,7 +207,12 @@ async function syncJsonl(
 					if (doc) stats.docsAdded += writer.add(source, state.indexed_lines, doc);
 					state.indexed_bytes += end + 1 - cursor;
 					cursor = end + 1;
-					if (++rows >= SLICE_ROWS || performance.now() - started >= SLICE_WORK_MS) break;
+					if (
+						++rows >= SLICE_ROWS ||
+						cursor - sliceStart >= SLICE_BYTES ||
+						performance.now() - started >= SLICE_WORK_MS
+					)
+						break;
 				}
 				writer.progress(source, state);
 			});

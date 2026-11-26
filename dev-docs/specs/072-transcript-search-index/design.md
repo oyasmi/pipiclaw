@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 设计已定稿，待实施（[实施计划](./plan.md)） |
+| 状态 | 已实施（[实施计划](./plan.md)、[验收记录](./acceptance.md)） |
 | 日期 | 2026-11-26 |
 | 输入 | [OpenMausBot 记忆与检索研究输入](../../research/openmausbot-memory-and-retrieval-input.md)、[借鉴评估](../../research/openmausbot-memory-and-retrieval-assessment.md) |
 | 前置 | [050 记忆 v2](../050-memory-v2/design.md)（D3 `memory_search`、D7 反思、D13 冷存储检索保持现状并预留 FTS5）、[060 Desk](../060-desk/design.md)、[053 对外文案](../053-user-facing-copy/design.md) |
@@ -199,8 +199,8 @@ CREATE VIRTUAL TABLE docs_fts USING fts5(
 实现要求：
 
 - 按 Buffer 操作，用 `buf.indexOf(0x0a, pos)` 切行，`indexed_bytes` 按字节累计，避免多字节字符导致偏移错误。
-- **每 2,000 行一个事务**，事务内同时写入 docs/refs 和 files 的进度（`indexed_bytes`、`indexed_lines`、`size`、`mtime_ms`、`ino`、`head_*`）。崩溃或回滚后，进度与内容始终一致，下次从提交点续接，不丢不重。
-- 事务之间 `await setImmediate()` 让出事件循环。目标是单片同步时间 ≤ 50 ms（I4）。
+- **分片提交**，事务内同时写入 docs/refs 和 files 的进度（`indexed_bytes`、`indexed_lines`、`size`、`mtime_ms`、`ino`、`head_*`）。崩溃或回滚后，进度与内容始终一致，下次从提交点续接，不丢不重。
+- 事务之间 `await setImmediate()` 让出事件循环。单片最多 1,000 行，累计处理约 256 KiB 或工作时间达到 12 ms 也立即提交。单行保持完整。目标是单片同步时间 ≤ 50 ms（I4）。
 - task 文档：files 行以 `.md` 为 path，`size` = md + jsonl 字节和，`mtime_ms` 取两者最大值；任何变化都整篇重建。
 - `log.jsonl` 轮转（rename 到 `.1`）会落入第 3 步，每个文件约 1 MB，重建开销可忽略。
 - 同步结果返回 `SyncStats { filesScanned, filesIndexed, filesAppended, filesRebuilt, filesRemoved, docsAdded, durationMs, maxSliceMs }`。
@@ -326,7 +326,7 @@ CREATE VIRTUAL TABLE docs_fts USING fts5(
 
 **出处**：反思 pass 实际可见的全部输入，NFKC 后拼接：
 
-- **未截断**的序列化窗口：`serializeConversation(sanitizeMessagesForMemory(messages))`，或 `sourceText.text`；
+- **未截断**的序列化窗口：`serializeConversation(sanitizeMessagesForMemory(messages))`，或 `sourceText.text`。同一窗口传入的工具结果也可以用其脱敏正文核验；
 - 当前全部记忆的 description 与正文；
 - 工作区 `MEMORY.md`；
 - 当天 journal。
@@ -384,7 +384,7 @@ CREATE VIRTUAL TABLE docs_fts USING fts5(
 
 | 风险 | 对策 |
 |---|---|
-| 同步 SQLite 阻塞钉钉流式更新 | 2,000 行一个事务并让出事件循环；预热放在调度器 tick；acceptance 用 `monitorEventLoopDelay` 测量 |
+| 同步 SQLite 阻塞钉钉流式更新 | 每片最多 1,000 行，按字节和时间提前提交并让出事件循环；预热放在调度器 tick；acceptance 用 `monitorEventLoopDelay` 测量 |
 | 首次查询等待全量构建 | 首个 tick（≤ 60 s）即完成预热；最坏情况下当次查询等待，当前最大 desk 约 2 s |
 | 去重把不同会话里相同的短句合并 | 合并只影响检索结果条数，不丢出处（refs 全部保留），结果展示最早的出处 |
 | 排序常量不合适 | 常量集中定义，由评测（§9.3）调参，不在单元测试中钉死数值 |

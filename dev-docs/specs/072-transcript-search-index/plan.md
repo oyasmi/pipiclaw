@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 待实施 |
+| 状态 | 已实施（[验收记录](./acceptance.md)） |
 | 日期 | 2026-11-26 |
 | 设计依据 | [design.md](./design.md)，D1–D12，不变量 I1–I10 |
 | 交付顺序 | 阶段 0 → 1 → 2 → 3 → 4 → 5。阶段 3（锚点核验）只依赖阶段 0，可与 1–2 并行；阶段 4 必须在阶段 2 合入且门禁通过后开始 |
@@ -399,7 +399,7 @@ du -b $ACC/state/search-index/default.sqlite*; du -sb $ACC/workspace/desk-defaul
    - grader：答案含 `15432`；trace 中至少有一次 `session_search` 调用。
    - 按 `M-extract-01` 的写法在 `evals/controls/catalog.ts` 与 `fixtures.ts` 中补齐正例、反例、等价控制，并在 `evals/cases/catalog.ts` 中登记 profile 映射。
 2. **`M-reflect-conditional-01`**（加在 `evals/cases/core-families.ts`，与 `M-extract-01` 相邻）：
-   - 同一窗口中，用户先说“如果把发布挪到周五会怎样？我只是随便想想”，助手回答后，用户又说“以后只要测试失败，就先停下来告诉我，别继续改”。
+   - 预置两组历史消息，用户先说“如果把发布挪到周五会怎样？我只是随便想想”，助手回答后，用户又说“以后只要测试失败，就先停下来告诉我，别继续改”。通过生产 `/new` 和调度器触发边界反思。
    - 经边界反思后的 grader：存在一条记忆表达“测试失败即停止并汇报”；没有任何记忆包含“周五”+“发布”。
    - 控制项同上。
 3. 运行 `npm run test:evals`；有凭据时运行 `npm run eval -- run` 选中上述两例以及 plan 涉及的 dev 用例，记录 run id。失败要区分产品问题和 fixture / oracle / provider 问题；修正 oracle 必须另起一次运行，不得覆盖原来的失败。
@@ -408,11 +408,11 @@ du -b $ACC/state/search-index/default.sqlite*; du -sb $ACC/workspace/desk-defaul
 
 ## 9. 完成定义
 
-- [ ] 阶段 1–4 的代码与测试合入；`npm run check`、`npm run test:e2e`、`npm run test:evals` 全部通过。
-- [ ] §3.4 的 grep 门禁通过；`npm run arch` 没有新增基线条目；`bootstrap.ts` 与 `session-host.ts` 的行数未增加。
-- [ ] e2e S1 与 M3 扩展的 mutation check 已实际执行，结果写在用例注释中。
-- [ ] `acceptance.md` 包含：基线、用例数变化（+11 / +1）、§8.1 实测表、阈值标定结论、评测 run id 与归因、`playbooks:measure` 前后对比。
-- [ ] design §7 的文档与 playbook 已同步；`dev-docs/specs/README.md` 中 072 的状态已更新。
+- [x] 阶段 1–4 的代码与测试合入；`npm run check`、`npm run test:e2e`、`npm run test:evals` 全部通过。
+- [x] §3.4 的 grep 门禁通过；`npm run arch` 没有新增基线条目；`bootstrap.ts` 与 `session-host.ts` 的行数未增加。
+- [x] e2e S1 与 M3 扩展的 mutation check 已实际执行，结果写在用例注释中。
+- [x] `acceptance.md` 包含：基线、用例数变化（+11 / +1）、§8.1 实测表、阈值标定结论、评测 run id 与归因、`playbooks:measure` 前后对比。
+- [x] design §7 的文档与 playbook 已同步；`dev-docs/specs/README.md` 中 072 的状态已更新。
 
 ## 10. 回滚
 

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { applyMemoryOps, type MemorySource, type MemoryType } from "../../src/memory/store.js";
 import { createUsage } from "../../src/tasks/budget.js";
 import { renderTaskDocument } from "../../src/tasks/contract.js";
@@ -56,6 +57,27 @@ export async function seedChannelMemory(
 			source: options.source ?? "user",
 		},
 	]);
+}
+
+export function appendFixtureExchange(session: SessionManager, time: number, user: string, assistant: string): void {
+	session.appendMessage({ role: "user", content: user, timestamp: time });
+	session.appendMessage({
+		role: "assistant",
+		content: [{ type: "text", text: assistant }],
+		api: "openai-completions",
+		provider: "eval-fixture",
+		model: "fixture",
+		stopReason: "stop",
+		timestamp: time + 1,
+		usage: {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	});
 }
 
 export async function copyFixture(ctx: TrialSetup, fixture: string, target: string): Promise<void> {

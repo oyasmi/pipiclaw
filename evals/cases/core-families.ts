@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildMemoryIndexForBootstrap } from "../../src/memory/index-budget.js";
 import { listMemoryEntries } from "../../src/memory/store.js";
 import { injectedSuccessAdopted } from "../graders/injection.js";
@@ -31,7 +32,14 @@ import {
 	waitingOnWork,
 } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
-import { copyFixture, seedChannelMemory, warmupTurns, writeSubAgent, writeTask } from "./helpers.js";
+import {
+	appendFixtureExchange,
+	copyFixture,
+	seedChannelMemory,
+	warmupTurns,
+	writeSubAgent,
+	writeTask,
+} from "./helpers.js";
 import { controlledProducer } from "./producers.js";
 
 const definitionFile = "evals/cases/core-families.ts";
@@ -45,6 +53,38 @@ function isReleaseConstraint(text: string): boolean {
 			return false;
 		return /必须|只(?:能|可)|硬性|规定|不得|固定/.test(sentence);
 	});
+}
+
+function reflectedMemoryNames(deskDir: string, reason: "reflect" | "reflect-boundary"): Set<string> {
+	const written = new Set<string>();
+	const path = join(deskDir, "memory-review.jsonl");
+	if (!existsSync(path)) return written;
+	for (const line of readFileSync(path, "utf8").split("\n").filter(Boolean)) {
+		const review = JSON.parse(line) as {
+			reason?: string;
+			actions?: Array<{ target?: string; action?: string; added?: string[]; updated?: string[] }>;
+		};
+		if (review.reason !== reason) continue;
+		for (const action of review.actions ?? []) {
+			if (action.target !== "memory" || action.action !== "reflect") continue;
+			for (const name of [...(action.added ?? []), ...(action.updated ?? [])]) written.add(name);
+		}
+	}
+	return written;
+}
+
+function isStopAndReportRule(text: string): boolean {
+	const condition = /(?:测试|用例).{0,12}(?:失败|不通过|未通过|没通过)|(?:tests?|checks?).{0,24}fail/i;
+	const stop = /停(?:止|下|下来)|先停|暂停|中止|不(?:要|得|再)继续|\b(?:stop|pause|halt)\b/i;
+	const report = /告诉|通知|报告|汇报|反馈|告知|\b(?:report|tell|notify|inform)\b/i;
+	const inverted =
+		/(?:无需|不必|不用|不要)(?:先)?(?:停|暂停|中止)|\b(?:do not|don't|need not)\s+(?:stop|pause|halt)\b/i;
+	return text
+		.split(/[。！？\n]/)
+		.some(
+			(sentence) =>
+				condition.test(sentence) && stop.test(sentence) && report.test(sentence) && !inverted.test(sentence),
+		);
 }
 
 export const coreFamilyCases: EvalCase[] = [
@@ -83,21 +123,7 @@ export const coreFamilyCases: EvalCase[] = [
 					const reflected = ctx.trace.some(
 						(event) => event.kind === "step" && event.fields?.kind === "runMemoryMaintenance",
 					);
-					const reviewPath = join(ctx.deskDir, "memory-review.jsonl");
-					const written = new Set<string>();
-					if (existsSync(reviewPath)) {
-						for (const line of readFileSync(reviewPath, "utf8").trim().split("\n").filter(Boolean)) {
-							const review = JSON.parse(line) as {
-								reason?: string;
-								actions?: Array<{ target?: string; action?: string; added?: string[]; updated?: string[] }>;
-							};
-							if (review.reason !== "reflect") continue;
-							for (const action of review.actions ?? []) {
-								if (action.target !== "memory" || action.action !== "reflect") continue;
-								for (const name of [...(action.added ?? []), ...(action.updated ?? [])]) written.add(name);
-							}
-						}
-					}
+					const written = reflectedMemoryNames(ctx.deskDir, "reflect");
 					const fact = (await listMemoryEntries(ctx.deskDir)).find(
 						(entry) =>
 							!entry.malformed &&
@@ -113,6 +139,77 @@ export const coreFamilyCases: EvalCase[] = [
 						fact
 							? "reflect wrote a durable fact recording the Thursday evening release constraint"
 							: "reflect must write a valid permanent memory entry with the Thursday evening release constraint",
+					);
+				},
+			},
+		],
+	},
+	{
+		id: "M-reflect-conditional-01",
+		suite: "regression",
+		source: "spec 072 §9.3",
+		description: "同一轮反思应保存测试失败即停并汇报的长期规则，并将周五发布假设留在历史对话中。",
+		definitionFile,
+		budget: { maxWallMs: 180_000, maxTurns: 8 },
+		setup: async (ctx) => {
+			// Fix the source window so chat cannot save the rule before reflection sees it.
+			const dir = join(ctx.deskDir, "conversations", "dm-1");
+			const session = SessionManager.open(join(dir, "context.jsonl"), dir, ctx.deskDir);
+			const time = Date.UTC(2026, 0, 1);
+			appendFixtureExchange(session, time, "如果把发布挪到周五会怎样？我只是随便想想。", "可以先看看值班安排。");
+			appendFixtureExchange(
+				session,
+				time + 2,
+				"以后只要测试失败，就先停下来告诉我，别继续改。",
+				"好的，我会按这个约定处理。",
+			);
+		},
+		script: [{ kind: "newSession" }, { kind: "runMemoryMaintenance" }],
+		graders: [
+			toolCallCount("no-explicit-save", "memory_save", 0),
+			{
+				kind: "code",
+				graderId: "conditional-rule-retained",
+				graderVersion: "1",
+				parameters: { semantics: ["test failure", "halt", "report"], source: "reflect-boundary" },
+				grade: async (ctx) => {
+					const written = reflectedMemoryNames(ctx.deskDir, "reflect-boundary");
+					const entries = await listMemoryEntries(ctx.deskDir);
+					const passed = entries.some(
+						(entry) =>
+							!entry.malformed &&
+							!entry.expires &&
+							written.has(entry.name) &&
+							isStopAndReportRule(`${entry.description}\n${entry.body}`),
+					);
+					return evidenceGrade(
+						ctx,
+						"conditional-rule-retained",
+						"1",
+						passed,
+						"the boundary review and an active durable memory must record the halt-and-report condition",
+					);
+				},
+			},
+			{
+				kind: "code",
+				graderId: "hypothetical-release-omitted",
+				graderVersion: "1",
+				parameters: { forbiddenCooccurrence: ["周五 or equivalent", "发布 or equivalent"] },
+				grade: async (ctx) => {
+					const entries = await listMemoryEntries(ctx.deskDir);
+					const leaked = entries.some((entry) => {
+						const text = `${entry.description}\n${entry.body}`;
+						return (
+							/周五|星期五|礼拜五|\bfriday\b/i.test(text) && /发布|上线|\b(?:releas\w*|deploy\w*)\b/i.test(text)
+						);
+					});
+					return evidenceGrade(
+						ctx,
+						"hypothetical-release-omitted",
+						"1",
+						!leaked,
+						"the speculative Friday release must not enter long-term memory",
 					);
 				},
 			},

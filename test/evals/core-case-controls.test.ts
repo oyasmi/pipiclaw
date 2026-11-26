@@ -253,8 +253,8 @@ describe("offline contributor CLI", () => {
 		expect(plan).toContain("coverage: 12 cases / 12 families; 36 trials");
 		expect(plan).toContain("未调用模型");
 		expect(selectCases([]).cases).toHaveLength(6);
-		expect(allCases).toHaveLength(43);
-		expect(selectCases(["--all"]).cases).toHaveLength(41);
+		expect(allCases).toHaveLength(45);
+		expect(selectCases(["--all"]).cases).toHaveLength(43);
 		expect(metadataForCase("M-quality-recall-03", "source", "description").lifecycle).toBe("retired");
 		expect(
 			allCases.every((item) => {

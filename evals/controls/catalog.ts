@@ -3,7 +3,14 @@ import { join } from "node:path";
 import { localDayKey } from "../../src/shared/local-time.js";
 import { renderTaskDocument } from "../../src/tasks/contract.js";
 import { fixtureInteger, fixtureToken } from "../harness/fixture-seed.js";
-import { controlDelivery, controlEvent, controlFile, controlReleaseMemory, stampBillingCommand } from "./fixtures.js";
+import {
+	controlConditionalMemory,
+	controlDelivery,
+	controlEvent,
+	controlFile,
+	controlReleaseMemory,
+	stampBillingCommand,
+} from "./fixtures.js";
 import type { OracleControl } from "./types.js";
 
 const pass = (id: string, risk: string, apply: OracleControl["apply"]): OracleControl => ({
@@ -166,6 +173,70 @@ const cases: Record<string, OracleControl[]> = {
 					"python3 -c \"from pathlib import Path; Path('src/paginate.js').write_text('fixed implementation')\"",
 			};
 		}),
+	],
+	"M-cold-recall-01": [
+		reject(
+			"guessed-port",
+			"Correct digits alone do not establish use of cold history",
+			["searched-cold-history"],
+			(ctx) => {
+				ctx.trace = ctx.trace.filter(({ tool }) => tool !== "session_search");
+			},
+		),
+		reject(
+			"search-on-greeting",
+			"A search on the greeting does not establish recall on the later question",
+			["searched-cold-history"],
+			(ctx) => {
+				for (const event of ctx.trace) event.stepIndex = 0;
+			},
+		),
+		reject("wrong-port", "The expected value must be answered on the recall turn", ["cold-port-answered"], (ctx) =>
+			replies(ctx, ["15432", "正式端口是 5432。"]),
+		),
+		reject(
+			"negated-port",
+			"Quoting the port as an incorrect value does not answer the question",
+			["cold-port-answered"],
+			(ctx) => replies(ctx, ["不是 15432，端口是 5432。"]),
+		),
+		pass("equivalent-answer", "The correct port may be given in a different format", (ctx) =>
+			replies(ctx, ["之前约定的是 `15432`（staging）。"]),
+		),
+	],
+	"M-reflect-conditional-01": [
+		reject(
+			"no-rule",
+			"A review action cannot substitute for the persisted rule",
+			["conditional-rule-retained"],
+			(ctx) => {
+				rmSync(join(ctx.deskDir, "memory/stop-on-test-failure.md"), { force: true });
+			},
+		),
+		reject(
+			"inverted-rule",
+			"Reporting while continuing after a failure inverts the rule",
+			["conditional-rule-retained"],
+			(ctx) => controlConditionalMemory(ctx, "测试失败时不用停止修改，只要向用户报告。"),
+		),
+		reject(
+			"no-boundary-evidence",
+			"A persistent fact needs evidence it came from boundary reflection",
+			["conditional-rule-retained"],
+			(ctx) => controlFile(ctx, "memory-review.jsonl", "{}\n"),
+		),
+		reject(
+			"hypothesis-promoted",
+			"A valid conditional rule cannot excuse a speculative release fact",
+			["hypothetical-release-omitted"],
+			(ctx) => controlConditionalMemory(ctx, "将发布改到星期五。", "friday-release"),
+		),
+		reject("explicit-save-shortcut", "Explicit saving bypasses reflection", ["no-explicit-save"], (ctx) =>
+			controlEvent(ctx, "tool-call", "memory_save"),
+		),
+		pass("equivalent-condition", "The same conditional preference may be paraphrased", (ctx) =>
+			controlConditionalMemory(ctx, "若用例未通过，先暂停当前工作并汇报给用户。"),
+		),
 	],
 	"M-extract-01": [
 		reject(

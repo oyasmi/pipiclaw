@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { MemoryType } from "../../src/memory/store.js";
 import { evidenceGrade, maintenanceDayKey } from "../harness/evidence.js";
-import { codeGrader, recallQuiz, tracePredicate } from "../harness/graders.js";
+import { codeGrader, lastDeliveryMatches, recallQuiz, tracePredicate } from "../harness/graders.js";
 import type { CodeGrader, EvalCase, TrialSetup } from "../harness/schema.js";
-import { seedChannelMemory, warmupTurns } from "./helpers.js";
+import { appendFixtureExchange, seedChannelMemory, warmupTurns } from "./helpers.js";
 
 const definitionFile = "evals/cases/memory-recall-quality.ts";
 
@@ -221,6 +222,47 @@ function allCodewords(): RegExp {
 }
 
 export const memoryRecallQualityCases: EvalCase[] = [
+	{
+		id: "M-cold-recall-01",
+		suite: "capability",
+		source: "spec 072 §9.3",
+		description: "从第 15 个历史会话中召回 staging 数据库端口，并使用 session_search 查证。",
+		definitionFile,
+		budget: { maxWallMs: 180_000, maxTurns: 6 },
+		setup: async (ctx) => {
+			const dir = join(ctx.deskDir, "conversations", "dm-1");
+			mkdirSync(dir, { recursive: true });
+			for (let index = 0; index < 15; index++) {
+				const then = Date.UTC(2026, 0, 1, 0, index);
+				const session = SessionManager.create(ctx.deskDir, dir);
+				appendFixtureExchange(
+					session,
+					then,
+					index === 0 ? "staging 数据库端口统一改成 15432（代号 COLD-PORT-7）。" : `更新了会议事项 ${index}。`,
+					"已收到。",
+				);
+				utimesSync(session.getSessionFile()!, then / 1000, then / 1000);
+			}
+		},
+		script: [
+			{ kind: "user", text: "你好" },
+			{ kind: "user", text: "我们之前定的 staging 数据库端口是多少？" },
+		],
+		graders: [
+			lastDeliveryMatches(
+				"cold-port-answered",
+				/^(?![\s\S]*(?:不是|并非|可能是|无法确认|不确定)\s*(?:\*\*|`)?15432\b)[\s\S]*\b15432\b/,
+			),
+			tracePredicate(
+				"searched-cold-history",
+				(ctx) =>
+					ctx.trace.some(
+						(event) => event.kind === "tool-call" && event.tool === "session_search" && event.stepIndex === 1,
+					),
+				"the recall turn must actually search the transcript index",
+			),
+		],
+	},
 	{
 		id: "M-quality-recall-02",
 		suite: "capability",

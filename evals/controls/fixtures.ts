@@ -91,6 +91,14 @@ function stampMaintenanceDay(ctx: TrialContext, day = localDayKey()): void {
 	});
 }
 
+export function controlConditionalMemory(ctx: TrialContext, description: string, name = "stop-on-test-failure"): void {
+	controlFile(
+		ctx,
+		`memory/${name}.md`,
+		`---\nname: ${name}\ndescription: ${description}\ntype: feedback\nsource: agent\ncreated: 2026-11-26\n---\n`,
+	);
+}
+
 export function controlReleaseMemory(ctx: TrialContext, description: string, expires?: string): void {
 	controlFile(
 		ctx,
@@ -302,6 +310,25 @@ export function buildPositiveContext(id: string, ctx: TrialContext): TrialContex
 		);
 		controlEvent(ctx, "step", undefined, { kind: "runMemoryMaintenance" });
 		stampEpoch(ctx);
+	} else if (id === "M-cold-recall-01") {
+		correlatedTool(
+			ctx,
+			"cold-search",
+			"session_search",
+			{ query: "staging 数据库端口" },
+			{
+				detail: "staging 数据库端口统一改成 15432（代号 COLD-PORT-7）。",
+			},
+		);
+		for (const event of ctx.trace.filter((entry) => entry.tool === "session_search")) event.stepIndex = 1;
+		controlDelivery(ctx, "staging 数据库端口是 15432。");
+	} else if (id === "M-reflect-conditional-01") {
+		controlConditionalMemory(ctx, "测试失败时先停止修改并告诉用户。");
+		controlFile(
+			ctx,
+			"memory-review.jsonl",
+			`${JSON.stringify({ reason: "reflect-boundary", actions: [{ target: "memory", action: "reflect", added: ["stop-on-test-failure"] }] })}\n`,
+		);
 	} else if (id === "M-overflow-01") {
 		const win = fixtureInteger(ctx.seed, "observation-window", 20, 80);
 		controlFile(ctx, ".eval/overflow-proof.json", '{"overBudget":true,"omittedTarget":true}\n');
