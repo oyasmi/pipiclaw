@@ -161,7 +161,9 @@ pipiclaw auth logout openai-codex    # 移除已保存凭据
 ```
 
 - 将 `tools.web.enable` 改为 `true` 即可启用 `web_search` 与 `web_fetch`。
-- 搜索 `provider` 支持 `duckduckgo`（默认免 Key）、`tavily`（填 `apiKey`）、`jina`（填 `apiKey`）与 `searxng`（填 `baseUrl`）。
+- 搜索 `provider` 支持 `duckduckgo`（默认免 Key）、`tavily` 和 `jina`（填 `apiKey`）、`searxng`（填 `baseUrl`），以及 `parallel`（填 `apiKey` 或设置进程环境变量 `PARALLEL_API_KEY`）。
+- 使用原生 Parallel Search API 时，将 `provider` 设为 `parallel`。默认用 `fast` 模式，可按需设 `parallelMode: "advanced"`。该接口通过 Parallel 账户计费。 [Parallel Search API](https://docs.parallel.ai/search/search-quickstart) · [价格说明](https://docs.parallel.ai/getting-started/pricing)
+- 通过 `fallback` 选择临时故障时使用的供应商。省略时默认尝试 DuckDuckGo，设为 `null` 可关闭。同一供应商只发起一次请求，带来源筛选的搜索只切换到支持同等筛选的供应商。改完配置后，在当前会话发送 `/reload`。
 
 ---
 

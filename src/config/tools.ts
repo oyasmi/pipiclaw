@@ -9,12 +9,18 @@ import type { AssertNoMissingKeys } from "../shared/exact-keys.js";
 import { clampInteger } from "../shared/format.js";
 import { isRecord } from "../shared/type-guards.js";
 
-export type WebSearchProvider = "tavily" | "jina" | "searxng" | "duckduckgo";
+const WEB_SEARCH_PROVIDERS = ["tavily", "jina", "searxng", "duckduckgo", "parallel"] as const;
+export type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
-export interface PipiclawWebSearchConfig {
+export interface WebSearchBackendConfig {
 	provider: WebSearchProvider;
 	apiKey: string;
 	baseUrl: string;
+}
+
+export interface PipiclawWebSearchConfig extends WebSearchBackendConfig {
+	fallback: WebSearchBackendConfig | null;
+	parallelMode: "fast" | "advanced";
 	maxResults: number;
 	timeoutMs: number;
 }
@@ -83,7 +89,8 @@ const _toolsConfigKeysComplete: AssertNoMissingKeys<PipiclawToolsConfig["tools"]
 	true;
 void _toolsConfigKeysComplete;
 
-const WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ["tavily", "jina", "searxng", "duckduckgo"];
+const MAX_SEARCH_TIMEOUT_MS = 2_147_483_647;
+const DEFAULT_SEARCH_BACKEND: WebSearchBackendConfig = { provider: "duckduckgo", apiKey: "", baseUrl: "" };
 
 export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 	tools: {
@@ -91,9 +98,9 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 			enable: false,
 			proxy: null,
 			search: {
-				provider: "duckduckgo",
-				apiKey: "",
-				baseUrl: "",
+				...DEFAULT_SEARCH_BACKEND,
+				fallback: DEFAULT_SEARCH_BACKEND,
+				parallelMode: "fast",
 				maxResults: 5,
 				timeoutMs: 30_000,
 			},
@@ -146,6 +153,14 @@ function pushInvalidValueDiagnostic(
 	pushConfigWarning(diagnostics, "tools", configPath, field, message);
 }
 
+function readSearchBackend(value: Record<string, unknown>): WebSearchBackendConfig | null {
+	const name = asTrimmedString(value.provider).toLowerCase();
+	const provider = WEB_SEARCH_PROVIDERS.find((candidate) => candidate === name);
+	return provider
+		? { provider, apiKey: asTrimmedString(value.apiKey), baseUrl: asTrimmedString(value.baseUrl) }
+		: null;
+}
+
 function mergeToolsConfig(source: unknown, configPath: string, diagnostics: ConfigDiagnostic[]): PipiclawToolsConfig {
 	if (!isRecord(source)) {
 		pushInvalidValueDiagnostic(diagnostics, configPath, "root", "expected a JSON object; using defaults");
@@ -161,20 +176,38 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 	const search = isRecord(web.search) ? web.search : {};
 	const fetch = isRecord(web.fetch) ? web.fetch : {};
 
-	const providerValue = asTrimmedString(search.provider, DEFAULT_TOOLS_CONFIG.tools.web.search.provider).toLowerCase();
-	const provider = WEB_SEARCH_PROVIDERS.includes(providerValue as WebSearchProvider)
-		? (providerValue as WebSearchProvider)
-		: (() => {
-				if (search.provider !== undefined) {
-					pushInvalidValueDiagnostic(
-						diagnostics,
-						configPath,
-						"tools.web.search.provider",
-						`unknown provider "${String(search.provider)}"; using ${DEFAULT_TOOLS_CONFIG.tools.web.search.provider}`,
-					);
-				}
-				return DEFAULT_TOOLS_CONFIG.tools.web.search.provider;
-			})();
+	const backend = readSearchBackend(search);
+	if (!backend && search.provider !== undefined) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.search.provider",
+			`unknown provider "${String(search.provider)}"; using duckduckgo`,
+		);
+	}
+	const fallback =
+		search.fallback === undefined
+			? DEFAULT_SEARCH_BACKEND
+			: isRecord(search.fallback)
+				? readSearchBackend(search.fallback)
+				: null;
+	if (search.fallback != null && !fallback) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.search.fallback",
+			"expected null or a known provider object; disabling fallback",
+		);
+	}
+	const parallelMode = search.parallelMode === "advanced" ? "advanced" : "fast";
+	if (search.parallelMode !== undefined && search.parallelMode !== parallelMode) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.search.parallelMode",
+			'expected "fast" or "advanced"; using fast',
+		);
+	}
 	const defaultExtractMode = asTrimmedString(
 		fetch.defaultExtractMode,
 		DEFAULT_TOOLS_CONFIG.tools.web.fetch.defaultExtractMode,
@@ -190,12 +223,12 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 			"expected an integer between 1 and 10; using default",
 		);
 	}
-	if (search.timeoutMs !== undefined && clampInteger(search.timeoutMs, -1, 1) === -1) {
+	if (search.timeoutMs !== undefined && clampInteger(search.timeoutMs, -1, 1, MAX_SEARCH_TIMEOUT_MS) === -1) {
 		pushInvalidValueDiagnostic(
 			diagnostics,
 			configPath,
 			"tools.web.search.timeoutMs",
-			"expected a positive integer; using default",
+			`expected an integer between 1 and ${MAX_SEARCH_TIMEOUT_MS}; using default`,
 		);
 	}
 	if (fetch.maxChars !== undefined && clampInteger(fetch.maxChars, -1, 100) === -1) {
@@ -245,11 +278,16 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 				enable: typeof web.enable === "boolean" ? web.enable : DEFAULT_TOOLS_CONFIG.tools.web.enable,
 				proxy: asOptionalProxy(web.proxy),
 				search: {
-					provider,
-					apiKey: asTrimmedString(search.apiKey),
-					baseUrl: asTrimmedString(search.baseUrl),
+					...(backend ?? DEFAULT_SEARCH_BACKEND),
+					fallback,
+					parallelMode,
 					maxResults: clampInteger(search.maxResults, DEFAULT_TOOLS_CONFIG.tools.web.search.maxResults, 1, 10),
-					timeoutMs: clampInteger(search.timeoutMs, DEFAULT_TOOLS_CONFIG.tools.web.search.timeoutMs, 1),
+					timeoutMs: clampInteger(
+						search.timeoutMs,
+						DEFAULT_TOOLS_CONFIG.tools.web.search.timeoutMs,
+						1,
+						MAX_SEARCH_TIMEOUT_MS,
+					),
 				},
 				fetch: {
 					maxChars: clampInteger(fetch.maxChars, DEFAULT_TOOLS_CONFIG.tools.web.fetch.maxChars, 100),

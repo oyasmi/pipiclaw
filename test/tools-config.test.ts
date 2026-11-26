@@ -20,6 +20,8 @@ describe("tools config", () => {
 							provider: "searxng",
 							baseUrl: "https://searx.example",
 							maxResults: 9,
+							fallback: { provider: "parallel", apiKey: "secondary-key" },
+							parallelMode: "advanced",
 						},
 						fetch: {
 							maxChars: 1200,
@@ -46,6 +48,8 @@ describe("tools config", () => {
 						provider: "searxng",
 						baseUrl: "https://searx.example",
 						maxResults: 9,
+						fallback: { provider: "parallel", apiKey: "secondary-key", baseUrl: "" },
+						parallelMode: "advanced",
 					},
 					fetch: {
 						...DEFAULT_TOOLS_CONFIG.tools.web.fetch,

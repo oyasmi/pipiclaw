@@ -72,7 +72,9 @@
 
 ## 网页工具（`web_search` / `web_fetch`）
 
-默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（tavily / jina / searxng / duckduckgo，默认 duckduckgo）。抓取有字符数、响应体积、超时等上限。`web_fetch` 把一次抓取缓存为快照，`offset` 在同一快照内分页续读（快照过期后 `offset>0` 会要求从 0 重取而不是跨版本拼接），`refresh: true` 绕过缓存重抓；返回文本会分别标注"本页没显示完"和"源站没取全"，并给出重定向后的最终 URL。PDF 等二进制下载会被拒绝并提示先下载再 `read`。完整字段见 [configuration-reference.md](./configuration-reference.md#6-toolsjson内建工具与任务开关)。
+默认关闭，在 `tools.json` 中设 `tools.web.enable: true` 启用。搜索默认用 DuckDuckGo，支持 Parallel、Tavily、Jina 和 SearXNG。搜索结果标明实际供应商，并给出原文链接、摘录和可用的发布日期。使用 Parallel 时，可给出搜索目标和最多两组额外关键词。Parallel 和 Tavily 支持指定或排除域名，以及按起始发布日期筛选。验证页、限流和暂时不可用等故障可触发一次后备搜索。真实空结果直接返回。 [配置字段](./configuration-reference.md#6-toolsjson内建工具与任务开关)
+
+抓取有字符数、响应体积、超时等上限。`web_fetch` 把一次抓取缓存为快照，`offset` 在同一快照内分页续读（快照过期后 `offset>0` 会要求从 0 重取而不是跨版本拼接），`refresh: true` 绕过缓存重抓；返回文本会分别标注"本页没显示完"和"源站没取全"，并给出重定向后的最终 URL。PDF 等二进制下载会被拒绝并提示先下载再 `read`。
 
 出站网络同样受 `security.json` 的网络守卫约束。首次初始化生成的 `security.json` 模板里 `networkGuard.enabled` 为 `false`；若删除该字段或自行从内置默认开始，则 network guard 默认开启。
 

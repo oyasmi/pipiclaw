@@ -4,6 +4,7 @@ export interface WebSearchResultItem {
 	title: string;
 	url: string;
 	snippet: string;
+	publishedDate?: string;
 }
 
 export interface FormattedFetchDetails {
@@ -24,15 +25,22 @@ function cleanLine(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
 }
 
-export function formatWebSearchText(query: string, results: WebSearchResultItem[]): string {
+export function formatWebSearchText(
+	query: string,
+	provider: string,
+	results: WebSearchResultItem[],
+	fallbackFrom?: string,
+): string {
+	const source = fallbackFrom ? `${provider} (fallback after ${fallbackFrom})` : provider;
 	if (results.length === 0) {
-		return `No results for: ${query}`;
+		return `No results from ${source} for: ${query}\nTry a different query or broaden the source filters.`;
 	}
 
-	const lines = [`Results for: ${query}`, ""];
+	const lines = [UNTRUSTED_WEB_CONTENT_BANNER, "", `Results from ${source} for: ${query}`, ""];
 	for (const [index, result] of results.entries()) {
 		lines.push(`${index + 1}. ${cleanLine(result.title) || "(untitled result)"}`);
 		lines.push(`   ${result.url}`);
+		if (result.publishedDate) lines.push(`   Published: ${result.publishedDate}`);
 		const snippet = cleanLine(result.snippet);
 		if (snippet) {
 			lines.push(`   ${snippet}`);
@@ -41,6 +49,7 @@ export function formatWebSearchText(query: string, results: WebSearchResultItem[
 			lines.push("");
 		}
 	}
+	lines.push("", "Open a source with web_fetch to verify claims or read the full text.");
 	return lines.join("\n");
 }
 

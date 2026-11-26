@@ -46,6 +46,8 @@ export interface WebHttpRequestOptions {
 	maxResponseBytes?: number;
 }
 
+export class WebResponseError extends Error {}
+
 const agentCache = new Map<string, HttpAgent | HttpsAgent>();
 
 function normalizeHeaders(headers: unknown): Record<string, string> {
@@ -183,6 +185,7 @@ export class WebHttpClient {
 		const credentialedOrigin = new URL(currentUrl).origin;
 
 		for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
+			options.signal?.throwIfAborted();
 			let validatedAddress: string | undefined;
 			try {
 				const validated =
@@ -196,6 +199,7 @@ export class WebHttpClient {
 				}
 				throw error;
 			}
+			options.signal?.throwIfAborted();
 
 			const proxyAgent = getProxyAgent(currentUrl, this.context.webConfig.proxy);
 			// Without a proxy, pin the socket to the guard-validated IP. With a proxy, the proxy
@@ -241,7 +245,7 @@ export class WebHttpClient {
 					typeof (error as { message?: unknown })?.message === "string" &&
 					(error as { message: string }).message.includes("maxContentLength")
 				) {
-					throw new Error(`Response exceeds maxResponseBytes (${options.maxResponseBytes} bytes)`);
+					throw new WebResponseError(`Response exceeds maxResponseBytes (${options.maxResponseBytes} bytes)`);
 				}
 				throw error;
 			}
@@ -250,7 +254,7 @@ export class WebHttpClient {
 
 			if (isRedirectStatus(response.status) && headers.location) {
 				if (redirectCount === maxRedirects) {
-					throw new Error(`Too many redirects while fetching ${options.url}`);
+					throw new WebResponseError(`Too many redirects while fetching ${options.url}`);
 				}
 				currentUrl = new URL(headers.location, currentUrl).toString();
 				if (
@@ -271,7 +275,7 @@ export class WebHttpClient {
 			};
 		}
 
-		throw new Error(`Too many redirects while fetching ${options.url}`);
+		throw new WebResponseError(`Too many redirects while fetching ${options.url}`);
 	}
 
 	async requestJson<T>(options: WebHttpRequestOptions): Promise<{ response: WebHttpResponse; data: T }> {

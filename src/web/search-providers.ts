@@ -1,203 +1,312 @@
+import { isAxiosError } from "axios";
 import { JSDOM } from "jsdom";
-import type { PipiclawWebSearchConfig, WebSearchProvider as WebSearchProviderName } from "../config/tools.js";
-import type { WebHttpClient } from "./client.js";
+import type { PipiclawWebSearchConfig, WebSearchBackendConfig } from "../config/tools.js";
+import { isRecord } from "../shared/type-guards.js";
+import { type WebHttpClient, type WebHttpRequestOptions, WebResponseError } from "./client.js";
+import { hasSearchFilters, isSearchDate, type ResolvedWebSearchRequest } from "./config.js";
 import type { WebSearchResultItem } from "./format.js";
 
-export class WebSearchProviderError extends Error {
-	readonly kind: "config" | "provider";
+type SearchFailureKind =
+	| "configuration"
+	| "invalid_request"
+	| "rate_limit"
+	| "timeout"
+	| "challenge"
+	| "invalid_response"
+	| "unavailable";
 
-	constructor(kind: "config" | "provider", message: string) {
+export class WebSearchProviderError extends Error {
+	constructor(
+		readonly kind: SearchFailureKind,
+		message: string,
+	) {
 		super(message);
 		this.name = "WebSearchProviderError";
-		this.kind = kind;
 	}
 }
 
 export interface SearchProviderContext {
 	client: WebHttpClient;
-	config: PipiclawWebSearchConfig;
+	backend: WebSearchBackendConfig;
+	parallelMode: PipiclawWebSearchConfig["parallelMode"];
+	timeoutMs: number;
+	signal: AbortSignal;
 }
 
-export interface SearchProvider {
-	search(query: string, count: number, signal?: AbortSignal): Promise<WebSearchResultItem[]>;
+interface SearchBatch {
+	results: WebSearchResultItem[];
+	searchId?: string;
 }
 
-function normalizeResult(item: Partial<WebSearchResultItem>): WebSearchResultItem | null {
-	const title = item.title?.trim() ?? "";
-	const url = item.url?.trim() ?? "";
-	const snippet = item.snippet?.trim() ?? "";
-	if (!url) {
-		return null;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_SNIPPET_CHARS = 1_500;
+const DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/";
+
+function responseError(provider: string, status: number): WebSearchProviderError {
+	const prefix = `${provider} search returned HTTP ${status}.`;
+	if (status === 429)
+		return new WebSearchProviderError("rate_limit", `${prefix} Wait before retrying or use another source.`);
+	if (status === 408 || status === 504) {
+		return new WebSearchProviderError("timeout", `${prefix} Retry once or narrow the search.`);
 	}
+	if ([401, 402, 403, 404].includes(status)) {
+		return new WebSearchProviderError(
+			"configuration",
+			`${prefix} Ask the operator to check the provider settings and account access.`,
+		);
+	}
+	if (status === 400 || status === 422) {
+		return new WebSearchProviderError("invalid_request", `${prefix} Check the query and filters and retry once.`);
+	}
+	return new WebSearchProviderError("unavailable", `${prefix} Retry later or use another source.`);
+}
+
+function invalidResponse(provider: string): WebSearchProviderError {
+	return new WebSearchProviderError(
+		"invalid_response",
+		`${provider} search returned an unexpected response. Use another source or retry later.`,
+	);
+}
+
+async function requestSearchText(
+	context: SearchProviderContext,
+	options: Omit<WebHttpRequestOptions, "timeoutMs" | "signal" | "maxResponseBytes">,
+): Promise<string> {
+	const { client, backend, signal, timeoutMs } = context;
+	const { provider } = backend;
+	let payload: Awaited<ReturnType<WebHttpClient["requestText"]>>;
+	try {
+		payload = await client.requestText({ ...options, timeoutMs, signal, maxResponseBytes: MAX_RESPONSE_BYTES });
+	} catch (error) {
+		signal.throwIfAborted();
+		if (error instanceof WebResponseError) throw invalidResponse(provider);
+		if (!isAxiosError(error)) throw error;
+		if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
+			throw new WebSearchProviderError("timeout", `${provider} search timed out. Retry once or narrow the search.`);
+		}
+		throw new WebSearchProviderError(
+			"unavailable",
+			`${provider} search could not reach the server. Use another source or retry later.`,
+		);
+	}
+
+	const { status } = payload.response;
+	if (provider === "duckduckgo" && status === 202) throw duckDuckGoChallenge();
+	if (status !== 200) throw responseError(provider, status);
+	return payload.text;
+}
+
+function decodeSearchJson(text: string, provider: string): Record<string, unknown> {
+	let data: unknown;
+	try {
+		data = JSON.parse(text);
+	} catch {
+		throw invalidResponse(provider);
+	}
+	if (!isRecord(data)) throw invalidResponse(provider);
+	return data;
+}
+
+function buildResult(title: unknown, href: unknown, excerpt: unknown, date?: unknown): WebSearchResultItem | null {
+	if (typeof href !== "string") return null;
+	const url = URL.parse(href.trim());
+	if (!url || !["https:", "http:"].includes(url.protocol) || url.username || url.password) return null;
+	const publishedDate = typeof date === "string" ? /^\d{4}-\d{2}-\d{2}(?=$|T)/.exec(date)?.[0] : undefined;
 	return {
-		title: title || url,
-		url,
-		snippet,
+		title: (typeof title === "string" ? title.trim().slice(0, 300) : "") || url.href,
+		url: url.href,
+		snippet: typeof excerpt === "string" ? excerpt.trim().slice(0, MAX_SNIPPET_CHARS) : "",
+		...(publishedDate && isSearchDate(publishedDate) ? { publishedDate } : {}),
 	};
 }
 
-function isProviderConfigStatus(status: number): boolean {
-	return status === 400 || status === 401 || status === 403 || status === 422 || status === 429;
+function resultList(
+	data: unknown,
+	context: SearchProviderContext,
+	count: number,
+	parse: (row: Record<string, unknown>) => WebSearchResultItem | null,
+): WebSearchResultItem[] {
+	if (!Array.isArray(data)) throw invalidResponse(context.backend.provider);
+	const results: WebSearchResultItem[] = [];
+	for (const row of data) {
+		const result = isRecord(row) ? parse(row) : null;
+		if (result) results.push(result);
+		if (results.length >= count) break;
+	}
+	if (data.length > 0 && results.length === 0) throw invalidResponse(context.backend.provider);
+	return results;
 }
 
-class TavilySearchProvider implements SearchProvider {
-	constructor(private readonly context: SearchProviderContext) {}
+function requireApiKey(context: SearchProviderContext): string {
+	const { provider, apiKey } = context.backend;
+	const key = apiKey || (provider === "parallel" ? process.env.PARALLEL_API_KEY?.trim() : undefined);
+	if (key) return key;
+	const envHint = provider === "parallel" ? " or set PARALLEL_API_KEY" : "";
+	throw new WebSearchProviderError(
+		"configuration",
+		`${provider} search requires an API key. Ask the operator to set the apiKey for this search provider in tools.json${envHint}.`,
+	);
+}
 
-	async search(query: string, count: number, signal?: AbortSignal): Promise<WebSearchResultItem[]> {
-		if (!this.context.config.apiKey) {
-			throw new WebSearchProviderError("config", "Tavily search requires tools.web.search.apiKey");
-		}
-		const { response, data } = await this.context.client.requestJson<{
-			results?: Array<{ title?: string; url?: string; content?: string }>;
-		}>({
-			method: "POST",
-			url: "https://api.tavily.com/search",
-			headers: {
-				Authorization: `Bearer ${this.context.config.apiKey}`,
-				"Content-Type": "application/json",
-				Accept: "application/json",
+async function searchParallel(context: SearchProviderContext, request: ResolvedWebSearchRequest): Promise<SearchBatch> {
+	const { objective, queries, count, includeDomains, excludeDomains, publishedAfter } = request;
+	const text = await requestSearchText(context, {
+		method: "POST",
+		url: "https://api.parallel.ai/v1/search",
+		headers: { "x-api-key": requireApiKey(context), "Content-Type": "application/json", Accept: "application/json" },
+		data: {
+			objective,
+			search_queries: queries,
+			mode: context.parallelMode,
+			max_chars_total: count * MAX_SNIPPET_CHARS,
+			advanced_settings: {
+				max_results: count,
+				...(hasSearchFilters(request)
+					? {
+							source_policy: {
+								include_domains: includeDomains.length ? includeDomains : undefined,
+								exclude_domains: excludeDomains.length ? excludeDomains : undefined,
+								after_date: publishedAfter,
+							},
+						}
+					: {}),
 			},
-			data: { query, max_results: count },
-			timeoutMs: this.context.config.timeoutMs,
-			signal,
-		});
-		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError(
-				isProviderConfigStatus(response.status) ? "config" : "provider",
-				`Tavily search failed with HTTP ${response.status}`,
-			);
-		}
-		return (data.results ?? [])
-			.map((item) =>
-				normalizeResult({
-					title: item.title,
-					url: item.url,
-					snippet: item.content,
-				}),
-			)
-			.filter((item): item is WebSearchResultItem => item !== null)
-			.slice(0, count);
-	}
+		},
+	});
+	const data = decodeSearchJson(text, context.backend.provider);
+	return {
+		searchId: typeof data.search_id === "string" ? data.search_id : undefined,
+		results: resultList(data.results, context, count, (row) =>
+			buildResult(
+				row.title,
+				row.url,
+				Array.isArray(row.excerpts) ? row.excerpts.filter((part) => typeof part === "string").join("\n\n") : "",
+				row.publish_date,
+			),
+		),
+	};
 }
 
-class JinaSearchProvider implements SearchProvider {
-	constructor(private readonly context: SearchProviderContext) {}
-
-	async search(query: string, count: number, signal?: AbortSignal): Promise<WebSearchResultItem[]> {
-		if (!this.context.config.apiKey) {
-			throw new WebSearchProviderError("config", "Jina search requires tools.web.search.apiKey");
-		}
-		const { response, data } = await this.context.client.requestJson<{
-			data?: Array<{ title?: string; url?: string; content?: string }>;
-		}>({
-			url: `https://s.jina.ai/${encodeURIComponent(query)}`,
-			headers: {
-				Authorization: `Bearer ${this.context.config.apiKey}`,
-				Accept: "application/json",
-			},
-			timeoutMs: this.context.config.timeoutMs,
-			signal,
-		});
-		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError(
-				isProviderConfigStatus(response.status) ? "config" : "provider",
-				`Jina search failed with HTTP ${response.status}`,
-			);
-		}
-		return (data.data ?? [])
-			.map((item) =>
-				normalizeResult({
-					title: item.title,
-					url: item.url,
-					snippet: item.content,
-				}),
-			)
-			.filter((item): item is WebSearchResultItem => item !== null)
-			.slice(0, count);
-	}
+async function searchTavily(context: SearchProviderContext, request: ResolvedWebSearchRequest): Promise<SearchBatch> {
+	const { query, count, includeDomains, excludeDomains, publishedAfter } = request;
+	const text = await requestSearchText(context, {
+		method: "POST",
+		url: "https://api.tavily.com/search",
+		headers: {
+			Authorization: `Bearer ${requireApiKey(context)}`,
+			"Content-Type": "application/json",
+			Accept: "application/json",
+		},
+		data: {
+			query,
+			max_results: count,
+			include_published_date: true,
+			...(includeDomains.length ? { include_domains: includeDomains } : {}),
+			...(excludeDomains.length ? { exclude_domains: excludeDomains } : {}),
+			...(publishedAfter ? { start_date: publishedAfter, filter_by_published_date: true } : {}),
+		},
+	});
+	const data = decodeSearchJson(text, context.backend.provider);
+	return {
+		results: resultList(data.results, context, count, (row) =>
+			buildResult(row.title, row.url, row.content, row.published_date),
+		),
+	};
 }
 
-class SearxngSearchProvider implements SearchProvider {
-	constructor(private readonly context: SearchProviderContext) {}
-
-	async search(query: string, count: number, signal?: AbortSignal): Promise<WebSearchResultItem[]> {
-		if (!this.context.config.baseUrl) {
-			throw new WebSearchProviderError("config", "SearXNG search requires tools.web.search.baseUrl");
-		}
-		const baseUrl = new URL("/search", this.context.config.baseUrl).toString();
-		const { response, data } = await this.context.client.requestJson<{
-			results?: Array<{ title?: string; url?: string; content?: string }>;
-		}>({
-			url: baseUrl,
-			params: { q: query, format: "json" },
-			timeoutMs: this.context.config.timeoutMs,
-			signal,
-		});
-		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError("provider", `SearXNG search failed with HTTP ${response.status}`);
-		}
-		return (data.results ?? [])
-			.map((item) =>
-				normalizeResult({
-					title: item.title,
-					url: item.url,
-					snippet: item.content,
-				}),
-			)
-			.filter((item): item is WebSearchResultItem => item !== null)
-			.slice(0, count);
-	}
+async function searchJina(
+	context: SearchProviderContext,
+	{ query, count }: ResolvedWebSearchRequest,
+): Promise<SearchBatch> {
+	const text = await requestSearchText(context, {
+		url: `https://s.jina.ai/${encodeURIComponent(query)}`,
+		headers: { Authorization: `Bearer ${requireApiKey(context)}`, Accept: "application/json" },
+	});
+	const data = decodeSearchJson(text, context.backend.provider);
+	return { results: resultList(data.data, context, count, (row) => buildResult(row.title, row.url, row.content)) };
 }
 
-class DuckDuckGoSearchProvider implements SearchProvider {
-	constructor(private readonly context: SearchProviderContext) {}
+async function searchSearxng(
+	context: SearchProviderContext,
+	{ query, count }: ResolvedWebSearchRequest,
+): Promise<SearchBatch> {
+	const base = URL.parse(context.backend.baseUrl);
+	if (!base || !["http:", "https:"].includes(base.protocol)) {
+		throw new WebSearchProviderError(
+			"configuration",
+			"SearXNG search requires an HTTP(S) baseUrl. Ask the operator to set the URL in tools.json.",
+		);
+	}
+	const text = await requestSearchText(context, {
+		url: new URL("/search", base).href,
+		params: { q: query, format: "json" },
+		headers: { Accept: "application/json" },
+	});
+	const data = decodeSearchJson(text, context.backend.provider);
+	return { results: resultList(data.results, context, count, (row) => buildResult(row.title, row.url, row.content)) };
+}
 
-	async search(query: string, count: number, signal?: AbortSignal): Promise<WebSearchResultItem[]> {
-		const { response, text } = await this.context.client.requestText({
-			url: "https://html.duckduckgo.com/html/",
-			params: { q: query },
-			headers: { Accept: "text/html" },
-			timeoutMs: this.context.config.timeoutMs,
-			signal,
-		});
-		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError("provider", `DuckDuckGo search failed with HTTP ${response.status}`);
-		}
+function duckDuckGoChallenge(): WebSearchProviderError {
+	return new WebSearchProviderError(
+		"challenge",
+		"DuckDuckGo returned a verification page. Use another search source or open the official site directly.",
+	);
+}
 
-		const dom = new JSDOM(text);
-		const items = Array.from(dom.window.document.querySelectorAll<HTMLElement>(".result"));
+function duckDuckGoResultUrl(href: string): string | null {
+	const url = URL.parse(href, DUCKDUCKGO_URL);
+	if (url?.hostname === "duckduckgo.com" && url.pathname === "/l/") return url.searchParams.get("uddg");
+	return url?.href ?? null;
+}
+
+async function searchDuckDuckGo(
+	context: SearchProviderContext,
+	{ query, count }: ResolvedWebSearchRequest,
+): Promise<SearchBatch> {
+	const text = await requestSearchText(context, {
+		url: DUCKDUCKGO_URL,
+		params: { q: query },
+		headers: { Accept: "text/html" },
+	});
+	const { window } = new JSDOM(text);
+	try {
+		const document = window.document;
+		if (document.querySelector("#challenge-form, #anomaly-modal, .anomaly-modal")) throw duckDuckGoChallenge();
+		if (document.querySelector(".no-results, .result--no-result")) return { results: [] };
 		const results: WebSearchResultItem[] = [];
-		for (const item of items) {
-			const link = item.querySelector(".result__title a") ?? item.querySelector("a.result__a");
-			const snippet = item.querySelector(".result__snippet");
-			const href = link?.getAttribute("href")?.trim() ?? "";
-			if (!href) {
-				continue;
-			}
-			results.push({
-				title: link?.textContent?.trim() || href,
-				url: href,
-				snippet: snippet?.textContent?.trim() || "",
-			});
-			if (results.length >= count) {
-				break;
-			}
+		for (const item of document.querySelectorAll(".result")) {
+			const link = item.querySelector(".result__title a, a.result__a");
+			const href = link?.getAttribute("href");
+			if (!link || !href) continue;
+			const result = buildResult(
+				link.textContent,
+				duckDuckGoResultUrl(href),
+				item.querySelector(".result__snippet")?.textContent,
+			);
+			if (result) results.push(result);
+			if (results.length >= count) break;
 		}
-		return results;
+		if (results.length === 0) throw invalidResponse(context.backend.provider);
+		return { results };
+	} finally {
+		window.close();
 	}
 }
 
-export function createSearchProvider(provider: WebSearchProviderName, context: SearchProviderContext): SearchProvider {
-	switch (provider) {
-		case "tavily":
-			return new TavilySearchProvider(context);
-		case "jina":
-			return new JinaSearchProvider(context);
-		case "searxng":
-			return new SearxngSearchProvider(context);
-		case "duckduckgo":
-			return new DuckDuckGoSearchProvider(context);
-		default:
-			throw new WebSearchProviderError("config", `Unknown search provider: ${provider}`);
-	}
+const providers = {
+	parallel: searchParallel,
+	tavily: searchTavily,
+	jina: searchJina,
+	searxng: searchSearxng,
+	duckduckgo: searchDuckDuckGo,
+} satisfies Record<
+	WebSearchBackendConfig["provider"],
+	(context: SearchProviderContext, request: ResolvedWebSearchRequest) => Promise<SearchBatch>
+>;
+
+export function searchByProvider(
+	context: SearchProviderContext,
+	request: ResolvedWebSearchRequest,
+): Promise<SearchBatch> {
+	return providers[context.backend.provider](context, request);
 }

@@ -180,11 +180,13 @@
 |---|---|---|---|
 | `tools.web.enable` | `boolean` | `false` | 联网工具总开关（同时控制 `web_search` 与 `web_fetch` 是否注册） |
 | `tools.web.proxy` | `string \| null` | `null` | 网页工具专用代理 URL；未设置时依次回落到 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`、直连 |
-| `tools.web.search.provider` | `"duckduckgo" \| "tavily" \| "jina" \| "searxng"` | `"duckduckgo"` | 搜索引擎后端（`duckduckgo` 免 API Key） |
-| `tools.web.search.apiKey` | `string` | `""` | `tavily` 或 `jina` 的 API Key |
+| `tools.web.search.provider` | `"duckduckgo" \| "tavily" \| "jina" \| "searxng" \| "parallel"` | `"duckduckgo"` | 主搜索供应商（`duckduckgo` 免 API Key） |
+| `tools.web.search.apiKey` | `string` | `""` | 主供应商的 API Key。`parallel` 可从进程环境变量 `PARALLEL_API_KEY` 读取 |
 | `tools.web.search.baseUrl` | `string` | `""` | `searxng` 实例地址 |
+| `tools.web.search.fallback` | `{ provider, apiKey?, baseUrl? } \| null` | `{ "provider": "duckduckgo" }` | 主供应商临时故障时尝试一次。设置 `null` 可关闭，凭据和实例地址与主供应商独立 |
+| `tools.web.search.parallelMode` | `"fast" \| "advanced"` | `"fast"` | Parallel 搜索模式，适用于配置为主供应商或后备供应商的 Parallel |
 | `tools.web.search.maxResults` | `number` | `5` | 每次搜索返回条数（整数 `1–10`） |
-| `tools.web.search.timeoutMs` | `number` | `30000` | 搜索超时毫秒数 |
+| `tools.web.search.timeoutMs` | `number` | `30000` | 整次搜索的毫秒预算。有可用后备供应商时，主请求最多用三分之二，后备请求使用剩余时间 |
 | `tools.web.fetch.maxChars` | `number` | `50000` | 单次网页正文提取最大字符数（长页面自动缓存于工位 `web-cache/` 并支持 `offset` 翻页） |
 | `tools.web.fetch.timeoutMs` | `number` | `30000` | 网页抓取超时毫秒数 |
 | `tools.web.fetch.maxImageBytes` | `number` | `10485760` | 抓取图片最大字节数（10 MiB） |

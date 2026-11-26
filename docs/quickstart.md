@@ -264,7 +264,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{claude-main,codex-main,codex-rev
 > 外部 Coding Agent 作为独立本机 CLI 进程运行，不经过 Pipiclaw 内置命令与路径守卫（除只读的 `codex-review` 外，示例模板默认开启自动执行参数）。详情请阅读[智能体委派指南](./sub-agents.md)。
 
 ### 🌐 2. 开启联网搜索与网页抓取
-默认联网工具关闭。编辑 `~/.pipiclaw/tools.json`，把 `tools.web.enable` 改为 `true`（默认使用免 API Key 的 DuckDuckGo，也支持配置 Tavily、Jina、SearXNG），在聊天框发送 `/reload` 即刻生效。
+默认联网工具关闭。编辑 `~/.pipiclaw/tools.json`，把 `tools.web.enable` 改为 `true`（默认使用免 API Key 的 DuckDuckGo，也支持配置 Parallel、Tavily、Jina、SearXNG），在聊天框发送 `/reload` 即刻生效。
 
 ### 🛡️ 3. 用 `pm2` 托管为 24 小时常驻后台
 不想每次关终端窗口就断连？用 `pm2` 一行命令常驻后台：
