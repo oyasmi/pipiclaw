@@ -36,8 +36,9 @@ export async function listJournalDates(deskDir: string): Promise<string[]> {
 }
 
 /** Search stays bounded even after years of journals, or one unusually busy day. */
-export const JOURNAL_SEARCH_MAX_DAYS = 30;
+export const JOURNAL_SEARCH_MAX_DAYS = 365;
 export const JOURNAL_SEARCH_DAY_BYTES = 64 * 1024;
+export const JOURNAL_SEARCH_MAX_TOTAL_BYTES = 1_024 * 1_024;
 
 export interface JournalSearchWindow {
 	days: Array<{ date: string; content: string }>;
@@ -48,20 +49,30 @@ export interface JournalSearchWindow {
 /** Newest day files first; retain only whole lines when a day's older bytes are omitted. */
 export async function readJournalForSearch(deskDir: string): Promise<JournalSearchWindow> {
 	const dates = (await listJournalDates(deskDir)).reverse();
+	const capped = dates.slice(0, JOURNAL_SEARCH_MAX_DAYS);
 	const window: JournalSearchWindow = {
 		days: [],
-		omittedDays: Math.max(0, dates.length - JOURNAL_SEARCH_MAX_DAYS),
+		omittedDays: Math.max(0, dates.length - capped.length),
 		truncatedDates: [],
 	};
-	for (const date of dates.slice(0, JOURNAL_SEARCH_MAX_DAYS)) {
+	let totalBytes = 0;
+	for (let i = 0; i < capped.length; i++) {
+		const date = capped[i];
+		const remainingTotal = JOURNAL_SEARCH_MAX_TOTAL_BYTES - totalBytes;
+		if (remainingTotal <= 0) {
+			window.omittedDays += capped.length - i;
+			break;
+		}
 		try {
 			const file = await open(getJournalPath(deskDir, date), "r");
 			try {
 				const stat = await file.stat();
 				if (!stat.isFile()) continue;
-				const start = Math.max(0, stat.size - JOURNAL_SEARCH_DAY_BYTES);
-				const buffer = Buffer.alloc(Math.min(stat.size, JOURNAL_SEARCH_DAY_BYTES));
+				const maxBytes = Math.min(JOURNAL_SEARCH_DAY_BYTES, remainingTotal);
+				const start = Math.max(0, stat.size - maxBytes);
+				const buffer = Buffer.alloc(Math.min(stat.size, maxBytes));
 				const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
+				totalBytes += bytesRead;
 				let content = buffer.subarray(0, bytesRead).toString("utf-8");
 				if (start > 0) {
 					window.truncatedDates.push(date);
@@ -78,6 +89,18 @@ export async function readJournalForSearch(deskDir: string): Promise<JournalSear
 		}
 	}
 	return window;
+}
+
+/** Read today's journal and, when present, the most recent earlier day for morning backfill (B2). */
+export async function readRecentJournalForBootstrap(
+	deskDir: string,
+	today: string = localDayKey(),
+): Promise<{ todayText: string; previous?: { date: string; text: string } }> {
+	const [todayText, dates] = await Promise.all([readJournalDay(deskDir, today), listJournalDates(deskDir)]);
+	const previousDate = dates.filter((date) => date < today).at(-1);
+	if (!previousDate) return { todayText };
+	const previousText = await readJournalDay(deskDir, previousDate);
+	return previousText.trim() ? { todayText, previous: { date: previousDate, text: previousText } } : { todayText };
 }
 
 function normalizeLine(line: string): string {

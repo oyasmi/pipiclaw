@@ -39,6 +39,8 @@ export interface MemoryEntry {
 	/** Local calendar dates (`YYYY-MM-DD`). */
 	created: string;
 	updated: string;
+	/** Local calendar date (`YYYY-MM-DD`) when a background reflect last confirmed this entry was used. */
+	confirmed?: string;
 	/** Present only for probationary entries (spec 050, D6); cleared on touch/update. */
 	expires?: string;
 	/** Optional long form; empty for the common one-line memory. */
@@ -184,6 +186,7 @@ export function parseMemoryFile(name: string, raw: string, fallbackDate: string)
 	const description = collapseToLine(fmDescription || firstParagraph(hadFrontmatter ? body : raw));
 	const created = fields.get("created") || fallbackDate;
 	const updated = fields.get("updated") || created;
+	const confirmed = fields.get("confirmed") || undefined;
 	const expires = fields.get("expires") || undefined;
 	// When frontmatter carried no description, the first paragraph became the description, so it
 	// must not be repeated in the body.
@@ -196,6 +199,7 @@ export function parseMemoryFile(name: string, raw: string, fallbackDate: string)
 		source: source ?? "migrated",
 		created,
 		updated,
+		confirmed,
 		expires,
 		body: effectiveBody,
 		malformed,
@@ -218,6 +222,9 @@ export function serializeMemoryEntry(entry: MemoryEntry): string {
 		`created: ${entry.created}`,
 		`updated: ${entry.updated}`,
 	];
+	if (entry.confirmed) {
+		lines.push(`confirmed: ${entry.confirmed}`);
+	}
 	if (entry.expires) {
 		lines.push(`expires: ${entry.expires}`);
 	}
@@ -473,7 +480,11 @@ export async function applyMemoryOps(
 					continue;
 				}
 				if (entry.expires) {
-					const next: MemoryEntry = { ...entry, expires: undefined, updated: today };
+					const next: MemoryEntry = { ...entry, expires: undefined, updated: today, confirmed: today };
+					await writeEntryFile(deskDir, next);
+					byName.set(name, next);
+				} else if (shouldRefreshConfirmed(entry.confirmed, today)) {
+					const next: MemoryEntry = { ...entry, confirmed: today };
 					await writeEntryFile(deskDir, next);
 					byName.set(name, next);
 				}
@@ -612,6 +623,19 @@ export async function applyMemoryOps(
 
 	await rebuildMemoryIndex(deskDir);
 	return result;
+}
+
+const CONFIRMED_REFRESH_DAYS = 7;
+
+function shouldRefreshConfirmed(confirmed: string | undefined, today: string): boolean {
+	if (!confirmed) return true;
+	const diffDays = (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${confirmed}T00:00:00Z`)) / 86_400_000;
+	return !Number.isFinite(diffDays) || diffDays >= CONFIRMED_REFRESH_DAYS;
+}
+
+/** Most recent activity date for an entry (`updated` or `confirmed`, whichever is later). */
+export function memoryActivityDate(entry: Pick<MemoryEntry, "updated" | "confirmed">): string {
+	return entry.confirmed && entry.confirmed > entry.updated ? entry.confirmed : entry.updated;
 }
 
 async function writeEntryFile(deskDir: string, entry: MemoryEntry): Promise<void> {

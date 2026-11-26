@@ -7,14 +7,14 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import {
+	buildJournalBlocksForBootstrap,
 	buildMemoryIndexForBootstrap,
-	clipJournalTailForBootstrap,
 	clipWorkspaceMemoryForBootstrap,
 	JOURNAL_TAIL_MAX_UNITS,
 	MEMORY_INDEX_MAX_UNITS,
 	WORKSPACE_MEMORY_MAX_UNITS,
 } from "../memory/index-budget.js";
-import { readJournalDay } from "../memory/journal.js";
+import { readRecentJournalForBootstrap } from "../memory/journal.js";
 import { renderMemoryBootstrap } from "../memory/render.js";
 import { listMemoryEntries } from "../memory/store.js";
 import { localDayKey } from "../shared/local-time.js";
@@ -199,19 +199,22 @@ async function buildContextualBlocks(
 			return "";
 		}
 	};
-	const [entries, workspaceMemory, journalToday] = await Promise.all([
+	const [entries, workspaceMemory, recentJournal] = await Promise.all([
 		listMemoryEntries(options.deskDir).catch(() => []),
 		readOptionalFile(join(options.workspaceDir, "MEMORY.md")),
-		readJournalDay(options.deskDir, today).catch(() => ""),
+		readRecentJournalForBootstrap(options.deskDir, today).catch(
+			(): Awaited<ReturnType<typeof readRecentJournalForBootstrap>> => ({ todayText: "" }),
+		),
 	]);
 	const index = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS / 2);
+	const journal = buildJournalBlocksForBootstrap(
+		{ todayDate: today, todayText: recentJournal.todayText, previous: recentJournal.previous },
+		JOURNAL_TAIL_MAX_UNITS / 2,
+	);
 	const bootstrap = renderMemoryBootstrap({
 		workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory, WORKSPACE_MEMORY_MAX_UNITS / 2),
 		memoryIndex: entries.length > 0 ? index.text : "",
-		journal: (() => {
-			const text = clipJournalTailForBootstrap(journalToday, JOURNAL_TAIL_MAX_UNITS / 2);
-			return text ? { date: today, text } : undefined;
-		})(),
+		journal: journal.length > 0 ? journal : undefined,
 	});
 	if (bootstrap) {
 		blocks.push(bootstrap);

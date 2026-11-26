@@ -16,7 +16,7 @@ export function hasMemoryBootstrapBlock(text: string): boolean {
 export interface MemoryBootstrapParts {
 	workspaceMemory?: string;
 	memoryIndex?: string;
-	journal?: { date: string; text: string };
+	journal?: { date: string; text: string } | Array<{ date: string; text: string }>;
 }
 
 const HEADER =
@@ -27,8 +27,10 @@ const HEADER =
 export function renderMemoryBootstrap(parts: MemoryBootstrapParts): string {
 	const workspace = parts.workspaceMemory?.trim();
 	const index = parts.memoryIndex?.trim();
-	const journalText = parts.journal?.text.trim();
-	if (!workspace && !index && !journalText) {
+	const journalEntries = (Array.isArray(parts.journal) ? parts.journal : parts.journal ? [parts.journal] : [])
+		.map((entry) => ({ date: entry.date, text: entry.text.trim() }))
+		.filter((entry) => entry.text.length > 0);
+	if (!workspace && !index && journalEntries.length === 0) {
 		return "";
 	}
 
@@ -39,8 +41,8 @@ export function renderMemoryBootstrap(parts: MemoryBootstrapParts): string {
 	if (index) {
 		lines.push("<memory_index>", index, "</memory_index>");
 	}
-	if (journalText && parts.journal) {
-		lines.push(`<journal date="${parts.journal.date}">`, journalText, "</journal>");
+	for (const entry of journalEntries) {
+		lines.push(`<journal date="${entry.date}">`, entry.text, "</journal>");
 	}
 	lines.push(`</${MEMORY_BOOTSTRAP_TAG}>`);
 	return lines.join("\n");

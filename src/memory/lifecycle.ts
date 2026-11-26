@@ -43,6 +43,7 @@ export interface MemoryLifecycleOptions {
 	getSessionEntries: () => SessionEntry[];
 	getModel: () => Model<Api>;
 	modelRequests: ModelRequests;
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	recordMemoryActivity?: (event: MemoryActivityEvent) => Promise<void> | void;
 	memoryQueue?: DeskMemoryQueue;
 }
@@ -188,6 +189,7 @@ export class MemoryLifecycle {
 				workspaceDir: this.options.workspaceDir,
 				model: this.options.getModel(),
 				modelRequests: this.options.modelRequests,
+				resolveFallbackModel: this.options.resolveFallbackModel,
 				messages: sourceWindow.messages,
 				sourceClosed: true,
 				usageContext: {
@@ -251,6 +253,7 @@ export class MemoryLifecycle {
 			appHomeDir: this.options.appHomeDir,
 			model: this.options.getModel(),
 			modelRequests: this.options.modelRequests,
+			resolveFallbackModel: this.options.resolveFallbackModel,
 			queue: this.memoryQueue,
 		});
 	}

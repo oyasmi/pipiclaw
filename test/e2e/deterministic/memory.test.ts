@@ -251,6 +251,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 							op: "add",
 							type: "project",
 							description: "部署脚本是 scripts/deploy.sh",
+							durability: "stable",
 							confidence: 0.95,
 							necessity: "high",
 							reason: "user stated it",
@@ -311,5 +312,74 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		// Drain the queue used by the detached boundary reflect; no observation-time guess.
 		await getDeskMemoryQueue().run(harness, async () => {});
 		expect(harness.model.requests.filter((r) => r.matchedRoute === "reflect-once")).toHaveLength(reflected.length);
+	});
+
+	it("B1: scheduler digests closed one-off task archive via reflect (deleting stale agent memory) and logs recurring task without LLM", async () => {
+		// Catches broken wiring between MemoryMaintenanceScheduler, tasks/archive/, and runReflect.
+		// Mutation check (2026-11-26): removing `digestArchivedTasksOnce` from `scheduler.ts` leaves
+		// `stale-p1-bug` on disk and produces 0 `reflect-task` requests.
+		harness = await createDeterministicHarness();
+		// Seed a stale agent-owned memory and bind the channel so the desk is active.
+		const memoryDir = join(harness.deskDir, "memory");
+		mkdirSync(memoryDir, { recursive: true });
+		writeFileSync(
+			join(memoryDir, "stale-p1-bug.md"),
+			"---\nname: stale-p1-bug\ndescription: HEAD has a P1 bug\ntype: project\nsource: agent\ncreated: 2026-11-01\nupdated: 2026-11-01\n---\n",
+		);
+		harness.model.script.route({
+			name: "chat-ping",
+			when: (r) => r.isMainTurn,
+			respond: [reply.text("ok")],
+			repeat: true,
+		});
+		await harness.sendUserMessage("ping");
+
+		// Archive one recurring task and one one-off task closed *after* scheduler creation.
+		const archiveDir = join(harness.deskDir, "tasks", "archive");
+		mkdirSync(archiveDir, { recursive: true });
+		const closedAt = new Date(Date.now() + 2_000).toISOString();
+		writeFileSync(
+			join(archiveDir, "daily-brief-1.md"),
+			`---\noutcome: completed\nclosedAt: ${closedAt}\norigin: daily-brief\nchannel: ${harness.channelId}\n---\n# Daily Brief\n`,
+		);
+		writeFileSync(
+			join(archiveDir, "daily-brief-1.jsonl"),
+			`${JSON.stringify({ kind: "close", outcome: "completed", note: "Sent briefing #99", ts: closedAt })}\n`,
+		);
+		const oneOffClosedAt = new Date(Date.now() + 3_000).toISOString();
+		writeFileSync(
+			join(archiveDir, "fix-p1-1.md"),
+			`---\noutcome: completed\nclosedAt: ${oneOffClosedAt}\nchannel: ${harness.channelId}\n---\n# Fix P1\n\n## Goal\nFix stale P1 bug.\n`,
+		);
+		writeFileSync(
+			join(archiveDir, "fix-p1-1.jsonl"),
+			`${JSON.stringify({ kind: "close", outcome: "completed", note: "TASK-CLOSE-EVIDENCE-42: P1 bug fixed and verified", ts: oneOffClosedAt })}\n`,
+		);
+
+		harness.model.script.prependRoute({
+			name: "reflect-task",
+			when: (r) => !r.isMainTurn && r.lastUserText.includes("TASK-CLOSE-EVIDENCE-42"),
+			respond: [
+				reply.json({
+					journal: ["12:00 fix-p1-1 已修复并验证 P1 缺陷"],
+					ops: [{ op: "delete", name: "stale-p1-bug", confidence: 0.95, reason: "fixed by task" }],
+					discarded: [],
+				}),
+			],
+		});
+
+		await harness.runtime.memoryMaintenance.runOnce?.(new Date(Date.now() + 5_000));
+		const reflectReqs = harness.model.requests.filter((r) => r.matchedRoute === "reflect-task");
+		expect(reflectReqs).toHaveLength(1);
+		expect(existsSync(join(memoryDir, "stale-p1-bug.md"))).toBe(false);
+
+		const today = localDayKey(new Date(oneOffClosedAt));
+		const journal = readFileSync(join(harness.deskDir, "journal", `${today}.md`), "utf8");
+		expect(journal).toContain("任务 daily-brief-1（已完成）：Sent briefing #99");
+		expect(journal).toContain("fix-p1-1 已修复并验证 P1 缺陷");
+
+		// A second tick is idempotent: no additional LLM calls.
+		await harness.runtime.memoryMaintenance.runOnce?.(new Date(Date.now() + 10_000));
+		expect(harness.model.requests.filter((r) => r.matchedRoute === "reflect-task")).toHaveLength(1);
 	});
 });

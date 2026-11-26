@@ -7,8 +7,8 @@ import { errorMessage } from "../shared/text-utils.js";
 
 import type { ReflectRunResult } from "./reflect.js";
 
-/** Spec 050, D10: the idle reflect job, a boundary-triggered reflect run, or a memory tool event. */
-export type MemoryReviewReason = "reflect" | "reflect-boundary" | "memory-save" | "memory-forget";
+/** Spec 050, D10: the idle reflect job, a boundary-triggered reflect run, a task archive digest, or a memory tool event. */
+export type MemoryReviewReason = "reflect" | "reflect-boundary" | "task-digest" | "memory-save" | "memory-forget";
 
 export interface MemoryReviewLogEntry {
 	timestamp: string;

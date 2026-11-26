@@ -16,8 +16,10 @@ import {
 	expireProbationaryEntries,
 	isValidMemoryName,
 	listMemoryEntries,
+	type MemoryEntry,
 	type MemoryStoreOp,
 	type MemoryType,
+	memoryActivityDate,
 	renderMemoryIndex,
 } from "./store.js";
 import { hasMeaningfulExchange, messageText, sanitizeMessagesForMemory } from "./transcript.js";
@@ -39,6 +41,7 @@ const MAX_DELETE_PER_RUN = 3;
 const MAX_DELETE_PER_RUN_CONDENSE = 8;
 const WORKSPACE_MEMORY_MAX_CHARS = 3_000;
 const JOURNAL_TAIL_MAX_CHARS = 3_000;
+const REFLECT_BODIES_MAX_CHARS = 6_000;
 
 function probationDeadline(today: string): string {
 	const ms = new Date(`${today}T00:00:00`).getTime() + PROBATION_DAYS * 24 * 60 * 60 * 1000;
@@ -55,8 +58,8 @@ Output schema:
 {
   "journal": ["HH:MM one terse bullet about what happened, was decided, or is blocked"],
   "ops": [
-    {"op": "add", "name": "kebab-case-handle (optional)", "type": "user|feedback|project|reference", "description": "one self-contained line", "details": "optional long form", "confidence": 0.0, "necessity": "low|medium|high", "reason": "why"},
-    {"op": "update", "name": "existing-name", "description": "...", "details": "...", "confidence": 0.0, "necessity": "low|medium|high", "reason": "why"},
+    {"op": "add", "name": "kebab-case-handle (optional)", "type": "user|feedback|project|reference", "description": "one self-contained line", "details": "optional long form", "durability": "stable|state", "confidence": 0.0, "necessity": "low|medium|high", "reason": "why"},
+    {"op": "update", "name": "existing-name", "description": "...", "details": "(omit to keep existing body)", "durability": "stable|state", "confidence": 0.0, "necessity": "low|medium|high", "reason": "why"},
     {"op": "delete", "name": "existing-name", "confidence": 0.0, "reason": "why this is no longer true"},
     {"op": "touch", "names": ["existing-name", "..."]}
   ],
@@ -71,10 +74,13 @@ ${MEMORY_INPUT_SAFETY_RULES}
   - "feedback": corrections about how to work, and lessons learned from a mistake.
   - "project": stable facts, decisions, and constraints about what you're working on.
   - "reference": pointers — paths, URLs, commands, contacts, ids.
-- An explicit standing rule from the user is a high-necessity project constraint when future work must follow it. Extract it even if it was mentioned alongside a one-off request, tool output, or unrelated chat.
-- Never write in-progress task state, transient debugging notes, or anything with a natural end date as memory — that belongs in "journal", or the user should be told to use a task if it needs tracking. If the whole window is just progress on something, "ops" should be empty.
-- Prefer "update" over adding a near-duplicate of an existing entry (the index is given to you in full below); prefer "delete" over leaving a fact that the conversation shows is no longer true.
-- "touch" lists the names of existing entries this window's conversation depended on or confirmed — do this whenever relevant, it costs nothing and is how a probationary entry becomes permanent.
+- Every add/update MUST classify "durability":
+  - "stable": remains true until someone explicitly changes the preference, decision, convention, or pointer.
+  - "state": describes current code, system, or work status expected to change after later work (e.g., "X currently has a P1 regression", "current version is not ready to release", "task Y was restored", "a review found two P2 bugs"). NEVER put "state" facts in "ops" — record them in "journal" instead.
+- An explicit standing rule from the user is a high-necessity, stable project constraint when future work must follow it. Extract it even if it was mentioned alongside a one-off request, tool output, or unrelated chat.
+- Never write in-progress task state, transient debugging notes, point-in-time review findings, or anything with a natural end date as memory — that belongs in "journal", or the user should be told to use a task if it needs tracking. If the whole window is just progress or point-in-time status, "ops" should be empty (except "delete" if it resolves a stale entry or "touch" if it confirms an existing one).
+- Prefer "update" over adding a near-duplicate of an existing entry (the index is given to you in full below); on "update", omit "details" unless you intend to replace the entry's existing body. Prefer "delete" over leaving a fact that the window shows is fixed or no longer true.
+- "touch" lists the names of existing entries this window depended on or confirmed — do this whenever relevant, it costs nothing and promotes probationary entries while keeping active permanent entries fresh.
 - Every add/update needs a calibrated confidence (0.0-1.0) and necessity ("high": would future turns go wrong or redo work without this; "medium": useful operating knowledge, nothing breaks without it; "low": not worth writing). Every delete needs a calibrated confidence.
 - name must be lowercase kebab-case (letters, digits, hyphens only) if given at all; omit it to let the runtime generate one.
 - Empty arrays are correct when nothing applies. Put anything you considered and rejected in "discarded".`;
@@ -92,8 +98,14 @@ export interface ReflectRunOptions {
 	workspaceDir: string;
 	model: Model<Api>;
 	modelRequests: ModelRequests;
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	/** The conversation window to reflect on (already extracted by the caller's source window). */
 	messages: AgentMessage[];
+	/**
+	 * Optional pre-formatted non-chat source (e.g. a closed task's distilled archive).
+	 * When set, `messages` is ignored and this block is reflected on directly.
+	 */
+	sourceText?: { label: string; text: string; hasUserMessage?: boolean };
 	timeoutMs?: number;
 	/** Closed boundary snapshots cannot wait for an answer from the outgoing session. */
 	sourceClosed?: boolean;
@@ -137,6 +149,7 @@ interface RawOp {
 	type?: unknown;
 	description?: unknown;
 	details?: unknown;
+	durability?: unknown;
 	confidence?: unknown;
 	necessity?: unknown;
 	reason?: unknown;
@@ -181,15 +194,55 @@ function normalizeType(value: unknown): MemoryType | undefined {
 		: undefined;
 }
 
-/** Durable if high-necessity and confident; probationary only for a medium-necessity `add`; else rejected. */
+function normalizeDurability(value: unknown): "stable" | "state" | undefined {
+	return value === "stable" || value === "state" ? value : undefined;
+}
+
+/**
+ * Durable if high-necessity, confident, and explicitly `stable`; probationary for medium-necessity
+ * `add` or when `durability` was omitted on a high-necessity `add` (safety net so unlabelled
+ * point-in-time facts expire after 30 days instead of polluting permanently).
+ */
 function classifyWrite(
 	op: "add" | "update",
 	confidence: number,
 	necessity: "low" | "medium" | "high",
+	durability: "stable" | "state" | undefined,
 ): "durable" | "probationary" | undefined {
-	if (necessity === "high" && confidence >= DURABLE_CONFIDENCE) return "durable";
+	if (durability === "state") return undefined;
+	if (necessity === "high" && confidence >= DURABLE_CONFIDENCE) {
+		if (op === "add" && durability === undefined) return "probationary";
+		return "durable";
+	}
 	if (op === "add" && necessity === "medium" && confidence >= PROBATION_CONFIDENCE) return "probationary";
 	return undefined;
+}
+
+function renderIndexBodiesForReflect(entries: MemoryEntry[]): string {
+	const withBody = entries
+		.filter((entry) => entry.body.trim().length > 0)
+		.sort((a, b) => memoryActivityDate(b).localeCompare(memoryActivityDate(a)) || a.name.localeCompare(b.name));
+	if (withBody.length === 0) return "";
+	const blocks: string[] = [];
+	const omitted: string[] = [];
+	let usedChars = 0;
+	for (const entry of withBody) {
+		const block = `### ${entry.name}\n${entry.body.trim()}`;
+		if (usedChars + block.length > REFLECT_BODIES_MAX_CHARS) {
+			omitted.push(entry.name);
+			continue;
+		}
+		blocks.push(block);
+		usedChars += block.length + 2;
+	}
+	const parts: string[] = [];
+	if (blocks.length > 0) {
+		parts.push(`Details of (+) entries:\n${blocks.join("\n\n")}`);
+	}
+	if (omitted.length > 0) {
+		parts.push(`(+ body omitted — leave details unset on update to preserve them): ${omitted.join(", ")}`);
+	}
+	return parts.join("\n");
 }
 
 async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{ prompt: string; condense: boolean }> {
@@ -199,17 +252,20 @@ async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{
 		readOptionalTextFile(`${options.deskDir}/journal/${today}.md`),
 	]);
 	const tiered = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS);
-	const transcript = clipText(
-		serializeConversation(sanitizeMessagesForMemory(options.messages)),
-		MEMORY_TRANSCRIPT_MAX_CHARS,
-		{ headRatio: 0.35 },
-	);
+	const sourceLabel = options.sourceText?.label ?? "Conversation window to reflect on";
+	const transcript = options.sourceText
+		? clipText(options.sourceText.text, MEMORY_TRANSCRIPT_MAX_CHARS, { headRatio: 0.35 })
+		: clipText(serializeConversation(sanitizeMessagesForMemory(options.messages)), MEMORY_TRANSCRIPT_MAX_CHARS, {
+				headRatio: 0.35,
+			});
 
+	const bodies = renderIndexBodiesForReflect(entries);
 	const sections = [
 		`Desk memory index (full):\n${renderMemoryIndex(entries) || "(empty)"}`,
+		...(bodies ? [bodies] : []),
 		`Workspace background (read-only; do not target it with ops):\n${clipText(workspaceMemory, WORKSPACE_MEMORY_MAX_CHARS, { headRatio: 0.35 }) || "(empty)"}`,
 		`Today's journal so far:\n${clipText(journalToday, JOURNAL_TAIL_MAX_CHARS, { headRatio: 0 }) || "(empty)"}`,
-		`Conversation window to reflect on:\n${transcript || "(empty)"}`,
+		`${sourceLabel}:\n${transcript || "(empty)"}`,
 	];
 	if (tiered.overBudget) {
 		sections.push(CONDENSE_INSTRUCTIONS.trim());
@@ -242,8 +298,12 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 	// Deterministic pre-step, independent of whether the window has meaningful material.
 	const expiredProbation = await expireProbationaryEntries(options.deskDir, today);
 
-	const sanitized = sanitizeMessagesForMemory(options.messages);
-	if (
+	const sanitized = options.sourceText ? [] : sanitizeMessagesForMemory(options.messages);
+	if (options.sourceText) {
+		if (!options.sourceText.text.trim()) {
+			return { ...empty, skipped: true, expiredProbation };
+		}
+	} else if (
 		!hasMeaningfulExchange(sanitized) &&
 		!(options.sourceClosed && sanitized.some((message) => message.role === "user" && messageText(message).trim()))
 	) {
@@ -255,6 +315,7 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 		name: "memory-reflect",
 		model: options.model,
 		modelRequests: options.modelRequests,
+		resolveFallbackModel: options.resolveFallbackModel,
 		systemPrompt: REFLECT_SYSTEM_PROMPT,
 		prompt,
 		timeoutMs: options.timeoutMs ?? REFLECT_DEFAULT_TIMEOUT_MS,
@@ -265,7 +326,9 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 
 	const currentEntries = await listMemoryEntries(options.deskDir);
 	const byName = new Map(currentEntries.map((entry) => [entry.name, entry]));
-	const hasUserMessage = sanitized.some((message) => message.role === "user");
+	const hasUserMessage = options.sourceText
+		? Boolean(options.sourceText.hasUserMessage)
+		: sanitized.some((message) => message.role === "user");
 
 	const rejected: ReflectOpOutcome[] = [];
 	const storeOps: MemoryStoreOp[] = [];
@@ -324,14 +387,26 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 			}
 			const confidence = normalizeConfidence(raw.confidence);
 			const necessity = normalizeNecessity(raw.necessity);
+			const durability = normalizeDurability(raw.durability);
 			const rawName = typeof raw.name === "string" ? raw.name.trim() : "";
-			const details = typeof raw.details === "string" ? raw.details : undefined;
+			// Blank `details` from reflect must never wipe an existing `(+)` body (A3).
+			const rawDetails = typeof raw.details === "string" ? raw.details.trim() : "";
+			const details = rawDetails ? rawDetails : undefined;
 			const type = normalizeType(raw.type);
 
 			// D7 risk table: an `update` naming an entry that doesn't exist downgrades to `add`
 			// rather than being silently dropped — the model's judgment about the fact still counts.
 			const existing = op === "update" && rawName ? byName.get(rawName) : undefined;
 			const effectiveOp: "add" | "update" = existing ? "update" : "add";
+
+			if (durability === "state") {
+				rejected.push({
+					op: effectiveOp,
+					name: existing?.name ?? rawName,
+					reason: "state belongs in journal",
+				});
+				continue;
+			}
 
 			if (effectiveOp === "update" && existing?.source === "user" && confidence < 0.95) {
 				rejected.push({ op: "update", name: existing.name, reason: "user-saved entry needs confidence >= 0.95" });
@@ -346,7 +421,7 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 				continue;
 			}
 
-			const tier = classifyWrite(effectiveOp, confidence, necessity);
+			const tier = classifyWrite(effectiveOp, confidence, necessity, durability);
 			if (!tier) {
 				rejected.push({
 					op: effectiveOp,

@@ -225,7 +225,7 @@ sequenceDiagram
 |---|---|---|---|
 | `memory/<name>.md` | 一条记忆一个文件；frontmatter 是唯一元数据（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），正文可选 | `memory_save` / 后台反思 pass / 人手编辑 | 否，`read` 单条打开 |
 | `MEMORY.md` | 从 `memory/*.md` **生成**的索引，人也能直接看 | `store.ts` 每次写入后重建；启动时若缺失也重建（按 mtime 缓存） | 会话首轮（含 `/new` 之后、压缩之后）整份注入，超预算按类型分层 |
-| `journal/YYYY-MM-DD.md` | 按天追加的工作记录（发生了什么、定了什么、卡在哪） | 只有后台反思 pass 写 | 首轮注入当天尾部 |
+| `journal/YYYY-MM-DD.md` | 按天追加的工作记录（发生了什么、定了什么、卡在哪） | 后台记忆维护（反思 pass 与任务归档消化） | 首轮注入当天尾部（不足时补齐前序日期） |
 | `memory/.tombstones.jsonl` | 已遗忘记忆的 name + 内容哈希（不含原文），防止反思把同一件事又写回来 | `memory_forget` / `/memory forget` / reflect | 否 |
 | `conversations/*/log.jsonl` / 会话 JSONL | 冷存储：各频道的完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 跨本工位的所有会话区检索 |
 | `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（含 actions/skipped/error；重复的相同跳过原因去重） | `review-log.ts` | 否，人工排查用 |
@@ -372,7 +372,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │       ├── memory/<name>.md       # 一条记忆一个文件（frontmatter 元数据）
 │       ├── memory/.tombstones.jsonl # 已遗忘记忆的 name + 内容哈希
 │       ├── MEMORY.md              # 生成的记忆索引（勿手改，写入后自动重建）
-│       ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，只由反思 pass 写
+│       ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，由后台记忆维护写
 │       ├── memory-review.jsonl    # 反思/工具写入的动作与拒绝原因审计
 │       ├── conversations/<kind>-<n>/ # 每个与本工位对话过的频道一个会话区（dm-1、group-1、webapi-1…）
 │       │   ├── log.jsonl  context.jsonl  last_prompt.json

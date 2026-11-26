@@ -14,6 +14,7 @@ import {
 	MEMORY_TYPE_ORDER,
 	type MemoryEntry,
 	type MemoryType,
+	memoryActivityDate,
 	readMemoryEntry,
 } from "./store.js";
 import { hashMemoryContent } from "./tombstones.js";
@@ -40,8 +41,18 @@ function isMemoryType(value: string | undefined): value is MemoryType {
 	return value !== undefined && (MEMORY_TYPE_ORDER as readonly string[]).includes(value);
 }
 
+const STALE_UNCONFIRMED_DAYS = 90;
+
+function isStaleAgentEntry(entry: MemoryEntry, today: string): boolean {
+	if (entry.source !== "agent" || entry.expires) return false;
+	const activity = memoryActivityDate(entry);
+	const diffDays = (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${activity}T00:00:00Z`)) / 86_400_000;
+	return Number.isFinite(diffDays) && diffDays >= STALE_UNCONFIRMED_DAYS;
+}
+
 async function handleStatus(options: MemoryCommandOptions): Promise<string> {
 	const entries = await listMemoryEntries(options.conversation.deskDir);
+	const today = localDayKey();
 	const byType = new Map<MemoryType, number>(MEMORY_TYPE_ORDER.map((type) => [type, 0]));
 	for (const entry of entries) {
 		byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
@@ -50,21 +61,34 @@ async function handleStatus(options: MemoryCommandOptions): Promise<string> {
 		.filter((entry): entry is MemoryEntry & { expires: string } => Boolean(entry.expires))
 		.sort((a, b) => a.expires.localeCompare(b.expires));
 	const malformed = entries.filter((entry) => entry.malformed);
+	const stale = entries.filter((entry) => isStaleAgentEntry(entry, today));
 	const tiered = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS);
 
 	const state = options.appHomeDir
 		? await readMemoryMaintenanceState(options.appHomeDir, options.conversation)
 		: undefined;
 
-	return [
+	const lines = [
 		"**记忆状态**",
 		"",
 		`- 记忆条目：\`${entries.length}\`（${MEMORY_TYPE_ORDER.map((type) => `${type} ${byType.get(type) ?? 0}`).join(" / ")}）`,
 		`- 观察期条目：\`${probationary.length}\`${probationary.length > 0 ? `（最早到期 \`${probationary[0].expires}\`）` : ""}`,
 		`- 文件头解析异常：\`${malformed.length}\`${malformed.length > 0 ? `（${malformed.map((e) => e.name).join("、")}）` : ""}`,
+	];
+	if (stale.length > 0) {
+		const preview = stale
+			.slice(0, 5)
+			.map((e) => e.name)
+			.join("、");
+		lines.push(
+			`- 久未印证（>${STALE_UNCONFIRMED_DAYS}天）：\`${stale.length}\`（${preview}${stale.length > 5 ? "…" : ""}）`,
+		);
+	}
+	lines.push(
 		`- 上次后台整理：\`${state?.lastReflectAt ?? "从未"}\``,
-		`- 索引大小：${tiered.overBudget ? "超出预算，注入时优先带最近更新的条目；下次整理会尝试合并" : "未超出预算，整份注入"}`,
-	].join("\n");
+		`- 索引大小：${tiered.overBudget ? "超出预算，注入时优先带最近更新或印证的条目；下次整理会尝试合并" : "未超出预算，整份注入"}`,
+	);
+	return lines.join("\n");
 }
 
 async function handleList(options: MemoryCommandOptions, typeArg: string | undefined): Promise<string> {
@@ -99,7 +123,7 @@ async function handleShow(options: MemoryCommandOptions, name: string | undefine
 		"",
 		`- 类型（type）：\`${entry.type}\``,
 		`- 来源（source）：\`${entry.source}\``,
-		`- 创建（created）：\`${entry.created}\`；更新（updated）：\`${entry.updated}\``,
+		`- 创建（created）：\`${entry.created}\`；更新（updated）：\`${entry.updated}\`${entry.confirmed ? `；印证（confirmed）：\`${entry.confirmed}\`` : ""}`,
 	];
 	if (entry.expires) lines.push(`- 观察期至（expires）：\`${entry.expires}\``);
 	if (entry.malformed) lines.push("- ⚠️ 文件头解析异常，以第一段作为描述");

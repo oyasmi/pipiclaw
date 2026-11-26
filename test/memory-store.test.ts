@@ -205,18 +205,35 @@ describe("memory store — applyMemoryOps", () => {
 		expect(entry.expires).toBeUndefined();
 	});
 
-	it("touch clears probation and reports missing targets", async () => {
+	it("touch clears probation, refreshes confirmed on permanent entries (throttled), and reports missing targets", async () => {
 		const deskDir = createTempDir();
-		await applyMemoryOps(deskDir, [
-			{ op: "add", name: "p", description: "probationary", source: "agent", expires: "2026-10-04" },
-		]);
-		const result = await applyMemoryOps(deskDir, [{ op: "touch", names: ["p", "ghost"] }], {
+		await applyMemoryOps(
+			deskDir,
+			[
+				{ op: "add", name: "p", description: "probationary", source: "agent", expires: "2026-10-04" },
+				{ op: "add", name: "perm", description: "permanent core fact", source: "agent" },
+			],
+			{ today: "2026-09-01" },
+		);
+		const result = await applyMemoryOps(deskDir, [{ op: "touch", names: ["p", "perm", "ghost"] }], {
 			today: "2026-09-15",
 		});
-		expect(result.touched).toEqual(["p"]);
+		expect(result.touched).toEqual(["p", "perm"]);
 		expect(result.missingTarget).toBe(1);
 		clearMemoryStoreCache();
-		expect((await listMemoryEntries(deskDir))[0].expires).toBeUndefined();
+		const byName = new Map((await listMemoryEntries(deskDir)).map((e) => [e.name, e]));
+		expect(byName.get("p")?.expires).toBeUndefined();
+		expect(byName.get("p")?.confirmed).toBe("2026-09-15");
+		expect(byName.get("perm")?.confirmed).toBe("2026-09-15");
+		expect(byName.get("perm")?.updated).toBe("2026-09-01");
+
+		// Touching again within 7 days is throttled (no rewrite); >= 7 days refreshes confirmed.
+		await applyMemoryOps(deskDir, [{ op: "touch", names: ["perm"] }], { today: "2026-09-18" });
+		clearMemoryStoreCache();
+		expect((await readMemoryEntry(deskDir, "perm"))?.confirmed).toBe("2026-09-15");
+		await applyMemoryOps(deskDir, [{ op: "touch", names: ["perm"] }], { today: "2026-09-22" });
+		clearMemoryStoreCache();
+		expect((await readMemoryEntry(deskDir, "perm"))?.confirmed).toBe("2026-09-22");
 	});
 
 	it("lets an explicit user save through a tombstone and revokes it for the background pass too (batch 1.7)", async () => {

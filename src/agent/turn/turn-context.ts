@@ -8,11 +8,11 @@ import { join } from "node:path";
 import { TASK_DIGEST_SETTINGS } from "../../config/settings.js";
 import type { DeskConversation } from "../../desk/types.js";
 import {
+	buildJournalBlocksForBootstrap,
 	buildMemoryIndexForBootstrap,
-	clipJournalTailForBootstrap,
 	clipWorkspaceMemoryForBootstrap,
 } from "../../memory/index-budget.js";
-import { readJournalDay } from "../../memory/journal.js";
+import { readRecentJournalForBootstrap } from "../../memory/journal.js";
 import { renderMemoryBootstrap } from "../../memory/render.js";
 import { listMemoryEntries } from "../../memory/store.js";
 import { localDayKey } from "../../shared/local-time.js";
@@ -66,17 +66,23 @@ export async function buildFirstTurnMemoryBootstrap(deskDir: string, workspaceDi
 	};
 
 	const today = localDayKey();
-	const [entries, workspaceMemory, journalToday] = await Promise.all([
+	const [entries, workspaceMemory, recentJournal] = await Promise.all([
 		listMemoryEntries(deskDir).catch(() => []),
 		readOptionalFile(join(workspaceDir, "MEMORY.md")),
-		readJournalDay(deskDir, today).catch(() => ""),
+		readRecentJournalForBootstrap(deskDir, today).catch(
+			(): Awaited<ReturnType<typeof readRecentJournalForBootstrap>> => ({ todayText: "" }),
+		),
 	]);
 
 	const index = buildMemoryIndexForBootstrap(entries);
-	const journalTail = clipJournalTailForBootstrap(journalToday);
+	const journal = buildJournalBlocksForBootstrap({
+		todayDate: today,
+		todayText: recentJournal.todayText,
+		previous: recentJournal.previous,
+	});
 	return renderMemoryBootstrap({
 		workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory),
 		memoryIndex: entries.length > 0 ? index.text : "",
-		journal: journalTail ? { date: today, text: journalTail } : undefined,
+		journal: journal.length > 0 ? journal : undefined,
 	});
 }

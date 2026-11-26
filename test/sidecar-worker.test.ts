@@ -238,6 +238,37 @@ describe("sidecar-worker", () => {
 		vi.useRealTimers();
 	});
 
+	it("switches once to the backup model when the primary fails with a quota error (B3)", async () => {
+		const primary = { provider: "openai", id: "primary" } as never;
+		const backup = { provider: "anthropic", id: "backup" } as never;
+		promptImpl = vi
+			.fn<(input: string) => Promise<void>>()
+			.mockRejectedValueOnce(new Error("Codex error: The usage limit has been reached"))
+			.mockResolvedValueOnce(undefined);
+		stateMessages = [
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "fallback-ok" }],
+				stopReason: "stop",
+			},
+		];
+		const resolveFallbackModel = vi.fn(async () => backup);
+
+		const result = await runRetriedSidecarTask({
+			name: "memory-reflect",
+			model: primary,
+			modelRequests: testModelRequests(),
+			resolveFallbackModel,
+			systemPrompt: "System",
+			prompt: "Prompt",
+			parse: (text) => text,
+		});
+
+		expect(result.output).toBe("fallback-ok");
+		expect(resolveFallbackModel).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(Agent).mock.calls.map((call) => call[0]?.initialState?.model)).toEqual([primary, backup]);
+	});
+
 	it("does not retry parse failures", async () => {
 		stateMessages = [
 			{

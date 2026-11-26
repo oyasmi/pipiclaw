@@ -12,7 +12,7 @@ Pipiclaw 的记忆是**三件东西**：工位记忆库（一条事实一个文�
 | 是什么 | 存哪 | 谁写 | 怎么进上下文 |
 |---|---|---|---|
 | 工位记忆 | `desk-<name>/memory/*.md`，一条一文件，生成的 `desk-<name>/MEMORY.md` 是索引 | `memory_save` / 后台反思 pass / 人手编辑 | 索引在**会话首轮**（含 `/new` 之后、压缩之后）整份注入 `<memory_bootstrap>`；装不下时按类型分层，见下 |
-| 日志 | `desk-<name>/journal/YYYY-MM-DD.md`，按天追加 | 只有后台反思 pass 写 | 首轮注入当天尾部；更早的日期用 `memory_search` 或 `/memory journal <date>` 查 |
+| 日志 | `desk-<name>/journal/YYYY-MM-DD.md`，按天追加 | 后台记忆维护（反思 pass 与任务归档消化） | 首轮注入当天尾部（当天较短时补齐前一个有记录的日期）；更早的日期用 `memory_search` 或 `/memory journal <date>` 查 |
 | 共享背景 | `workspace/MEMORY.md` | 管理员维护；通用文件工具能否写入由 path guard 决定 | 首轮按完整 H2 段落和预算注入 |
 | 环境记录 | `workspace/ENVIRONMENT.md` | 管理员或获准的文件工具 | 不自动注入，需要时读取 |
 

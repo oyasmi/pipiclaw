@@ -190,6 +190,7 @@ export class ChannelRunner implements AgentRunner {
 				ensureAuth: (model, signal) => this.host.modelRequests.ensureAuth(model, signal),
 				stream: (model, context, options) => this.host.modelRequests.stream(model, context, options),
 			},
+			resolveFallbackModel: () => this.models.resolveFallbackModel(),
 			recordMemoryActivity: (event) => this.recordMemoryActivity(event),
 		});
 
@@ -476,6 +477,7 @@ export class ChannelRunner implements AgentRunner {
 			sessionEntries: () => [...this.sessionManager.getBranch()],
 			model: this.session.model ?? this.models.activeModel,
 			modelRequests: this.host.modelRequests,
+			resolveFallbackModel: () => this.models.resolveFallbackModel(),
 			settings: { memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings() },
 		};
 	}

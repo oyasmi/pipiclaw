@@ -10,6 +10,7 @@ import { shouldRunReflect } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState } from "./maintenance-state.js";
 import { type MemoryMaintenanceInput, resolveMemoryMaintenanceSettings } from "./maintenance-tuning.js";
 import { runReflectJob } from "./reflect-job.js";
+import { digestTaskArchives } from "./task-archive-digest.js";
 
 export interface MemoryMaintenanceRuntimeContext {
 	conversation: DeskConversation;
@@ -23,6 +24,7 @@ export interface MemoryMaintenanceRuntimeContext {
 	sessionEntries: () => SessionEntry[];
 	model: Model<Api>;
 	modelRequests: ModelRequests;
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	settings: { memoryMaintenance: MemoryMaintenanceInput };
 }
 
@@ -74,6 +76,7 @@ export class MemoryMaintenanceScheduler {
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private running = false;
 	private nextIndex = 0;
+	private readonly startedAtMs = Date.now();
 
 	constructor(private readonly options: MemoryMaintenanceSchedulerOptions) {}
 
@@ -114,6 +117,13 @@ export class MemoryMaintenanceScheduler {
 			if (conversations.length === 0) {
 				return;
 			}
+			// Digest newly closed archived tasks per unique desk (B1). Recurring instances cost
+			// zero LLM calls; if a one-off task runs reflect, spend this tick's single LLM call
+			// there and return.
+			if (settings.memoryMaintenance.enabled) {
+				const usedLlmForTask = await this.digestArchivedTasksOnce(conversations, settings, now);
+				if (usedLlmForTask) return;
+			}
 			// One conversation per tick, round-robin: a reflect pass is an LLM call, and the first
 			// due conversation is as good a place to spend it as any.
 			let selected: DeskConversation | undefined;
@@ -136,6 +146,37 @@ export class MemoryMaintenanceScheduler {
 		}
 	}
 
+	private async digestArchivedTasksOnce(
+		conversations: DeskConversation[],
+		settings: { memoryMaintenance: MemoryMaintenanceInput },
+		now: Date,
+	): Promise<boolean> {
+		const seenDesks = new Set<string>();
+		const maintenance = resolveMemoryMaintenanceSettings(settings.memoryMaintenance);
+		for (const conversation of conversations) {
+			if (seenDesks.has(conversation.desk)) continue;
+			seenDesks.add(conversation.desk);
+			const result = await digestTaskArchives({
+				target: conversation,
+				now,
+				initialWatermarkMs: this.startedAtMs,
+				failureBackoffMinutes: maintenance.failureBackoffMinutes,
+				loadReflectRuntime: async () => {
+					const context = await this.options.getRuntimeContext(conversation);
+					if (!context) return null;
+					return {
+						workspaceDir: context.workspaceDir,
+						model: context.model,
+						modelRequests: context.modelRequests,
+						resolveFallbackModel: context.resolveFallbackModel,
+					};
+				},
+			});
+			if (result.usedLlm) return true;
+		}
+		return false;
+	}
+
 	private async runConversationOnce(conversation: DeskConversation, now: Date): Promise<void> {
 		if (this.options.isChannelActive(conversation.channelId)) {
 			return;
@@ -153,6 +194,7 @@ export class MemoryMaintenanceScheduler {
 			settings: context.settings,
 			model: context.model,
 			modelRequests: context.modelRequests,
+			resolveFallbackModel: context.resolveFallbackModel,
 			messages: context.messages,
 			sessionEntries: context.sessionEntries,
 		});

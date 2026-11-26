@@ -77,7 +77,7 @@ describe("reflect — skip conditions", () => {
 });
 
 describe("reflect — write tier (D6)", () => {
-	it("writes a high-necessity, high-confidence add as durable", async () => {
+	it("writes stable high-necessity as durable, downgrades missing durability to probationary, and rejects state", async () => {
 		const deskDir = createTempDir();
 		scripted({
 			journal: [],
@@ -87,17 +87,83 @@ describe("reflect — write tier (D6)", () => {
 					name: "deploy-window-thursday",
 					type: "project",
 					description: "Prod deploy window is Thursday evening",
+					durability: "stable",
 					confidence: 0.95,
 					necessity: "high",
 					reason: "user stated it",
+				},
+				{
+					op: "add",
+					name: "unlabelled-fact",
+					type: "project",
+					description: "Build uses pnpm workspace",
+					confidence: 0.95,
+					necessity: "high",
+					reason: "missing durability",
+				},
+				{
+					op: "add",
+					name: "current-p1-bug",
+					type: "project",
+					description: "Current HEAD has a P1 regression and is not ready to release",
+					durability: "state",
+					confidence: 0.99,
+					necessity: "high",
+					reason: "point-in-time review finding",
 				},
 			],
 			discarded: [],
 		});
 		const result = await run(deskDir);
-		expect(result.added).toEqual(["deploy-window-thursday"]);
+		expect(result.added).toEqual(["deploy-window-thursday", "unlabelled-fact"]);
+		expect(result.rejected).toContainEqual(
+			expect.objectContaining({ op: "add", name: "current-p1-bug", reason: "state belongs in journal" }),
+		);
+		const entries = new Map((await listMemoryEntries(deskDir)).map((e) => [e.name, e]));
+		expect(entries.get("deploy-window-thursday")?.expires).toBeUndefined();
+		expect(entries.get("unlabelled-fact")?.expires).toBe("2026-10-04");
+		expect(entries.has("current-p1-bug")).toBe(false);
+	});
+
+	it("preserves existing (+) body on update when reflect omits or blanks details, and exposes bodies in prompt", async () => {
+		const deskDir = createTempDir();
+		await applyMemoryOps(deskDir, [
+			{
+				op: "add",
+				name: "subagent-policy",
+				type: "feedback",
+				description: "Act as project manager when delegating",
+				details: "Always verify worktree diff before reporting done.",
+				source: "agent",
+			},
+		]);
+		let capturedPrompt = "";
+		vi.mocked(runRetriedSidecarTask).mockImplementationOnce(async (task) => {
+			capturedPrompt = task.prompt;
+			const text = JSON.stringify({
+				journal: [],
+				ops: [
+					{
+						op: "update",
+						name: "subagent-policy",
+						description: "Act as project manager and verify deliverables",
+						details: "",
+						durability: "stable",
+						confidence: 0.95,
+						necessity: "high",
+						reason: "tightened wording",
+					},
+				],
+				discarded: [],
+			});
+			return { rawText: text, output: task.parse(text) } as never;
+		});
+		const result = await run(deskDir);
+		expect(capturedPrompt).toContain("Always verify worktree diff before reporting done.");
+		expect(result.updated).toEqual(["subagent-policy"]);
 		const [entry] = await listMemoryEntries(deskDir);
-		expect(entry.expires).toBeUndefined();
+		expect(entry.description).toBe("Act as project manager and verify deliverables");
+		expect(entry.body).toBe("Always verify worktree diff before reporting done.");
 	});
 
 	it("writes a medium-necessity, high-confidence add as probationary with a 30-day deadline", async () => {
@@ -162,6 +228,7 @@ describe("reflect — per-run caps", () => {
 			...Array.from({ length: 10 }, (_, i) => ({
 				op: "add",
 				description: `fresh distinct fact number ${i} about the project`,
+				durability: "stable",
 				confidence: 0.95,
 				necessity: "high",
 				reason: "r",

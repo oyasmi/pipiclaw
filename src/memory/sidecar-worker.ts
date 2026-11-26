@@ -1,6 +1,7 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import { shouldFallback } from "../models/fallback.js";
 import { formatModelReference } from "../models/reference.js";
 import type { ModelRequests } from "../models/requests.js";
 import { extractAssistantText } from "../shared/text-utils.js";
@@ -11,6 +12,8 @@ export interface SidecarTask<T> {
 	name: string;
 	model: Model<Api>;
 	modelRequests: ModelRequests;
+	/** Optional backup-model resolver used once when the primary model fails with a fallback-eligible error (B3). */
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	systemPrompt: string;
 	prompt: string;
 	parse: (text: string) => T;
@@ -200,6 +203,8 @@ export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<Si
 	// Set when a one-shot repair hint has been applied; the next attempt runs with
 	// this prompt instead of the original.
 	let repairedPrompt: string | undefined;
+	let activeModel = task.model;
+	let fallbackAttempted = false;
 	let attempt = 0;
 	const deadline = task.timeoutMs && task.timeoutMs > 0 ? Date.now() + task.timeoutMs : undefined;
 
@@ -211,7 +216,12 @@ export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<Si
 
 		const remaining = deadline === undefined ? task.timeoutMs : deadline - Date.now();
 		if (remaining !== undefined && remaining <= 0) throw new SidecarTimeoutError(task.name, task.timeoutMs!);
-		const current: SidecarTask<T> = { ...task, prompt: repairedPrompt ?? task.prompt, timeoutMs: remaining };
+		const current: SidecarTask<T> = {
+			...task,
+			model: activeModel,
+			prompt: repairedPrompt ?? task.prompt,
+			timeoutMs: remaining,
+		};
 
 		try {
 			return await runSidecarTask(current);
@@ -231,6 +241,25 @@ export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<Si
 					task,
 				);
 				continue;
+			}
+
+			// When the primary model hits quota/auth/provider errors, switch once to the
+			// configured backup model instead of burning backoff cycles on the same model (B3).
+			if (
+				!fallbackAttempted &&
+				typeof task.resolveFallbackModel === "function" &&
+				!(error instanceof SidecarParseError) &&
+				!(error instanceof SidecarTimeoutError) &&
+				!isExternalAbort(task) &&
+				shouldFallback(error instanceof Error ? error.message : String(error))
+			) {
+				fallbackAttempted = true;
+				const candidate = await task.resolveFallbackModel().catch(() => null);
+				if (candidate && formatModelReference(candidate) !== formatModelReference(activeModel)) {
+					activeModel = candidate;
+					attempt = 0;
+					continue;
+				}
 			}
 
 			// Parse failures are otherwise fatal — a blind retry would reproduce the

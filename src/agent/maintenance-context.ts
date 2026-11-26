@@ -7,8 +7,9 @@ import type { PipiclawSettingsManager } from "../config/settings.js";
 import type { DeskConversation } from "../desk/types.js";
 import { enqueueBoundaryReflectEntries } from "../memory/boundary-work.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
+import { findExactModelReferenceMatch } from "../models/reference.js";
 import { createModelRequests } from "../models/requests.js";
-import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
+import { createModelRuntime, refreshModelRegistry, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 
 /** /new's local persistence path: no runner, credentials, inference, or memory queue. */
 export async function preserveMemoryBeforeNewSession(conversation: DeskConversation): Promise<void> {
@@ -93,6 +94,7 @@ export async function loadDetachedMaintenanceContext(
 	});
 	const modelRegistry = wrapModelRegistry(modelRuntime);
 	const model = resolveInitialModel(modelRegistry, options.settingsManager);
+	const modelRequests = createModelRequests(modelRuntime);
 
 	options.settingsManager.reload();
 	return {
@@ -101,7 +103,21 @@ export async function loadDetachedMaintenanceContext(
 		messages: () => [...cachedTranscript.messages],
 		sessionEntries: () => [...cachedTranscript.sessionEntries],
 		model,
-		modelRequests: createModelRequests(modelRuntime),
+		modelRequests,
+		resolveFallbackModel: async () => {
+			options.settingsManager.reload();
+			const reference = options.settingsManager.getFallbackModelReference();
+			if (!reference) return null;
+			await refreshModelRegistry(modelRuntime);
+			const { match } = findExactModelReferenceMatch(reference, modelRegistry.getAvailable());
+			if (!match) return null;
+			try {
+				await modelRequests.ensureAuth(match);
+				return match;
+			} catch {
+				return null;
+			}
+		},
 		settings: { memoryMaintenance: options.settingsManager.getMemoryMaintenanceSettings() },
 	};
 }

@@ -1,7 +1,7 @@
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { stripCrAndTrim } from "../shared/text-utils.js";
-import { type MemoryEntry, renderMemoryIndex } from "./store.js";
+import { type MemoryEntry, memoryActivityDate, renderMemoryIndex } from "./store.js";
 
 /**
  * Spec 050, D1/D4/D11: what actually goes into `<memory_bootstrap>` on the first turn, and the
@@ -12,6 +12,8 @@ import { type MemoryEntry, renderMemoryIndex } from "./store.js";
 export const WORKSPACE_MEMORY_MAX_UNITS = 500;
 export const MEMORY_INDEX_MAX_UNITS = 1_400;
 export const JOURNAL_TAIL_MAX_UNITS = 400;
+export const JOURNAL_BACKFILL_MIN_UNITS = 150;
+const JOURNAL_BACKFILL_MIN_REMAINING_UNITS = 40;
 const WORKSPACE_MEMORY_MAX_CHARS = 4_000;
 const JOURNAL_TAIL_MAX_CHARS = 3_000;
 
@@ -42,7 +44,7 @@ export function buildMemoryIndexForBootstrap(
 	const pinned = entries.filter((e) => ALWAYS_INCLUDED.has(e.type));
 	const droppable = entries
 		.filter((e) => !ALWAYS_INCLUDED.has(e.type))
-		.sort((a, b) => b.updated.localeCompare(a.updated) || a.name.localeCompare(b.name));
+		.sort((a, b) => memoryActivityDate(b).localeCompare(memoryActivityDate(a)) || a.name.localeCompare(b.name));
 
 	let kept = droppable.length;
 	let rendered = "";
@@ -119,4 +121,26 @@ export function clipJournalTailForBootstrap(journalText: string, maxUnits: numbe
 		maxChars: JOURNAL_TAIL_MAX_CHARS,
 		marker: "[... earlier entries omitted ...]\n",
 	}).text;
+}
+
+/**
+ * B2: when today's journal is empty or shorter than `JOURNAL_BACKFILL_MIN_UNITS`, fill the
+ * remaining budget with the tail of the most recent earlier day so morning sessions keep context.
+ */
+export function buildJournalBlocksForBootstrap(
+	input: { todayDate: string; todayText: string; previous?: { date: string; text: string } },
+	maxUnits: number = JOURNAL_TAIL_MAX_UNITS,
+): Array<{ date: string; text: string }> {
+	const todayClipped = clipJournalTailForBootstrap(input.todayText, maxUnits);
+	const todayUnits = todayClipped ? countPromptUnits(todayClipped) : 0;
+	const blocks: Array<{ date: string; text: string }> = [];
+	if (input.previous && todayUnits < Math.min(JOURNAL_BACKFILL_MIN_UNITS, maxUnits)) {
+		const remaining = maxUnits - todayUnits;
+		if (remaining >= JOURNAL_BACKFILL_MIN_REMAINING_UNITS) {
+			const prevClipped = clipJournalTailForBootstrap(input.previous.text, remaining);
+			if (prevClipped) blocks.push({ date: input.previous.date, text: prevClipped });
+		}
+	}
+	if (todayClipped) blocks.push({ date: input.todayDate, text: todayClipped });
+	return blocks;
 }

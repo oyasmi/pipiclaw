@@ -116,6 +116,7 @@ export interface BoundaryReflectOptions {
 	appHomeDir: string;
 	model: Model<Api>;
 	modelRequests: ModelRequests;
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	queue?: DeskMemoryQueue;
 }
 
@@ -175,6 +176,7 @@ export async function drainBoundaryReflectWork(options: BoundaryReflectOptions):
 							workspaceDir: options.workspaceDir,
 							model: options.model,
 							modelRequests: options.modelRequests,
+							resolveFallbackModel: options.resolveFallbackModel,
 							messages: batch.messages,
 							sourceClosed: true,
 							usageContext: {

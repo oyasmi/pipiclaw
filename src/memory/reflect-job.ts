@@ -35,6 +35,7 @@ export interface ReflectJobInput {
 	settings: { memoryMaintenance: MemoryMaintenanceInput };
 	model: Model<Api>;
 	modelRequests: ModelRequests;
+	resolveFallbackModel?: () => Promise<Model<Api> | null>;
 	/** Transcript accessors: only called once the gate has decided the job may actually run. */
 	messages: () => AgentMessage[];
 	sessionEntries: () => SessionEntry[];
@@ -101,6 +102,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 				workspaceDir: input.workspaceDir,
 				model: input.model,
 				modelRequests: input.modelRequests,
+				resolveFallbackModel: input.resolveFallbackModel,
 				messages: sourceWindow.messages,
 				usageContext: { channelId, desk: conversation.desk, correlationId: sourceWindow.windowId },
 			});
