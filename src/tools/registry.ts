@@ -261,6 +261,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "session_search",
 		create: (ctx) =>
 			createSessionSearchTool({
+				appHomeDir: req(ctx.securityContext.appHomeDir, "appHomeDir"),
 				channelId: ctx.channelId,
 				desk: ctx.desk,
 				deskDir: ctx.deskDir,

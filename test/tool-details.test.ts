@@ -25,7 +25,7 @@ function registryContext(): ToolBuildContext {
 		executor: { exec: async () => ({ stdout: "", stderr: "", code: 1 }) },
 		fileStore: createFileStore(),
 		securityConfig: DEFAULT_SECURITY_CONFIG,
-		securityContext: { agentWorkspaceDir: "/tmp/ws", cwd: "/tmp/ws" },
+		securityContext: { agentWorkspaceDir: "/tmp/ws", cwd: "/tmp/ws", appHomeDir: "/tmp/ws" },
 		channelId: "dingtalk:dm:1",
 		desk: "news",
 		deskDir: "/tmp/ws/dingtalk:dm:1",

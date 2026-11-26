@@ -254,5 +254,6 @@
 | `state/daemon.lock` | 单实例进程排他锁（保证同一 `PIPICLAW_HOME` 同时只有一个运行时写入） |
 | `state/logs/runtime.jsonl` | 结构化运行日志（`0600`，5MB × 3 轮转） |
 | `state/usage/usage-YYYY-MM.jsonl` | 按月分片的 Token 与费用账本（供 `/usage` 聚合查询） |
+| `state/search-index/` | 每工位的派生全文索引，删除后自动重建 |
 | `state/webapi/` · `state/tui/` · `state/dingtalk/` | Web API 会话与响应存储、终端上次工位会话映射、钉钉主动推送路由元数据 |
 | `state/jobs/` · `state/subagent-runs/` · `state/dispatch/` | 后台作业、外部/内置委派与持久化唤醒的崩溃恢复状态 |

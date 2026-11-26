@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -54,6 +54,83 @@ describe("E2E deterministic: memory (spec 050)", () => {
 					message.content.includes("JOURNAL-EVIDENCE-73") && message.content.includes("journal/2020-01-02.md"),
 			),
 		).toBe(true);
+	});
+
+	it("S1: recalls the oldest session and picks up the next turn incrementally", async () => {
+		// Regressions: a newest-12 source cap hides archived answers, and rebuilding an active
+		// context from zero on every call defeats the incremental checkpoint on disk.
+		// Mutation check (2026-11-26): limiting session sources to the 12 newest fails the
+		// old-marker assertion. Forcing a rebuild of every known file fails the filesRebuilt assertion.
+		harness = await createDeterministicHarness({
+			seed: ({ deskDir }) => {
+				const dir = join(deskDir, "conversations", "dm-9");
+				mkdirSync(dir, { recursive: true });
+				for (let index = 0; index < 15; index++) {
+					const then = Date.UTC(2026, 0, 1, 0, index);
+					const session = SessionManager.create(deskDir, dir);
+					session.appendMessage({
+						role: "user",
+						content: index === 0 ? "COLD-ANCHOR-4471" : `distractor ${index}`,
+						timestamp: then,
+					});
+					session.appendMessage({
+						role: "assistant",
+						content: [{ type: "text", text: `noted ${index}` }],
+						timestamp: then + 1,
+						api: "openai-completions",
+						provider: "e2e-mock",
+						model: "mock-main",
+						stopReason: "stop",
+						usage: {
+							input: 1,
+							output: 1,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 2,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+					});
+					utimesSync(session.getSessionFile()!, then / 1000, then / 1000);
+				}
+			},
+		});
+		for (const [marker, query] of [
+			["S1_ASK_OLD", "COLD-ANCHOR-4471"],
+			["S1_ASK_NEW", "FRESH-MARK-9902"],
+		] as const) {
+			harness.model.script.route({
+				name: marker,
+				when: (r) => r.isMainTurn && r.lastUserText.includes(marker),
+				respond: [reply.toolCall("session_search", { query }), reply.text("ok")],
+			});
+		}
+		harness.model.script.route({
+			name: "s1-fresh-message",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("FRESH-MARK-9902"),
+			respond: [reply.text("收到")],
+		});
+		const lastToolMessage = () =>
+			harness
+				.mainTurnRequests()
+				.at(-1)
+				?.messages.filter((message) => message.role === "tool")
+				.at(-1);
+		await harness.sendUserMessage("S1_ASK_OLD");
+		expect(lastToolMessage()?.content).toContain("COLD-ANCHOR-4471");
+		expect(lastToolMessage()?.content).toContain("conversations/dm-9/");
+
+		await harness.sendUserMessage("S1 新对话 FRESH-MARK-9902");
+		await harness.sendUserMessage("S1_ASK_NEW");
+		expect(lastToolMessage()?.content).toContain("FRESH-MARK-9902");
+		const entries = readFileSync(join(harness.conversationDir, "context.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const lastSearch = entries
+			.filter((entry) => entry.message?.role === "toolResult" && entry.message.toolName === "session_search")
+			.at(-1);
+		expect(lastSearch?.message.details.index).toMatchObject({ filesRebuilt: 0, filesAppended: expect.any(Number) });
+		expect(lastSearch?.message.details.index.filesAppended).toBeGreaterThanOrEqual(1);
 	});
 
 	it("DESK-2: memory writes from two channels of one desk are serialized on the desk", async () => {

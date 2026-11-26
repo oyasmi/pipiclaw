@@ -1,6 +1,7 @@
 import { parseLocalTime } from "../shared/local-time.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
+import { LATIN_STOP_WORDS } from "./search-terms.js";
 import type { MemoryEntry } from "./store.js";
 
 /**
@@ -32,67 +33,6 @@ export function recencyBoostByAge(
 const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;
 const ASCII_SPLIT_REGEX = /[._/-]+/g;
 const MAX_HAN_WORD_LENGTH = Array.from(COMMON_CHINESE_WORDS).reduce((max, word) => Math.max(max, word.length), 2);
-
-const LATIN_STOP_WORDS = new Set([
-	"a",
-	"an",
-	"and",
-	"are",
-	"as",
-	"at",
-	"be",
-	"been",
-	"being",
-	"by",
-	"can",
-	"could",
-	"did",
-	"do",
-	"does",
-	"doing",
-	"for",
-	"from",
-	"had",
-	"has",
-	"have",
-	"here",
-	"how",
-	"i",
-	"in",
-	"is",
-	"it",
-	"its",
-	"me",
-	"my",
-	"of",
-	"on",
-	"or",
-	"our",
-	"please",
-	"should",
-	"that",
-	"the",
-	"their",
-	"them",
-	"there",
-	"these",
-	"they",
-	"this",
-	"to",
-	"was",
-	"we",
-	"were",
-	"what",
-	"when",
-	"where",
-	"which",
-	"who",
-	"why",
-	"with",
-	"would",
-	"you",
-	"your",
-]);
 
 const CHINESE_STOP_CHARS = new Set([
 	"的",

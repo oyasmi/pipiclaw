@@ -37,9 +37,15 @@ describe("memory maintenance scheduler", () => {
 	it("does not request runtime context when disabled", async () => {
 		const root = createTempDir();
 		const getRuntimeContext = vi.fn(async () => null);
+		const syncSearchIndex = vi.fn(async () => {});
 		const scheduler = new MemoryMaintenanceScheduler({
+			syncSearchIndex,
 			appHomeDir: join(root, "app"),
-			getConversations: () => [conv("dingtalk:dm:1")],
+			getConversations: () => [
+				conv("dingtalk:dm:1"),
+				conv("dingtalk:dm:2"),
+				{ ...conv("dingtalk:dm:3"), desk: "other", deskDir: join(root, "desk-other") },
+			],
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({ memoryMaintenance: maintenanceSettings(false) }),
@@ -47,6 +53,17 @@ describe("memory maintenance scheduler", () => {
 
 		await scheduler.runOnce();
 		expect(getRuntimeContext).not.toHaveBeenCalled();
+		expect(syncSearchIndex).toHaveBeenCalledTimes(2);
+		expect(syncSearchIndex).toHaveBeenCalledWith({
+			appHomeDir: join(root, "app"),
+			desk: "news",
+			deskDir: "/tmp/desk-news",
+		});
+		expect(syncSearchIndex).toHaveBeenCalledWith({
+			appHomeDir: join(root, "app"),
+			desk: "other",
+			deskDir: join(root, "desk-other"),
+		});
 	});
 
 	it("reflects one channel per tick", async () => {
@@ -56,6 +73,7 @@ describe("memory maintenance scheduler", () => {
 		await updateMemoryMaintenanceState(appHomeDir, conv("dingtalk:dm:2"), (state) => ({ ...state, dirty: true }));
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
+			syncSearchIndex: async () => {},
 			appHomeDir,
 			getConversations: () => [conv("dingtalk:dm:1"), conv("dingtalk:dm:2")],
 			getRuntimeContext,
@@ -79,6 +97,7 @@ describe("memory maintenance scheduler", () => {
 		}
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
+			syncSearchIndex: async () => {},
 			appHomeDir,
 			getConversations: () => [conv("dingtalk:dm:1"), conv("dingtalk:dm:2"), conv("dingtalk:dm:3")],
 			getRuntimeContext,
@@ -112,6 +131,7 @@ describe("memory maintenance scheduler", () => {
 
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
+			syncSearchIndex: async () => {},
 			appHomeDir,
 			getConversations: () => [conv("dingtalk:dm:1"), conv("dingtalk:dm:2")],
 			getRuntimeContext,
@@ -132,6 +152,7 @@ describe("memory maintenance scheduler", () => {
 		let enabled = false;
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
+			syncSearchIndex: async () => {},
 			appHomeDir: join(root, "app"),
 			getConversations: () => [conv("dingtalk:dm:1")],
 			getRuntimeContext,

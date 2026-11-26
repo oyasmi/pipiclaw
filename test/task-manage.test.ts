@@ -336,6 +336,7 @@ describe("task tool surfaces (spec 064, D21–D23)", () => {
 					fileStore: createFileStore(),
 					securityConfig: DEFAULT_SECURITY_CONFIG,
 					cwd: workspaceDir,
+					appHomeDir: workspaceDir,
 					channelId: CHANNEL_ID,
 					desk: "main",
 					deskDir,

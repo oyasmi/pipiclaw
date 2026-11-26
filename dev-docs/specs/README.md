@@ -1,6 +1,6 @@
 # 设计记录
 
-这里保存 spec 050–071 的设计取舍和实施证据，供修改源码、追溯决策时参考。当前用法见[专题手册](../../docs/README.md)，编号 050 之前的设计见[历史归档](archive/README.md)。设计中的旧字段、路径和未采用方案不代表当前功能。
+这里保存 spec 050–072 的设计取舍和实施证据，供修改源码、追溯决策时参考。当前用法见[专题手册](../../docs/README.md)，编号 050 之前的设计见[历史归档](archive/README.md)。设计中的旧字段、路径和未采用方案不代表当前功能。
 
 ## 保留的设计
 
@@ -28,6 +28,7 @@
 | `069` | [Prompt 体系、渐进加载与缓存闭环优化](./069-prompt-cache-and-playbooks/design.md)：内置子代理缓存身份、外部续接去重、按路径 `cacheRetention`、Chat/Task 对称提示与收敛停止判据、`task-lead` 渐进拆分与 `pi-scout` 模板；已实施（[实施计划](./069-prompt-cache-and-playbooks/plan.md)、[验收记录](./069-prompt-cache-and-playbooks/acceptance.md)） |
 | `070` | [工具人体工学、执行精度与供给边界优化](./070-tool-ergonomics-and-exposure/design.md)：`subagent_inline` 与 `request` 工具契约修复、跨环境 Schema 裁剪、非阻塞先读后写软提示、`edit` CRLF/行号诊断/多块原子编辑、`grep`/`glob` 提速、`bash` 输出预算收紧与管理输出去 JSON 转义；已实施（[实施计划](./070-tool-ergonomics-and-exposure/plan.md)、[验收记录](./070-tool-ergonomics-and-exposure/acceptance.md)） |
 | `071` | [个人 Agent 行为评测的可信度与成本](./071-eval-reliability-and-budget/design.md) · 证据重放、评分修复、计划与执行一致、评测预算和核心用例迭代。已实施，两个候选已通过晋升检查（[实施计划](./071-eval-reliability-and-budget/plan.md)、[验收记录](./071-eval-reliability-and-budget/acceptance.md)） |
+| `072` | [冷存储全文索引与记忆写入锚点核验](./072-transcript-search-index/design.md)：`node:sqlite` FTS5 派生索引（每工位一库、查询前增量追平、删库即重建）、中文二元组查询与 BM25 重排、语料去注入块与去重、`memory_search` 并轨、反思标识符出处核验；待实施（[实施计划](./072-transcript-search-index/plan.md)） |
 
 050、051 已完成的实施清单也保存在归档中（[050](archive/050-memory-v2/plan.md)、[051](archive/051-long-horizon-task-loop/plan.md)）。
 

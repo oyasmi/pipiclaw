@@ -1,73 +1,40 @@
-import { readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { readdir } from "node:fs/promises";
+import { basename, join, relative, sep } from "node:path";
 import { getConversationsDir, SUBAGENT_RUNS_LOG_FILENAME } from "../desk/paths.js";
-import { isNodeError, readOptionalTextFile } from "../shared/os.js";
+import { isNodeError } from "../shared/os.js";
 import { isRecord } from "../shared/type-guards.js";
+import { redactSecrets } from "./secret-redaction.js";
+import { stripInjectedMemoryContext } from "./transcript.js";
 
 export type SessionSearchSource = "context" | "session" | "log" | "task";
 export type SessionSearchRole = "user" | "assistant" | "tool" | "system" | "unknown";
 
-export interface SessionSearchDocument {
-	id: string;
-	source: SessionSearchSource;
+export interface TranscriptSourceFile {
 	path: string;
-	timestamp?: string;
-	role: SessionSearchRole;
-	/** The full scannable message text (up to {@link SESSION_SCAN_MAX_CHARS}) — matching runs on
-	 * this, display windows are cut from it at query time (fix plan §2.5). */
-	text: string;
-	/** True when even the scan text was clipped: a keyword past this point cannot be found here. */
-	scanTruncated?: boolean;
-	sessionId?: string;
-	/** The conversation directory the document came from (`dm-1`, `group-2`, …). */
+	relPath: string;
+	kind: "session" | "log" | "task";
+	source: SessionSearchSource;
 	conversation?: string;
 }
 
-/**
- * Ceiling on how much of one message is kept for *matching*. The old code clipped each message to
- * the small display window at ingest, so a keyword in the middle of a long message was gone from
- * the corpus entirely and widening the query could never bring it back. This is deliberately much
- * larger than the display window; a single pathological message still cannot blow out memory.
- */
-export const SESSION_SCAN_MAX_CHARS = 20_000;
-
-export interface BuildSessionCorpusOptions {
-	/** The desk whose conversations — every channel that has talked to it — form the corpus (spec 058, D12). */
-	deskDir: string;
-	maxFiles: number;
-	maxCharsPerDocument?: number;
-	maxDocumentsTotal?: number;
+export interface TranscriptDoc {
+	role: SessionSearchRole;
+	text: string;
+	truncated: boolean;
+	speaker?: string;
+	ts?: string;
 }
 
-const DEFAULT_MAX_CHARS_PER_DOCUMENT = 4_000;
-const DEFAULT_MAX_DOCUMENTS_TOTAL = 5_000;
-const IGNORED_JSONL_FILES = new Set([
-	"context.jsonl",
-	"log.jsonl",
-	"log.jsonl.1",
-	SUBAGENT_RUNS_LOG_FILENAME,
-	"memory-review.jsonl",
-]);
-
-function parseJsonLine(line: string): unknown | null {
-	const trimmed = line.trim();
-	if (!trimmed) {
-		return null;
-	}
-	try {
-		return JSON.parse(trimmed) as unknown;
-	} catch {
-		return null;
-	}
-}
+const MAX_DOC_CHARS = 200_000;
+const IGNORED_JSONL_FILES = new Set([SUBAGENT_RUNS_LOG_FILENAME, "memory-review.jsonl"]);
+const ISO_PREFIX = String.raw`\[\d{4}-\d{2}-\d{2}[^\]\r\n]{0,30}\]`;
+const SPEAKER_PREFIX = String.raw`\[([^\]\r\n]{1,64})\]:`;
+const ATTRIBUTION = new RegExp(`^(?:\\s*(${ISO_PREFIX})[ \t]*)?(?:${SPEAKER_PREFIX}[ \t]*)?`);
 
 function normalizeRole(value: unknown): SessionSearchRole {
-	if (value === "user" || value === "assistant" || value === "tool" || value === "system") {
-		return value;
-	}
-	if (value === "bot") {
-		return "assistant";
-	}
+	if (value === "user" || value === "assistant" || value === "tool" || value === "system") return value;
+	if (value === "bot") return "assistant";
+	if (value === "toolResult") return "tool";
 	return "unknown";
 }
 
@@ -86,9 +53,6 @@ function extractContentText(content: unknown): string {
 			if (part.type === "text" && typeof part.text === "string") {
 				return part.text;
 			}
-			if (part.type === "thinking" && typeof part.thinking === "string") {
-				return part.thinking;
-			}
 			if (part.type === "toolCall") {
 				const toolName =
 					(typeof part.toolName === "string" && part.toolName) ||
@@ -105,363 +69,155 @@ function extractContentText(content: unknown): string {
 		.join("\n");
 }
 
-function extractMessageText(message: unknown): { role: SessionSearchRole; text: string } {
-	if (!isRecord(message)) {
-		return { role: "unknown", text: "" };
-	}
-	return {
-		role: normalizeRole(message.role),
-		text: extractContentText(message.content),
-	};
-}
-
 function getStringField(record: Record<string, unknown>, key: string): string | undefined {
 	const value = record[key];
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function getNestedRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
-	const value = record[key];
-	return isRecord(value) ? value : null;
-}
-
-function createDocument(params: {
-	id: string;
-	source: SessionSearchSource;
-	path: string;
-	timestamp?: string;
-	role: SessionSearchRole;
-	text: string;
-	sessionId?: string;
-	maxChars: number;
-}): SessionSearchDocument | null {
-	// The ingest clip is a fixed, generous scan cap — not the caller's display window. Trimming for
-	// display happens later, at query time, centered on the match (fix plan §2.5). `params.maxChars`
-	// is kept in the signature for callers that still pass it but no longer drives the clip.
-	const raw = params.text.trim();
-	if (!raw) {
-		return null;
+function createDocument(role: SessionSearchRole, raw: string, ts?: string, speaker?: string): TranscriptDoc | null {
+	let text = raw.trim();
+	if (role === "user") {
+		text = stripInjectedMemoryContext(text);
+		const prefix = ATTRIBUTION.exec(text);
+		if (prefix?.[0]) {
+			ts = prefix[1]?.slice(1, -1) ?? ts;
+			speaker = prefix[2] ?? speaker;
+			text = text.slice(prefix[0].length).trim();
+		}
 	}
-	const scanTruncated = raw.length > SESSION_SCAN_MAX_CHARS;
+	if (!text) return null;
+
+	// Redact before clipping so a boundary cannot turn a secret into an unrecognized fragment.
+	text = redactSecrets(text);
+	if (role === "tool" && text.length > 4_000) text = `${text.slice(0, 3_000)}\n[…]\n${text.slice(-1_000)}`;
+	const truncated = text.length > MAX_DOC_CHARS;
 	return {
-		id: params.id,
-		source: params.source,
-		path: params.path,
-		timestamp: params.timestamp,
-		role: params.role,
-		text: scanTruncated ? raw.slice(0, SESSION_SCAN_MAX_CHARS) : raw,
-		...(scanTruncated ? { scanTruncated: true } : {}),
-		sessionId: params.sessionId,
+		role,
+		text: text.slice(0, MAX_DOC_CHARS),
+		truncated,
+		speaker: speaker && redactSecrets(speaker),
+		ts,
 	};
 }
 
-function parseSessionEntry(
-	value: unknown,
-	path: string,
-	lineNumber: number,
-	source: SessionSearchSource,
-	maxChars: number,
-): SessionSearchDocument | null {
-	if (!isRecord(value)) {
-		return null;
+export function parseTranscriptLine(source: SessionSearchSource, value: unknown): TranscriptDoc | null {
+	if (!isRecord(value)) return null;
+	if (source === "log") {
+		if (value.skipContextSync === true) return null;
+		const bot = value.isBot === true;
+		return createDocument(
+			bot ? "assistant" : "user",
+			getStringField(value, "text") ?? "",
+			getStringField(value, "date") ?? getStringField(value, "ts"),
+			bot ? undefined : (getStringField(value, "displayName") ?? getStringField(value, "userName")),
+		);
 	}
-
-	const timestamp = getStringField(value, "timestamp") ?? getStringField(value, "date");
-	const sessionId = getStringField(value, "sessionId") ?? getStringField(value, "branchId");
-
-	if (value.type === "message") {
-		const message = getNestedRecord(value, "message");
-		if (!message) {
-			return null;
-		}
-		const { role, text } = extractMessageText(message);
-		return createDocument({
-			id: `${basename(path)}:${lineNumber}`,
-			source,
-			path,
-			timestamp,
-			role,
-			text,
-			sessionId,
-			maxChars,
-		});
-	}
-
-	if ("message" in value && isRecord(value.message)) {
-		const { role, text } = extractMessageText(value.message);
-		return createDocument({
-			id: `${basename(path)}:${lineNumber}`,
-			source,
-			path,
-			timestamp,
-			role,
-			text,
-			sessionId,
-			maxChars,
-		});
-	}
-
-	const role = normalizeRole(value.role);
-	const text = getStringField(value, "text") ?? getStringField(value, "content") ?? "";
-	return createDocument({
-		id: `${basename(path)}:${lineNumber}`,
-		source,
-		path,
-		timestamp,
-		role,
-		text,
-		sessionId,
-		maxChars,
-	});
-}
-
-function parseLogEntry(
-	value: unknown,
-	path: string,
-	lineNumber: number,
-	maxChars: number,
-): SessionSearchDocument | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-
-	// Command traffic (help/status/tasks/... echoes) is marked skipContextSync at write time
-	// (runtime/bootstrap.ts) so it never comes back as memory-extraction input.
-	if (value.skipContextSync === true) {
-		return null;
-	}
-
-	const isBot = value.isBot === true;
-	const text = getStringField(value, "text") ?? "";
-	const role = isBot ? "assistant" : "user";
-	const timestamp = getStringField(value, "date") ?? getStringField(value, "ts");
-	const userName = getStringField(value, "displayName") ?? getStringField(value, "userName");
-	const prefixedText = userName && !isBot ? `[${userName}] ${text}` : text;
-
-	return createDocument({
-		id: `${basename(path)}:${lineNumber}`,
-		source: "log",
-		path,
-		timestamp,
-		role,
-		text: prefixedText,
-		maxChars,
-	});
-}
-
-async function parseJsonlFile(
-	path: string,
-	source: SessionSearchSource,
-	maxChars: number,
-): Promise<SessionSearchDocument[]> {
-	const content = await readOptionalTextFile(path);
-	if (!content.trim()) {
-		return [];
-	}
-
-	const docs: SessionSearchDocument[] = [];
-	const lines = content.split(/\r?\n/);
-	for (let index = 0; index < lines.length; index++) {
-		const parsed = parseJsonLine(lines[index] ?? "");
-		if (parsed === null) {
-			continue;
-		}
-		const document =
-			source === "log"
-				? parseLogEntry(parsed, path, index + 1, maxChars)
-				: parseSessionEntry(parsed, path, index + 1, source, maxChars);
-		if (document) {
-			docs.push(document);
-		}
-	}
-	return docs;
-}
-
-async function listConversations(deskDir: string): Promise<string[]> {
-	try {
-		const entries = await readdir(getConversationsDir(deskDir), { withFileTypes: true });
-		return entries
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => entry.name)
-			.sort();
-	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") {
-			return [];
-		}
-		throw error;
-	}
-}
-
-async function listSessionJsonlFiles(
-	conversationDirs: Array<{ conversation: string; dir: string }>,
-	maxFiles: number,
-): Promise<Array<{ conversation: string; path: string }>> {
-	// Stat in parallel: one round trip per session file, and awaiting them one at a time made the
-	// corpus build scale with the file count rather than with the slowest stat.
-	const listed = await Promise.all(
-		conversationDirs.map(async ({ conversation, dir }) => {
-			try {
-				return (await readdir(dir))
-					.filter((name) => name.endsWith(".jsonl") && !IGNORED_JSONL_FILES.has(name))
-					.map((name) => ({ conversation, path: join(dir, name) }));
-			} catch {
-				return [];
-			}
-		}),
+	const message = isRecord(value.message) ? value.message : value;
+	return createDocument(
+		normalizeRole(message.role),
+		getStringField(message, "text") ?? extractContentText(message.content),
+		getStringField(value, "timestamp") ?? getStringField(value, "date"),
 	);
-	const stated = await Promise.all(
-		listed.flat().map(async (entry) => {
-			try {
-				const stats = await stat(entry.path);
-				return stats.isFile() ? { ...entry, mtimeMs: stats.mtimeMs } : null;
-			} catch {
-				return null;
-			}
-		}),
-	);
-	return stated
-		.filter((entry): entry is { conversation: string; path: string; mtimeMs: number } => entry !== null)
-		.sort((a, b) => b.mtimeMs - a.mtimeMs)
-		.slice(0, Math.max(0, maxFiles))
-		.map(({ conversation, path }) => ({ conversation, path }));
 }
 
-async function readArchivedTaskDocuments(
-	deskDir: string,
-	maxFiles: number,
-	maxChars: number,
-): Promise<SessionSearchDocument[]> {
-	const archiveDir = join(deskDir, "tasks", "archive");
-	let names: string[];
+export function dedupKey(text: string): string {
+	return text
+		.normalize("NFKC")
+		.split("\n")
+		.map((line) => line.replace(ATTRIBUTION, ""))
+		.join(" ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+export async function listIndexSourceEntries(dir: string) {
 	try {
-		names = (await readdir(archiveDir)).filter((name) => name.endsWith(".md"));
+		return await readdir(dir, { withFileTypes: true });
 	} catch (error) {
 		if (isNodeError(error) && error.code === "ENOENT") return [];
 		throw error;
 	}
-	const stated = await Promise.all(
-		names.map(async (name) => {
-			const path = join(archiveDir, name);
-			try {
-				const stats = await stat(path);
-				return stats.isFile() ? { name, path, mtimeMs: stats.mtimeMs } : null;
-			} catch {
-				return null;
-			}
-		}),
-	);
-	const files = stated
-		.filter((entry): entry is { name: string; path: string; mtimeMs: number } => entry !== null)
-		.sort((a, b) => b.mtimeMs - a.mtimeMs)
-		.slice(0, Math.min(200, Math.max(20, maxFiles * 10)));
+}
 
-	const docs: SessionSearchDocument[] = [];
-	for (const file of files) {
-		const id = file.name.slice(0, -".md".length);
-		const markdown = await readOptionalTextFile(file.path);
-		if (!markdown.trim()) continue;
-		const logContent = await readOptionalTextFile(join(archiveDir, `${id}.jsonl`));
-		const logNotes: string[] = [];
-		let closedAt: string | undefined;
-		for (const line of logContent.split(/\r?\n/)) {
-			const parsed = parseJsonLine(line);
-			if (!isRecord(parsed)) continue;
-			if (parsed.kind === "report" && typeof parsed.text === "string" && parsed.text.trim()) {
-				logNotes.push(`[汇报] ${parsed.text.trim()}`);
-			} else if (parsed.kind === "ask" && typeof parsed.question === "string" && parsed.question.trim()) {
-				logNotes.push(`[提问] ${parsed.question.trim()}`);
-			} else if (parsed.kind === "message" && typeof parsed.text === "string" && parsed.text.trim()) {
-				logNotes.push(`[用户消息] ${parsed.text.trim()}`);
-			} else if (parsed.kind === "close" || parsed.kind === "closed") {
-				closedAt = getStringField(parsed, "ts") ?? closedAt;
-				const outcome = getStringField(parsed, "outcome") ?? "closed";
-				const note = getStringField(parsed, "note");
-				logNotes.push(`[结项 ${outcome}]${note ? ` ${note}` : ""}`);
-			}
+export async function listDeskTranscriptSources(deskDir: string): Promise<TranscriptSourceFile[]> {
+	const conversationsDir = getConversationsDir(deskDir);
+	const conversations = (await listIndexSourceEntries(conversationsDir)).filter((entry) => entry.isDirectory());
+	const archiveDir = join(deskDir, "tasks", "archive");
+	const [conversationsFiles, taskFiles] = await Promise.all([
+		Promise.all(
+			conversations.map(async ({ name: conversation }) => {
+				const dir = join(conversationsDir, conversation);
+				const files: TranscriptSourceFile[] = [];
+				for (const entry of await listIndexSourceEntries(dir)) {
+					if (!entry.isFile() || IGNORED_JSONL_FILES.has(entry.name)) continue;
+					const isLog = /^log\.jsonl(?:\.\d+)?$/.test(entry.name);
+					if (!isLog && (!entry.name.endsWith(".jsonl") || entry.name.startsWith("log.jsonl"))) continue;
+					const path = join(dir, entry.name);
+					files.push({
+						path,
+						relPath: relative(deskDir, path).split(sep).join("/"),
+						conversation,
+						kind: isLog ? "log" : "session",
+						source: isLog ? "log" : entry.name === "context.jsonl" ? "context" : "session",
+					});
+				}
+				return files;
+			}),
+		),
+		listIndexSourceEntries(archiveDir),
+	]);
+	return [
+		...conversationsFiles.flat(),
+		...taskFiles
+			.filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+			.map(
+				({ name }) =>
+					({
+						path: join(archiveDir, name),
+						relPath: `tasks/archive/${name}`,
+						kind: "task",
+						source: "task",
+					}) as const,
+			),
+	];
+}
+
+export function archivedTaskDoc(
+	mdPath: string,
+	markdown: string,
+	logContent: string,
+	mtimeMs: number,
+): TranscriptDoc | null {
+	if (!markdown.trim()) return null;
+	const id = basename(mdPath, ".md");
+	const logNotes: string[] = [];
+	let closedAt: string | undefined;
+	for (const line of logContent.split(/\r?\n/)) {
+		const parsed = parseJsonLine(line);
+		if (!isRecord(parsed)) continue;
+		if (parsed.kind === "report" && typeof parsed.text === "string" && parsed.text.trim()) {
+			logNotes.push(`[汇报] ${parsed.text.trim()}`);
+		} else if (parsed.kind === "ask" && typeof parsed.question === "string" && parsed.question.trim()) {
+			logNotes.push(`[提问] ${parsed.question.trim()}`);
+		} else if (parsed.kind === "message" && typeof parsed.text === "string" && parsed.text.trim()) {
+			logNotes.push(`[用户消息] ${parsed.text.trim()}`);
+		} else if (parsed.kind === "close" || parsed.kind === "closed") {
+			closedAt = getStringField(parsed, "ts") ?? closedAt;
+			const outcome = getStringField(parsed, "outcome") ?? "closed";
+			const note = getStringField(parsed, "note");
+			logNotes.push(`[结项 ${outcome}]${note ? ` ${note}` : ""}`);
 		}
-		const frontmatterClosedAt = /^closedAt:\s*["']?([^"'\r\n]+)["']?\s*$/m.exec(markdown)?.[1]?.trim();
-		const timestamp = closedAt ?? frontmatterClosedAt ?? new Date(file.mtimeMs).toISOString();
-		const combined = logNotes.length > 0 ? `${markdown.trim()}\n\n${logNotes.join("\n")}` : markdown.trim();
-		const document = createDocument({
-			id: `tasks/archive/${file.name}`,
-			source: "task",
-			path: file.path,
-			timestamp,
-			role: "assistant",
-			text: `[归档任务 ${id}]\n${combined}`,
-			maxChars,
-		});
-		if (document) docs.push(document);
 	}
-	return docs.reverse();
+	const frontmatterClosedAt = /^closedAt:\s*["']?([^"'\r\n]+)["']?\s*$/m.exec(markdown)?.[1]?.trim();
+	const timestamp = closedAt ?? frontmatterClosedAt ?? new Date(mtimeMs).toISOString();
+	const combined = logNotes.length > 0 ? `${markdown.trim()}\n\n${logNotes.join("\n")}` : markdown.trim();
+	return createDocument("assistant", `[归档任务 ${id}]\n${combined}`, timestamp);
 }
 
-export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Promise<SessionSearchDocument[]> {
-	const maxFiles = Math.max(1, Math.floor(options.maxFiles));
-	const maxChars = options.maxCharsPerDocument ?? DEFAULT_MAX_CHARS_PER_DOCUMENT;
-	const maxDocuments = options.maxDocumentsTotal ?? DEFAULT_MAX_DOCUMENTS_TOTAL;
-	const conversationDirs = (await listConversations(options.deskDir)).map((conversation) => ({
-		conversation,
-		dir: join(getConversationsDir(options.deskDir), conversation),
-	}));
-	const readPlan: Array<{ path: string; source: SessionSearchSource; conversation: string }> = [];
-	for (const { conversation, dir } of conversationDirs) {
-		readPlan.push(
-			{ path: join(dir, "context.jsonl"), source: "context", conversation },
-			{ path: join(dir, "log.jsonl"), source: "log", conversation },
-			{ path: join(dir, "log.jsonl.1"), source: "log", conversation },
-		);
+export function parseJsonLine(line: string): unknown {
+	try {
+		return JSON.parse(line) as unknown;
+	} catch {
+		return null;
 	}
-	for (const entry of await listSessionJsonlFiles(conversationDirs, maxFiles)) {
-		readPlan.push({ ...entry, source: "session" });
-	}
-
-	// Every conversation is read, each keeping at most its newest `maxDocuments`; the total is then
-	// shared out by `shareBudget`. Stopping in directory order once the total ran over let one
-	// long-lived channel fill the budget before later channels were read at all (spec 058, D12:
-	// `session_search` covers the whole desk).
-	const byConversation = new Map<string, SessionSearchDocument[]>();
-	for (const item of readPlan) {
-		let docs = byConversation.get(item.conversation) ?? [];
-		for (const document of await parseJsonlFile(item.path, item.source, maxChars)) {
-			// Ids are `<file>:<line>`, and every conversation has its own `context.jsonl`.
-			docs.push({ ...document, id: `${item.conversation}/${document.id}`, conversation: item.conversation });
-		}
-		if (docs.length > maxDocuments * 2) docs = docs.slice(-maxDocuments);
-		byConversation.set(item.conversation, docs);
-	}
-	const archivedTasks = await readArchivedTaskDocuments(options.deskDir, maxFiles, maxChars);
-	const groups = [...byConversation.values()];
-	if (archivedTasks.length > 0) groups.push(archivedTasks);
-	return shareBudget(groups.map(deduplicate), maxDocuments);
-}
-
-function deduplicate(docs: SessionSearchDocument[]): SessionSearchDocument[] {
-	const deduplicated: SessionSearchDocument[] = [];
-	const seen = new Set<string>();
-	for (const document of docs) {
-		const identity = document.timestamp
-			? `${document.timestamp}\0${document.role}\0${document.text}`
-			: `${document.source}\0${document.id}`;
-		if (seen.has(identity)) continue;
-		seen.add(identity);
-		deduplicated.push(document);
-	}
-	return deduplicated;
-}
-
-/**
- * Fair shares of `budget`, smallest conversation first: one that needs less than an equal share
- * keeps everything and leaves the rest to the others; a larger one keeps its newest documents.
- */
-function shareBudget(groups: SessionSearchDocument[][], budget: number): SessionSearchDocument[] {
-	const kept = new Map<SessionSearchDocument[], SessionSearchDocument[]>();
-	let remaining = budget;
-	const bySize = [...groups].sort((a, b) => a.length - b.length);
-	bySize.forEach((group, index) => {
-		const take = Math.min(group.length, Math.floor(remaining / (bySize.length - index)));
-		kept.set(group, take === 0 ? [] : group.slice(-take));
-		remaining -= take;
-	});
-	return groups.flatMap((group) => kept.get(group) ?? []);
 }

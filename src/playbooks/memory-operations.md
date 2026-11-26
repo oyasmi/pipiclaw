@@ -29,7 +29,7 @@ order: 20
 
 ## 找回与应用
 
-先用当前上下文和首轮索引，相关 `(+)` 才读正文。索引不逐轮刷新，中途怀疑记过用 memory_search，查工位 memory、workspace MEMORY、近期 journal；只需旧对话用 session_search，其频道标识也有助于确认是谁说的。
+先用当前上下文和首轮索引，相关 `(+)` 才读正文。索引不逐轮刷新，中途怀疑记过用 memory_search，查工位 memory、workspace MEMORY、近期 journal；只需旧对话用 session_search，一次可给出中英文名称、别称和标识符。用频道和发言人确认出处。
 
 journal 搜索最多最近 365 个日文件（总量上限 1 MiB，每份末尾 64 KiB）；不足按工具给的路径 grep 或按日期 read，原始对话仍走 session_search。无命中不等于不存在。
 

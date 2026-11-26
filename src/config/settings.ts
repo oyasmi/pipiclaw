@@ -68,8 +68,6 @@ export interface PipiclawLoggingSettings {
 }
 
 export interface PipiclawSessionSearchSettings {
-	maxFiles: number;
-	maxChunks: number;
 	maxCharsPerChunk: number;
 	summarizeWithModel: boolean;
 	timeoutMs: number;
@@ -188,8 +186,6 @@ export const TASK_DIGEST_SETTINGS: PipiclawTaskDigestSettings = {
 };
 
 const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
-	maxFiles: 12,
-	maxChunks: 80,
 	maxCharsPerChunk: 1200,
 	summarizeWithModel: false,
 	timeoutMs: 12_000,

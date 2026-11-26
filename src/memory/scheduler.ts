@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -10,6 +11,7 @@ import { shouldRunReflect } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState } from "./maintenance-state.js";
 import { type MemoryMaintenanceInput, resolveMemoryMaintenanceSettings } from "./maintenance-tuning.js";
 import { runReflectJob } from "./reflect-job.js";
+import { type DeskIndexTarget, pruneOrphanSearchIndexes, syncDeskSearchIndex } from "./search-index-sync.js";
 import { digestTaskArchives } from "./task-archive-digest.js";
 
 export interface MemoryMaintenanceRuntimeContext {
@@ -40,6 +42,7 @@ export interface MemoryMaintenanceSchedulerOptions {
 	isChannelActive: (channelId: string) => boolean;
 	getSettings: () => { memoryMaintenance: MemoryMaintenanceInput };
 	intervalMs?: number;
+	syncSearchIndex?: (target: DeskIndexTarget) => Promise<unknown>;
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
@@ -75,6 +78,7 @@ async function mightReflectBeDue(input: {
 export class MemoryMaintenanceScheduler {
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private running = false;
+	private orphansPruned = false;
 	private nextIndex = 0;
 	private readonly startedAtMs = Date.now();
 
@@ -84,9 +88,6 @@ export class MemoryMaintenanceScheduler {
 		if (this.timer) {
 			return;
 		}
-		// `enabled` is re-checked on every tick inside `runOnce`, which is nearly free when
-		// disabled (one cached settings read, no channel scan). Gating `start()` on it too would
-		// mean flipping `memoryMaintenance.enabled` on at runtime never actually starts the timer.
 		this.timer = setInterval(() => {
 			void this.runOnce().catch((error) => {
 				log.logWarn("memory.scheduler.tick_failed", "Memory maintenance tick failed", {
@@ -117,6 +118,7 @@ export class MemoryMaintenanceScheduler {
 			if (conversations.length === 0) {
 				return;
 			}
+			await this.syncSearchIndexesOnce(conversations);
 			// Digest newly closed archived tasks per unique desk (B1). Recurring instances cost
 			// zero LLM calls; if a one-off task runs reflect, spend this tick's single LLM call
 			// there and return.
@@ -143,6 +145,31 @@ export class MemoryMaintenanceScheduler {
 			if (selected) await this.runConversationOnce(selected, now);
 		} finally {
 			this.running = false;
+		}
+	}
+
+	private async syncSearchIndexesOnce(conversations: DeskConversation[]): Promise<void> {
+		const { appHomeDir, syncSearchIndex = syncDeskSearchIndex } = this.options;
+		if (!this.orphansPruned) {
+			this.orphansPruned = true;
+			try {
+				await pruneOrphanSearchIndexes(appHomeDir, dirname(conversations[0].deskDir));
+			} catch (error) {
+				log.logWarn("memory.search_index.prune_failed", "Search index prune failed", {
+					reason: errorMessage(error),
+				});
+			}
+		}
+		const desks = new Map(conversations.map(({ desk, deskDir }) => [desk, deskDir]));
+		for (const [desk, deskDir] of desks) {
+			try {
+				await syncSearchIndex({ appHomeDir, desk, deskDir });
+			} catch (error) {
+				log.logWarn("memory.search_index.sync_failed", "Search index sync failed", {
+					reason: errorMessage(error),
+					fields: { desk },
+				});
+			}
 		}
 	}
 

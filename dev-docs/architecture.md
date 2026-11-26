@@ -44,7 +44,7 @@ pipiclaw tui [--desk <名字>] [提示] # 终端：Web API 本地 socket 的客�
 | 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
 | 5 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts`、`client.ts` |
 | 5 | `src/skills/` | 工作区与用户共享技能的发现、过滤、名称合并及 `/skills`（spec 063） | `loader.ts`、`catalog.ts`、`roots.ts`、`types.ts`、`commands.ts` |
-| 6 | `src/memory/` | 一条事实一文件的工位记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
+| 6 | `src/memory/` | 一条事实一文件的工位记忆 + 日志 + 单一反思 pass（spec 050）、冷存储全文索引（spec 072）及 `/memory` | `store.ts`、`search.ts`、`search-index-db.ts`、`search-index-sync.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
 | 6 | `src/events/` | 定时/传感器事件：定义、校验、文件监视器、`/events` | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
 | 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`probe.ts`、`kill.ts`、`record.ts` |
 | 7 | `src/subagents/` | 角色发现、调用期解析、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`resolve.ts`、`types.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`cursor-cli.ts`、`antigravity-cli.ts`、`role-warnings.ts`、`exec.ts`） |
@@ -227,7 +227,7 @@ sequenceDiagram
 | `MEMORY.md` | 从 `memory/*.md` **生成**的索引，人也能直接看 | `store.ts` 每次写入后重建；启动时若缺失也重建（按 mtime 缓存） | 会话首轮（含 `/new` 之后、压缩之后）整份注入，超预算按类型分层 |
 | `journal/YYYY-MM-DD.md` | 按天追加的工作记录（发生了什么、定了什么、卡在哪） | 后台记忆维护（反思 pass 与任务归档消化） | 首轮注入当天尾部（不足时补齐前序日期） |
 | `memory/.tombstones.jsonl` | 已遗忘记忆的 name + 内容哈希（不含原文），防止反思把同一件事又写回来 | `memory_forget` / `/memory forget` / reflect | 否 |
-| `conversations/*/log.jsonl` / 会话 JSONL | 冷存储：各频道的完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 跨本工位的所有会话区检索 |
+| `conversations/*/log.jsonl` / 会话 JSONL | 冷存储：各频道的完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 查询前增量同步全工位会话和归档任务到派生全文索引 |
 | `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（含 actions/skipped/error；重复的相同跳过原因去重） | `review-log.ts` | 否，人工排查用 |
 
 工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于 path guard，因此“管理员拥有”不是 OS 级只读保证。工位 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
@@ -397,6 +397,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
     ├── events/history.jsonl       # 事件审计
     ├── jobs/<name>/                # 后台作业状态与输出索引
     ├── subagent-runs/<name>/       # 委派权威状态、pid、argv、幂等标记
+    ├── search-index/<desk>.sqlite # 工位全文索引，删除后自动重建
     ├── memory/<name>/<会话区>.json # 反思调度打点状态（单 job）
     ├── logs/runtime.jsonl         # 结构化运行日志
     └── usage/                     # 用量账本
