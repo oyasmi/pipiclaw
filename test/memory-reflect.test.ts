@@ -8,6 +8,7 @@ vi.mock("../src/memory/sidecar-worker.js", () => ({
 }));
 
 import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import * as journal from "../src/memory/journal.js";
 import { runReflect } from "../src/memory/reflect.js";
@@ -77,6 +78,63 @@ describe("reflect — skip conditions", () => {
 });
 
 describe("reflect — write tier (D6)", () => {
+	it("checks add and update identifiers against the original reflection inputs", async () => {
+		// Catches synthesized paths persisting as durable facts and a rejected add permitting a deletion.
+		const deskDir = createTempDir();
+		await applyMemoryOps(deskDir, [
+			{ op: "add", name: "keep", type: "project", source: "agent", description: "Existing fact" },
+			{
+				op: "add",
+				name: "rules",
+				type: "reference",
+				source: "agent",
+				description: "Release runbook",
+				details: "Old documentation is in docs/release/runbook.md.",
+			},
+		]);
+		const write = { durability: "stable", confidence: 0.97, necessity: "high" };
+		const toolPath = `${homedir()}/pipiclaw/config.json`;
+		scripted({
+			journal: [],
+			ops: [
+				{ ...write, op: "add", name: "invented", description: "Use /opt/never-seen/config.yaml" },
+				{ ...write, op: "add", name: "from-tool", description: "Config is ~/pipiclaw/config.json" },
+				{ ...write, op: "add", name: "dated", description: "Release policy adopted 2026-11-26" },
+				{ ...write, op: "update", name: "rules", description: "Read docs/release/runbook.md before a release" },
+				{ op: "delete", name: "keep", confidence: 0.97, reason: "replaced" },
+			],
+			discarded: [],
+		});
+		const result = await runReflect({
+			deskDir,
+			workspaceDir: deskDir,
+			model: fakeModel,
+			modelRequests: testModelRequests(),
+			messages: [
+				...meaningfulMessages,
+				{
+					role: "toolResult",
+					toolCallId: "lookup",
+					toolName: "read",
+					content: [{ type: "text", text: `Configuration path: ${toolPath}` }],
+					isError: false,
+					timestamp: 1,
+				},
+			],
+		});
+		expect(result.added).toEqual(["from-tool", "dated"]);
+		expect(result.updated).toEqual(["rules"]);
+		expect(result.deleted).toEqual([]);
+		expect(result.rejected).toContainEqual({
+			op: "add",
+			name: "invented",
+			reason: "unanchored identifier: /opt/never-seen/config.yaml",
+		});
+		expect((await listMemoryEntries(deskDir)).map(({ name }) => name)).toEqual(
+			expect.arrayContaining(["keep", "rules"]),
+		);
+	});
+
 	it("writes stable high-necessity as durable, downgrades missing durability to probationary, and rejects state", async () => {
 		const deskDir = createTempDir();
 		scripted({

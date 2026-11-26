@@ -195,7 +195,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 			return run(target, job);
 		});
 		try {
-			await harness.sendUserMessage("部署脚本在哪？");
+			await harness.sendUserMessage("部署脚本是 scripts/deploy.sh。");
 			await harness.sendUserMessage("/new"); // A's boundary reflect, held at the provider below
 			await reflect.arrived;
 
@@ -280,6 +280,8 @@ describe("E2E deterministic: memory (spec 050)", () => {
 	it("M3: the boundary reflect pass writes memory + journal and does not reprocess an empty window", async () => {
 		// Regression: reflecting an empty session wastes a model call and can duplicate durable facts.
 		// Mutation verified: bypass runReflect's hasMeaningfulExchange guard; the empty reset adds a request.
+		// Mutation check (2026-11-26): disabling findUnanchored saves invented-config.md
+		// and fails the assertion that only the supported memory survived.
 		// Mutation 2026-10-31: consuming the full source window makes the batch assertions fail;
 		// the provider then receives a head/tail sample instead of every seeded exchange.
 		harness = await createDeterministicHarness({
@@ -288,7 +290,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 				for (let index = 0; index < 4; index++) {
 					session.appendMessage({
 						role: "user",
-						content: `MEMORY-BATCH-FACT-${index} ${"中".repeat(7500)}`,
+						content: `MEMORY-BATCH-FACT-${index} 部署脚本是 scripts/deploy.sh。 ${"中".repeat(7500)}`,
 						timestamp: index * 2,
 					});
 					session.appendMessage({
@@ -333,6 +335,16 @@ describe("E2E deterministic: memory (spec 050)", () => {
 							necessity: "high",
 							reason: "user stated it",
 						},
+						{
+							op: "add",
+							name: "invented-config",
+							type: "project",
+							description: "配置在 /opt/never-seen/config.yaml",
+							durability: "stable",
+							confidence: 0.95,
+							necessity: "high",
+							reason: "unsupported identifier",
+						},
 					],
 					discarded: [],
 				}),
@@ -373,6 +385,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		});
 		expect(journal).toContain("01:00 完成一次部署");
 		expect(readdirSync(join(harness.deskDir, "memory")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
+		expect(existsSync(join(harness.deskDir, "memory", "invented-config.md"))).toBe(false);
 		// Mutation: suppressing journal actions in reviewLogEntryFor loses the persisted audit evidence.
 		const audit = readFileSync(join(harness.deskDir, "memory-review.jsonl"), "utf8")
 			.trim()
@@ -380,6 +393,14 @@ describe("E2E deterministic: memory (spec 050)", () => {
 			.map((line) => JSON.parse(line));
 		expect(audit.flatMap((entry) => entry.actions ?? [])).toContainEqual(
 			expect.objectContaining({ target: "journal", action: "append", count: 1 }),
+		);
+
+		expect(audit.flatMap((entry) => entry.skipped ?? [])).toContainEqual(
+			expect.objectContaining({
+				op: "add",
+				name: "invented-config",
+				reason: "unanchored identifier: /opt/never-seen/config.yaml",
+			}),
 		);
 
 		// A second /new with nothing said in between reflects on an empty window — no new call.

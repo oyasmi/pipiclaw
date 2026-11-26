@@ -6,6 +6,7 @@ import { parseJsonObject } from "../shared/llm-json.js";
 import { localDayKey } from "../shared/local-time.js";
 import { readOptionalTextFile } from "../shared/os.js";
 import { clipText } from "../shared/text-utils.js";
+import { extractAnchors, findUnanchored, toolResultProvenance } from "./anchors.js";
 import { buildMemoryIndexForBootstrap, MEMORY_INDEX_MAX_UNITS } from "./index-budget.js";
 import { appendJournalEntries } from "./journal.js";
 import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
@@ -245,7 +246,11 @@ function renderIndexBodiesForReflect(entries: MemoryEntry[]): string {
 	return parts.join("\n");
 }
 
-async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{ prompt: string; condense: boolean }> {
+async function buildPrompt(
+	options: ReflectRunOptions,
+	today: string,
+	source: string,
+): Promise<{ prompt: string; condense: boolean; provenance: string }> {
 	const [entries, workspaceMemory, journalToday] = await Promise.all([
 		listMemoryEntries(options.deskDir),
 		readOptionalTextFile(`${options.workspaceDir}/MEMORY.md`),
@@ -253,11 +258,14 @@ async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{
 	]);
 	const tiered = buildMemoryIndexForBootstrap(entries, MEMORY_INDEX_MAX_UNITS);
 	const sourceLabel = options.sourceText?.label ?? "Conversation window to reflect on";
-	const transcript = options.sourceText
-		? clipText(options.sourceText.text, MEMORY_TRANSCRIPT_MAX_CHARS, { headRatio: 0.35 })
-		: clipText(serializeConversation(sanitizeMessagesForMemory(options.messages)), MEMORY_TRANSCRIPT_MAX_CHARS, {
-				headRatio: 0.35,
-			});
+	const transcript = clipText(source, MEMORY_TRANSCRIPT_MAX_CHARS, { headRatio: 0.35 });
+	const provenance = [
+		source,
+		...toolResultProvenance(options.messages),
+		...entries.map((entry) => `${entry.description}\n${entry.body}`),
+		workspaceMemory,
+		journalToday,
+	].join("\n\n");
 
 	const bodies = renderIndexBodiesForReflect(entries);
 	const sections = [
@@ -270,7 +278,7 @@ async function buildPrompt(options: ReflectRunOptions, today: string): Promise<{
 	if (tiered.overBudget) {
 		sections.push(CONDENSE_INSTRUCTIONS.trim());
 	}
-	return { prompt: sections.join("\n\n"), condense: tiered.overBudget };
+	return { prompt: sections.join("\n\n"), condense: tiered.overBudget, provenance };
 }
 
 /**
@@ -310,7 +318,8 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 		return { ...empty, skipped: true, expiredProbation };
 	}
 
-	const { prompt, condense } = await buildPrompt(options, today);
+	const source = options.sourceText?.text ?? serializeConversation(sanitized);
+	const { prompt, condense, provenance } = await buildPrompt(options, today, source);
 	const response = await runRetriedSidecarTask({
 		name: "memory-reflect",
 		model: options.model,
@@ -427,6 +436,15 @@ export async function runReflect(options: ReflectRunOptions): Promise<ReflectRun
 					op: effectiveOp,
 					name: existing?.name ?? rawName,
 					reason: `confidence ${confidence} / necessity ${necessity} below the write bar`,
+				});
+				continue;
+			}
+			const [unanchored] = findUnanchored(extractAnchors(`${description}\n${details ?? ""}`), provenance);
+			if (unanchored) {
+				rejected.push({
+					op: effectiveOp,
+					name: existing?.name ?? rawName,
+					reason: `unanchored identifier: ${unanchored.slice(0, 80)}`,
 				});
 				continue;
 			}
