@@ -4,14 +4,27 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.6-beta.3] - 2026-11-26
+
+### Added
+
+- **Full-text history and memory search.** Each desk has an incremental SQLite FTS5 index covering all conversation files, rotated logs, and archived tasks. `session_search` catches up to the last complete line before answering, strips injected context and reasoning, and deduplicates repeated text while keeping its sources. BM25 ranks English terms and Han and kana bigrams. `memory_search` uses the same database for durable memory, all journal dates, and workspace background, with source citations and expiry filtering. The derived index rebuilds automatically after deletion. See the [memory guide](docs/memory.md#历史对话检索).
+- **Parallel web search and bounded fallback.** `web_search` supports Parallel's native Search API, search objectives, keyword variants, and source filters. Results report the provider and available publication dates. A temporary provider failure can trigger one fallback within the original deadline, using that provider's own credentials and carrying source filters through the switch. An empty result returns directly. See the [web tools guide](docs/tools.md#网页工具web_search--web_fetch).
+- **Atomic multi-edit and file-change hints.** `edit` can apply several replacements against one file snapshot, with line numbers for ambiguous matches and LF anchors for CRLF files. A missed or overlapping replacement cancels the batch. Writes that overwrite unread content or externally changed files include a hint after succeeding.
+
 ### Changed
 
-- Upgrade the four direct Pi SDK dependencies together from 1.5.0 to 1.5.2, including tool-argument validation, provider compatibility, session-boundary and terminal-input fixes. Historical sessions need no migration. Check removed model references and the empty-tool-list compatibility setting for older gateways in the [upgrade notes](docs/migrations/sdk-upgrades.md#pi-sdk-152-升级注意事项).
+- Upgrade the four direct Pi SDK dependencies together from 1.5.0 to 1.5.2, including tool-argument validation, provider compatibility, session-boundary and terminal-input fixes. Check removed model references and the empty-tool-list compatibility setting for older gateways in the [upgrade notes](docs/migrations/sdk-upgrades.md#pi-sdk-152-升级注意事项).
+- **Memory maintenance checks durability and identifier provenance.** Reflection sends transient state to the journal and requires paths, URLs, hashes, versions, and ports in durable writes to appear in the source material. Updates preserve existing bodies when details are omitted, and confirmed entries refresh correctly. New task archives feed the journal or a reflection pass. First-turn context can draw on the most recent earlier journal when today's is short.
+- **Smaller prompts and session-scoped caching.** Chat and internal agents reuse model session caches, `/context` reports cache usage, and external continuations avoid resending role instructions. Task guides load verification on demand, and `pi-scout` provides a lightweight read-only role. Compaction restores the memory context and task contract before work resumes.
+- **More focused tools.** `grep` uses ripgrep when installed and retains read-policy filtering. `glob` supports pagination, and Bash inlines at most the last 30 KiB or 1,000 lines with a file reference for longer output. Standalone Web API requests offer foreground Bash. Inline delegation reports progress and contributes to turn usage.
 - Ship sub-agent profiles directly under `examples/sub-agents/`. Use this path in scripts that copy example profiles into a workspace.
+- Keep user guides in [docs/](docs/README.md) and contributor material in [dev-docs/](dev-docs/README.md). Behavior evaluations use replayable evidence, qualify graders against positive and negative controls, and enforce the frozen run budget. Test failures now provide targeted rerun commands and JSON reports.
 
 ### Fixed
 
 - **Preserve complete model request authentication.** Chat, task sessions, internal agents, memory helpers and compaction now use the SDK model runtime for request-time API keys, headers, endpoint overrides and provider environment. Backup models resolve their own credentials. Shutdown waits within its existing deadline for OAuth refresh writes, including work left behind by a cancelled request, before releasing the daemon lock. Authentication CLI commands and the optional evaluation judge also drain pending credential work before returning.
+- **Keep delegated worktrees safe during inspection and cleanup.** A failed Git inspection or a refused removal preserves the checkout. Active runs and follow-ups retain their checkout protection, and read and write leases are restored after restart.
 
 ## [0.9.6-beta.2] - 2026-11-17
 
