@@ -36,12 +36,16 @@ const LAUNCH_HANDSHAKE_MAX_POLLS = 40;
  * The inner shell writes an atomic `ready` marker as its very first action — *before* the user
  * command — so the parent can distinguish "wrapper live, spill writable, command about to run"
  * from "launch silently failed" (a read-only spill dir, a `setsid`/`sh` that could not exec). The
- * parent also writes a metadata file (pid, and under `setsid` the pgid/start-time) *before* it
- * waits on the handshake, so an abort that lands mid-handshake still leaves a recoverable pid.
+ * parent also writes a metadata file with the spawned pid *before* it waits on the handshake, so
+ * an abort that lands mid-handshake still leaves a recoverable pid.
  *
  * `setsid` (when present) makes the job its own session/process-group leader (pgid == pid), so a
- * later cancel/timeout can terminate the whole group. A host without it falls back to `nohup` —
- * still detached and restart-safe, but single-pid, so pgid/identity are deliberately not claimed.
+ * later cancel/timeout can terminate the whole group. Under `setsid`, the inner shell itself
+ * captures `pgid` and `lstart` into the `ready` marker: querying `ps` from the parent right after
+ * `&` races with `setsid(2)` and can observe the parent shell's pgid before the child creates its
+ * new session, whereas the inner `sh` only runs after `setsid(2)` has completed and while `$$` is
+ * guaranteed alive. A host without `setsid` falls back to `nohup` — still detached and
+ * restart-safe, but single-pid, so pgid/identity are deliberately not claimed.
  *
  * On handshake success the parent prints `MODE`/`PID`(/`PGID`/`LSTART`) and exits 0. On failure it
  * kills whatever it spawned, echoes the inner error, removes the scratch files, and exits 1.
@@ -58,15 +62,13 @@ export function buildLaunchScript(command: string, art: JobArtifacts): string {
 	// Subshell around the user command so its own `exit N` only leaves the subshell and the
 	// exit-capture still runs; the exit code is written temp-then-renamed so a probe never reads a
 	// half-written `.exit`.
-	const inner =
-		`printf 'ready\\n' > ${readyTmp} && mv -f ${readyTmp} ${ready} || exit 127; ` +
-		`( ${command} )\n__pc_rc=$?; ` +
-		`printf '%s\\n' "$__pc_rc" > ${exitTmp} && mv -f ${exitTmp} ${exitFile}`;
-	const escInner = shellEscape(inner);
-
-	// `ps` can momentarily miss a just-forked process on a loaded host: one short retry.
-	const psField = (field: string) =>
-		`"$(ps -o ${field}= -p "$__pc_pid" 2>/dev/null || { sleep 0.1; ps -o ${field}= -p "$__pc_pid" 2>/dev/null; })"`;
+	const innerBody = `( ${command} )\n__pc_rc=$?; printf '%s\\n' "$__pc_rc" > ${exitTmp} && mv -f ${exitTmp} ${exitFile}`;
+	const innerSetsid =
+		`__pc_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' '); ` +
+		`__pc_lstart=$(ps -o lstart= -p $$ 2>/dev/null); ` +
+		`printf 'MODE setsid\\nPID %s\\nPGID %s\\nLSTART %s\\n' "$$" "$__pc_pgid" "$__pc_lstart" ` +
+		`> ${readyTmp} && mv -f ${readyTmp} ${ready} || exit 127; ${innerBody}`;
+	const innerNohup = `printf 'ready\\n' > ${readyTmp} && mv -f ${readyTmp} ${ready} || exit 127; ${innerBody}`;
 
 	const handshake = (killExpr: string) =>
 		`__pc_i=0; while [ ! -s ${ready} ] && [ "$__pc_i" -lt ${LAUNCH_HANDSHAKE_MAX_POLLS} ]; do ` +
@@ -80,15 +82,13 @@ export function buildLaunchScript(command: string, art: JobArtifacts): string {
 	const nohupKill = `kill -TERM "$__pc_pid" 2>/dev/null; sleep 0.1; kill -KILL "$__pc_pid" 2>/dev/null; `;
 
 	const setsidBranch =
-		`setsid sh -c ${escInner} > ${spill} 2>&1 & __pc_pid=$!; ` +
-		`__pc_pgid=$(printf '%s' ${psField("pgid")} | tr -d ' '); __pc_lstart=${psField("lstart")}; ` +
-		`printf 'MODE setsid\\nPID %s\\nPGID %s\\nLSTART %s\\n' "$__pc_pid" "$__pc_pgid" "$__pc_lstart" ` +
-		`> ${metaTmp} && mv -f ${metaTmp} ${meta}; ` +
+		`setsid sh -c ${shellEscape(innerSetsid)} > ${spill} 2>&1 & __pc_pid=$!; ` +
+		`printf 'MODE setsid\\nPID %s\\n' "$__pc_pid" > ${metaTmp} && mv -f ${metaTmp} ${meta}; ` +
 		`${handshake(setsidKill)}; ` +
-		`printf 'MODE setsid\\nPID %s\\nPGID %s\\nLSTART %s\\n' "$__pc_pid" "$__pc_pgid" "$__pc_lstart"`;
+		`cat ${ready}`;
 
 	const nohupBranch =
-		`nohup sh -c ${escInner} > ${spill} 2>&1 & __pc_pid=$!; ` +
+		`nohup sh -c ${shellEscape(innerNohup)} > ${spill} 2>&1 & __pc_pid=$!; ` +
 		`printf 'MODE nohup\\nPID %s\\n' "$__pc_pid" > ${metaTmp} && mv -f ${metaTmp} ${meta}; ` +
 		`${handshake(nohupKill)}; ` +
 		`printf 'MODE nohup\\nPID %s\\n' "$__pc_pid"`;

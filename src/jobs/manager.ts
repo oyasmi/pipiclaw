@@ -383,7 +383,7 @@ export class DeskJobManager {
 		const partialStdout =
 			typeof (error as { stdout?: unknown }).stdout === "string" ? (error as { stdout: string }).stdout : "";
 		let launched = parseLaunchOutput(partialStdout);
-		for (const metaPath of [art.metaFile, art.metaTmp]) {
+		for (const metaPath of [art.readyFile, art.metaFile, art.metaTmp]) {
 			if (launched.pid !== undefined) break;
 			try {
 				launched = parseLaunchOutput(await readFile(metaPath, "utf-8"));
